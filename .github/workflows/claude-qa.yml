@@ -1,42 +1,118 @@
 name: claude-qa
+# Nightly deep QA in five areas, one Claude session each. Every reproducible bug becomes an issue labeled
+# "bug" + "claude", which hands it to the claude workflow: it fixes the bug and opens a PR with "Fixes #N".
 on:
-  schedule: [{ cron: "0 19 * * *" }] # 02:00 WIB
+  schedule: [{ cron: "0 18 * * *" }] # 01:00 WIB
   workflow_dispatch:
+    inputs:
+      areas:
+        description: "Comma-separated areas to run (checks,core,editor,agent,design); empty = all"
+        required: false
 
 env:
   CARGO_TARGET_DIR: /home/nalarupa-ci/.cache/nalarupa-target
   NALARUPA_CORE: /home/nalarupa-ci/.cache/nalarupa-target/release/libnalarupa_core.so
+  # The in-app agent runs the `claude` CLI (Claude Code backend); this logs it in.
+  CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
 jobs:
   qa:
+    strategy:
+      fail-fast: false
+      max-parallel: 1 # one runner, and every area opens windows
+      matrix:
+        include:
+          - area: checks
+            focus: |
+              Run every automated check and turn each failure into an issue.
+              - core: cd core && cargo test --release
+              - headless: cd app; bun run typecheck; bun run smoke; bun run editor-check; bun run mcp-check; bun run doc-check
+              - window (one at a time): bash scripts/wl-run.sh bun run <e2e | editor-e2e | file-e2e | motion-check>
+              - real agent turns (Claude Code backend): bun run agent-check, bun run model-check, bash scripts/wl-run.sh bun scripts/agent-e2e.ts
+              Rerun a failure once to separate flakes from bugs; a flake that reproduces in 2 of 5 runs is a bug too (say so).
+          - area: core
+            focus: |
+              Deep-dive the Rust core through FFI (app/src/core.ts `call`) and MCP: document model, layout (auto layout,
+              hug/fill, wrap, gaps, padding, nested frames), text (unicode, RTL, emoji, long words, line breaking),
+              components/refs/variables/themes, undo/redo chains, execute() sandbox (core/guide/execute.md: every API,
+              invalid input, timeouts, rollback), import of .pen files, exports (png/jpg/webp/svg/pdf/html) and their
+              fidelity against the canvas render. Compare render output pixels where it matters.
+          - area: editor
+            focus: |
+              Drive the real window and use the editor like a designer would: every toolbar tool (move, frame, rectangle,
+              ellipse, text, pen, hand), drawing, selecting, marquee, resize/rotate/flip handles, snapping and guides,
+              Alt-measure, group/ungroup, auto layout, the Layers panel (expand, rename, drag, keyboard tree), the
+              Inspector (every field, scrubbing, arrow keys, colors, effects), Slides panel, Present mode, zoom/pan,
+              keyboard shortcuts, undo/redo across all of these, Save/Recent/reopen. Look at every screenshot you take.
+          - area: agent
+            focus: |
+              The built-in agent chat (Claude Code backend), in the real window: send design prompts of different kinds
+              (landing page, mobile screen, slide deck, edit the selection, follow-up changes), parallel agents (2×/3×,
+              split and side-by-side modes), Stop mid-run, chat history (new, reopen, delete), permission prompts,
+              errors (bad prompt, agent failure), and that edits land on the canvas, are undoable and attributed.
+              Judge the produced designs from screenshots: broken layout, overflowing or clipped text, overlapping
+              elements, unreadable contrast, empty frames. Keep each prompt small (2–3 execute calls) to bound time.
+          - area: design
+            focus: |
+              Review Nalarupa's own interface for quality, from screenshots of every screen and state (Home, Editor
+              panels, Inspector sections, Agent chat, Slides, Present, toasts, empty and error states, long names,
+              many layers): visual bugs (misalignment, clipping, overflow, inconsistent spacing or radius, wrong
+              colors in states), interaction bugs (hover/focus/active states, focus order with Tab, keyboard access),
+              accessibility (every control has a name in the automation tree, focus visible, contrast WCAG AA),
+              and copy (unclear labels, typos). Only real defects; no taste-only opinions.
+    name: qa (${{ matrix.area }})
     runs-on: [self-hosted, nalarupa]
-    timeout-minutes: 90
+    timeout-minutes: 150
     permissions: { contents: read, issues: write, id-token: write }
     steps:
-      - uses: actions/checkout@v4
-      - run: cargo build --release
+      # workflow_dispatch can pick areas; matrix values are not available in a job-level `if`.
+      - id: pick
+        run: echo "run=${{ github.event.inputs.areas == '' || contains(format(',{0},', github.event.inputs.areas), format(',{0},', matrix.area)) }}" >> "$GITHUB_OUTPUT"
+      - if: steps.pick.outputs.run == 'true'
+        uses: actions/checkout@v4
+      - if: steps.pick.outputs.run == 'true'
+        run: cargo build --release
         working-directory: core
-      - run: bun install --frozen-lockfile
+      - if: steps.pick.outputs.run == 'true'
+        run: bun install --frozen-lockfile
         working-directory: app
-      - uses: anthropics/claude-code-action@v1
+      - if: steps.pick.outputs.run == 'true'
+        uses: anthropics/claude-code-action@v1
+        env: { GH_TOKEN: "${{ secrets.GH_PAT }}" }
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          claude_args: --max-turns 120 --allowedTools "Bash,Read,Glob,Grep,Write"
+          # The owner's token: issues it labels "claude" start the claude workflow (GITHUB_TOKEN events don't).
+          github_token: ${{ secrets.GH_PAT }}
+          settings: '{"includeCoAuthoredBy": false}'
+          claude_args: --model claude-opus-5-5 --max-turns 300 --allowedTools "Bash,Read,Glob,Grep,Write,Edit"
           prompt: |
-            You are the nightly QA for Nalarupa (repo ${{ github.repository }}, branch ${{ github.ref_name }}).
-            The Rust core is already built; app deps are installed. Read README.md (Checks) and core/guide/*.md first.
+            You are the nightly QA for Nalarupa (repo ${{ github.repository }}, branch ${{ github.ref_name }}), area: ${{ matrix.area }}.
+            Read AGENTS.md and README.md (Checks) first. The Rust core is built (NALARUPA_CORE points at it) and app deps are installed.
 
-            1. Run the checks and note every failure:
-               cd core && cargo test --release
-               cd app && bun run typecheck && bun run smoke && bun run editor-check && bun run mcp-check && bun run doc-check
-               cd app && bash scripts/wl-run.sh bun run e2e && bash scripts/wl-run.sh bun run file-e2e   (GPU window under headless Wayland; screenshots in app/screenshots/)
-               Skip a11y-check, window-check, exe-check (Windows only) and editor-e2e (known Linux gap).
-            2. Exploratory QA: write throwaway scripts under $RUNNER_TEMP (never in the repo) that drive the core
-               through app/src/core.ts `call(...)` or the MCP server at http://127.0.0.1:47700/mcp. Probe edge cases:
-               empty/huge documents, odd unicode text, deep nesting, auto layout extremes, undo/redo chains,
-               invalid MCP/execute input, HTML/PDF export. Look at e2e screenshots (Read them) for visual defects.
-            3. For each real, reproducible bug: search first with `gh issue list --state open --label bug --search "<keywords>"`.
-               If it is not already filed, `gh issue create --label bug --title "<short>" --body "<repro steps, expected, actual, logs>"`.
-               At most 5 new issues per run; no issues for style opinions or things you could not reproduce.
-            Do not edit tracked files, commit, or push. End with a short summary of what you ran and filed.
+            ## Your area
+            ${{ matrix.focus }}
+
+            ## How to test on this machine
+            - Throwaway scripts go in app/.qa/ (gitignored) so they can import from app/node_modules; never edit tracked files.
+            - Headless: `import { call } from '../src/core'` and drive commands (see core/src/lib.rs `dispatch` for all of them).
+              A script that needs a fresh data folder must rerun itself with NALARUPA_DATA set (see app/scripts/doc-check.ts).
+            - Window: GPUIX automation (`launch` from '@gpuix/react/automation', as in app/scripts/e2e.ts and editor-e2e.ts),
+              run as `bash scripts/wl-run.sh bun .qa/<file>.ts` from app/. Pass NALARUPA_DATA (a mkdtemp folder) in launch env.
+              Find testIds with grep in app/src. Screenshots: `grim <path>.png` (GPUIX screenshot() does not work on Linux);
+              Read every screenshot you take and look at it.
+            - GPUIX limits (AGENTS.md): waitFor needs exactly one match, chords use hyphens, input values can't be read.
+              A problem caused only by the automation or the headless compositor is not a product bug.
+            - The MCP port is whatever `init` returns (another instance may hold 47700).
+
+            ## Filing
+            For each real, reproducible product bug:
+            1. Search first: `gh issue list --state all --search "<keywords>"`; if an open issue covers it, comment new evidence there instead.
+            2. Otherwise `gh issue create --label bug --label claude --title "[qa/${{ matrix.area }}] <short>" --body ...`
+               with: steps to reproduce (a minimal script in a code block when possible), expected, actual, environment
+               (Linux VPS, headless sway, lavapipe), and how often it reproduces. The "claude" label makes the claude
+               workflow fix it and open a PR, so the repro must be precise.
+            At most 6 new issues per area per night, most severe first. Nothing for style opinions, Windows-only behavior,
+            or things you could not reproduce. Do not commit, push or open PRs.
+            End with a summary: what you covered, what you could not, and the issues you filed or updated.
+      - if: always() && steps.pick.outputs.run == 'true'
+        run: rm -rf app/.qa

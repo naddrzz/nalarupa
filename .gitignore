@@ -5,3 +5,4 @@ app/screenshots/
 *.tmp-nalarupa
 docs/screenshots/live/
 *.log
+app/.qa/
