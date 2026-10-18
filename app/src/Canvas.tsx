@@ -259,7 +259,9 @@ export function Canvas(props: {
   useEffect(() => {
     if (!props.animating) return
     const t = setInterval(() => draw(false), 16)
-    return () => clearInterval(t)
+    // The poll can end the slide between two redraws: paint the settled view once more, or the
+    // bitmap keeps the last slide frame (neither the camera nor `version` changed to repaint it).
+    return () => { clearInterval(t); draw(false) }
   }, [props.animating])
   useEffect(() => () => {
     if (pending.current) clearTimeout(pending.current)

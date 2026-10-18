@@ -27,6 +27,17 @@ await Bun.sleep(700)
 renderPixels(320, 180, 0, 0, 1920 / 320 / 6, 0x1c1c1f)
 assert(!call('state').animating, 'slide settled after ~0.6 s')
 call('undo')
+// The poll can end the slide between two canvas redraws: the last slide frame is not the settled view,
+// so the canvas must repaint when `animating` turns false (Canvas.tsx, the `[props.animating]` effect).
+call('tool', { name: 'execute', args: { input: 'Insert("sld01", {type:"rectangle", name:"Slide", width:100, height:100, fill:"#00ff00"})' } })
+// What the canvas does: redraw every ~16 ms while animating (the clock starts at the first frame).
+let lastSlide = new Uint8Array()
+for (const t0 = performance.now(); performance.now() - t0 < 560; await Bun.sleep(16)) lastSlide = new Uint8Array(renderPixels(320, 180, 0, 0, 1 / 6, 0x1c1c1f)!)
+await Bun.sleep(70) // the next redraw is late, the poll arrives first
+assert(!call('poll').state.animating, 'poll ends the slide')
+const settled = new Uint8Array(renderPixels(320, 180, 0, 0, 1 / 6, 0x1c1c1f)!)
+assert(Buffer.compare(lastSlide, settled) !== 0, 'the last slide frame differs from the settled view')
+call('undo')
 // Reduced motion (an OS preference the app passes in): agent inserts appear in place.
 call('reduce_motion', { on: true })
 call('tool', { name: 'execute', args: { input: 'Insert("sld01", {type:"rectangle", name:"Still", width:100, height:100, fill:"#0000ff"})' } })
