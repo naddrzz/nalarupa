@@ -1,7 +1,7 @@
 // End-to-end check against the real GPU window: `bun scripts/e2e.ts`
 // Screenshots land in app/screenshots/. The window opens in the background.
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { launch } from '@gpuix/react/automation'
 
@@ -11,8 +11,13 @@ mkdirSync(out, { recursive: true })
 const shot = (name: string) => process.platform === 'linux' ? Bun.$`grim ${join(out, `${name}.png`)}`.quiet() : app.screenshot({ path: join(out, `${name}.png`) })
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
+// The core takes the next free port from 47700 when another Nalarupa already holds it; find this window's.
+const alive = (p: number) => fetch(`http://127.0.0.1:${p}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }) }).then(() => true, () => false)
+const ports = async () => (await Promise.all(Array.from({ length: 16 }, (_, i) => 47700 + i).map(async (p) => ((await alive(p)) ? p : 0)))).filter(Boolean)
+let port = 0
+
 async function mcp(name: string, args: Record<string, unknown>) {
-  const res = await fetch('http://127.0.0.1:47700/mcp', {
+  const res = await fetch(`http://127.0.0.1:${port}/mcp`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method: 'tools/call', params: { name, arguments: args } }),
@@ -22,9 +27,18 @@ async function mcp(name: string, args: Record<string, unknown>) {
   return text as string
 }
 
-const app = await launch({ command: 'bun', args: ['app.tsx'], cwd: join(import.meta.dir, '..'), env: { ...process.env, GPUIX_BACKGROUND: '1' } })
+// Own data folder, so another running Nalarupa can't touch this run's exports and chats; reuse the
+// font/icon caches (same lookup as core's render::data_dir) so nothing is downloaded again.
+const data = mkdtempSync(join(tmpdir(), 'nalarupa-e2e-'))
+const own = join(process.env.LOCALAPPDATA ?? process.env.XDG_DATA_HOME ?? join(homedir(), '.local', 'share'), 'Nalarupa')
+for (const dir of ['cache', 'fonts']) if (existsSync(join(own, dir))) cpSync(join(own, dir), join(data, dir), { recursive: true })
+
+const before = new Set(await ports())
+const app = await launch({ command: 'bun', args: ['app.tsx'], cwd: join(import.meta.dir, '..'), env: { ...process.env, GPUIX_BACKGROUND: '1', NALARUPA_DATA: data } })
 try {
   await app.getByTestId('template-slides').waitFor({ timeoutMs: 30000 })
+  port = (await ports()).find((p) => !before.has(p)) ?? 0
+  if (!port) throw new Error('no MCP port for the test window')
   await shot('01-home')
 
   await app.getByTestId('template-slides').click()
@@ -120,8 +134,6 @@ TakeScreenshot([s])`,
   console.log('deck PDF:', pdfPath, `${pages} pages`)
 
   // Saved chats: a session file on disk is listed in the history dropdown, reopens, and can be removed.
-  // Same lookup as core's render::data_dir (Windows: %LOCALAPPDATA%, Linux: $XDG_DATA_HOME or ~/.local/share).
-  const data = process.env.NALARUPA_DATA || join(process.env.LOCALAPPDATA ?? process.env.XDG_DATA_HOME ?? join(homedir(), '.local', 'share'), 'Nalarupa')
   const sessions = join(data, 'sessions')
   const chatId = `e2e${Date.now().toString(36)}`
   const chatFile = join(sessions, `${chatId}.json`)
@@ -148,7 +160,7 @@ TakeScreenshot([s])`,
 
   // Per-tool permission: Claude Code asks through the MCP permission tool (as the restored chat's
   // agent); the card in the chat answers it.
-  const asked = fetch(`http://127.0.0.1:47700/mcp/${agent.id}`, {
+  const asked = fetch(`http://127.0.0.1:${port}/mcp/${agent.id}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'approve', arguments: { tool_name: 'Bash', input: { command: 'echo hi', description: 'Print a greeting' }, tool_use_id: 't1' } } }),
@@ -227,4 +239,5 @@ TakeScreenshot([s])`,
   console.log('e2e ok — screenshots in', out)
 } finally {
   await app.close()
+  rmSync(data, { recursive: true, force: true })
 }
