@@ -264,7 +264,9 @@ fn start_thread(p: Profile, prompt: String, child: Option<String>) {
             Ok(u) => u,
             Err(err) => {
                 if !stopped {
-                    emit(&p, "error", json!({"text": err}));
+                    if !err.is_empty() {
+                        emit(&p, "error", json!({"text": err}));
+                    }
                     // A failed main turn ends the iterations.
                     if child.is_none() {
                         engine().agent.cook.0 = 1;
@@ -818,6 +820,7 @@ fn run_claude_code(p: &Profile, prompt: &str, child: bool) -> Result<Value, Stri
     let mut inputs: HashMap<String, (String, Value)> = HashMap::new();
     let mut last_preview: HashMap<String, Instant> = HashMap::new();
     let mut usage = json!({});
+    let mut reported = false;
     for line in BufReader::new(stdout).lines() {
         let Ok(line) = line else { break };
         let Ok(ev) = serde_json::from_str::<Value>(&line) else { continue };
@@ -890,6 +893,7 @@ fn run_claude_code(p: &Profile, prompt: &str, child: bool) -> Result<Value, Stri
                                "cacheWrite": u["cache_creation_input_tokens"], "turns": ev["num_turns"], "costUsd": ev["total_cost_usd"]});
                 if ev["is_error"] == true {
                     emit(p, "error", json!({"text": ev["result"].as_str().unwrap_or("Claude Code reported an error")}));
+                    reported = true;
                 }
             }
             _ => {}
@@ -900,9 +904,22 @@ fn run_claude_code(p: &Profile, prompt: &str, child: bool) -> Result<Value, Stri
     let status = proc.lock().unwrap_or_else(|e| e.into_inner()).wait().map_err(|e| e.to_string())?;
     let err = err_reader.join().unwrap_or_default();
     if !cancel.load(Ordering::SeqCst) && !status.success() {
-        return Err(format!("claude exited with {status}: {}", err.trim()));
+        return Err(exit_error(&status.to_string(), &err, reported));
     }
     Ok(usage)
+}
+
+/// The failure for a non-zero exit. Empty when an error result already showed the cause, so
+/// `start_thread` ends the run without a second card; never ends in a bare colon.
+fn exit_error(status: &str, stderr: &str, reported: bool) -> String {
+    let stderr = stderr.trim();
+    if reported {
+        String::new()
+    } else if stderr.is_empty() {
+        format!("claude exited with {status}")
+    } else {
+        format!("claude exited with {status}: {stderr}")
+    }
 }
 
 fn short_tool(name: &str) -> String {
@@ -958,6 +975,14 @@ mod tests {
         assert_eq!(events[1]["text"], "Hello");
         assert!(read_chat(&dir, "../settings").is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn exit_error_has_no_duplicate_or_empty_tail() {
+        assert_eq!(exit_error("exit status: 1", "", true), "", "the error result already showed the cause");
+        assert_eq!(exit_error("exit status: 1", "boom\n", true), "");
+        assert_eq!(exit_error("exit status: 1", " \n", false), "claude exited with exit status: 1");
+        assert_eq!(exit_error("exit status: 1", "boom\n", false), "claude exited with exit status: 1: boom");
     }
 
     /// Auto-allowed paths: the workspace for file tools, skills for Read; `..` cannot escape.
