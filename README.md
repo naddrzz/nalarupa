@@ -180,7 +180,8 @@ cd app && bun run a11y-check && bun run motion-check && bun run window-check
   sure animations stop under *reduced motion*; `window-check` makes sure the window fits the screen and its
   frame carries the Nalarupa icon (`bun run window-check dist/nalarupa.exe` for the built exe).
 - `exe-check` runs the built binary; `model-check` runs two real agent turns.
-- On a Linux server without a display, `bash scripts/wl-run.sh bun run e2e` runs the window under a headless
+- On a Linux server without a display, prefix each windowed check (`e2e`, `editor-e2e`, `file-e2e`) with
+  `bash scripts/wl-run.sh` from `app/`, e.g. `cd app && bash scripts/wl-run.sh bun run file-e2e`, to run the window under a headless
   Wayland compositor (needs `sway`, `grim`, `mesa-vulkan-drivers`). CI does this on a self-hosted runner.
 - `bun run shots` regenerates the README screenshots in `docs/screenshots/`.
 

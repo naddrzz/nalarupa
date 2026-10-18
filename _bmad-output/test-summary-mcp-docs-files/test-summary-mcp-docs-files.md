@@ -5,7 +5,7 @@ Date: 2026-10-18 · Branch: `qa/automated-checks` · Framework: Bun scripts with
 ## Generated Tests
 
 ### API Tests
-- [x] `app/scripts/mcp-check.ts`: MCP HTTP contract. 404 on unknown paths, 405 + `Allow: POST` on GET, 403 for a foreign `Origin` (DNS-rebinding guard) while localhost is allowed, 202 for notifications, JSON-RPC -32700 / -32601, batches, `initialize`, per-agent tool lists, and happy path + error for every tool (`get_editor_state`, `read_guide`, `get_style`, `execute` incl. rollback on failure, `open_document`, `spawn_agents` refused for external agents).
+- [x] `app/scripts/mcp-check.ts`: MCP HTTP contract. 404 on unknown paths, 405 + `Allow: POST` on GET, 403 for a foreign `Origin` (DNS-rebinding guard) while localhost is allowed, 202 for notifications, JSON-RPC -32700 / -32601, batches, `initialize`, per-agent tool lists, happy paths for all five public tools, error cases for `read_guide`, `get_style`, `execute` (incl. rollback on failure) and `open_document`, plus the `spawn_agents` refusal for external agents.
 - [x] `app/scripts/doc-check.ts`: core commands through FFI. Save → open → save is byte-identical (unicode names included); the dirty flag; open failures (missing file, invalid JSON, no path) keep the current document; select / move_by / undo / redo / reorder front+back / delete; variables (set, undo, missing name); export png / jpg / webp / svg / pdf (page count) / html-css plus unknown format, missing node and empty-deck errors; `png` command; settings persisted, API key masked, null removes, missing key rejected.
 
 ### E2E Tests

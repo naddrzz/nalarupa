@@ -8,12 +8,12 @@ import { launch } from '@gpuix/react/automation'
 const out = join(import.meta.dir, '..', 'screenshots')
 mkdirSync(out, { recursive: true })
 // GPUIX can't capture on Linux; there the window runs under a headless Wayland compositor, so grab it with grim.
-const shot = (name: string) => process.platform === 'linux' ? Bun.$`grim ${join(out, `${name}.png`)}`.quiet() : app.screenshot({ path: join(out, `${name}.png`) })
+const shot = (name: string) => process.platform === 'linux' ? Bun.$`grim ${join(out, `${name}.png`)}`.quiet() : app!.screenshot({ path: join(out, `${name}.png`) })
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-// The core takes the next free port from 47700 when another Nalarupa already holds it; find this window's.
+// The core takes the next free port of 47700–47719 when another Nalarupa already holds one; find this window's.
 const alive = (p: number) => fetch(`http://127.0.0.1:${p}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }) }).then(() => true, () => false)
-const ports = async () => (await Promise.all(Array.from({ length: 16 }, (_, i) => 47700 + i).map(async (p) => ((await alive(p)) ? p : 0)))).filter(Boolean)
+const ports = async () => (await Promise.all(Array.from({ length: 20 }, (_, i) => 47700 + i).map(async (p) => ((await alive(p)) ? p : 0)))).filter(Boolean)
 let port = 0
 
 async function mcp(name: string, args: Record<string, unknown>) {
@@ -28,17 +28,20 @@ async function mcp(name: string, args: Record<string, unknown>) {
 }
 
 // Own data folder, so another running Nalarupa can't touch this run's exports and chats; reuse the
-// font/icon caches (same lookup as core's render::data_dir) so nothing is downloaded again.
+// font/icon caches (same lookup as core's render::data_dir, dirs::data_local_dir) so nothing is downloaded again.
 const data = mkdtempSync(join(tmpdir(), 'nalarupa-e2e-'))
-const own = join(process.env.LOCALAPPDATA ?? process.env.XDG_DATA_HOME ?? join(homedir(), '.local', 'share'), 'Nalarupa')
-for (const dir of ['cache', 'fonts']) if (existsSync(join(own, dir))) cpSync(join(own, dir), join(data, dir), { recursive: true })
-
-const before = new Set(await ports())
-const app = await launch({ command: 'bun', args: ['app.tsx'], cwd: join(import.meta.dir, '..'), env: { ...process.env, GPUIX_BACKGROUND: '1', NALARUPA_DATA: data } })
+const local = process.platform === 'darwin' ? join(homedir(), 'Library', 'Application Support') : process.env.LOCALAPPDATA ?? process.env.XDG_DATA_HOME ?? join(homedir(), '.local', 'share')
+const own = process.env.NALARUPA_DATA || join(local, 'Nalarupa')
+let app: Awaited<ReturnType<typeof launch>> | undefined
 try {
+  for (const dir of ['cache', 'fonts']) if (existsSync(join(own, dir))) cpSync(join(own, dir), join(data, dir), { recursive: true })
+  const before = new Set(await ports())
+  app = await launch({ command: 'bun', args: ['app.tsx'], cwd: join(import.meta.dir, '..'), env: { ...process.env, GPUIX_BACKGROUND: '1', NALARUPA_DATA: data } })
   await app.getByTestId('template-slides').waitFor({ timeoutMs: 30000 })
-  port = (await ports()).find((p) => !before.has(p)) ?? 0
-  if (!port) throw new Error('no MCP port for the test window')
+  // Exactly one new server: with a second Nalarupa started meanwhile, picking one would be a guess.
+  const fresh = (await ports()).filter((p) => !before.has(p))
+  if (fresh.length !== 1) throw new Error(`expected one new MCP port for the test window, found ${fresh.join(', ') || 'none'}`)
+  port = fresh[0]
   await shot('01-home')
 
   await app.getByTestId('template-slides').click()
@@ -130,7 +133,11 @@ TakeScreenshot([s])`,
   const pdfPath = (await app.getByTestId('toast').textContent()).replace(/^Exported /, '')
   const pdf = readFileSync(pdfPath, 'latin1')
   const pages = pdf.match(/\/Type ?\/Page\b(?!s)/g)?.length ?? 0
-  if (!pdf.startsWith('%PDF-') || pages !== 4) throw new Error(`deck PDF ${pdfPath} has ${pages} pages, expected 4`)
+  if (!pdf.startsWith('%PDF-') || pages !== 4) {
+    // The data folder is removed below; keep the bad PDF next to the screenshots.
+    cpSync(pdfPath, join(out, 'deck.pdf'))
+    throw new Error(`deck PDF has ${pages} pages, expected 4 (kept as screenshots/deck.pdf)`)
+  }
   console.log('deck PDF:', pdfPath, `${pages} pages`)
 
   // Saved chats: a session file on disk is listed in the history dropdown, reopens, and can be removed.
@@ -248,6 +255,6 @@ TakeScreenshot([s])`,
   await sleep(500)
   console.log('e2e ok — screenshots in', out)
 } finally {
-  await app.close()
+  await app?.close()
   rmSync(data, { recursive: true, force: true })
 }
