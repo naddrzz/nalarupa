@@ -388,6 +388,19 @@ impl Html<'_> {
         if let Some(c) = fills(n.p.get("fill")).first().and_then(|f| f.as_str().map(str::to_string).or_else(|| f["color"].as_str().map(str::to_string))).and_then(|c| css_color(&c)) {
             let _ = write!(css, "color:{c};");
         }
+        // Like shapes, text takes the top width; CSS has no inner stroke, so it paints centered.
+        let width = match n.p.get("strokeWidth") {
+            Some(Value::Object(s)) => s.get("top").and_then(num),
+            v => v.and_then(num),
+        };
+        let stroke = fills(n.p.get("stroke")).first().and_then(|f| f.as_str().map(str::to_string).or_else(|| f["color"].as_str().map(str::to_string))).and_then(|c| css_color(&c));
+        if let (Some(c), Some(w)) = (stroke, width.filter(|w| *w > 0.0)) {
+            if matches!(n.s("strokeAlignment"), Some("outer" | "outside")) {
+                let _ = write!(css, "-webkit-text-stroke:{}px {c};paint-order:stroke fill;", w * 2.0);
+            } else {
+                let _ = write!(css, "-webkit-text-stroke:{w}px {c};");
+            }
+        }
     }
 }
 
@@ -421,5 +434,25 @@ mod tests {
         let webp = std::fs::read(&webp[0]).unwrap();
         assert!(webp.starts_with(b"RIFF") && &webp[8..12] == b"WEBP");
         assert!(super::export(&mut e, &ids, "tiff", "", &json!({})).is_err());
+    }
+
+    /// A text stroke reaches the SVG and HTML exports (it was dropped before).
+    #[test]
+    fn text_stroke_is_exported() {
+        let out = std::env::temp_dir().join("nalarupa-test-text-stroke");
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        e.load_template("empty");
+        let text = |align: &str| json!({"type": "text", "content": "Out", "fontSize": 50, "fill": "#ffff00", "stroke": "#000000", "strokeWidth": 4, "strokeAlignment": align});
+        let (center, outer) = (e.insert_root(text("center")).unwrap(), e.insert_root(text("outer")).unwrap());
+
+        let svg = |e: &mut Engine, id: &String| std::fs::read_to_string(&super::export(e, &[id.clone()], "svg", out.to_str().unwrap(), &json!({})).unwrap()[0]).unwrap();
+        let svg_center = svg(&mut e, &center);
+        assert!(svg_center.contains(r##"stroke="#000000""##) && svg_center.contains(r#"stroke-width="4""#), "{svg_center}");
+        assert!(svg(&mut e, &outer).contains(r#"stroke-width="8""#), "an outer stroke is drawn double width and clipped");
+
+        let html = |e: &mut Engine, id: &String| std::fs::read_to_string(&super::export(e, &[id.clone()], "html", out.join("export.html").to_str().unwrap(), &json!({})).unwrap()[0]).unwrap();
+        assert!(html(&mut e, &center).contains("-webkit-text-stroke:4px #000000;"));
+        assert!(html(&mut e, &outer).contains("-webkit-text-stroke:8px #000000;paint-order:stroke fill;"));
     }
 }
