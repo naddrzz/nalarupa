@@ -204,5 +204,7 @@ claude mcp add --transport http --scope user nalarupa http://127.0.0.1:47700/mcp
 - WebP selalu lossless; JPEG tanpa alpha (area transparan menjadi putih).
 - API key Claude disimpan apa adanya di `%LOCALAPPDATA%\Nalarupa\settings.json`.
 
-`core/vendor/resvg` adalah resvg 0.47.0 (Apache-2.0 OR MIT) dengan dua perbaikan *layer clamp*; ikon UI dari
-[Lucide](https://lucide.dev) (ISC, `app/assets/icons/LICENSE`).
+## Lisensi
+
+[MIT](LICENSE). `core/vendor/resvg` adalah resvg 0.47.0 (Apache-2.0 OR MIT) dengan dua perbaikan
+*layer clamp*; ikon UI dari [Lucide](https://lucide.dev) (ISC, `app/assets/icons/LICENSE`).
