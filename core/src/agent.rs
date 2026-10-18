@@ -106,7 +106,7 @@ impl AgentState {
         let mut ev = ev.clone();
         ev["at"] = json!(now_ms());
         chat.events.push(ev);
-        matches!(kind, "user" | "message_end" | "done")
+        matches!(kind, "user" | "message_end" | "done" | "dequeued")
     }
 
     /// Start over with no conversation (the old one stays saved).
@@ -975,18 +975,21 @@ mod tests {
     #[test]
     fn stop_announces_dropped_queue() {
         let kinds = || engine().events.iter().filter(|e| e["type"] == "agent").filter_map(|e| e["kind"].as_str().map(str::to_string)).collect::<Vec<_>>();
-        let saved = |kind: &str| engine().agent.chat.as_ref().map_or(0, |c| c.events.iter().filter(|e| e["kind"] == kind).count());
-        {
+        let dir = std::env::temp_dir().join(format!("nalarupa-test-stop-{:x}", crate::doc::random_u64()));
+        let saved = |kind: &str| read_chat(&dir, "5709e5").unwrap()["events"].as_array().unwrap().iter().filter(|e| e["kind"] == kind).count();
+        let data_dir = {
             let mut e = engine();
+            let old = std::mem::replace(&mut e.data_dir, dir.clone());
             e.agent.running = true;
-            e.agent.chat = Some(Chat { id: "stop-test".into(), title: "stop".into(), events: Vec::new() });
-        }
+            e.agent.chat = Some(Chat { id: "5709e5".into(), title: "stop".into(), events: Vec::new() });
+            old
+        };
         send("also add a footer".into(), 1, "split", 1, "").unwrap();
         assert_eq!(engine().agent.queue.len(), 1);
         stop();
         assert!(engine().agent.queue.is_empty());
         assert_eq!(kinds().iter().filter(|k| *k == "dequeued").count(), 1);
-        assert_eq!(saved("dequeued"), 1, "the chat keeps the announcement for replay");
+        assert_eq!(saved("dequeued"), 1, "the saved chat keeps the announcement for replay");
         stop();
         assert_eq!(kinds().iter().filter(|k| *k == "dequeued").count(), 1, "nothing queued, nothing announced");
         // A prompt that arrives while the stopped agents are still shutting down is dropped and announced too.
@@ -997,6 +1000,8 @@ mod tests {
         let mut e = engine();
         e.agent.running = false;
         e.agent.chat = None;
+        e.data_dir = data_dir;
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Auto-allowed paths: the workspace for file tools, skills for Read; `..` cannot escape.
