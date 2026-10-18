@@ -118,6 +118,27 @@ try {
   await sleep(300)
   assert(await until(async () => !(await count('rotated-overlay')) && (await size()).join() === [rw0, rh0].join()), 'two undo steps revert the resize and the rotation')
 
+  // Typing a rotation in the Inspector turns the layer around its center like the handle does: the center stays put.
+  const frame = async () => {
+    const f = (await app.getByTestId('selection-box').all()).concat(await app.getByTestId('rotated-overlay').all())[0]?.bounds
+    return f ? { cx: f.x + f.width / 2, cy: f.y + f.height / 2, w: f.width } : { cx: NaN, cy: NaN, w: NaN }
+  }
+  const f0 = await frame()
+  const rot = await app.getByTestId('inspector-rotation').bounds()
+  await app.mouse.click({ x: rot.x + rot.width - 10, y: rot.y + rot.height / 2 })
+  await sleep(500)
+  await app.call('keystrokes', { keys: 'ctrl-a 9 0' })
+  await sleep(500)
+  await app.call('keystrokes', { keys: 'enter' })
+  // A quarter turn swaps the rectangle's frame width for its height (101 → 92 px on screen).
+  assert(await until(async () => Math.abs((await frame()).w - f0.w) > 4, 6000), 'the Inspector rotation applies')
+  await sleep(500)
+  const f1 = await frame()
+  await shot('00c2-inspector-rotated')
+  assert(Math.abs(f1.cx - f0.cx) <= 2 && Math.abs(f1.cy - f0.cy) <= 2, `Inspector rotation keeps the center (${f0.cx},${f0.cy} → ${f1.cx},${f1.cy})`)
+  await canvas.press('ctrl-z')
+  assert(await until(async () => { const u = await frame(); return Math.abs(u.w - f0.w) <= 2 && Math.abs(u.cx - f0.cx) <= 2 && Math.abs(u.cy - f0.cy) <= 2 }), 'one undo step reverts the Inspector rotation')
+
   // Dragging the right edge past the left one flips the rectangle: it now paints left of its old left edge.
   await app.mouse.drag(at(250, 300), at(100, 300), { steps: 6 })
   await sleep(300)

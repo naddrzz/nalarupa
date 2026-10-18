@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import { tryCall } from './core'
 import { nodeIcon, type IconName } from './icons'
+import { turnAroundCenter } from './geometry'
 import { C } from './theme'
 import { Button, Field, Icon, IconButton, NumField, Row, Section, Segmented, Swatch, T, Toggle, type Toast } from './ui'
 
@@ -98,6 +99,15 @@ export function Inspector({ version, selection, select, toast }: Props) {
   const fill = fillMixed ? null : solidColor(n.fill, vars)
   const stroke = solidColor(n.stroke, vars)
 
+  // Rotation turns around the center like the canvas handle: a free layer's origin moves so the center stays put.
+  const setRotation = (v: number, key: string) => perNode((i) => {
+    const props: Record<string, unknown> = { rotation: v || null }
+    if (!inFlow(i) && i.box && i.node.type !== 'group') {
+      const [fx, fy] = [!!i.node.flipX, !!i.node.flipY]
+      ;[props.x, props.y] = turnAroundCenter(Number(i.node.x ?? 0), Number(i.node.y ?? 0), i.box.w, i.box.h, Number(i.node.rotation ?? 0), v, fx, fy)
+    }
+    return props
+  }, key)
   // W/H: typing a number makes that axis fixed; auto text becomes fixed width (height: fixed size).
   const setSize = (axis: 'width' | 'height', v: number, key: string) => perNode((i) => {
     const p: Record<string, unknown> = { [axis]: Math.max(0, Math.round(v * 100) / 100) }
@@ -144,7 +154,7 @@ export function Inspector({ version, selection, select, toast }: Props) {
           </Row>
         ) : null}
         <Row>
-          <NumField label="↻" name="Rotation" {...numOf((i) => i.node.rotation)} onCommit={(v, k) => update({ rotation: v || null }, k)} testId="inspector-rotation" />
+          <NumField label="↻" name="Rotation" {...numOf((i) => i.node.rotation)} onCommit={(v, k) => setRotation(v, k)} testId="inspector-rotation" />
           <NumField label="α" name="Opacity" {...numOf((i) => (i.node.opacity ?? 1) * 100)} onCommit={(v, k) => update({ opacity: v >= 100 ? null : Math.max(0, v) / 100 }, k)} testId="inspector-opacity" />
         </Row>
       </Section>
