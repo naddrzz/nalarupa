@@ -304,6 +304,9 @@ fn shared_hash(doc: &Doc, libs: &[(String, Value)]) -> u64 {
     for (a, l) in libs {
         s.push_str(a);
         s.push_str(&l["children"].as_array().map(|c| c.len()).unwrap_or(0).to_string());
+        // Instances resolve a library's variables in its own scope.
+        s.push_str(&l.get("variables").map(Value::to_string).unwrap_or_default());
+        s.push_str(&l.get("themes").map(Value::to_string).unwrap_or_default());
     }
     s.push_str(&doc.dir().map(|d| d.to_string_lossy().to_string()).unwrap_or_default());
     fxhash(&s)
