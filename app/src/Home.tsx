@@ -2,7 +2,7 @@ import { basename } from 'node:path'
 import { existsSync } from 'node:fs'
 import { useGpuixRequired } from '@gpuix/react'
 import * as Tooltip from '@gpuix/react/tooltip'
-import { tryCall } from './core'
+import { call } from './core'
 import { C, FONT } from './theme'
 import { Button, Icon, Pressable, T, type Toast } from './ui'
 import type { IconName } from './icons'
@@ -20,13 +20,18 @@ const TEMPLATES: { id: string; title: string; desc: string; icon: IconName }[] =
 
 export function Home({ recent, onOpened, toast }: { recent: string[]; onOpened: () => void; toast: Toast }) {
   const renderer = useGpuixRequired()
-  const create = (template: string) => {
-    if (tryCall('new', { template }) !== null) onOpened()
+  // The core refuses a switch while the agent runs; its message says what to do, so toast it as is.
+  const switchTo = (cmd: string, args: Record<string, unknown>, failed: string) => {
+    try {
+      call(cmd, args)
+      onOpened()
+    } catch (e) {
+      const msg = (e as Error).message
+      toast(msg.startsWith('Stop the agent') ? msg : failed, true)
+    }
   }
-  const open = (path: string) => {
-    if (tryCall('open', { path }) !== null) onOpened()
-    else toast(`Unable to open ${basename(path)}. Check that the file still exists and is a .nala or .pen document.`, true)
-  }
+  const create = (template: string) => switchTo('new', { template }, 'Unable to create that document.')
+  const open = (path: string) => switchTo('open', { path }, `Unable to open ${basename(path)}. Check that the file still exists and is a .nala or .pen document.`)
   const browse = async () => {
     const paths = await renderer.promptForPaths?.({ files: true, multiple: false, prompt: 'Open' })
     if (paths?.[0]) open(paths[0])

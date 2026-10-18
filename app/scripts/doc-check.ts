@@ -122,8 +122,9 @@ call('settings_set', { key: 'anthropic_api_key', value: null })
 assert(!('anthropic_api_key' in call('settings_get')), 'a null value removes the setting')
 throws(() => call('settings_set', { value: 1 }), /key required/, 'settings_set without a key')
 
-// New conversation while an agent runs is refused: the run keeps its chat, and Stop then allows it.
-// (The stand-in `claude` is a shell script: skipped on Windows.)
+// While an agent runs, a new conversation and a document switch are both refused: the run keeps its chat and
+// would keep editing the new document. Stop then allows both. (The stand-in `claude` is a shell script: skipped
+// on Windows.)
 if (process.platform !== 'win32') {
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
   const until = async (fn: () => boolean, msg: string) => {
@@ -138,11 +139,18 @@ if (process.platform !== 'win32') {
     assert(chat, 'the running agent has a chat')
     throws(() => call('agent_reset'), /Stop the agent/, 'new conversation while an agent runs')
     assert(call('chat_list').current === chat && call('state').agentRunning, 'the refused reset keeps the running chat')
+    throws(() => call('new', { template: 'slides' }), /Stop the agent/, 'new while the agent runs')
+    throws(() => call('open', { path: a }), /Stop the agent/, 'open while the agent runs')
+    const doc = call('tool', { name: 'open_document', args: { path: a } })
+    assert(doc.error && /Stop the agent/.test(doc.text), 'open_document while the agent runs')
+    assert(call('frames').length === 0 && call('state').path === null, 'a refused switch keeps the document')
   } finally {
     call('agent_stop')
   }
   await until(() => !call('state').agentRunning, 'the agent stops')
   assert(call('agent_reset') === true && call('chat_list').current === null, 'new conversation once the agent has stopped')
+  call('new', { template: 'slides' })
+  assert(ids() === 'sld01,sld02,sld03', 'switching works again once the agent stopped')
 }
 
 console.log('doc-check ok')
