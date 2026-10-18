@@ -65,9 +65,10 @@ jobs:
     timeout-minutes: 150
     permissions: { contents: read, issues: write, id-token: write }
     steps:
-      # workflow_dispatch can pick areas; matrix values are not available in a job-level `if`.
+      # workflow_dispatch can pick areas; matrix values are not available in a job-level `if`. No area name contains another,
+      # so a substring match accepts "checks,tests" and "checks, tests" alike.
       - id: pick
-        run: echo "run=${{ github.event.inputs.areas == '' || contains(format(',{0},', github.event.inputs.areas), format(',{0},', matrix.area)) }}" >> "$GITHUB_OUTPUT"
+        run: echo "run=${{ github.event.inputs.areas == '' || contains(github.event.inputs.areas, matrix.area) }}" >> "$GITHUB_OUTPUT"
       - if: steps.pick.outputs.run == 'true'
         uses: actions/checkout@v4
       - if: steps.pick.outputs.run == 'true'
@@ -121,7 +122,7 @@ jobs:
   # (installed for the runner user; _bmad/custom/bmad-qa-generate-e2e-tests.toml holds this repo's conventions).
   # Passing checks go to one PR; a check that exposes a product bug becomes a "claude" issue instead.
   tests:
-    if: always() && (github.event.inputs.areas == '' || contains(format(',{0},', github.event.inputs.areas), ',tests,'))
+    if: always() && (github.event.inputs.areas == '' || contains(github.event.inputs.areas, 'tests'))
     needs: qa
     runs-on: [self-hosted, nalarupa]
     timeout-minutes: 150
@@ -152,11 +153,11 @@ jobs:
               (windowed checks under `bash scripts/wl-run.sh` from app/); keep only checks that pass all 3 times.
             - A check that fails because of a product bug, not the test: leave it out of the PR. File an issue
               (`gh issue create --label bug --label claude --title "[qa/tests] <short>"`) with the failing script as the repro,
-              after searching for duplicates with `gh issue list --state all --search`.
-            - If you have passing checks: put them on a new branch `qa/tests-${{ github.run_id }}` with their package.json
+              after searching for duplicates with `gh issue list --state all --search`. At most 3 new issues per run.
+            - If you have passing checks: put them on a new branch `qa/tests-${{ github.run_id }}-${{ github.run_attempt }}` with their package.json
               scripts, the ci.yml step and the README line, plus the skill's summary. Run the full set first:
               (cd core && cargo test --release) && (cd app && bun run typecheck && bun run smoke && bun run editor-check &&
-              bun run mcp-check && bun run doc-check). Commit with no Co-authored-by trailer, push, and open ONE PR against
+              bun run mcp-check && bun run doc-check). If any command fails, open no PR and report the failure in the summary. Commit with no Co-authored-by trailer, push, and open ONE PR against
               dev (`gh pr create --base dev`) titled "Add checks for <features>", with the summary as the body. Don't reference
               any issue, and don't add a "Generated with Claude Code" line.
             - Nothing new worth adding: open no PR, and say so.
