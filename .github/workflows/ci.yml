@@ -4,9 +4,6 @@ on:
   pull_request:
   workflow_dispatch:
 
-# One app instance at a time: the MCP server binds 127.0.0.1:47700.
-concurrency: { group: nalarupa-vps, cancel-in-progress: false }
-
 env:
   CARGO_TARGET_DIR: /home/nalarupa-ci/.cache/nalarupa-target
   NALARUPA_CORE: /home/nalarupa-ci/.cache/nalarupa-target/release/libnalarupa_core.so

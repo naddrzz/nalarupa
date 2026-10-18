@@ -3,8 +3,6 @@ on:
   schedule: [{ cron: "0 19 * * *" }] # 02:00 WIB
   workflow_dispatch:
 
-concurrency: { group: nalarupa-vps, cancel-in-progress: false }
-
 env:
   CARGO_TARGET_DIR: /home/nalarupa-ci/.cache/nalarupa-target
   NALARUPA_CORE: /home/nalarupa-ci/.cache/nalarupa-target/release/libnalarupa_core.so
