@@ -10,8 +10,9 @@ export function Present({ w, h, start, version, exit }: { w: number; h: number; 
   const slides = useMemo(() => (tryCall<Box[]>('frames') ?? []).filter((f) => f.type === 'frame'), [version])
   const [i, setI] = useState(() => Math.max(0, slides.findIndex((s) => s.id === start)))
   const img = useRef<ImgInstance>(null)
-  // Clamped: a slide removed while presenting must not leave `i` past the end.
-  const at = Math.min(i, slides.length - 1)
+  // Clamped both ways: a slide removed while presenting must not leave `i` past the end, and an empty
+  // deck must not leave it below 0 once a slide is added.
+  const at = Math.max(0, Math.min(i, slides.length - 1))
   const slide = slides[at]
 
   useLayoutEffect(() => {
@@ -23,7 +24,8 @@ export function Present({ w, h, start, version, exit }: { w: number; h: number; 
     if (px) img.current?.setImagePixels(pw, ph, px)
   }, [slide?.id, w, h, version])
 
-  const step = (d: number) => setI((v) => Math.min(slides.length - 1, Math.max(0, Math.min(v, slides.length - 1) + d)))
+  const last = Math.max(0, slides.length - 1)
+  const step = (d: number) => setI((v) => Math.min(last, Math.max(0, Math.min(v, last) + d)))
   return (
     <div
       testId="presentation"
@@ -41,11 +43,12 @@ export function Present({ w, h, start, version, exit }: { w: number; h: number; 
         else if (['right', 'down', 'space', 'enter', 'pagedown'].includes(k)) step(1)
         else if (['left', 'up', 'backspace', 'pageup'].includes(k)) step(-1)
         else if (k === 'home') setI(0)
-        else if (k === 'end') setI(slides.length - 1)
+        else if (k === 'end') setI(last)
       }}
       style={{ position: 'relative', width: w, height: h, backgroundColor: '#000000' }}
     >
-      <img ref={img} objectFit="fill" style={{ position: 'absolute', left: 0, top: 0, width: w, height: h }} />
+      {/* Not mounted without a slide, so deleting the last one does not leave its bitmap on screen. */}
+      {slide ? <img ref={img} objectFit="fill" style={{ position: 'absolute', left: 0, top: 0, width: w, height: h }} /> : null}
       <div style={{ position: 'absolute', right: 16, bottom: 12, paddingLeft: 8, paddingRight: 8, height: 22, borderRadius: 6, backgroundColor: '#00000099', display: 'flex', alignItems: 'center' }}>
         <T size={11} color={C.muted}>{slides.length ? `${at + 1} / ${slides.length} · Esc to exit` : 'No slides: add top-level frames'}</T>
       </div>

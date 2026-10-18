@@ -171,6 +171,7 @@ export function Field({ label, value, onCommit, width, mono, testId, placeholder
     typed.current = sent.current = value
   }, [value])
   const commit = (v = typed.current) => {
+    typed.current = v
     if (v === sent.current) return
     sent.current = v
     onCommit(v)

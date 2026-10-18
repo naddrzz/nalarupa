@@ -234,8 +234,9 @@ function Layers({ version, selection, select, focus, hover }: { version: number;
                   position: 'relative', display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, height: 28, marginLeft: 6, marginRight: 6,
                   paddingLeft: 6 + l.depth * 14, paddingRight: 4, borderRadius: 6, cursor: 'pointer',
                   // Hidden layers keep their name at 4.5:1 on the panel and its hover fill: 0.6 for the grey
-                  // name, 0.85 for the violet component name (0.6 measured 3.17:1).
-                  opacity: l.hidden ? (l.reusable || l.type === 'ref' ? 0.85 : 0.6) : 1,
+                  // name, 0.85 for the violet component name (0.6 measured 3.17:1), and none on a selected
+                  // component row (0.85 over the selection fill measures 4.13:1).
+                  opacity: l.hidden ? (l.reusable || l.type === 'ref' ? (active ? 1 : 0.85) : 0.6) : 1,
                   backgroundColor: mark === 'inside' ? '#3B82F655' : active ? '#3B82F633' : undefined,
                   hover: { backgroundColor: active ? '#3B82F633' : C.panel2 },
                 }}
