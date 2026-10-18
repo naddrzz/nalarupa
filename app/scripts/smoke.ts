@@ -34,7 +34,14 @@ const lit = () => {
   for (let i = 0; i < p.length; i += 4) if (p[i] > 120) n++
   return n
 }
+const greens = () => {
+  const p = renderPixels(480, 270, 0, 0, 0.25, 0x000000, 'sld01', true)!
+  let n = 0
+  for (let i = 0; i < p.length; i += 4) if (p[i + 1] > 180 && p[i] < 100 && p[i + 2] < 130) n++
+  return n
+}
 const before = lit()
+const greenBefore = greens()
 assert(before > 0, 'presented slide shows its content')
 call('tool', { name: 'execute', args: { input: 'Insert("sld01", {type:"rectangle", name:"BigGreen", x:100, y:100, width:900, height:500, fill:"#22ff55"})' } })
 assert(call('state').animating, 'insert into a presented slide is animating')
@@ -42,7 +49,8 @@ assert(lit() > 0, 'presented slide keeps its content while the insert glides in'
 await Bun.sleep(700)
 renderPixels(480, 270, 0, 0, 0.25, 0x000000, 'sld01', true)
 assert(!call('state').animating, 'presented slide settled after ~0.6 s')
-assert(lit() >= before, 'presented slide shows its final content')
+assert(lit() >= before, 'presented slide keeps its existing content')
+assert(greens() > greenBefore, 'presented slide shows its inserted content')
 call('undo')
 // Reduced motion (an OS preference the app passes in): agent inserts appear in place.
 call('reduce_motion', { on: true })

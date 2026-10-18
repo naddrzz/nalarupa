@@ -453,10 +453,13 @@ impl Renderer {
     /// every sliding node out, so skipping them would blank the presented slide.
     fn composite_slides(&mut self, w: u32, h: u32, cam_x: f64, cam_y: f64, zoom: f64, solo: Option<&str>) {
         let now = Instant::now();
-        for s in &mut self.slides {
-            s.start.get_or_insert(now);
-        }
         let shown: Option<HashSet<&str>> = solo.map(|id| self.layers.get(id).into_iter().flat_map(|l| l.flat.iter().map(|f| f.id.as_str())).collect());
+        // A slide in another frame keeps waiting: its clock starts when it is first on screen.
+        for s in &mut self.slides {
+            if shown.as_ref().is_none_or(|ids| ids.contains(s.id.as_str())) {
+                s.start.get_or_insert(now);
+            }
+        }
         let states: HashMap<String, (f64, f64, f64)> = self.slides.iter().map(|s| (s.id.clone(), s.state(now))).collect();
         let (vx, vy) = ((cam_x * zoom).round() as i32, (cam_y * zoom).round() as i32);
         let Some(mut out) = tiny_skia::PixmapMut::from_bytes(&mut self.pixels, w, h) else { return };
@@ -1170,6 +1173,9 @@ pub(crate) mod tests {
         assert!(green(&px, 150, 153) < 200, "the sliding node paints in the solo frame");
         let px = r.render(400, 400, 0.0, 500.0, 1.0, [30, 30, 30], Some("f"), true).to_vec();
         assert!(green(&px, 150, 153) == 30, "a node sliding in another frame stays out");
+        r.slides.iter_mut().find(|s| s.id == "s").unwrap().start = None;
+        r.render(400, 400, 0.0, 0.0, 1.0, [30, 30, 30], Some("f"), true);
+        assert!(r.slides.iter().find(|s| s.id == "s").unwrap().start.is_none(), "its clock does not start while another frame is presented");
     }
 
     /// Inserting into a centered column moves the existing child up (auto-layout reflow); it
