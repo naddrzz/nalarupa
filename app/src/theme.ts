@@ -84,7 +84,8 @@ function workArea(): { w: number; h: number } | null {
 }
 
 /** Window size: 1440×900 where it fits, else the work area less a margin and the native frame (title
- *  bar ≈ 32 px, borders ≈ 8 px), so the title bar never lands above the screen. GPUI centres it. */
+ *  bar ≈ 32 px, borders ≈ 8 px), so the title bar never lands above the screen. GPUI centres it on the
+ *  display; decorateWindow moves it back into the work area when the taskbar would cover part of it. */
 export function windowSize() {
   const want = { width: 1440, height: 900, minWidth: 1100, minHeight: 680 }
   const area = workArea()
@@ -108,6 +109,10 @@ export function decorateWindow(tries = 50) {
       GetSystemMetrics: { args: [FFIType.i32], returns: FFIType.i32 },
       LoadImageW: { args: [FFIType.ptr, FFIType.ptr, FFIType.u32, FFIType.i32, FFIType.i32, FFIType.u32], returns: FFIType.ptr },
       SendMessageW: { args: [FFIType.ptr, FFIType.u32, FFIType.u64, FFIType.ptr], returns: FFIType.ptr },
+      GetWindowRect: { args: [FFIType.ptr, FFIType.ptr], returns: FFIType.i32 },
+      MonitorFromWindow: { args: [FFIType.ptr, FFIType.u32], returns: FFIType.ptr },
+      GetMonitorInfoW: { args: [FFIType.ptr, FFIType.ptr], returns: FFIType.i32 },
+      SetWindowPos: { args: [FFIType.ptr, FFIType.ptr, FFIType.i32, FFIType.i32, FFIType.i32, FFIType.i32, FFIType.u32], returns: FFIType.i32 },
     })
     const { symbols: dwm } = dlopen('dwmapi.dll', { DwmSetWindowAttribute: { args: [FFIType.ptr, FFIType.u32, FFIType.ptr, FFIType.u32], returns: FFIType.i32 } })
     const owner = new Uint32Array(1)
@@ -128,6 +133,22 @@ export function decorateWindow(tries = 50) {
         const size = u.GetSystemMetrics(metric)
         const icon = u.LoadImageW(null, ptr(path), 1, size, size, 0x10)
         if (icon) u.SendMessageW(hwnd, 0x80, which, icon) // WM_SETICON
+      }
+    }
+    // GPUI centres the window on the whole display, so on a short screen its bottom slides under the taskbar
+    // (1024×768 with a 48 px taskbar: 2 px off). Re-centre it in the work area of the monitor it is on when it
+    // does not fit there. GetWindowRect and GetMonitorInfoW answer in the same DPI space (this thread's).
+    const win = new Int32Array(4)
+    const info = new Int32Array(10) // MONITORINFO: cbSize, rcMonitor, rcWork, dwFlags
+    info[0] = 40
+    const mon = u.GetWindowRect(hwnd, ptr(win)) ? u.MonitorFromWindow(hwnd, 2) : null // MONITOR_DEFAULTTONEAREST
+    if (mon && u.GetMonitorInfoW(mon, ptr(info))) {
+      const area = info.subarray(6, 10)
+      const [w, h] = [win[2] - win[0], win[3] - win[1]]
+      if (win[0] < area[0] || win[1] < area[1] || win[2] > area[2] || win[3] > area[3]) {
+        const x = area[0] + Math.max(0, Math.floor((area[2] - area[0] - w) / 2))
+        const y = area[1] + Math.max(0, Math.floor((area[3] - area[1] - h) / 2))
+        u.SetWindowPos(hwnd, null, x, y, 0, 0, 0x0001 | 0x0004 | 0x0010) // SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE
       }
     }
     const colorref = (hex: string) => new Uint32Array([parseInt(hex.slice(5, 7) + hex.slice(3, 5) + hex.slice(1, 3), 16)])
