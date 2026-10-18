@@ -2,7 +2,7 @@
 // Screenshots land in app/screenshots/. The window opens in the background.
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { launch } from '@gpuix/react/automation'
 
 const out = join(import.meta.dir, '..', 'screenshots')
@@ -32,11 +32,19 @@ async function mcp(name: string, args: Record<string, unknown>) {
 const data = mkdtempSync(join(tmpdir(), 'nalarupa-e2e-'))
 const local = process.platform === 'darwin' ? join(homedir(), 'Library', 'Application Support') : process.env.LOCALAPPDATA ?? process.env.XDG_DATA_HOME ?? join(homedir(), '.local', 'share')
 const own = process.env.NALARUPA_DATA || join(local, 'Nalarupa')
+// A stand-in `claude` (a shell script, so not on Windows) that streams one long reply, for the agent message pill.
+const standIn = process.platform !== 'win32'
+// With an API key set the core picks the API backend; the stand-in needs the Claude Code one.
+delete process.env.ANTHROPIC_API_KEY
+const bin = join(data, 'bin')
+mkdirSync(bin)
+const delta = (t: string) => JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: t } } })
+if (standIn) writeFileSync(join(bin, 'claude'), `#!/bin/sh\nfor i in 0 1 2 3 4 5 6 7; do\n  echo '${delta('chunk lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. ')}'\n  sleep 0.5\ndone\n`, { mode: 0o755 })
 let app: Awaited<ReturnType<typeof launch>> | undefined
 try {
   for (const dir of ['cache', 'fonts']) if (existsSync(join(own, dir))) cpSync(join(own, dir), join(data, dir), { recursive: true })
   const before = new Set(await ports())
-  app = await launch({ command: 'bun', args: ['app.tsx'], cwd: join(import.meta.dir, '..'), env: { ...process.env, GPUIX_BACKGROUND: '1', NALARUPA_DATA: data } })
+  app = await launch({ command: 'bun', args: ['app.tsx'], cwd: join(import.meta.dir, '..'), env: { ...process.env, GPUIX_BACKGROUND: '1', NALARUPA_DATA: data, PATH: `${bin}${delimiter}${process.env.PATH ?? ''}` } })
   await app.getByTestId('template-slides').waitFor({ timeoutMs: 30000 })
   // Exactly one new server: with a second Nalarupa started meanwhile, picking one would be a guess.
   const fresh = (await ports()).filter((p) => !before.has(p))
@@ -247,6 +255,24 @@ TakeScreenshot([s])`,
   await sleep(200)
   if (await app.getByTestId('toast').count()) throw new Error('dismissing the error toast left it on screen')
   if (await app.getByTestId('chat-history').count()) await app.getByTestId('chat-history').press('escape')
+
+  // The agent message pill: a reply long enough to fill the pill must not squash its status dot.
+  if (standIn) {
+    await app.getByTestId('tab-agent').click()
+    await app.getByTestId('agent-input').waitFor()
+    await app.getByTestId('agent-input').click()
+    await app.getByTestId('agent-input').fill('Say something long')
+    await sleep(200)
+    await app.getByTestId('agent-send').click()
+    await app.getByTestId('tab-design').click()
+    const dot = async () => (await app.getByType('div').all()).find((n) => n.testId?.startsWith('agent-pill-dot-') && (n.bounds?.width ?? 0) > 0)?.bounds
+    let size = await dot()
+    for (let i = 0; !size && i < 40; i++) { await sleep(250); size = await dot() }
+    if (!size) throw new Error('the agent message pill did not show')
+    await shot('12-agent-pill')
+    if (Math.abs(size.width - 8) > 0.5 || Math.abs(size.height - 8) > 0.5) throw new Error(`the pill's status dot is ${size.width}x${size.height}, expected 8x8`)
+    await sleep(4500) // the stand-in reply ends and the run finishes
+  }
 
   await app.getByTestId('present').click()
   await sleep(1500)

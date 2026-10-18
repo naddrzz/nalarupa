@@ -310,7 +310,7 @@ export function AgentLayer({ cam, w, h, version, chatOpen }: { cam: Cam; w: numb
                 backgroundColor: C.panel, borderWidth: 1, borderColor: C.border,
                 boxShadow: { offsetX: 0, offsetY: 4, blurRadius: 12, spreadRadius: 0, color: '#00000055' },
               }}>
-                <div style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: prof.color, opacity: pulse }} />
+                <div testId={`agent-pill-dot-${id}`} style={{ width: 8, height: 8, flexShrink: 0, borderRadius: 4, backgroundColor: prof.color, opacity: pulse }} />
                 <text style={{ fontSize: 12, fontWeight: '600', color: prof.color, fontFamily: FONT, whiteSpace: 'nowrap' }}>{prof.name}</text>
                 <text style={{ fontSize: 12, color: C.text, fontFamily: FONT, whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden', flexShrink: 1, minWidth: 0 }}>
                   {msg.length > 140 ? `${msg.slice(0, 140)}…` : msg}
