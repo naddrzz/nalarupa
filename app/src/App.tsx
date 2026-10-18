@@ -273,11 +273,13 @@ export function App() {
     return <Present w={win?.width ?? 1440} h={win?.height ?? 900} start={presentFrom} version={state.version} exit={() => setScreen('editor')} />
   }
   if (screen === 'home') {
+    // One root like the editor: as two window-level siblings, a showing toast blanked Home.
     return (
-      <>
-        <Home recent={init.recent ?? []} onOpened={openedDoc} toast={toast} />
+      <div style={{ width: '100%', height: '100%' }}>
+        {/* Read fresh: files saved or opened since startup belong in Recent too. */}
+        <Home recent={tryCall<{ recent?: string[] }>('settings_get')?.recent ?? []} onOpened={openedDoc} toast={toast} />
         {toastEl}
-      </>
+      </div>
     )
   }
 
