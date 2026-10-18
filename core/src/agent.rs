@@ -192,12 +192,12 @@ pub fn send(prompt: String, parallel: usize, mode: &str, designs: usize, iterate
             return Ok(());
         }
     }
-    begin(prompt, parallel, mode, designs, iterate);
+    begin(prompt, parallel, mode, designs, iterate, false);
     Ok(())
 }
 
-/// Start a turn without the busy check: also how a finished run hands over to its continuation.
-fn begin(prompt: String, parallel: usize, mode: &str, designs: usize, iterate: &str) {
+/// Start a turn without the busy check: also how a finished run hands over to its continuation (`resume`).
+fn begin(prompt: String, parallel: usize, mode: &str, designs: usize, iterate: &str, resume: bool) {
     {
         let mut e = engine();
         e.agent.parallel = (parallel.clamp(1, MAX_CHILDREN + 1), if mode == "side" { "side".into() } else { "split".into() });
@@ -207,13 +207,18 @@ fn begin(prompt: String, parallel: usize, mode: &str, designs: usize, iterate: &
     if designs > 1 {
         text = format!("{text}\n\n{FIRST_DESIGN}");
     }
-    start_turn(&prompt, text);
+    start_turn(&prompt, text, resume);
 }
 
 /// Send `prompt` to the main agent (same conversation), showing `shown` as the user's message.
-fn start_turn(shown: &str, prompt: String) {
+/// A `resume` turn continues a finished run: it is dropped when Stop came in since that run ended.
+fn start_turn(shown: &str, prompt: String, resume: bool) {
     let main = {
         let mut e = engine();
+        if resume && e.agent.cancel.load(Ordering::SeqCst) {
+            e.agent.running = false;
+            return;
+        }
         if e.agent.chat.is_none() {
             let id = format!("{:x}{:04x}", now_ms(), crate::doc::random_u64() & 0xffff);
             e.agent.chat = Some(Chat { id, title: shown.trim().chars().take(100).collect(), events: Vec::new() });
@@ -312,10 +317,10 @@ fn start_thread(p: Profile, prompt: String, child: Option<String>) {
             }
         };
         match next {
-            Some(Next::Iterate(prompt)) => start_turn(ITERATING, wrap_parallel(prompt)),
+            Some(Next::Iterate(prompt)) => start_turn(ITERATING, wrap_parallel(prompt), true),
             Some(Next::Queued(q)) => {
                 let (n, mode) = engine().agent.parallel.clone();
-                begin(q, n, &mode, 1, "");
+                begin(q, n, &mode, 1, "", true);
             }
             None => {}
         }
