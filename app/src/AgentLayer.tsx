@@ -4,24 +4,19 @@
 // Positions are kept in document units and projected with the camera every frame.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { tryCall, type Box } from './core'
-import { PRESENCE, profileOf, store, type CursorState } from './agents'
+import { FADE_DELAY, FADE_DUR, FADE_IN, GONE, PILL_MS, PRESENCE, needsFrame, profileOf, store, type CursorState } from './agents'
 import { ICONS } from './icons'
 import { C, FONT, REDUCED_MOTION } from './theme'
 import type { Cam } from './Canvas'
 
 // ── constants ───────────────────────────────────────────────────────────────
 const DECAY = 2.5            // cursor approach rate, 1/s
-const FADE_IN = 200
-const FADE_DELAY = 5000
-const FADE_DUR = 1500
-const GONE = FADE_DELAY + FADE_DUR
 const WOBBLE_AMP = 4
 const REST_DELAY = 250
 const WOBBLE_DECAY = 3
 const ATTACK = 200
 const RELEASE = 300
 const SCAN_DELAY = 40
-const PILL_MS = 3000
 const PEN_DECAY = 40         // the AI Pen follows its points much faster than agent cursors
 
 const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3)
@@ -103,14 +98,10 @@ export function AgentLayer({ cam, w, h, version, chatOpen }: { cam: Cam; w: numb
     for (const b of tryCall<Box[]>('boxes', { ids }) ?? []) boxes.current.set(b.id, b)
   }, [version])
 
-  // 60 fps while anything animates; idle otherwise.
+  // 60 fps while anything animates; idle otherwise (under reduced motion only while a fade is due).
   useEffect(() => {
     const t = setInterval(() => {
-      const now = performance.now()
-      const busy = store.activity.length > 0 || store.flashes.length > 0 || live.length > 0 || store.pens.size > 0
-        || [...store.cursors.values()].some((c) => store.running.has(c.profile.id) || now - c.lastActivity < GONE)
-        || [...store.pills.values()].some((p) => now - p.at < PILL_MS)
-      if (busy) setFrame((f) => (f + 1) % 1_000_000)
+      if (needsFrame(performance.now(), REDUCED_MOTION, live.length)) setFrame((f) => (f + 1) % 1_000_000)
     }, 16)
     return () => clearInterval(t)
   }, [live.length])
