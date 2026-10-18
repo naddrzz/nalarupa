@@ -160,8 +160,13 @@ impl Html<'_> {
         if !text_auto {
             css += &size_css(n.p.get("width"), "width", parent_dir, true, n.w);
             css += &size_css(n.p.get("height"), "height", parent_dir, false, n.h);
-            if n.p.get("width").is_none() && matches!(n.ty.as_str(), "rectangle" | "ellipse" | "icon" | "polygon" | "line" | "path") {
-                let _ = write!(css, "width:{}px;height:{}px;", n.w, n.h);
+            if matches!(n.ty.as_str(), "rectangle" | "ellipse" | "icon" | "polygon" | "line" | "path") {
+                if n.p.get("width").is_none() {
+                    let _ = write!(css, "width:{}px;", n.w);
+                }
+                if n.p.get("height").is_none() {
+                    let _ = write!(css, "height:{}px;", n.h);
+                }
             }
         }
         if let Some(o) = n.f("opacity") {
