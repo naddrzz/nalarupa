@@ -301,6 +301,37 @@ try {
   await app.getByTestId('tool-rectangle').click()
   await app.mouse.drag(at(600, 420), at(780, 580), { steps: 5 })
   await sleep(300)
+
+  // Inspector: an empty or unparsable value is rejected (the field reverts) instead of committing 0, an empty
+  // name or an unpaintable color. Click the field's right end, then send each key batch in its own call.
+  const typeInto = async (testId: string, keys: string) => {
+    const b = (await app.getByTestId(testId).bounds())!
+    await app.mouse.click({ x: b.x + b.width - 10, y: b.y + b.height / 2 })
+    await sleep(700)
+    await app.call('keystrokes', { keys })
+    await sleep(1000)
+    await app.call('keystrokes', { keys: 'enter' })
+    await sleep(1500)
+  }
+  if (await count('toast-dismiss')) await app.getByTestId('toast-dismiss').click()
+  const sized0 = (await app.getByTestId('size-label').textContent()).trim()
+  const rows0 = await rectRows()
+  await typeInto('inspector-w', 'ctrl-a backspace')
+  assert((await app.getByTestId('size-label').textContent()).trim() === sized0, 'an empty width reverts instead of committing 0')
+  await typeInto('inspector-w', 'ctrl-a a b c')
+  assert((await app.getByTestId('size-label').textContent()).trim() === sized0, 'a non-numeric width is ignored')
+  await typeInto('inspector-name', 'ctrl-a backspace')
+  assert((await rectRows()) === rows0, 'an empty layer name is rejected')
+  assert(!(await count('toast')), 'no error toast before a bad color')
+  await typeInto('inspector-fill', 'ctrl-a r e d')
+  assert(await until(async () => (await count('toast')) > 0), 'a color the renderer cannot read raises an error toast')
+  await app.getByTestId('toast-dismiss').click()
+  await typeInto('inspector-fill', 'ctrl-a # 1 1 2 2 3 3')
+  await sleep(500)
+  assert(!(await count('toast')), 'a valid hex color is applied without an error')
+  await canvas.press('ctrl-z')
+  await sleep(300)
+
   // Handle centers (canvas px), tl, tr, br, bl. Each sits 12 px in at radius 0 and slides toward the middle
   // (80 px for a 180×160 box) as the radius grows: inset = 12 + radius·68/80.
   const insets = async () => (await app.getByTestId('radius-handle').all()).map((n, i) => {
