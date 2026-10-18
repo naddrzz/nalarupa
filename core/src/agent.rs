@@ -909,7 +909,7 @@ fn run_claude_code(p: &Profile, prompt: &str, child: bool) -> Result<Value, Stri
                                "cacheWrite": u["cache_creation_input_tokens"], "turns": ev["num_turns"], "costUsd": ev["total_cost_usd"]});
                 if ev["is_error"] == true {
                     // Without text the card would hide the real cause; leave that to the exit error (stderr).
-                    match ev["result"].as_str().map(str::trim).filter(|t| !t.is_empty()) {
+                    match error_cause(&ev) {
                         Some(text) => {
                             emit(p, "error", json!({"text": text}));
                             reported = true;
@@ -932,6 +932,13 @@ fn run_claude_code(p: &Profile, prompt: &str, child: bool) -> Result<Value, Stri
         emit(p, "error", json!({"text": "Claude Code reported an error"}));
     }
     Ok(usage)
+}
+
+/// The cause an error `result` event carries: its `result` text, else its `errors` list; None when it has neither.
+fn error_cause(ev: &Value) -> Option<String> {
+    let result = ev["result"].as_str().map(str::trim).filter(|t| !t.is_empty());
+    let errors: Vec<&str> = ev["errors"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::trim).filter(|t| !t.is_empty()).collect();
+    result.map(str::to_string).or_else(|| (!errors.is_empty()).then(|| errors.join("\n")))
 }
 
 /// The failure for a non-zero exit. Empty when an error result already showed the cause, so
@@ -1000,6 +1007,14 @@ mod tests {
         assert_eq!(events[1]["text"], "Hello");
         assert!(read_chat(&dir, "../settings").is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn error_cause_reads_result_then_errors() {
+        assert_eq!(error_cause(&json!({"result": " Credit balance is too low "})).as_deref(), Some("Credit balance is too low"));
+        assert_eq!(error_cause(&json!({"result": "", "errors": ["", "Not logged in", " Run /login "]})).as_deref(), Some("Not logged in\nRun /login"));
+        assert_eq!(error_cause(&json!({"result": "  ", "errors": []})), None, "no cause: the exit error shows stderr instead");
+        assert_eq!(error_cause(&json!({})), None);
     }
 
     #[test]
