@@ -1,8 +1,10 @@
 name: claude
-# Label an issue "claude" (bug or feature) to get a PR; mention @claude in an issue/PR comment or review to iterate.
-# Only users with write access can trigger it (claude-code-action default).
+# - An issue labeled "claude" (the nightly QA labels the bugs it files) → Claude fixes or builds it and opens a PR.
+# - A comment mentioning @claude by someone with write access → Claude iterates on that issue or PR.
+# - A cubic review on a PR → Claude fixes the valid findings, replies, resolves the threads and pushes.
+# Everything runs as the repo owner through GH_PAT, so pushes and new PRs trigger CI and commits carry only their name.
 on:
-  issues: { types: [labeled, assigned] }
+  issues: { types: [labeled] }
   issue_comment: { types: [created] }
   pull_request_review_comment: { types: [created] }
   pull_request_review: { types: [submitted] }
@@ -10,6 +12,7 @@ on:
 env:
   CARGO_TARGET_DIR: /home/nalarupa-ci/.cache/nalarupa-target
   NALARUPA_CORE: /home/nalarupa-ci/.cache/nalarupa-target/release/libnalarupa_core.so
+  GH_TOKEN: ${{ secrets.GH_PAT }}
 
 jobs:
   claude:
@@ -23,7 +26,7 @@ jobs:
     permissions: { contents: write, pull-requests: write, issues: write, id-token: write, actions: read }
     steps:
       - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+        with: { fetch-depth: 0, token: "${{ secrets.GH_PAT }}" }
       - run: cargo build --release
         working-directory: core
       - run: bun install --frozen-lockfile
@@ -31,12 +34,65 @@ jobs:
       - uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GH_PAT }}
           label_trigger: claude
           base_branch: dev
           branch_prefix: claude/
+          bot_id: "129574549"
+          bot_name: naddrzz
+          settings: '{"includeCoAuthoredBy": false}'
           additional_permissions: |
             actions: read
           claude_args: |
             --max-turns 150
             --allowedTools "Bash,Read,Edit,Write,Glob,Grep"
-            --append-system-prompt "Nalarupa repo. Fix bugs at the root cause; keep diffs small and in the style of the surrounding code. Before finishing, run: (cd core && cargo test --release) && (cd app && bun run typecheck && bun run smoke && bun run editor-check && bun run mcp-check && bun run doc-check && bash scripts/wl-run.sh bun run e2e && bash scripts/wl-run.sh bun run file-e2e). Add or extend a check for every bug fix. Windows-only checks (a11y-check, window-check, exe-check) and editor-e2e cannot run here; say so in the PR. Open the PR against dev and reference the issue."
+            --append-system-prompt "Nalarupa repo; follow AGENTS.md. Fix bugs at the root cause; keep diffs small and in the style of the surrounding code. Before finishing, run: (cd core && cargo test --release) && (cd app && bun run typecheck && bun run smoke && bun run editor-check && bun run mcp-check && bun run doc-check && bash scripts/wl-run.sh bun run e2e && bash scripts/wl-run.sh bun run file-e2e). Add or extend a check for every bug fix. Windows-only checks (a11y-check, window-check, exe-check) and editor-e2e cannot run here; say so in the PR. When working from an issue: push your branch and open the PR yourself with `gh pr create --base dev`, and put `Fixes #<issue number>` in its body. When working on an existing PR, push to its branch and do not open another PR; reference an issue only if the PR already relates to one. Never add Co-authored-by trailers or 'Generated with Claude Code' lines."
+
+  review-fix:
+    # cubic reviews once per push with all its findings; fix them, at most 3 rounds per PR.
+    if: |
+      github.event_name == 'pull_request_review' &&
+      github.event.review.user.login == 'cubic-dev-ai[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    concurrency: { group: "review-fix-${{ github.event.pull_request.number }}", cancel-in-progress: false }
+    runs-on: [self-hosted, nalarupa]
+    timeout-minutes: 120
+    permissions: { contents: write, pull-requests: write, issues: write, id-token: write, actions: read }
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: "${{ github.event.pull_request.head.ref }}", fetch-depth: 0, token: "${{ secrets.GH_PAT }}" }
+      - id: guard
+        run: echo "rounds=$(git log --oneline origin/${{ github.event.pull_request.base.ref }}..HEAD --grep '^Address review:' | wc -l)" >> "$GITHUB_OUTPUT"
+      - if: steps.guard.outputs.rounds < 3
+        run: cargo build --release
+        working-directory: core
+      - if: steps.guard.outputs.rounds < 3
+        run: bun install --frozen-lockfile
+        working-directory: app
+      - if: steps.guard.outputs.rounds < 3
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GH_PAT }}
+          allowed_bots: cubic-dev-ai
+          bot_id: "129574549"
+          bot_name: naddrzz
+          settings: '{"includeCoAuthoredBy": false}'
+          claude_args: --max-turns 150 --allowedTools "Bash,Read,Edit,Write,Glob,Grep"
+          prompt: |
+            Nalarupa repo; follow AGENTS.md. cubic reviewed PR #${{ github.event.pull_request.number }} (${{ github.repository }}),
+            branch `${{ github.event.pull_request.head.ref }}`, which is checked out.
+
+            1. List the unresolved review threads with their comment ids:
+               gh api graphql -f query='query{repository(owner:"${{ github.repository_owner }}",name:"${{ github.event.repository.name }}"){pullRequest(number:${{ github.event.pull_request.number }}){reviewThreads(first:100){nodes{id isResolved path line comments(first:5){nodes{databaseId author{login} body}}}}}}}'
+               Work only on unresolved threads started by cubic-dev-ai.
+            2. For each one, decide whether it is a real problem. Fix real ones at the root cause, small and in the
+               surrounding style. Do not change code for findings that are wrong; explain why instead.
+            3. Run the checks: (cd core && cargo test --release) && (cd app && bun run typecheck && bun run smoke &&
+               bun run editor-check && bun run mcp-check && bun run doc-check && bash scripts/wl-run.sh bun run e2e &&
+               bash scripts/wl-run.sh bun run file-e2e). Everything must pass before you push.
+            4. Commit with a subject starting `Address review: ` (no Co-authored-by trailer) and `git push`.
+            5. Reply on every thread you handled (gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments/<databaseId>/replies -f body=...)
+               saying what you changed or why not, then resolve it:
+               gh api graphql -f query='mutation{resolveReviewThread(input:{threadId:"<thread id>"}){thread{isResolved}}}'
+            Do not open a new PR and do not reference issues the PR does not already reference.

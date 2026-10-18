@@ -6,6 +6,7 @@ on:
 env:
   CARGO_TARGET_DIR: /home/nalarupa-ci/.cache/nalarupa-target
   NALARUPA_CORE: /home/nalarupa-ci/.cache/nalarupa-target/release/libnalarupa_core.so
+  GH_TOKEN: ${{ secrets.GH_PAT }}
 
 jobs:
   qa:
@@ -21,7 +22,9 @@ jobs:
       - uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          # The owner's token: issues it labels "claude" start the claude workflow (GITHUB_TOKEN events don't).
+          github_token: ${{ secrets.GH_PAT }}
+          settings: '{"includeCoAuthoredBy": false}'
           claude_args: --max-turns 120 --allowedTools "Bash,Read,Glob,Grep,Write"
           prompt: |
             You are the nightly QA for Nalarupa (repo ${{ github.repository }}, branch ${{ github.ref_name }}).
@@ -37,6 +40,7 @@ jobs:
                empty/huge documents, odd unicode text, deep nesting, auto layout extremes, undo/redo chains,
                invalid MCP/execute input, HTML/PDF export. Look at e2e screenshots (Read them) for visual defects.
             3. For each real, reproducible bug: search first with `gh issue list --state open --label bug --search "<keywords>"`.
-               If it is not already filed, `gh issue create --label bug --title "<short>" --body "<repro steps, expected, actual, logs>"`.
+               If it is not already filed, `gh issue create --label bug --label claude --title "<short>" --body "<repro steps, expected, actual, logs>"`
+               (the `claude` label hands it to the claude workflow, which opens a fix PR).
                At most 5 new issues per run; no issues for style opinions or things you could not reproduce.
             Do not edit tracked files, commit, or push. End with a short summary of what you ran and filed.
