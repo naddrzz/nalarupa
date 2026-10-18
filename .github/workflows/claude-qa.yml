@@ -117,7 +117,7 @@ jobs:
         env: { AREAS: "${{ github.event.inputs.areas }}", AREA: "${{ matrix.area }}" }
         run: |
           areas=",$(tr -d ' ' <<< "$AREAS"),"
-          if [ -z "$AREAS" ] || [[ "$areas" == *",$AREA,"* ]]; then echo "run=true" >> "$GITHUB_OUTPUT"; else echo "run=false" >> "$GITHUB_OUTPUT"; fi
+          if [ "$areas" = ",," ] || [[ "$areas" == *",$AREA,"* ]]; then echo "run=true" >> "$GITHUB_OUTPUT"; else echo "run=false" >> "$GITHUB_OUTPUT"; fi
       - if: steps.pick.outputs.run == 'true'
         uses: actions/checkout@v4
       - if: steps.pick.outputs.run == 'true'
