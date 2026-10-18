@@ -41,12 +41,20 @@ function solidColor(fill: unknown, vars: Record<string, any>): string | null {
   return typeof c === 'string' && c.startsWith('#') ? c.slice(0, 7) : null
 }
 
-/** A paint the renderer can draw: empty (none), #RGB / #RRGGBB / #RRGGBBAA, a $variable that exists, or a JSON paint. */
+const PAINT_TYPES = ['color', 'gradient', 'image', 'mesh_gradient', 'shader']
+
+/** A paint the renderer can draw: empty (none), #RGB / #RRGGBB / #RRGGBBAA, a $variable that exists, or a JSON paint (or list of them) with a known type. */
 function validPaint(v: string, vars: Record<string, any>): boolean {
   const t = v.trim()
   if (t === '' || /^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(t)) return true
-  if (t.startsWith('$')) return t.slice(1) in vars
-  return typeof parse(t) === 'object'
+  if (t.startsWith('$')) return Object.prototype.hasOwnProperty.call(vars, t.slice(1))
+  const p = parse(t)
+  const one = (f: any): boolean => {
+    if (typeof f === 'string') return f.startsWith('#') || f.startsWith('$')
+    if (!f || typeof f !== 'object' || Array.isArray(f)) return false
+    return (f.type ?? 'color') === 'color' ? typeof f.color === 'string' : PAINT_TYPES.includes(f.type)
+  }
+  return Array.isArray(p) ? p.every(one) : typeof p === 'object' && one(p)
 }
 
 export function Inspector({ version, selection, select, toast }: Props) {

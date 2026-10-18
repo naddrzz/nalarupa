@@ -242,7 +242,7 @@ export function NumField({ label, name = label, value, mixed, onCommit, step = 1
   }
   const typed = () => {
     if (draft === shown) return
-    // An empty field is not 0: Number('') would commit it as one.
+    // An empty field is not 0: Number('') would commit it as 0.
     const t = draft.trim()
     commit(t === '' ? NaN : Number(t))
   }
