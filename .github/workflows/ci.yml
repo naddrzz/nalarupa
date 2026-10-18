@@ -52,6 +52,9 @@ jobs:
         working-directory: core
       - run: bun install --frozen-lockfile && bun run typecheck && bun run smoke && bun run editor-check && bun run mcp-check && bun run doc-check
         working-directory: app
+      # The hosted desktop is 1024×768; the GUI suites assume the full 1440×900 window, as on a real screen.
+      - shell: pwsh
+        run: Set-DisplayResolution -Width 1920 -Height 1080 -Force; Get-CimInstance Win32_VideoController | Select-Object CurrentHorizontalResolution, CurrentVerticalResolution
       - run: bun run e2e
         working-directory: app
       - if: always()
