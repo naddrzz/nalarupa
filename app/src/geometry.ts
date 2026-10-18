@@ -29,6 +29,12 @@ export const own = (deg: number, flipX: boolean, flipY: boolean): M => {
 }
 /** Offset from a node's origin to its center in its parent's space (rotation and flips about the origin). */
 export const centerOffset = (w: number, h: number, deg: number, flipX: boolean, flipY: boolean): Pt => lin(own(deg, flipX, flipY), w / 2, h / 2)
+/** The origin that keeps a box's center put when its rotation goes from `from` to `to` degrees. */
+export const turnAroundCenter = (x: number, y: number, w: number, h: number, from: number, to: number, flipX: boolean, flipY: boolean): Pt => {
+  const [ox0, oy0] = centerOffset(w, h, from, flipX, flipY)
+  const [ox, oy] = centerOffset(w, h, to, flipX, flipY)
+  return [Math.round((x + ox0 - ox) * 100) / 100, Math.round((y + oy0 - oy) * 100) / 100]
+}
 /** Corners tl, tr, br, bl of `r` under `m`. */
 export const corners = (r: Rect, m?: M | null): Pt[] =>
   ([[r.x, r.y], [r.x + r.w, r.y], [r.x + r.w, r.y + r.h], [r.x, r.y + r.h]] as Pt[]).map(([x, y]) => apply(m, x, y))

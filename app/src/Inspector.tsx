@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { tryCall } from './core'
 import { nodeIcon, type IconName } from './icons'
-import { centerOffset } from './geometry'
+import { turnAroundCenter } from './geometry'
 import { C } from './theme'
 import { Button, Field, Icon, IconButton, NumField, Row, Section, Segmented, Swatch, T, Toggle, type Toast } from './ui'
 
@@ -104,10 +104,7 @@ export function Inspector({ version, selection, select, toast }: Props) {
     const props: Record<string, unknown> = { rotation: v || null }
     if (!inFlow(i) && i.box && i.node.type !== 'group') {
       const [fx, fy] = [!!i.node.flipX, !!i.node.flipY]
-      const [ox0, oy0] = centerOffset(i.box.w, i.box.h, Number(i.node.rotation ?? 0), fx, fy)
-      const [ox, oy] = centerOffset(i.box.w, i.box.h, v, fx, fy)
-      props.x = Math.round((Number(i.node.x ?? 0) + ox0 - ox) * 100) / 100
-      props.y = Math.round((Number(i.node.y ?? 0) + oy0 - oy) * 100) / 100
+      ;[props.x, props.y] = turnAroundCenter(Number(i.node.x ?? 0), Number(i.node.y ?? 0), i.box.w, i.box.h, Number(i.node.rotation ?? 0), v, fx, fy)
     }
     return props
   }, key)

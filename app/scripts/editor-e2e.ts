@@ -137,7 +137,7 @@ try {
   await shot('00c2-inspector-rotated')
   assert(Math.abs(f1.cx - f0.cx) <= 2 && Math.abs(f1.cy - f0.cy) <= 2, `Inspector rotation keeps the center (${f0.cx},${f0.cy} → ${f1.cx},${f1.cy})`)
   await canvas.press('ctrl-z')
-  assert(await until(async () => Math.abs((await frame()).w - f0.w) <= 2), 'one undo step reverts the Inspector rotation')
+  assert(await until(async () => { const u = await frame(); return Math.abs(u.w - f0.w) <= 2 && Math.abs(u.cx - f0.cx) <= 2 && Math.abs(u.cy - f0.cy) <= 2 }), 'one undo step reverts the Inspector rotation')
 
   // Dragging the right edge past the left one flips the rectangle: it now paints left of its old left edge.
   await app.mouse.drag(at(250, 300), at(100, 300), { steps: 6 })

@@ -7,7 +7,7 @@ import { CANVAS_BG, C, DPR, FONT, LEFT_W, TOP_H } from './theme'
 import { FocusRing, setKeyboardFocus, T, useRing, type Toast } from './ui'
 import { AgentLayer } from './AgentLayer'
 import {
-  anchorPoints, apply, centerOffset, corners, dragPoints, lin, measure, own, painted, resizeBox, resizeCursor, snap, turned, unapply, unionRect,
+  anchorPoints, apply, corners, dragPoints, lin, measure, own, painted, resizeBox, resizeCursor, snap, turnAroundCenter, turned, unapply, unionRect,
   type Guide, type M, type Measure, type Pt, type Rect,
 } from './geometry'
 import {
@@ -591,10 +591,7 @@ export function Canvas(props: {
     const props: Record<string, unknown> = { rotation: r }
     if (d.movable) {
       // Turn around the center: move the origin so the center stays put.
-      const [ox0, oy0] = centerOffset(d.box.w, d.box.h, d.rot0, d.flipX, d.flipY)
-      const [ox, oy] = centerOffset(d.box.w, d.box.h, r, d.flipX, d.flipY)
-      props.x = Math.round((d.x0 + ox0 - ox) * 100) / 100
-      props.y = Math.round((d.y0 + oy0 - oy) * 100) / 100
+      ;[props.x, props.y] = turnAroundCenter(d.x0, d.y0, d.box.w, d.box.h, d.rot0, r, d.flipX, d.flipY)
     }
     tryCall('update', { ids: [d.id], props })
     refresh()
