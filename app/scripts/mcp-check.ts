@@ -77,6 +77,15 @@ const text = (r: any) => r.content.map((c: any) => c.text ?? '').join('')
   assert(!(await tool('open_document', { path: doc })).isError, 'open_document reopens it')
   assert((await tool('spawn_agents', { agents: [] })).isError, 'external agents cannot spawn agents')
 
+  // Each /mcp/<agent-id> keeps its own execute globals: B reusing `page` must not redirect A.
+  const as = async (agent: string, input: string) => text((await rpc({ id: agent, method: 'tools/call', params: { name: 'execute', arguments: { input } } }, `/mcp/${agent}`)).result)
+  await as('agA', 'page = Insert(document, {type:"frame", name:"A page", width:400, height:300})')
+  await as('agB', 'page = Insert(document, {type:"frame", name:"B page", x:500, width:400, height:300})')
+  await as('agA', 'Insert(page, {type:"text", name:"A text", content:"from A", fill:"#000"})')
+  const layers = (call('layers') as any[]).map((x) => '  '.repeat(x.depth) + x.name).join('\n')
+  assert(/A page\n {2}A text/.test(layers) && !/B page\n {2}A text/.test(layers), `A's text lands in A's frame:\n${layers}`)
+  assert((await as('agC', 'Print(typeof page)')).includes('undefined'), 'another agent does not inherit A/B globals')
+
   console.log('mcp-check ok — MCP at', mcpUrl)
 }
 process.exit(0)
