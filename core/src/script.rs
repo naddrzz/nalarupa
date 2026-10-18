@@ -117,7 +117,7 @@ function Get(a, b, c) {
 }
 var __rejected = new Map();
 function __track(p, reason, handled) { if (handled) __rejected.delete(p); else __rejected.set(p, reason); }
-function __unhandled() { for (const r of __rejected.values()) return r; }
+function __unhandled() { for (const r of __rejected.values()) return [r]; }
 var __base = new Set(Object.getOwnPropertyNames(globalThis));
 "#;
 
@@ -537,9 +537,10 @@ fn settle(ctx: &Ctx<'_>) -> Result<(), String> {
             return Err(describe(ctx, rquickjs::Error::Exception));
         }
     }
-    let reason: Option<rquickjs::Value> = ctx.globals().get::<_, Function>("__unhandled").and_then(|f| f.call(())).map_err(|e| describe(ctx, e))?;
+    // Boxed in an array so a rejection with an `undefined` reason still counts as found.
+    let reason: Option<rquickjs::Array> = ctx.globals().get::<_, Function>("__unhandled").and_then(|f| f.call(())).map_err(|e| describe(ctx, e))?;
     match reason {
-        Some(r) => Err(describe(ctx, ctx.throw(r))),
+        Some(r) => Err(describe(ctx, ctx.throw(r.get(0).map_err(|e| describe(ctx, e))?))),
         None => Ok(()),
     }
 }
@@ -1468,6 +1469,11 @@ Insert(card, {type:\"text\", name:\"Title\", content:\"Hi\", fill:\"#111111\"})
             let r = execute(&mut e, &json!({"input": src}));
             assert!(r.error && r.text.contains("late failure") && r.text.contains("editId"), "{}", r.text);
             assert_eq!(e.doc.children().len(), 3, "rolled back");
+        }
+        // A rejection whose reason is undefined fails too.
+        for src in ["Promise.reject()", "(async () => { await null; throw undefined })()"] {
+            let r = execute(&mut e, &json!({"input": src}));
+            assert!(r.error && r.text.contains("Uncaught"), "{}", r.text);
         }
         // A rejection that is handled later is not a failure; a job loop stops at the deadline.
         let handled = execute(&mut e, &json!({"input": "const p = Promise.reject(new Error('x')); p.catch(() => Print('caught'))"}));
