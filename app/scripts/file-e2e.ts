@@ -18,8 +18,9 @@ const data = mkdtempSync(join(tmpdir(), 'nalarupa-file-'))
 let saved = ''
 let app: Awaited<ReturnType<typeof launch>> | undefined
 try {
-  // HOME too: untitled documents save under ~/Documents/Nalarupa, which must stay out of the real home.
-  app = await launch({ command: 'bun', args: ['app.tsx'], cwd: join(import.meta.dir, '..'), env: { ...process.env, GPUIX_BACKGROUND: '1', NALARUPA_DATA: data, HOME: data } })
+  // The home folder too (HOME, USERPROFILE on Windows): untitled documents save under ~/Documents/Nalarupa,
+  // which must stay out of the real home.
+  app = await launch({ command: 'bun', args: ['app.tsx'], cwd: join(import.meta.dir, '..'), env: { ...process.env, GPUIX_BACKGROUND: '1', NALARUPA_DATA: data, HOME: data, USERPROFILE: data } })
   await app.getByTestId('template-blank').waitFor({ timeoutMs: 30000 })
   assert(await app.getByText('No recent files yet.').count(), 'a fresh data folder has no recent files')
   await app.getByTestId('template-blank').click()

@@ -1,9 +1,9 @@
 <!-- bmad:context -->
-<!-- Verified 2026-10-18 against 31eac66. Managed by bmad-project-context; edits inside this block are replaced on refresh. Keep anything you want preserved outside the markers. -->
+<!-- Verified 2026-10-18 against c7a6a33. Managed by bmad-project-context; edits inside this block are replaced on refresh. Keep anything you want preserved outside the markers. -->
 
 ## nalarupa
 
-AI design editor: a Rust core (`core/`, a cdylib loaded through `bun:ffi`) and a GPUIX/React UI run by Bun (`app/`). Windows is the release platform; CI, nightly QA and Claude automation run on a self-hosted Linux runner (`.github/workflows/`). Work is tracked in GitHub issues.
+AI design editor: a Rust core (`core/`, a cdylib loaded through `bun:ffi`) and a GPUIX/React UI run by Bun (`app/`). Windows is the release platform. CI runs on GitHub-hosted Linux and Windows runners; nightly QA and the Claude automation run on a self-hosted Linux VPS (`.github/workflows/`). Work is tracked in GitHub issues.
 
 ## Policy
 

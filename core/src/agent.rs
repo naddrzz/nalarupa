@@ -8,7 +8,7 @@
 //! - `spawn_agents` starts parallel child agents that each own container frames.
 //! The UI polls the events emitted here.
 
-use crate::engine::{engine, tool_specs};
+use crate::engine::{engine, tool_specs, Engine};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -60,8 +60,6 @@ pub struct AgentState {
     pub running: bool,
     active: usize,
     pub cancel: Arc<AtomicBool>,
-    /// Counts `stop()` calls, so a turn handing over to the next one can tell it was stopped meanwhile.
-    stops: u64,
     pub profiles: Vec<Profile>,
     pub main: Option<String>,
     /// Prompts sent while agents were busy; flushed as one message afterwards.
@@ -85,15 +83,6 @@ pub struct Chat {
 }
 
 impl AgentState {
-    /// True (and idle again) when `stop()` ran since `since`, the stop count a handoff started from.
-    fn stopped_since(&mut self, since: Option<u64>) -> bool {
-        let stopped = since.is_some_and(|s| s != self.stops);
-        if stopped {
-            self.running = false;
-        }
-        stopped
-    }
-
     pub fn profile(&self, id: &str) -> Option<&Profile> {
         self.profiles.iter().find(|p| p.id == id)
     }
@@ -117,7 +106,7 @@ impl AgentState {
         let mut ev = ev.clone();
         ev["at"] = json!(now_ms());
         chat.events.push(ev);
-        matches!(kind, "user" | "message_end" | "done")
+        matches!(kind, "user" | "message_end" | "done" | "dequeued")
     }
 
     /// Start over with no conversation (the old one stays saved).
@@ -203,18 +192,14 @@ pub fn send(prompt: String, parallel: usize, mode: &str, designs: usize, iterate
             return Ok(());
         }
     }
-    begin(prompt, parallel, mode, designs, iterate, None);
+    begin(prompt, parallel, mode, designs, iterate, false);
     Ok(())
 }
 
-/// Start the first turn of a run (the agent is idle, or the previous turn is handing over:
-/// `since` is then the stop count at the handoff, and a `stop()` after it cancels the run).
-fn begin(prompt: String, parallel: usize, mode: &str, designs: usize, iterate: &str, since: Option<u64>) {
+/// Start a turn without the busy check: also how a finished run hands over to its continuation (`resume`).
+fn begin(prompt: String, parallel: usize, mode: &str, designs: usize, iterate: &str, resume: bool) {
     {
         let mut e = engine();
-        if e.agent.stopped_since(since) {
-            return;
-        }
         e.agent.parallel = (parallel.clamp(1, MAX_CHILDREN + 1), if mode == "side" { "side".into() } else { "split".into() });
         e.agent.cook = (designs.clamp(1, MAX_DESIGNS), if iterate == "style" { "style".into() } else { "layout".into() });
     }
@@ -222,14 +207,25 @@ fn begin(prompt: String, parallel: usize, mode: &str, designs: usize, iterate: &
     if designs > 1 {
         text = format!("{text}\n\n{FIRST_DESIGN}");
     }
-    start_turn(&prompt, text, since);
+    start_turn(&prompt, text, resume);
 }
 
 /// Send `prompt` to the main agent (same conversation), showing `shown` as the user's message.
-fn start_turn(shown: &str, prompt: String, since: Option<u64>) {
+/// A `resume` turn continues a finished run: it is dropped when Stop came in since that run ended.
+fn start_turn(shown: &str, prompt: String, resume: bool) {
     let main = {
         let mut e = engine();
-        if e.agent.stopped_since(since) {
+        if resume && e.agent.cancel.load(Ordering::SeqCst) {
+            // Prompts sent after Stop queued behind this continuation: run them now as a fresh turn,
+            // keeping the agent busy so nothing else slips in, instead of leaving them stranded.
+            let queued = std::mem::take(&mut e.agent.queue);
+            if queued.is_empty() {
+                e.agent.running = false;
+                return;
+            }
+            let (n, mode) = e.agent.parallel.clone();
+            drop(e);
+            begin(queued.join("\n\n"), n, &mode, 1, "", false);
             return;
         }
         if e.agent.chat.is_none() {
@@ -302,6 +298,10 @@ fn start_thread(p: Profile, prompt: String, child: Option<String>) {
         {
             let mut e = engine();
             e.streams_of_agent_end(&p.id);
+            // A child runs once under a fresh id: its globals can never be read again.
+            if child.is_some() {
+                e.script.globals.remove(&p.id);
+            }
             // A request its (now gone) process still waits on is denied; its card goes away.
             e.agent.permissions.retain(|_, (agent, waiting)| *agent != p.id || waiting.send(false).is_err());
         }
@@ -310,41 +310,51 @@ fn start_thread(p: Profile, prompt: String, child: Option<String>) {
             Iterate(&'static str),
             Queued(String),
         }
-        let (next, since) = {
+        let next = {
             let mut e = engine();
             e.agent.active -= 1;
             if e.agent.active > 0 {
-                (None, None)
+                None
             } else {
                 e.emit(json!({"type": "agent", "kind": "all_done"}));
                 // The next variation starts before the queue: queued prompts wait for the last variation.
                 let next = if e.agent.cook.0 > 1 && !stopped {
                     e.agent.cook.0 -= 1;
                     Some(Next::Iterate(if e.agent.cook.1 == "style" { NEXT_STYLE } else { NEXT_LAYOUT }))
+                } else if stopped {
+                    // Prompts queued while the stopped agents were shutting down are dropped too.
+                    drop_queue(&mut e);
+                    None
                 } else {
-                    (!e.agent.queue.is_empty() && !stopped).then(|| Next::Queued(std::mem::take(&mut e.agent.queue).join("\n\n")))
+                    (!e.agent.queue.is_empty()).then(|| Next::Queued(std::mem::take(&mut e.agent.queue).join("\n\n")))
                 };
-                // Stay busy across the handoff so a document switch cannot slip in before the next turn starts.
+                // A continuation keeps the agent busy until its thread starts, so a reset cannot slip in between.
                 e.agent.running = next.is_some();
-                (next, Some(e.agent.stops))
+                next
             }
         };
         match next {
-            Some(Next::Iterate(prompt)) => start_turn(ITERATING, wrap_parallel(prompt), since),
+            Some(Next::Iterate(prompt)) => start_turn(ITERATING, wrap_parallel(prompt), true),
             Some(Next::Queued(q)) => {
                 let (n, mode) = engine().agent.parallel.clone();
-                begin(q, n, &mode, 1, "", since);
+                begin(q, n, &mode, 1, "", true);
             }
             None => {}
         }
     });
 }
 
+/// Drop the queued prompts and tell the UI, so their bubbles stop promising to send them.
+fn drop_queue(e: &mut Engine) {
+    if !std::mem::take(&mut e.agent.queue).is_empty() {
+        e.emit(json!({"type": "agent", "kind": "dequeued"}));
+    }
+}
+
 pub fn stop() {
     let mut e = engine();
     e.agent.cancel.store(true, Ordering::SeqCst);
-    e.agent.stops += 1;
-    e.agent.queue.clear();
+    drop_queue(&mut e);
     e.agent.cook.0 = 1;
     for (_, (_, waiting)) in e.agent.permissions.drain() {
         let _ = waiting.send(false);
@@ -355,8 +365,15 @@ pub fn stop() {
     }
 }
 
-pub fn reset() {
-    engine().agent.clear();
+/// `agent_reset`: start a new conversation. The running thread keeps writing into whatever chat and
+/// session are current, so it is refused until the agents have stopped.
+pub fn reset() -> Result<(), String> {
+    let mut e = engine();
+    if e.agent.running {
+        return Err("Stop the agent before starting a new conversation.".into());
+    }
+    e.agent.clear();
+    Ok(())
 }
 
 /// Name of our MCP tool that Claude Code asks before running a tool it may not use on its own
@@ -986,6 +1003,39 @@ mod tests {
         assert_eq!(kinds, ["user", "text_delta", "done"]);
         assert_eq!(events[1]["text"], "Hello");
         assert!(read_chat(&dir, "../settings").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Stop drops the queued prompts and says so, so the chat does not keep promising to send them.
+    #[test]
+    fn stop_announces_dropped_queue() {
+        let kinds = || engine().events.iter().filter(|e| e["type"] == "agent").filter_map(|e| e["kind"].as_str().map(str::to_string)).collect::<Vec<_>>();
+        let dir = std::env::temp_dir().join(format!("nalarupa-test-stop-{:x}", crate::doc::random_u64()));
+        let saved = |kind: &str| read_chat(&dir, "5709e5").unwrap()["events"].as_array().unwrap().iter().filter(|e| e["kind"] == kind).count();
+        let data_dir = {
+            let mut e = engine();
+            let old = std::mem::replace(&mut e.data_dir, dir.clone());
+            e.agent.running = true;
+            e.agent.chat = Some(Chat { id: "5709e5".into(), title: "stop".into(), events: Vec::new() });
+            old
+        };
+        send("also add a footer".into(), 1, "split", 1, "").unwrap();
+        assert_eq!(engine().agent.queue.len(), 1);
+        stop();
+        assert!(engine().agent.queue.is_empty());
+        assert_eq!(kinds().iter().filter(|k| *k == "dequeued").count(), 1);
+        assert_eq!(saved("dequeued"), 1, "the saved chat keeps the announcement for replay");
+        stop();
+        assert_eq!(kinds().iter().filter(|k| *k == "dequeued").count(), 1, "nothing queued, nothing announced");
+        // A prompt that arrives while the stopped agents are still shutting down is dropped and announced too.
+        send("one more thing".into(), 1, "split", 1, "").unwrap();
+        drop_queue(&mut engine());
+        assert!(engine().agent.queue.is_empty());
+        assert_eq!(saved("dequeued"), 2);
+        let mut e = engine();
+        e.agent.running = false;
+        e.agent.chat = None;
+        e.data_dir = data_dir;
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -103,6 +103,16 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
       onSent?.()
     } else toast('Unable to start the agent. Check the backend in Agent settings and try again.', true)
   }
+  // The core refuses while an agent runs ("Stop the agent before …"): keep the chat and say why.
+  const newChat = () => {
+    try {
+      call('agent_reset')
+    } catch (e) {
+      return toast((e as Error).message, true)
+    }
+    resetChat()
+    toast('New conversation')
+  }
   const toggle = (id: number) => setOpen((s) => {
     const n = new Set(s)
     if (n.has(id)) n.delete(id)
@@ -125,7 +135,7 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
         <Icon name="sparkles" size={14} color={C.accent} />
         <T weight="600" grow>Design agent</T>
         <ChatHistory running={running} toast={toast} changed={() => setChatVersion((n) => n + 1)} />
-        <IconButton icon="plus" title="New agent" testId="agent-new" onClick={() => { tryCall('agent_reset'); resetChat(); toast('New conversation') }} />
+        <IconButton icon="plus" title="New agent" testId="agent-new" onClick={newChat} />
         <IconButton icon="settings" title="Agent settings" testId="agent-settings" active={settings} onClick={() => setSettings((s) => !s)} />
       </div>
       {settings ? <AgentSettings mcpUrl={mcpUrl} toast={toast} /> : null}
@@ -202,8 +212,8 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
           <Row gap={6}>
             <T size={11} color={C.muted}>Agents</T>
             <Segmented label="Agents working in parallel" value={parallel} onChange={setParallel} options={['1', '2', '3', '4'].map((v) => ({ value: v, label: `${v}×`, name: v === '1' ? '1 agent' : `${v} agents` }))} />
-            {parallel !== '1' ? <Segmented label="How agents share the work" value={mode} onChange={setMode} options={[{ value: 'split', label: 'Split' }, { value: 'side', label: 'Side by side' }]} /> : null}
           </Row>
+          {parallel !== '1' ? <Segmented label="How agents share the work" value={mode} onChange={setMode} options={[{ value: 'split', label: 'Split' }, { value: 'side', label: 'Side by side' }]} /> : null}
           <Row gap={6}>
             <ModelPicker settingsOpen={settings} />
             <div style={{ flexGrow: 1 }} />

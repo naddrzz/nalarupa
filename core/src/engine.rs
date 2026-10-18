@@ -200,7 +200,7 @@ impl Engine {
         if let Some(mut preview) = self.preview.take() {
             let seed = self.streams[i].seed;
             std::mem::swap(&mut self.doc, &mut preview);
-            let touched = crate::script::stream_step(self, key, prefix, seed);
+            let touched = crate::script::stream_step(self, key, agent, prefix, seed);
             std::mem::swap(&mut self.doc, &mut preview);
             self.preview = Some(preview);
             if let Some(touched) = touched {
@@ -256,7 +256,7 @@ impl Engine {
         let jobs: Vec<(String, String, String, u64, usize)> = self.streams.iter().map(|s| (s.key.clone(), s.agent.clone(), s.source.clone(), s.seed, s.touched)).collect();
         let mut activity = Vec::new();
         for (i, (key, agent, source, seed, seen)) in jobs.into_iter().enumerate() {
-            let touched = crate::script::stream_step(self, &key, &source, seed).unwrap_or_default();
+            let touched = crate::script::stream_step(self, &key, &agent, &source, seed).unwrap_or_default();
             if touched.len() > seen {
                 activity.push(json!({"type": "agent_activity", "agent": agent, "op": "write", "ids": touched[seen..].to_vec(), "streaming": true}));
             }
