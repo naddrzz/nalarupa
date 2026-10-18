@@ -66,16 +66,32 @@ const text = (r: any) => r.content.map((c: any) => c.text ?? '').join('')
   assert((await tool('get_style', { name: 'no-such-style' })).isError, 'unknown style is an error')
   const ok = await tool('execute', { input: 'Insert("sld01", {type:"rectangle", name:"McpRect", width:10, height:10})' })
   assert(!ok.isError && text(ok).includes('McpRect'), `execute inserts: ${text(ok)}`)
-  const before = text(await tool('get_editor_state'))
-  const broken = await tool('execute', { input: 'Insert("missing-parent", {type:"rectangle"})' })
+  // The first insert succeeds before the second throws: the whole call must roll back. The layer list
+  // names every node (get_editor_state does not), so it shows a leftover rectangle.
+  const before = JSON.stringify(call('layers'))
+  assert(before.includes('McpRect'), 'the layer list names inserted nodes')
+  const broken = await tool('execute', { input: 'Insert("sld01", {type:"rectangle", name:"RolledBack"}); Insert("missing-parent", {type:"rectangle"})' })
   assert(broken.isError, 'execute against a missing parent is an error')
-  assert(text(await tool('get_editor_state')) === before, 'a failed execute changes nothing')
+  assert(JSON.stringify(call('layers')) === before, 'a failed execute rolls back the edits it made')
   assert((await tool('no_such_tool')).isError, 'unknown tool is an error')
   assert((await tool('open_document')).isError, 'open_document needs a path')
   const doc = join(data, 'created.pen')
   assert(!(await tool('open_document', { path: doc })).isError && existsSync(doc), 'open_document creates a missing file')
   assert(!(await tool('open_document', { path: doc })).isError, 'open_document reopens it')
   assert((await tool('spawn_agents', { agents: [] })).isError, 'external agents cannot spawn agents')
+
+  // Each /mcp/<agent-id> keeps its own execute globals: B reusing `page` must not redirect A.
+  const as = async (agent: string, input: string) => {
+    const r = (await rpc({ id: agent, method: 'tools/call', params: { name: 'execute', arguments: { input } } }, `/mcp/${agent}`)).result
+    assert(!r.isError, `${agent} execute failed: ${text(r)}`)
+    return text(r)
+  }
+  await as('agA', 'page = Insert(document, {type:"frame", name:"A page", width:400, height:300})')
+  await as('agB', 'page = Insert(document, {type:"frame", name:"B page", x:500, width:400, height:300})')
+  await as('agA', 'Insert(page, {type:"text", name:"A text", content:"from A", fill:"#000"})')
+  const layers = (call('layers') as any[]).map((x) => '  '.repeat(x.depth) + x.name).join('\n')
+  assert(/A page\n {2}A text/.test(layers) && !/B page\n {2}A text/.test(layers), `A's text lands in A's frame:\n${layers}`)
+  assert((await as('agC', 'Print(typeof page)')).includes('undefined'), 'another agent does not inherit A/B globals')
 
   console.log('mcp-check ok — MCP at', mcpUrl)
 }

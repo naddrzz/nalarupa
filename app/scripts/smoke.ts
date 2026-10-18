@@ -1,6 +1,6 @@
 // FFI smoke check: `bun scripts/smoke.ts` — exercises the core without opening a window.
 import { call, renderPixels } from '../src/core'
-import { imageSrc } from '../src/agents'
+import { applyEvents, imageSrc, resetChat, store } from '../src/agents'
 
 const assert = (ok: unknown, msg: string) => {
   if (!ok) throw new Error(`smoke failed: ${msg}`)
@@ -33,6 +33,14 @@ call('tool', { name: 'execute', args: { input: 'Insert("sld01", {type:"rectangle
 assert(!call('state').animating, 'no slide-in under reduced motion')
 call('undo')
 call('reduce_motion', { on: false })
+// Stop drops queued prompts: the chat must not keep a bubble promising to send them.
+resetChat()
+applyEvents([{ type: 'agent', kind: 'queued', text: 'also add a footer' }], 0)
+assert(store.items.some((i) => i.kind === 'queued'), 'queued prompt shows a bubble')
+applyEvents([{ type: 'agent', kind: 'dequeued' }], 0)
+assert(!store.items.some((i) => i.kind === 'queued'), 'dequeued drops the queued bubble')
+assert(store.items.some((i) => i.kind === 'note' && /discarded/.test(i.text)), 'dequeued says the prompt was discarded')
+resetChat()
 const mcp = await fetch(`http://127.0.0.1:${init.mcpPort}/mcp`, {
   method: 'POST',
   headers: { 'content-type': 'application/json' },
