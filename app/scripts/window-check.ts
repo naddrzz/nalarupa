@@ -38,6 +38,8 @@ try {
     if (owner[0] === pid && u32.IsWindowVisible(hwnd)) break
   }
   if (!hwnd) throw new Error('no window for the app')
+  // Measure after decorateWindow (it polls every 100 ms) has set the icon and moved the window into the work area.
+  await new Promise((r) => setTimeout(r, 500))
   const wr = new Int32Array(4), cr = new Int32Array(4), origin = new Int32Array(2)
   u32.GetWindowRect(hwnd, ptr(wr))
   u32.GetClientRect(hwnd, ptr(cr))
@@ -51,7 +53,6 @@ try {
   console.log('work area', work, '\nwindow', win, '\nclient', client, `\nnative frame: top ${client.y - win.y}px, left ${client.x - win.x}px`)
   if (win.x < work.x || win.y < work.y || win.x + win.w > work.x + work.w || win.y + win.h > work.y + work.h) failures.push('the window does not fit the work area: part of it (its title bar) is off screen')
   if (client.y - win.y < 20) failures.push('no native title bar above the client area')
-  await new Promise((r) => setTimeout(r, 500)) // decorateWindow polls every 100 ms
   // WM_GETICON: ICON_SMALL (title bar), ICON_BIG (taskbar)
   if (!u32.SendMessageW(hwnd, 0x7f, 0, null) || !u32.SendMessageW(hwnd, 0x7f, 1, null)) failures.push('the window has no Nalarupa icon')
   const caption = new Uint32Array(1)
