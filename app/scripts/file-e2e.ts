@@ -1,7 +1,7 @@
 // Save and reopen through the real window: `bun scripts/file-e2e.ts`
 // Draw → Save (toolbar) → Home lists it under Recent → reopen shows the drawing; a second Save keeps the
-// same file; Home asks before it replaces unsaved edits (Cancel / Back, Save, Don't save); a recent file that vanished from disk is no longer offered. No OS file dialogs involved.
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+// same file; Home asks before it replaces unsaved edits (Cancel / Escape / Back, Save, a failed Save, Don't save); a recent file that vanished from disk is no longer offered. No OS file dialogs involved.
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { launch } from '@gpuix/react/automation'
@@ -69,14 +69,28 @@ try {
   await prompt.waitFor()
   await app.getByTestId('unsaved-cancel').click()
   await until(async () => !(await prompt.count()), 'Cancel closes the prompt')
+  await app.getByTestId('template-empty').click()
+  await prompt.waitFor()
+  await prompt.press('escape')
+  await until(async () => !(await prompt.count()), 'Escape closes the prompt')
   await app.getByTestId('home-back').click()
   await app.getByTestId('canvas').waitFor()
   await rectsAre(3, 'Cancel and Back keep the unsaved rectangle')
 
-  // Save writes the open file first, then the new document replaces it.
+  // A failed Save (a folder stands where the file should be) shows an error and keeps the prompt, and the document, in place.
+  const aside = `${saved}.bak`
+  renameSync(saved, aside)
+  mkdirSync(saved)
   await app.getByTestId('home').click()
   await app.getByTestId('template-empty').click()
   await prompt.waitFor()
+  await app.getByTestId('unsaved-save').click()
+  await app.getByText('Unable to save the document').waitFor()
+  assert(await prompt.count(), 'a failed Save keeps the prompt open')
+  rmSync(saved, { recursive: true })
+  renameSync(aside, saved)
+
+  // Save writes the open file first, then the new document replaces it.
   await app.getByTestId('unsaved-save').click()
   await app.getByTestId('canvas').waitFor()
   await until(() => (readFileSync(saved, 'utf8').match(/"rectangle"/g) ?? []).length === 3, 'Save in the prompt wrote the third rectangle')

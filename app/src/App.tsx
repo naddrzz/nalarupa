@@ -281,7 +281,23 @@ export function App() {
     return (
       <div style={{ width: '100%', height: '100%' }}>
         {/* Read fresh: files saved or opened since startup belong in Recent too. */}
-        <Home recent={tryCall<{ recent?: string[] }>('settings_get')?.recent ?? []} dirty={state.dirty} title={state.title} save={() => saveTo(state.path ?? defaultSavePath(state.title))} back={opened ? () => setScreen('editor') : undefined} onOpened={openedDoc} toast={toast} />
+        <Home
+          recent={tryCall<{ recent?: string[] }>('settings_get')?.recent ?? []}
+          // The polled flag lags an edit by up to 120 ms, so ask the core when a template or file is picked.
+          dirty={() => tryCall<State>('state')?.dirty ?? state.dirty}
+          title={state.title}
+          save={() => {
+            try {
+              return saveTo(state.path ?? defaultSavePath(state.title))
+            } catch {
+              toast('Unable to save the document. Check that the folder exists and is writable.', true)
+              return false
+            }
+          }}
+          back={opened ? () => setScreen('editor') : undefined}
+          onOpened={openedDoc}
+          toast={toast}
+        />
         {toastEl}
       </div>
     )
