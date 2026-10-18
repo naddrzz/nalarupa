@@ -53,6 +53,7 @@ jobs:
     if: |
       github.event_name == 'pull_request_review' &&
       github.event.review.user.login == 'cubic-dev-ai[bot]' &&
+      github.event.pull_request.state == 'open' &&
       github.event.pull_request.head.repo.full_name == github.repository
     concurrency: { group: "review-fix-${{ github.event.pull_request.number }}", cancel-in-progress: false }
     runs-on: [self-hosted, nalarupa]
