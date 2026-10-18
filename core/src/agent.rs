@@ -286,7 +286,9 @@ fn start_thread(p: Profile, prompt: String, child: Option<String>) {
             Ok(u) => u,
             Err(err) => {
                 if !stopped {
-                    emit(&p, "error", json!({"text": err}));
+                    if !err.is_empty() {
+                        emit(&p, "error", json!({"text": err}));
+                    }
                     // A failed main turn ends the iterations.
                     if child.is_none() {
                         engine().agent.cook.0 = 1;
@@ -864,6 +866,8 @@ fn run_claude_code(p: &Profile, prompt: &str, child: bool) -> Result<Value, Stri
     let mut inputs: HashMap<String, (String, Value)> = HashMap::new();
     let mut last_preview: HashMap<String, Instant> = HashMap::new();
     let mut usage = json!({});
+    let mut reported = false;
+    let mut textless_error = false;
     for line in BufReader::new(stdout).lines() {
         let Ok(line) = line else { break };
         let Ok(ev) = serde_json::from_str::<Value>(&line) else { continue };
@@ -935,7 +939,14 @@ fn run_claude_code(p: &Profile, prompt: &str, child: bool) -> Result<Value, Stri
                 usage = json!({"input": u["input_tokens"], "output": u["output_tokens"], "cacheRead": u["cache_read_input_tokens"],
                                "cacheWrite": u["cache_creation_input_tokens"], "turns": ev["num_turns"], "costUsd": ev["total_cost_usd"]});
                 if ev["is_error"] == true {
-                    emit(p, "error", json!({"text": ev["result"].as_str().unwrap_or("Claude Code reported an error")}));
+                    // Without text the card would hide the real cause; leave that to the exit error (stderr).
+                    match error_cause(&ev) {
+                        Some(text) => {
+                            emit(p, "error", json!({"text": text}));
+                            reported = true;
+                        }
+                        None => textless_error = true,
+                    }
                 }
             }
             _ => {}
@@ -946,9 +957,32 @@ fn run_claude_code(p: &Profile, prompt: &str, child: bool) -> Result<Value, Stri
     let status = proc.lock().unwrap_or_else(|e| e.into_inner()).wait().map_err(|e| e.to_string())?;
     let err = err_reader.join().unwrap_or_default();
     if !cancel.load(Ordering::SeqCst) && !status.success() {
-        return Err(format!("claude exited with {status}: {}", err.trim()));
+        return Err(exit_error(&status.to_string(), &err, reported));
+    }
+    if textless_error && !cancel.load(Ordering::SeqCst) {
+        emit(p, "error", json!({"text": "Claude Code reported an error"}));
     }
     Ok(usage)
+}
+
+/// The cause an error `result` event carries: its `result` text, else its `errors` list; None when it has neither.
+fn error_cause(ev: &Value) -> Option<String> {
+    let result = ev["result"].as_str().map(str::trim).filter(|t| !t.is_empty());
+    let errors: Vec<&str> = ev["errors"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::trim).filter(|t| !t.is_empty()).collect();
+    result.map(str::to_string).or_else(|| (!errors.is_empty()).then(|| errors.join("\n")))
+}
+
+/// The failure for a non-zero exit. Empty when an error result already showed the cause, so
+/// `start_thread` ends the run without a second card; never ends in a bare colon.
+fn exit_error(status: &str, stderr: &str, reported: bool) -> String {
+    let stderr = stderr.trim();
+    if reported {
+        String::new()
+    } else if stderr.is_empty() {
+        format!("claude exited with {status}")
+    } else {
+        format!("claude exited with {status}: {stderr}")
+    }
 }
 
 fn short_tool(name: &str) -> String {
@@ -1004,6 +1038,22 @@ mod tests {
         assert_eq!(events[1]["text"], "Hello");
         assert!(read_chat(&dir, "../settings").is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn error_cause_reads_result_then_errors() {
+        assert_eq!(error_cause(&json!({"result": " Credit balance is too low "})).as_deref(), Some("Credit balance is too low"));
+        assert_eq!(error_cause(&json!({"result": "", "errors": ["", "Not logged in", " Run /login "]})).as_deref(), Some("Not logged in\nRun /login"));
+        assert_eq!(error_cause(&json!({"result": "  ", "errors": []})), None, "no cause: the exit error shows stderr instead");
+        assert_eq!(error_cause(&json!({})), None);
+    }
+
+    #[test]
+    fn exit_error_has_no_duplicate_or_empty_tail() {
+        assert_eq!(exit_error("exit status: 1", "", true), "", "the error result already showed the cause");
+        assert_eq!(exit_error("exit status: 1", "boom\n", true), "");
+        assert_eq!(exit_error("exit status: 1", " \n", false), "claude exited with exit status: 1");
+        assert_eq!(exit_error("exit status: 1", "boom\n", false), "claude exited with exit status: 1: boom");
     }
 
     /// Stop drops the queued prompts and says so, so the chat does not keep promising to send them.
