@@ -216,7 +216,16 @@ fn start_turn(shown: &str, prompt: String, resume: bool) {
     let main = {
         let mut e = engine();
         if resume && e.agent.cancel.load(Ordering::SeqCst) {
-            e.agent.running = false;
+            // Prompts sent after Stop queued behind this continuation: run them now as a fresh turn,
+            // keeping the agent busy so nothing else slips in, instead of leaving them stranded.
+            let queued = std::mem::take(&mut e.agent.queue);
+            if queued.is_empty() {
+                e.agent.running = false;
+                return;
+            }
+            let (n, mode) = e.agent.parallel.clone();
+            drop(e);
+            begin(queued.join("\n\n"), n, &mode, 1, "", false);
             return;
         }
         if e.agent.chat.is_none() {
