@@ -131,18 +131,30 @@ fn css_color_alpha(v: &str, k: f64) -> Option<String> {
 /// CSS gradient of a gradient paint. Backgrounds have no per-layer opacity, so `opacity` goes into the stop alphas.
 fn gradient_css(o: &serde_json::Map<String, Value>) -> Option<String> {
     let opacity = o.get("opacity").and_then(num).unwrap_or(1.0).clamp(0.0, 1.0);
-    let stops: Vec<String> = o.get("colors").and_then(Value::as_array).into_iter().flatten().filter_map(|c| {
-        Some(format!("{} {}%", css_color_alpha(c["color"].as_str()?, opacity)?, num(&c["position"]).unwrap_or(0.0) * 100.0))
+    // Like the canvas: positions clamped to 0..1 and sorted.
+    let mut stops: Vec<(f64, String)> = o.get("colors").and_then(Value::as_array).into_iter().flatten().filter_map(|c| {
+        let position = num(&c["position"]).unwrap_or(0.0).clamp(0.0, 1.0);
+        Some((position, format!("{} {}%", css_color_alpha(c["color"].as_str()?, opacity)?, position * 100.0)))
     }).collect();
     if stops.is_empty() {
         return None;
     }
+    stops.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let stops: Vec<String> = stops.into_iter().map(|(_, stop)| stop).collect();
     let rot = o.get("rotation").and_then(num).unwrap_or(0.0);
-    let at = |k: &str, d: f64| o.get("center").and_then(|c| c.get(k)).and_then(num).unwrap_or(d) * 100.0;
+    let pt = |k: &str, a: &str, d: f64| o.get(k).and_then(|v| v.get(a)).and_then(num).unwrap_or(d);
+    let at = |k: &str| pt("center", k, 0.5) * 100.0;
     Some(match o.get("gradientType").and_then(Value::as_str) {
-        Some("radial") => format!("radial-gradient({})", stops.join(",")),
+        // The canvas ellipse spans `size` of the box; CSS radii are box percentages. A rotated ellipse is
+        // approximated by its bounding half-extents (exact at multiples of 90deg).
+        Some("radial") => {
+            let (rx, ry) = (pt("size", "width", 1.0) / 2.0, pt("size", "height", 1.0) / 2.0);
+            let (sn, cs) = (-rot).to_radians().sin_cos();
+            let r = |a: f64, b: f64| (a.hypot(b) * 100.0).max(1e-4);
+            format!("radial-gradient({}% {}% at {}% {}%,{})", r(rx * cs, ry * sn), r(rx * sn, ry * cs), at("x"), at("y"), stops.join(","))
+        }
         // Angle 0 points up and runs clockwise, like the canvas; rotation is CCW.
-        Some("angular") => format!("conic-gradient(from {}deg at {}% {}%,{})", -rot, at("x", 0.5), at("y", 0.5), stops.join(",")),
+        Some("angular") => format!("conic-gradient(from {}deg at {}% {}%,{})", -rot, at("x"), at("y"), stops.join(",")),
         _ => format!("linear-gradient({}deg,{})", -rot, stops.join(",")),
     })
 }
@@ -517,6 +529,9 @@ mod tests {
         // Angular gradients are conic, rotated like the canvas.
         let (s, _) = rect_html(json!({"fill": grad(json!({"gradientType": "angular"}))}));
         assert!(s.contains("conic-gradient(from -90deg at 50% 50%,#ff0000 0%,#0000ff 100%)"), "{s}");
+        // Radial gradients carry center and size; stops are sorted like the canvas.
+        let (s, _) = rect_html(json!({"fill": grad(json!({"gradientType": "radial", "rotation": 0, "center": {"x": 0.3, "y": 0.4}, "size": {"width": 0.5, "height": 1.0}, "colors": [{"color": "#0000ff", "position": 1.5}, {"color": "#ff0000", "position": 0}]}))}));
+        assert!(s.contains("radial-gradient(25% 50% at 30% 40%,#ff0000 0%,#0000ff 100%)"), "{s}");
     }
 
     #[test]
