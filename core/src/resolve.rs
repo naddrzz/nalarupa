@@ -188,10 +188,15 @@ impl<'a> Resolver<'a> {
         let def = self.vars.get(name)?;
         let val = &def["value"];
         let Some(list) = val.as_array() else { return Some(val.clone()) };
-        // Scan from the end, first entry whose theme fully matches wins.
-        list.iter().rev().find(|e| {
+        // Scan from the end, first entry whose theme fully matches wins; an un-themed entry is the base and
+        // only applies when no themed entry matches, wherever it sits in the list.
+        let matches = |e: &&Value| {
             e["theme"].as_object().map_or(true, |t| t.iter().all(|(a, v)| theme.iter().any(|(ta, tv)| ta == a && Some(tv.as_str()) == v.as_str())))
-        }).or_else(|| list.first()).map(|e| e.get("value").cloned().unwrap_or_else(|| e.clone()))
+        };
+        let themed = |e: &&Value| e["theme"].as_object().is_some_and(|t| !t.is_empty());
+        list.iter().rev().find(|e| themed(e) && matches(e))
+            .or_else(|| list.iter().rev().find(matches))
+            .or_else(|| list.first()).map(|e| e.get("value").cloned().unwrap_or_else(|| e.clone()))
     }
 }
 
@@ -369,6 +374,38 @@ mod tests {
         assert_eq!(inst.kids[0].p["fill"], "#EEEEEE");
         let comp = r.resolve(&root["children"][0]).unwrap();
         assert_eq!(comp.kids[0].p["fill"], "#111111");
+    }
+
+    /// A base value plus one themed override must keep the base as the default theme.
+    #[test]
+    fn base_value_stays_default_with_one_override() {
+        let mut d = crate::doc::Doc::new();
+        d.set_variables(&json!({"bg": {"type": "color", "value": [{"value": "#ffffff"}, {"value": "#111111", "theme": {"mode": "dark"}}]}}), false).unwrap();
+        let mut root = d.root.clone();
+        root["children"] = json!([
+            {"type": "frame", "id": "f", "fill": "$bg"},
+            {"type": "frame", "id": "g", "fill": "$bg", "theme": {"mode": "dark"}}
+        ]);
+        let empty = Map::new();
+        let r = Resolver::new(&root, &[], &empty);
+        assert_eq!(r.resolve(&root["children"][0]).unwrap().p["fill"], "#ffffff");
+        assert_eq!(r.resolve(&root["children"][1]).unwrap().p["fill"], "#111111");
+    }
+
+    /// The un-themed base applies only when no themed entry matches, even if it is listed after the override.
+    #[test]
+    fn base_value_after_override_stays_default() {
+        let mut d = crate::doc::Doc::new();
+        d.set_variables(&json!({"bg": {"type": "color", "value": [{"value": "#111111", "theme": {"mode": "dark"}}, {"value": "#ffffff"}]}}), false).unwrap();
+        let mut root = d.root.clone();
+        root["children"] = json!([
+            {"type": "frame", "id": "f", "fill": "$bg"},
+            {"type": "frame", "id": "g", "fill": "$bg", "theme": {"mode": "dark"}}
+        ]);
+        let empty = Map::new();
+        let r = Resolver::new(&root, &[], &empty);
+        assert_eq!(r.resolve(&root["children"][0]).unwrap().p["fill"], "#ffffff");
+        assert_eq!(r.resolve(&root["children"][1]).unwrap().p["fill"], "#111111");
     }
 
     /// A component that is itself an instance (ref of a ref) expands through the whole chain,
