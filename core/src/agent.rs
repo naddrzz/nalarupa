@@ -812,7 +812,8 @@ fn run_claude_code(p: &Profile, prompt: &str, child: bool) -> Result<Value, Stri
         (e.settings.get("agent_auto_permissions") == Some(&json!(true)), model, fast)
     };
     let mut cmd = Command::new("claude");
-    cmd.arg("-p").arg(&full_prompt)
+    // The prompt goes in on stdin: as an argument a long message or selection overflows the OS limit.
+    cmd.arg("-p")
         .args(["--output-format", "stream-json", "--verbose", "--include-partial-messages", "--strict-mcp-config"])
         .arg("--mcp-config").arg(&cfg)
         // Pre-allowed set: the canvas tools plus web search/fetch. Every other tool asks the
@@ -822,7 +823,7 @@ fn run_claude_code(p: &Profile, prompt: &str, child: bool) -> Result<Value, Stri
         .args(["--permission-prompt-tool", &format!("mcp__nalarupa__{PERMISSION_TOOL}")])
         .arg("--append-system-prompt")
         .arg(format!("{SYSTEM_INTRO}Your canvas tools are the `mcp__nalarupa__*` MCP tools. Read the guide with read_guide before your first execute."))
-        .stdin(Stdio::null())
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     if let Some(s) = &session {
@@ -838,7 +839,19 @@ fn run_claude_code(p: &Profile, prompt: &str, child: bool) -> Result<Value, Stri
     if fast {
         cmd.args(["--settings", r#"{"fastMode":true}"#]);
     }
-    let mut child_proc = cmd.spawn().map_err(|e| format!("could not start the `claude` CLI ({e}). Install Claude Code or switch the backend to the Claude API."))?;
+    let mut child_proc = cmd.spawn().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            format!("could not start the `claude` CLI ({e}). Install Claude Code or switch the backend to the Claude API.")
+        } else {
+            format!("could not start the `claude` CLI ({e})")
+        }
+    })?;
+    // A thread writes it so a prompt larger than the pipe buffer cannot block before output is read; dropping the handle sends EOF.
+    if let Some(mut stdin) = child_proc.stdin.take() {
+        std::thread::spawn(move || {
+            let _ = std::io::Write::write_all(&mut stdin, full_prompt.as_bytes());
+        });
+    }
     let stdout = child_proc.stdout.take().unwrap();
     let mut stderr = child_proc.stderr.take().unwrap();
     let proc = Arc::new(std::sync::Mutex::new(child_proc));
