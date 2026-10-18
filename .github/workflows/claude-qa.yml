@@ -55,9 +55,10 @@ jobs:
               rectangle, ellipse, line, path, text, image, component, instance/ref) and every visual property (solid,
               linear/radial/angular gradient and image fills, multiple fills, strokes with width/align/dash, corner radii,
               opacity, blend modes, shadows/blur effects, rotation, flip, clip content, auto layout child sizing, variables
-              and themes). For each layer: render it alone with `renderPixels(..., solo=<id>)` from app/src/core.ts, render
-              the whole scene, export it (png/svg/pdf/html), and compare the pixels against what the properties say it should
-              look like and against each other (solo vs scene vs export). Then check layer order operations (front/back/up/
+              and themes). For each layer: render it alone with `renderPixels(..., solo=<id>)` from app/src/core.ts (solo draws
+              top-level nodes only; check nested layers inside their top-level ancestor's solo render), render the whole scene,
+              export it (png/svg/pdf/html), and compare the pixels against what the properties say it should look like and
+              against each other (solo vs scene vs export). Then check layer order operations (front/back/up/
               down, reparent, wrap/unwrap, group/ungroup), hidden layers, nested clipping and deep nesting, and that each
               stays correct after undo/redo and after save → open. Read the rendered PNGs and look at them.
           - area: canvas-motion
@@ -110,10 +111,13 @@ jobs:
     timeout-minutes: 150
     permissions: { contents: read, issues: write, id-token: write }
     steps:
-      # workflow_dispatch can pick areas; matrix values are not available in a job-level `if`. No area name contains another,
-      # so a substring match accepts "checks,tests" and "checks, tests" alike.
+      # workflow_dispatch can pick areas; matrix values are not available in a job-level `if`. Whole names are matched,
+      # because "motion" is a substring of "canvas-motion"; spaces are ignored, so "checks,tests" and "checks, tests" both work.
       - id: pick
-        run: echo "run=${{ github.event.inputs.areas == '' || contains(github.event.inputs.areas, matrix.area) }}" >> "$GITHUB_OUTPUT"
+        env: { AREAS: "${{ github.event.inputs.areas }}", AREA: "${{ matrix.area }}" }
+        run: |
+          areas=",$(tr -d ' ' <<< "$AREAS"),"
+          if [ -z "$AREAS" ] || [[ "$areas" == *",$AREA,"* ]]; then echo "run=true" >> "$GITHUB_OUTPUT"; else echo "run=false" >> "$GITHUB_OUTPUT"; fi
       - if: steps.pick.outputs.run == 'true'
         uses: actions/checkout@v4
       - if: steps.pick.outputs.run == 'true'
