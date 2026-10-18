@@ -1,6 +1,6 @@
 // FFI smoke check: `bun scripts/smoke.ts` — exercises the core without opening a window.
 import { call, renderPixels } from '../src/core'
-import { applyEvents, imageSrc, resetChat, store } from '../src/agents'
+import { applyEvents, imageSrc, needsFrame, resetChat, store } from '../src/agents'
 
 const assert = (ok: unknown, msg: string) => {
   if (!ok) throw new Error(`smoke failed: ${msg}`)
@@ -66,6 +66,25 @@ applyEvents([{ type: 'agent', kind: 'dequeued' }], 0)
 assert(!store.items.some((i) => i.kind === 'queued'), 'dequeued drops the queued bubble')
 assert(store.items.some((i) => i.kind === 'note' && /discarded/.test(i.text)), 'dequeued says the prompt was discarded')
 resetChat()
+// Reduced motion: a running agent repaints the canvas layer only for fades, not every frame of the run.
+{
+  const cursor = { profile: { id: 'a', name: 'A', color: '#f00' }, x: 0, y: 0, tx: 0, ty: 0, appearAt: 0, lastActivity: 0, wobble: 0, phase: 0 }
+  store.running.add('a')
+  store.cursors.set('a', cursor)
+  assert(needsFrame(100, true, 0), 'reduced motion: a cursor fading in repaints')
+  assert(!needsFrame(1000, true, 0) && needsFrame(1000, false, 0), 'reduced motion: a settled running cursor is idle, normal motion animates it')
+  assert(!needsFrame(1000, true, 3), 'reduced motion: generating placeholders are static')
+  store.pens.set('p', { x: 0, y: 0, tx: 0, ty: 0, appearAt: 0 })
+  assert(!needsFrame(1000, true, 0), 'reduced motion: a settled AI Pen is idle')
+  store.pens.clear()
+  store.running.clear()
+  cursor.lastActivity = 0
+  assert(!needsFrame(3000, true, 0) && needsFrame(6000, true, 0) && !needsFrame(7000, true, 0), 'reduced motion: a finished cursor repaints only while it fades out')
+  store.pills.set('a', { text: 'hi', at: 5000 })
+  assert(needsFrame(6000, true, 0) && !needsFrame(8500, true, 0), 'reduced motion: a pill repaints until it expires')
+  store.pills.clear()
+  store.cursors.clear()
+}
 const mcp = await fetch(`http://127.0.0.1:${init.mcpPort}/mcp`, {
   method: 'POST',
   headers: { 'content-type': 'application/json' },
