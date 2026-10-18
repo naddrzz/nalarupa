@@ -10,7 +10,7 @@ on:
         required: false
 
 # Runs of one trigger type queue behind each other, and a pending run is only replaced by the same type, so a manual run
-# never drops the full QA a workflow-file push asked for. The single runner still runs one job at a time.
+# never drops the nightly scheduled QA. The single runner still runs one job at a time.
 concurrency: { group: "claude-qa-${{ github.event_name }}", cancel-in-progress: false }
 
 env:
