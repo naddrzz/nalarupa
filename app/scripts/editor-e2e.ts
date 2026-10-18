@@ -169,6 +169,17 @@ try {
   await shot('02-alt-measure')
   assert(measures > 0, 'Alt+hover measures to the hovered layer')
 
+  // Shift+H / Shift+V flip the selected layer about its center: the origin moves across the box (X + width, Y + height)
+  // and one undo step puts it back.
+  const [fx0, fy0, fw, fh] = await Promise.all(['inspector-x', 'inspector-y', 'inspector-w', 'inspector-h'].map(async (id) => Number(await val(id))))
+  for (const [key, field, want] of [['shift-h', 'inspector-x', fx0 + fw], ['shift-v', 'inspector-y', fy0 + fh]] as const) {
+    await canvas.press(key)
+    assert(await until(async () => Number(await val(field)) === want), `${key} moves the origin across the box (${field} → ${want}, got ${await val(field)})`)
+    assert(Number(await val(field === 'inspector-x' ? 'inspector-y' : 'inspector-x')) === (field === 'inspector-x' ? fy0 : fx0), `${key} leaves the other axis alone`)
+    await canvas.press('ctrl-z')
+    assert(await until(async () => Number(await val(field)) === (field === 'inspector-x' ? fx0 : fy0)), `one undo step restores the origin after ${key}`)
+  }
+
   // Marquee from the artboard's empty area selects both rectangles (touch semantics).
   await app.mouse.drag(at(120, 420), at(430, 300), { steps: 6 })
   await sleep(300)

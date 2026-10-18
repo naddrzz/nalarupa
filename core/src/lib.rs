@@ -172,8 +172,12 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             let parent_layout = parent.as_deref().and_then(|p| e.doc.find(p)).map(|p| {
                 if p["type"] == "frame" { p["layout"].as_str().unwrap_or("horizontal").to_string() } else { "none".into() }
             }).unwrap_or_else(|| "none".into());
+            let local = e.renderer.find(id).map(|f| {
+                let ([bx, by], rotation, flip_x, flip_y) = f.local;
+                json!({"bx": bx, "by": by, "rotation": rotation, "flipX": flip_x, "flipY": flip_y})
+            });
             let flat = e.renderer.find(id).map(rect);
-            Ok(json!({"node": raw, "box": flat, "parent": parent, "parentLayout": parent_layout,
+            Ok(json!({"node": raw, "box": flat, "local": local, "parent": parent, "parentLayout": parent_layout,
                       "variables": e.doc.root.get("variables").cloned().unwrap_or(json!({}))}))
         }
         "select" => {

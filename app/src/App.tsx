@@ -175,16 +175,25 @@ export function App() {
     if (m.shift && !m.mod && !m.alt && (key === 'h' || key === 'v') && has) {
       const k = key === 'h' ? 'flipX' : 'flipY'
       const undoKey = `flip:${++flips}`
-      for (const id of sel) {
+      // A flipped layer mirrors its descendants too, so a selected descendant of a selected layer is left to it.
+      const inside = (id: string, of: string) => {
+        if (id.startsWith(`${of}/`)) return true
+        for (let p = parentOf(id); p !== 'document'; p = parentOf(p)) if (p === of) return true
+        return false
+      }
+      for (const id of sel.filter((id) => !sel.some((o) => o !== id && inside(id, o)))) {
         const info = nodeOf(id)
-        const n = info?.node
-        if (!n) continue
-        const props: Record<string, unknown> = { [k]: n[k] ? null : true }
-        if (info.box && (isMovable(info) || info.parent === 'document')) {
+        const l = info?.local
+        if (!l) continue
+        const slash = id.includes('/')
+        // Descendants of component instances are overridden: write the flip explicitly, `null` would fall back to the component's.
+        const props: Record<string, unknown> = { [k]: l[k] ? (slash ? false : null) : true }
+        if (info.box && !slash && (isMovable(info) || info.parent === 'document')) {
           // The flip mirrors about the origin: move the origin so the center stays put.
-          const [rot, fx, fy] = [Number(n.rotation ?? 0), !!n.flipX, !!n.flipY]
-          const [ox0, oy0] = centerOffset(info.box.w, info.box.h, rot, fx, fy)
-          const [ox, oy] = centerOffset(info.box.w, info.box.h, rot, k === 'flipX' ? !fx : fx, k === 'flipY' ? !fy : fy)
+          const [rot, fx, fy] = [Number(l.rotation), !!l.flipX, !!l.flipY]
+          const n = info.node
+          const [ox0, oy0] = centerOffset(info.box.w, info.box.h, rot, fx, fy, l.bx, l.by)
+          const [ox, oy] = centerOffset(info.box.w, info.box.h, rot, k === 'flipX' ? !fx : fx, k === 'flipY' ? !fy : fy, l.bx, l.by)
           props.x = Math.round((Number(n.x ?? 0) + ox0 - ox) * 100) / 100
           props.y = Math.round((Number(n.y ?? 0) + oy0 - oy) * 100) / 100
         }
