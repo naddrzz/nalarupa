@@ -133,6 +133,42 @@ TakeScreenshot([s])`,
   await sleep(1200)
   await shot('05-after-mcp-agent')
 
+  // Agent overlays on rotated nodes (flash, shimmer on a pending image, "Generating" glow on a placeholder frame)
+  // are drawn where the node is painted: each one is centred like the selection frame of the same node
+  // (turning about its corner moves a node's centre by ~30 px at this zoom, so a box left at the layout position fails).
+  const centre = async (id: string) => {
+    const r = await app!.getByTestId(id).bounds()
+    return [r.x + r.width / 2, r.y + r.height / 2]
+  }
+  const poll = async (ok: () => Promise<boolean>, ms = 4000) => {
+    for (const end = Date.now() + ms; Date.now() < end; await sleep(50)) if (await ok()) return true
+    return false
+  }
+  const selectedCentre = async (name: string) => {
+    await app.getByTestId('layers').getByText(name).click()
+    if (!(await poll(async () => (await app!.getByTestId('rotated-overlay').count()) > 0))) throw new Error(`no rotated selection frame for ${name}`)
+    const c = await centre('rotated-overlay')
+    await app.getByTestId('canvas').press('escape')
+    await sleep(200)
+    return c
+  }
+  const sameSpot = (name: string, a: number[], b: number[]) => {
+    if (Math.hypot(a[0] - b[0], a[1] - b[1]) > 6) throw new Error(`the ${name} overlay is centred at ${a.map(Math.round)}, the rotated node at ${b.map(Math.round)}`)
+  }
+  await mcp('execute', { input: `Insert(document, {type:"rectangle", name:"SpinImg", x:300, y:600, width:1000, height:160, rotation:-30, fill:{type:"image", url:"nalarupa:pending-e2e", mode:"fill"}})` })
+  let flash: number[] | undefined
+  if (!(await poll(async () => ((await app!.getByTestId('agent-flash-turned').count()) > 0 && !!(flash = await centre('agent-flash-turned')))))) throw new Error('no flash on the rotated node')
+  if (!(await poll(async () => (await app!.getByTestId('agent-shimmer-turned').count()) > 0))) throw new Error('no shimmer on the rotated pending image')
+  const imgAt = await selectedCentre('SpinImg')
+  sameSpot('flash', flash!, imgAt)
+  sameSpot('shimmer', await centre('agent-shimmer-turned'), imgAt)
+  await mcp('execute', { input: `Insert(document, {type:"frame", name:"SpinGen", x:300, y:300, width:900, height:240, placeholder:true, rotation:30, fill:"#ffd0d0"})` })
+  if (!(await poll(async () => (await app!.getByTestId('agent-glow-turned').count()) > 0))) throw new Error('no generating glow on the rotated placeholder frame')
+  sameSpot('generating glow', await centre('agent-glow-turned'), await selectedCentre('SpinGen'))
+  await shot('05b-rotated-overlays')
+  await mcp('execute', { input: `Delete(Get(n => n.name === "SpinImg" ? n.id : undefined)[0]); Delete(Get(n => n.name === "SpinGen" ? n.id : undefined)[0])` })
+  await sleep(300)
+
   // Slides tab → Export deck to PDF: one page per top-level frame (3 template slides + the MCP one).
   await app.getByText('Slides').click()
   await sleep(800)
