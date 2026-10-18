@@ -7,7 +7,8 @@ import { launch } from '@gpuix/react/automation'
 
 const out = join(import.meta.dir, '..', 'screenshots')
 mkdirSync(out, { recursive: true })
-const shot = (name: string) => app.screenshot({ path: join(out, `${name}.png`) })
+// GPUIX can't capture on Linux; there the window runs under a headless Wayland compositor, so grab it with grim.
+const shot = (name: string) => process.platform === 'linux' ? Bun.$`grim ${join(out, `${name}.png`)}`.quiet() : app.screenshot({ path: join(out, `${name}.png`) })
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 async function mcp(name: string, args: Record<string, unknown>) {
@@ -119,7 +120,9 @@ TakeScreenshot([s])`,
   console.log('deck PDF:', pdfPath, `${pages} pages`)
 
   // Saved chats: a session file on disk is listed in the history dropdown, reopens, and can be removed.
-  const sessions = join(process.env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local'), 'Nalarupa', 'sessions')
+  // Same lookup as core's render::data_dir (Windows: %LOCALAPPDATA%, Linux: $XDG_DATA_HOME or ~/.local/share).
+  const data = process.env.NALARUPA_DATA || join(process.env.LOCALAPPDATA ?? process.env.XDG_DATA_HOME ?? join(homedir(), '.local', 'share'), 'Nalarupa')
+  const sessions = join(data, 'sessions')
   const chatId = `e2e${Date.now().toString(36)}`
   const chatFile = join(sessions, `${chatId}.json`)
   const agent = { id: 'ag0e2e', name: 'Arunika', color: '#7C9CFF', parent: null }
