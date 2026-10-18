@@ -160,7 +160,7 @@ impl Html<'_> {
         if !text_auto {
             css += &size_css(n.p.get("width"), "width", parent_dir, true, n.w);
             css += &size_css(n.p.get("height"), "height", parent_dir, false, n.h);
-            if n.p.get("width").is_none() && matches!(n.ty.as_str(), "rectangle" | "ellipse" | "icon" | "polygon" | "path") {
+            if n.p.get("width").is_none() && matches!(n.ty.as_str(), "rectangle" | "ellipse" | "icon" | "polygon" | "line" | "path") {
                 let _ = write!(css, "width:{}px;height:{}px;", n.w, n.h);
             }
         }

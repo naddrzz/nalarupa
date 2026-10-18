@@ -105,6 +105,15 @@ const figKids = node(card[0]).node.children
 assert(card.length === 1 && box(card[0]).x === 40 && figKids.map((k: any) => k.name).join() === 'Title,Body,Row', 'Figma paste')
 assert(figKids[2].children[1].children[0].content === 'Buy now', 'the instance keeps its text override')
 
+// A line (documented in the agent guide) can be inserted, created by execute and copied → pasted.
+const LN = call('insert', { parent: F, node: { type: 'line', name: 'Ln', x: 20, y: 200, width: 100, height: 60, stroke: '#000000', strokeWidth: 6 } }).id
+assert(node(LN).node.type === 'line', 'insert accepts a line')
+const lineOut = call('tool', { name: 'execute', args: { input: 'Insert(document, {type:"line", name:"x", width:100, height:50, stroke:"#000", strokeWidth:4})' } })
+assert(!lineOut.error, `execute Insert accepts a line: ${lineOut.text}`)
+const lineClip = call('copy', { ids: [LN] })
+const lp = call('paste', { html: lineClip.html, text: lineClip.text, targets: [], view }).ids
+assert(lp.length === 1 && node(lp[0]).node.type === 'line' && same(box(lp[0]), box(LN)), 'a copied line pastes in place')
+
 // Pen: points drawn on the canvas become a path in F; reading them back gives the same canvas points.
 const drawn = [{ closed: false, anchors: [{ x: 10, y: 120 }, { x: 60, y: 120, out: [80, 140] }, { x: 60, y: 170 }] }]
 const P = call('path_write', { parent: F, contours: drawn }).id

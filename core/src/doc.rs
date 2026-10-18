@@ -9,7 +9,7 @@ pub const FORMAT_VERSION: &str = "2.19";
 pub const ROOT: &str = "document";
 
 const NODE_TYPES: &[&str] = &[
-    "frame", "group", "rectangle", "ellipse", "polygon", "path", "text", "note", "prompt",
+    "frame", "group", "rectangle", "ellipse", "polygon", "line", "path", "text", "note", "prompt",
     "context", "icon", "script", "browser", "ref",
 ];
 
