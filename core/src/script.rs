@@ -31,7 +31,9 @@ const STACK_LIMIT: usize = 512 << 10;
 
 #[derive(Default)]
 pub struct ScriptState {
-    pub globals: Map<String, Value>,
+    /// Globals earlier calls kept, per agent: agents reuse names like `page`, so one shared map
+    /// let the last writer win for everybody.
+    pub globals: HashMap<String, Map<String, Value>>,
     pub failed: HashMap<String, String>,
     /// JS state of `execute` calls still streaming, by stream key.
     live: HashMap<String, Live>,
@@ -606,7 +608,7 @@ fn ids_drawn(seed: u64, from: u64) -> Option<u64> {
 /// Returns every id the stream has touched, or None when it cannot continue (its prefix changed
 /// in a non-append way, or a statement threw): the caller then rebuilds the preview, which
 /// re-runs the stream from scratch in one piece (so later function declarations hoist).
-pub fn stream_step(e: &mut Engine, key: &str, source: &str, seed: u64) -> Option<Vec<String>> {
+pub fn stream_step(e: &mut Engine, key: &str, agent: &str, source: &str, seed: u64) -> Option<Vec<String>> {
     let mut live = match e.script.live.remove(key) {
         Some(l) if l.stalled => {
             let touched = l.touched.clone();
@@ -615,7 +617,7 @@ pub fn stream_step(e: &mut Engine, key: &str, source: &str, seed: u64) -> Option
         }
         Some(l) if l.broken || !source.starts_with(&l.ran) => return None,
         Some(l) => l,
-        None => Live { js: sandbox(&e.script.globals).ok()?, ran: String::new(), draws: 0, touched: Vec::new(), broken: false, stalled: false },
+        None => Live { js: sandbox(e.script.globals.get(agent).unwrap_or(&Map::new())).ok()?, ran: String::new(), draws: 0, touched: Vec::new(), broken: false, stalled: false },
     };
     let chunk = &source[live.ran.len()..];
     if !chunk.trim().is_empty() {
@@ -666,7 +668,8 @@ fn execute_within(e: &mut Engine, args: &Value, budget: Duration) -> ToolOut {
     };
 
     let before = e.doc.root.clone();
-    let globals = e.script.globals.clone();
+    let agent = args["__agent"].as_str().unwrap_or("agent").to_string();
+    let globals = e.script.globals.get(&agent).cloned().unwrap_or_default();
     if let Some(seed) = args["__seed"].as_u64() {
         crate::doc::reseed(seed);
     }
@@ -687,7 +690,7 @@ fn execute_within(e: &mut Engine, args: &Value, budget: Duration) -> ToolOut {
     if let Some(id) = &edit_id {
         e.script.failed.remove(id);
     }
-    e.script.globals.extend(new_globals.clone());
+    e.script.globals.entry(agent).or_default().extend(new_globals.clone());
     e.commit(before);
     e.emit(json!({"type": "agent_edit", "ids": ex.touched, "read": ex.read}));
     if !ex.pens.is_empty() {
@@ -1340,7 +1343,7 @@ mod tests {
         assert!(ok.text.contains("\"Card\""), "{}", ok.text);
         assert!(ok.text.contains("2 [\"TA\",\"TB\"]"), "{}", ok.text);
         assert_eq!(e.doc.children().len(), 1);
-        assert!(e.script.globals.contains_key("card"));
+        assert!(e.script.globals["agent"].contains_key("card"));
 
         let bad = execute(&mut e, &json!({"input": "Insert(document,{type:'frame',name:'X'}); Update('nope', {x:1});"}));
         assert!(bad.error);
@@ -1386,6 +1389,25 @@ Insert(card, {type:\"text\", name:\"Title\", content:\"Hi\", fill:\"#111111\"})
         assert_eq!(e.doc.children()[0]["children"].as_array().unwrap().len(), 1);
         assert!(e.undo());
         assert!(e.doc.children().is_empty(), "one undo step for the whole call");
+    }
+
+    #[test]
+    fn globals_are_per_agent() {
+        let mut e = engine();
+        let run = |e: &mut Engine, agent: &str, input: &str| {
+            let out = e.tool("execute", &json!({"input": input, "__agent": agent}));
+            assert!(!out.error, "{}", out.text);
+            out.text
+        };
+        run(&mut e, "agA", "page = Insert(document, {type:\"frame\", name:\"A page\", width:400, height:300})");
+        let b = run(&mut e, "agB", "page = Insert(document, {type:\"frame\", name:\"B page\", x:500, width:400, height:300})");
+        assert!(b.contains("carry over to later calls: page"), "{b}");
+        run(&mut e, "agA", "Insert(page, {type:\"text\", name:\"A text\", content:\"from A\", fill:\"#000\"})");
+        let frames = e.doc.children();
+        let of = |name: &str| frames.iter().find(|n| n["name"] == name).unwrap()["children"].as_array().map_or(0, |c| c.len());
+        assert_eq!((of("A page"), of("B page")), (1, 0), "A's text lands in A's frame");
+        let child = e.tool("execute", &json!({"input": "Print(typeof page)", "__agent": "agC"}));
+        assert!(child.text.contains("undefined"), "another agent starts without A's globals: {}", child.text);
     }
 
     #[test]

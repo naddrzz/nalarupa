@@ -276,6 +276,10 @@ fn start_thread(p: Profile, prompt: String, child: Option<String>) {
         {
             let mut e = engine();
             e.streams_of_agent_end(&p.id);
+            // A child runs once under a fresh id: its globals can never be read again.
+            if child.is_some() {
+                e.script.globals.remove(&p.id);
+            }
             // A request its (now gone) process still waits on is denied; its card goes away.
             e.agent.permissions.retain(|_, (agent, waiting)| *agent != p.id || waiting.send(false).is_err());
         }
