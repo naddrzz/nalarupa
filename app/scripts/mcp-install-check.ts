@@ -4,7 +4,6 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
-import { call } from '../src/core'
 
 const assert = (ok: unknown, msg: string) => {
   if (!ok) throw new Error(`mcp-install-check failed: ${msg}`)
@@ -23,7 +22,7 @@ if (process.platform === 'win32') {
   console.log('mcp-install-check skipped on Windows (the stand-in claude is a shell script)')
   process.exit(0)
 }
-if (!process.env.NALARUPA_CHECK_CHILD) {
+if (!process.argv.includes('--child')) {
   const root = mkdtempSync(join(tmpdir(), 'nalarupa-install-'))
   const home = join(root, 'home')
   const bin = join(root, 'bin')
@@ -31,14 +30,16 @@ if (!process.env.NALARUPA_CHECK_CHILD) {
   mkdirSync(bin)
   const script = '#!/bin/sh\necho "$@" > "$HOME/claude-args"\ncase "$(cat "$HOME/claude-mode" 2>/dev/null)" in\n  exists) echo "MCP server nalarupa already exists in user config" >&2; exit 1 ;;\n  fail) echo "boom: not logged in" >&2; exit 1 ;;\nesac\n'
   writeFileSync(join(bin, 'claude'), script, { mode: 0o755 })
-  const env = { ...process.env, HOME: home, NALARUPA_DATA: join(root, 'data'), PATH: `${bin}${delimiter}${process.env.PATH ?? ''}`, NALARUPA_CHECK_CHILD: '1' }
-  const run = Bun.spawnSync([process.execPath, import.meta.path], { env, stdio: ['inherit', 'inherit', 'inherit'] })
+  const env = { ...process.env, HOME: home, NALARUPA_DATA: join(root, 'data'), PATH: `${bin}${delimiter}${process.env.PATH ?? ''}` }
+  const run = Bun.spawnSync([process.execPath, import.meta.path, '--child'], { env, stdio: ['inherit', 'inherit', 'inherit'] })
   rmSync(root, { recursive: true, force: true })
   process.exit(run.exitCode ?? 1)
 }
+// Loaded only now: the Windows skip above must not depend on the native core being present.
+const { call } = await import('../src/core')
 const home = process.env.HOME!
 const { mcpUrl } = call('init')
-assert(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/.test(mcpUrl), `the server URL: ${mcpUrl}`)
+assert(/^http:\/\/127\.0\.0\.1:[1-9]\d*\/mcp$/.test(mcpUrl), `the server URL, on a real port: ${mcpUrl}`)
 const install = (client: string) => call<string>('mcp_install', { client })
 const cursor = join(home, '.cursor', 'mcp.json')
 const codex = join(home, '.codex', 'config.toml')
@@ -51,10 +52,14 @@ install('cursor')
 const merged = JSON.parse(readFileSync(cursor, 'utf8'))
 assert(merged.theme === 'dark' && merged.mcpServers.other.url === 'http://example.test/mcp', 'other settings and servers survive')
 assert(merged.mcpServers.nalarupa.url === mcpUrl, 'a stale nalarupa entry is refreshed')
-// A config that is not a JSON object is refused, not overwritten.
+// A config that is not a JSON object, or not valid JSON at all, is refused, not overwritten.
 writeFileSync(cursor, '[1,2]')
 throws(() => install('cursor'), /not a JSON object/, 'Cursor config that is an array')
 assert(readFileSync(cursor, 'utf8') === '[1,2]', 'the refused file is left untouched')
+const trailing = '{ "theme": "dark", "mcpServers": {},\n}'
+writeFileSync(cursor, trailing)
+throws(() => install('cursor'), /not valid JSON/, 'Cursor config with a trailing comma')
+assert(readFileSync(cursor, 'utf8') === trailing, 'the malformed file is left untouched')
 
 // Codex: appends a TOML table once; running it again does not duplicate it.
 mkdirSync(join(home, '.codex'))

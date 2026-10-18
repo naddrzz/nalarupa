@@ -54,7 +54,7 @@ jobs:
         with: { bun-version: 1.4.3 }
       - run: cargo build --release && cargo test --release
         working-directory: core
-      - run: bun install --frozen-lockfile && bun run typecheck && bun run smoke && bun run editor-check && bun run mcp-check && bun run doc-check
+      - run: bun install --frozen-lockfile && bun run typecheck && bun run smoke && bun run editor-check && bun run mcp-check && bun run doc-check && bun run script-check && bun run chat-check
         working-directory: app
       # The hosted desktop is 1024×768; the GUI suites assume the full 1440×900 window, as on a real screen.
       - shell: pwsh
