@@ -68,7 +68,8 @@ try {
   await app.getByTestId('tab-design').click()
   await sleep(500)
   const design = dump('editor-design', pid)
-  for (const want of ['Layer name', 'Fill', 'Stroke color', 'Bring forward', 'Delete']) {
+  // Number fields show a letter or symbol ("W", "↻"); their names must say what they set.
+  for (const want of ['Layer name', 'Fill', 'Stroke color', 'Bring forward', 'Delete', 'Rotation', 'Opacity', 'Width', 'Height', 'Corner radius']) {
     if (!design.some(([, , label]) => label === want)) failures.push(`inspector: no control named "${want}"`)
   }
 } finally {

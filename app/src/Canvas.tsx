@@ -4,7 +4,7 @@ import type { CursorValue } from '@gpuix/native/host'
 import type { ImgInstance, PublicInstance } from '@gpuix/react'
 import { call, renderPixels, tryCall, type Box } from './core'
 import { CANVAS_BG, C, DPR, FONT, LEFT_W, TOP_H } from './theme'
-import { setKeyboardFocus, T, type Toast } from './ui'
+import { FocusRing, setKeyboardFocus, T, useRing, type Toast } from './ui'
 import { AgentLayer } from './AgentLayer'
 import {
   anchorPoints, apply, corners, dragPoints, lin, measure, own, painted, resizeBox, resizeCursor, snap, turned, unapply, unionRect,
@@ -27,6 +27,8 @@ const INWARD: Pt[] = [[1, 1], [-1, 1], [-1, -1], [1, -1]]
 
 // Overlay constants (screen px): snap threshold and color, drag threshold, handle hit areas.
 const SNAP = '#F24518'
+/** Measure-label fill: white 11 px text needs 4.5:1 (on SNAP it is 3.7:1). */
+const SNAP_LABEL = '#D9380F'
 const SNAP_PX = 5
 const DRAG_PX = 4
 const HIT = 7.5
@@ -178,6 +180,8 @@ export function Canvas(props: {
   rootRef?: Ref<PublicInstance>
 }) {
   const { w, h, cam, setCam, version, selection, select, tool, setTool, toast } = props
+  // Keyboard focus ring (Tab onto the canvas); a press clears it in onMouseDown.
+  const ring = useRing(props.rootRef)
 
   // Tell the core what the user sees, so the agent's editor state marks visible frames.
   useEffect(() => {
@@ -1265,7 +1269,7 @@ export function Canvas(props: {
       testId="canvas"
       role="group"
       aria-label="Design canvas"
-      ref={props.rootRef}
+      ref={ring.ref}
       tabIndex={0}
       autoFocus
       onMouseDown={onMouseDown}
@@ -1296,6 +1300,7 @@ export function Canvas(props: {
             <div key={f.id} style={{ position: 'absolute', left: r.x, top: r.y, width: r.w, height: r.h, borderRadius: 4, borderWidth: 1, borderColor: C.select, backgroundColor: C.panel2, display: 'flex', alignItems: 'center', paddingLeft: 3 }}>
               <input
                 testId="frame-rename"
+                aria-label="Frame name"
                 autoFocus
                 value={renaming.draft}
                 onChange={(ev) => setRenaming((s) => (s ? { ...s, draft: ev.value ?? '' } : s))}
@@ -1390,7 +1395,7 @@ export function Canvas(props: {
                 <Line x1={x1} y1={y1} x2={x2} y2={y2} color={SNAP} />
                 {ext ? <Dashed x1={ext[0]} y1={ext[1]} x2={ext[2]} y2={ext[3]} color={SNAP} dash={3} /> : null}
                 <div style={{
-                  position: 'absolute', height: 14, paddingLeft: 4, paddingRight: 4, borderRadius: 3, backgroundColor: SNAP, display: 'flex', alignItems: 'center',
+                  position: 'absolute', height: 14, paddingLeft: 4, paddingRight: 4, borderRadius: 3, backgroundColor: SNAP_LABEL, display: 'flex', alignItems: 'center',
                   left: horizontal ? (x1 + x2) / 2 - lw / 2 : x1 + 4, top: horizontal ? y1 + 4 : (y1 + y2) / 2 - 7,
                 }}>
                   <T size={11} weight="500" color="#FFFFFF" style={{ whiteSpace: 'nowrap' }}>{label}</T>
@@ -1449,6 +1454,7 @@ export function Canvas(props: {
           <div style={{ position: 'absolute', left: x - 2, top: y - 2, width: Math.max(80, editing.box.w * cam.zoom + 40), borderWidth: 1.5, borderColor: C.select, backgroundColor: '#FFFFFFEE', borderRadius: 3, padding: 2 }}>
             <textarea
               testId="text-editor"
+              aria-label="Text content"
               autoFocus
               value={editing.value}
               minRows={1}
@@ -1462,6 +1468,7 @@ export function Canvas(props: {
           </div>
         )
       })() : null}
+      {ring.on ? <FocusRing radius={0} inset /> : null}
     </div>
   )
 }
