@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Nalarupa mark: a gunungan (wayang kayon) drawn as a pen-tool nib — slit and breather hole — with a
+       kawung batik flower around the hole and a parang texture on the tile. Sizes ≤ 48 px use
+       nalarupa-small.svg. -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FF8D4F"/>
+      <stop offset="1" stop-color="#E5432A"/>
+    </linearGradient>
+    <linearGradient id="gloss" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity=".16"/>
+      <stop offset=".55" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <pattern id="parang" width="128" height="128" patternUnits="userSpaceOnUse" patternTransform="rotate(-45 512 512)">
+      <path d="M-4 64 C32 6 96 122 132 64" fill="none" stroke="#FFFFFF" stroke-opacity=".09" stroke-width="14" stroke-linecap="round"/>
+      <circle cx="64" cy="0" r="8" fill="#FFFFFF" fill-opacity=".09"/>
+      <circle cx="64" cy="128" r="8" fill="#FFFFFF" fill-opacity=".09"/>
+    </pattern>
+    <mask id="cut" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+      <rect width="1024" height="1024" fill="#FFFFFF"/>
+      <rect x="499" y="100" width="26" height="460" rx="13" fill="#000000"/>
+      <circle cx="512" cy="575" r="34" fill="#000000"/>
+      <g fill="#000000">
+        <ellipse cx="512" cy="457" rx="34" ry="62" transform="rotate(45 512 575)"/>
+        <ellipse cx="512" cy="457" rx="34" ry="62" transform="rotate(135 512 575)"/>
+        <ellipse cx="512" cy="457" rx="34" ry="62" transform="rotate(225 512 575)"/>
+        <ellipse cx="512" cy="457" rx="34" ry="62" transform="rotate(315 512 575)"/>
+      </g>
+    </mask>
+    <filter id="shadow" x="-25%" y="-20%" width="150%" height="150%">
+      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#7A1E0C" flood-opacity=".38"/>
+    </filter>
+  </defs>
+  <rect x="32" y="32" width="960" height="960" rx="224" fill="url(#tile)"/>
+  <rect x="32" y="32" width="960" height="960" rx="224" fill="url(#parang)"/>
+  <rect x="32" y="32" width="960" height="960" rx="224" fill="url(#gloss)"/>
+  <g filter="url(#shadow)" transform="translate(0 10)">
+    <g mask="url(#cut)" fill="#FFF7F0">
+      <path d="M512 140 C530 250 760 470 760 660 C760 740 730 770 680 770 L344 770 C294 770 264 740 264 660 C264 470 494 250 512 140 Z"/>
+      <rect x="316" y="796" width="392" height="56" rx="28"/>
+    </g>
+  </g>
+</svg>

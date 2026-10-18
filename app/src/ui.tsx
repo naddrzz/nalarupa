@@ -1,0 +1,354 @@
+import { forwardRef, useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode, type Ref } from 'react'
+import type { EventPayload } from '@gpuix/native'
+import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
+import { ICONS, type IconName } from './icons'
+import { C, FONT, MONO } from './theme'
+
+/** Show a message. Errors stay until dismissed and must say how to recover. */
+export type Toast = (message: string, error?: boolean) => void
+
+// Focus rings follow the keyboard (`:focus-visible`). GPUIX sends no `onFocus` when Tab moves focus
+// (`focusNext`), so the window's Tab handler reads the focused host id once GPUI has applied it and
+// stores it here; a mouse press clears it, so clicking never leaves a ring behind.
+let keyboardFocusId: number | null = null
+const focusListeners = new Set<() => void>()
+export function setKeyboardFocus(id: number | null) {
+  if (id === keyboardFocusId) return
+  keyboardFocusId = id
+  for (const f of focusListeners) f()
+}
+const subscribeFocus = (f: () => void) => {
+  focusListeners.add(f)
+  return () => void focusListeners.delete(f)
+}
+/** Host id that has keyboard focus, or null. */
+export const useKeyboardFocusId = () => useSyncExternalStore(subscribeFocus, () => keyboardFocusId)
+
+/** Keyboard focus ring: a 2 px outline 3 px outside the element, drawn over it. Render it as the last
+ *  child of a positioned element. (A spread box-shadow does not work: GPUI paints shadows as a filled
+ *  box, which showed as a solid block behind transparent buttons.) */
+export function FocusRing({ radius = 6 }: { radius?: number }) {
+  return <div style={{ position: 'absolute', left: -3, top: -3, right: -3, bottom: -3, borderRadius: radius + 3, borderWidth: 2, borderColor: C.focus, pointerEvents: 'none' }} />
+}
+
+type Handler = (e: EventPayload) => void
+type PressableProps = {
+  onClick?: () => void; testId?: string; role?: string; label?: string; selected?: boolean; expanded?: boolean
+  /** -1 leaves the Tab order (a parent owns the keyboard path, e.g. a tree row's chevron). */
+  tabIndex?: number
+  style?: Record<string, unknown>; children?: ReactNode | ((focused: boolean) => ReactNode)
+  // Passed in by `asChild` wrappers (Tooltip.Trigger) and composed with our own focus handling.
+  onMouseEnter?: Handler; onMouseLeave?: Handler; onMouseDown?: Handler; onFocus?: Handler; onBlur?: Handler; onKeyDown?: Handler
+}
+
+/**
+ * A clickable div with a keyboard path (GPUIX has no `<button>`): a Tab stop, Enter/Space activate,
+ * a role and name for screen readers, and a focus ring while focused from the keyboard.
+ */
+export const Pressable = forwardRef<PublicInstance, PressableProps>(function Pressable(
+  { onClick, testId, role = 'button', label, selected, expanded, tabIndex = 0, style, children, onMouseEnter, onMouseLeave, onMouseDown, onFocus, onBlur, onKeyDown },
+  ref,
+) {
+  const { ref: own, on, clear } = useRing(ref)
+  const radius = typeof style?.borderRadius === 'number' ? style.borderRadius : 6
+  return (
+    <div
+      ref={own}
+      testId={testId}
+      role={role}
+      aria-label={label}
+      aria-selected={selected}
+      aria-expanded={expanded}
+      tabIndex={tabIndex}
+      onClick={onClick}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+      onMouseDown={(e) => { clear(); onMouseDown?.(e) }}
+      onFocus={onFocus}
+      onBlur={onBlur}
+      onKeyDown={(e) => {
+        onKeyDown?.(e)
+        const k = (e.key ?? '').toLowerCase()
+        if ((k === 'enter' || k === 'space') && !e.isHeld) onClick?.()
+      }}
+      style={{ cursor: 'pointer', ...style, ...(on ? { position: 'relative' } : {}) }}
+    >
+      {typeof children === 'function' ? children(on) : children}
+      {on ? <FocusRing radius={radius} /> : null}
+    </div>
+  )
+})
+
+/** Focus ring for any focusable element: spread `focusProps` on it and `ring` into its style. */
+/** Keyboard focus for a focusable host element: attach `ref` (it also fills `forwarded`), render a
+ *  `FocusRing` while `on`, and call `clear` on mouse down. */
+export function useRing<T extends PublicInstance>(forwarded?: Ref<T>) {
+  const el = useRef<T | null>(null)
+  const id = useKeyboardFocusId()
+  const ref = useCallback((v: T | null) => {
+    el.current = v
+    if (typeof forwarded === 'function') forwarded(v)
+    else if (forwarded) (forwarded as { current: T | null }).current = v
+  }, [forwarded])
+  const on = id !== null && el.current?.id === id
+  return { ref, on, clear: () => setKeyboardFocus(null) }
+}
+
+export function Icon({ name, size = 15, color = C.muted }: { name: IconName; size?: number; color?: string }) {
+  return <svg source={ICONS[name]} style={{ width: size, height: size, flexShrink: 0, color }} />
+}
+
+export function T({ children, size = 12, color = C.text, weight, mono, grow, style }: {
+  children: ReactNode; size?: number; color?: string; weight?: string; mono?: boolean; grow?: boolean; style?: Record<string, unknown>
+}) {
+  return (
+    <text style={{ fontSize: size, color, fontFamily: mono ? MONO : FONT, fontWeight: weight, flexGrow: grow ? 1 : undefined, ...style }}>
+      {children}
+    </text>
+  )
+}
+
+export function IconButton({ icon, onClick, active, title, testId, color, size = 28 }: {
+  icon: IconName; onClick?: () => void; active?: boolean; title?: string; testId?: string; color?: string; size?: number
+}) {
+  return (
+    <Pressable
+      testId={testId}
+      label={title}
+      selected={active}
+      onClick={onClick}
+      style={{
+        width: size, height: size, borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+        backgroundColor: active ? C.accentSoft : undefined,
+        hover: { backgroundColor: active ? C.accentSoft : C.raised },
+        active: { backgroundColor: C.border },
+      }}
+    >
+      <Icon name={icon} color={color ?? (active ? C.accent : C.muted)} />
+    </Pressable>
+  )
+}
+
+export function Button({ children, onClick, primary, icon, testId, grow, danger }: {
+  children: ReactNode; onClick?: () => void; primary?: boolean; icon?: IconName; testId?: string; grow?: boolean; danger?: boolean
+}) {
+  const fg = primary ? '#16110F' : danger ? C.danger : C.text
+  return (
+    <Pressable
+      testId={testId}
+      onClick={onClick}
+      style={{
+        display: 'flex', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+        height: 30, paddingLeft: 12, paddingRight: 12, borderRadius: 7, flexGrow: grow ? 1 : undefined,
+        backgroundColor: primary ? C.accent : C.raised,
+        borderWidth: primary ? 0 : 1, borderColor: C.border,
+        hover: { backgroundColor: primary ? '#FF8059' : '#303036' },
+        active: { backgroundColor: primary ? '#E85A2F' : C.border },
+      }}
+    >
+      {icon ? <Icon name={icon} size={14} color={fg} /> : null}
+      <T color={fg} weight={primary ? '600' : undefined}>{children}</T>
+    </Pressable>
+  )
+}
+
+/** Text field that commits on Enter or blur (not on every keystroke). */
+export function Field({ label, value, onCommit, width, mono, testId, placeholder, name }: {
+  label?: string; value: string; onCommit: (v: string) => void; width?: number; mono?: boolean; testId?: string; placeholder?: string
+  /** Accessible name when the visible label is the section title (a placeholder is not a label). */
+  name?: string
+}) {
+  const [draft, setDraft] = useState(value)
+  useEffect(() => setDraft(value), [value])
+  const commit = () => {
+    if (draft !== value) onCommit(draft)
+  }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, width, flexGrow: width ? undefined : 1, minWidth: 0 }}>
+      {label ? <T size={11} color={C.ghost} style={{ width: 14 }}>{label}</T> : null}
+      <div style={{ flexGrow: 1, minWidth: 0, height: 26, borderRadius: 6, backgroundColor: C.panel2, borderWidth: 1, borderColor: C.field, display: 'flex', alignItems: 'center', paddingLeft: 7, paddingRight: 4 }}>
+        <input
+          testId={testId}
+          aria-label={name ?? label}
+          value={draft}
+          placeholder={placeholder}
+          onChange={(e) => setDraft(e.value ?? '')}
+          onSubmit={commit}
+          onBlur={commit}
+          theme={{ caret: C.accent }}
+          style={{ flexGrow: 1, minWidth: 0, fontSize: 12, color: C.text, fontFamily: mono ? MONO : FONT }}
+        />
+      </div>
+    </div>
+  )
+}
+
+// Label scrubbing: GPUIX keeps sending moves to the pressed element, so the label sees the whole drag.
+let scrub: { x: number; at: number; last: number; apply: (steps: number) => void } | null = null
+let gesture = 0
+function scrubMove(e: EventPayload) {
+  if (!scrub) return
+  // No button at a new spot: released elsewhere. Same spot: GPUI's hover refresh, ignore.
+  if (e.pressedButton === undefined) return void (Math.abs((e.x ?? 0) - scrub.at) > 0.5 && (scrub = null))
+  scrub.at = e.x ?? 0
+  const dx = (e.x ?? 0) - scrub.x
+  // 2 px per step; Shift moves in tens (10 steps per 20 px).
+  const steps = e.modifiers?.shift ? Math.trunc(dx / 20) * 10 : Math.trunc(dx / 2)
+  if (steps !== scrub.last) {
+    scrub.last = steps
+    scrub.apply(steps)
+  }
+}
+
+/**
+ * Number field: drag the label to scrub, Up/Down ±step (Shift ×10), Enter/blur
+ * commits. `onCommit` gets a coalescing key: one focus session or one scrub = one undo step.
+ */
+export function NumField({ label, value, mixed, onCommit, step = 1, testId, width }: {
+  label: string; value: number; mixed?: boolean; onCommit: (v: number, coalesce: string) => void; step?: number; testId?: string; width?: number
+}) {
+  const fmt = (v: number) => String(Number(v.toFixed(2)))
+  const shown = mixed ? '' : fmt(value)
+  const [draft, setDraft] = useState(shown)
+  // Latest committed value: key repeats can arrive before React re-renders.
+  const latest = useRef(shown)
+  latest.current = draft
+  useEffect(() => setDraft(shown), [shown])
+  const session = useRef<string | null>(null)
+  const key = () => (session.current ??= `field:${testId ?? label}:${++gesture}`)
+  const commit = (v: number, k = key()) => {
+    if (!Number.isFinite(v)) return setDraft(shown)
+    latest.current = fmt(v)
+    setDraft(latest.current)
+    onCommit(v, k)
+  }
+  const typed = () => {
+    if (draft === shown) return
+    const v = Number(draft.trim())
+    commit(v)
+  }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, width, flexGrow: width ? undefined : 1, minWidth: 0 }}>
+      <div
+        testId={testId ? `${testId}-scrub` : undefined}
+        role="slider"
+        aria-label={`${label}: drag to change`}
+        onMouseDown={(e) => {
+          const base = mixed ? 0 : Number(latest.current) || 0
+          const k = `scrub:${testId ?? label}:${++gesture}`
+          scrub = { x: e.x ?? 0, at: e.x ?? 0, last: 0, apply: (steps) => commit(Math.round((base + steps * step) * 100) / 100, k) }
+        }}
+        onMouseMove={scrubMove}
+        onMouseUp={() => { scrub = null }}
+        style={{ width: 14, height: 26, display: 'flex', alignItems: 'center', cursor: 'ew-resize', userSelect: 'none' }}
+      >
+        <T size={11} color={C.ghost}>{label}</T>
+      </div>
+      <div style={{ flexGrow: 1, minWidth: 0, height: 26, borderRadius: 6, backgroundColor: C.panel2, borderWidth: 1, borderColor: C.field, display: 'flex', alignItems: 'center', paddingLeft: 7, paddingRight: 4 }}>
+        <input
+          testId={testId}
+          aria-label={label}
+          value={draft}
+          placeholder={mixed ? 'Mixed' : undefined}
+          onChange={(e) => setDraft(e.value ?? '')}
+          onSubmit={typed}
+          onBlur={() => {
+            typed()
+            session.current = null
+          }}
+          onKeyDown={(e) => {
+            const k = (e.key ?? '').toLowerCase()
+            if (k !== 'up' && k !== 'down') return
+            const base = Number(latest.current) || 0
+            commit(Math.round((base + (k === 'up' ? 1 : -1) * step * (e.modifiers?.shift ? 10 : 1)) * 100) / 100)
+          }}
+          theme={{ caret: C.accent }}
+          style={{ flexGrow: 1, minWidth: 0, fontSize: 12, color: C.text, fontFamily: FONT }}
+        />
+      </div>
+    </div>
+  )
+}
+
+/**
+ * A dropdown's trigger. A press outside the open dropdown that lands on the trigger is left to the
+ * trigger's own click (which closes it): closing in `onMouseDownOutside` too made that click reopen
+ * it, and the old workaround (ignore clicks for 500 ms) swallowed a quick reopen.
+ */
+export function useTrigger() {
+  const renderer = useGpuixRequired()
+  const ref = useRef<PublicInstance>(null)
+  const hit = (e: EventPayload) => {
+    const b = ref.current && renderer.getElementBounds?.(ref.current.id)
+    const [x, y] = [e.x ?? -1, e.y ?? -1]
+    return !!b && x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height
+  }
+  return { ref, hit }
+}
+
+/** Small toggle chip (checkbox semantics). */
+export function Toggle({ label, on, onChange, testId }: { label: string; on: boolean; onChange: (on: boolean) => void; testId?: string }) {
+  return (
+    <Pressable
+      testId={testId}
+      role="checkbox"
+      label={label}
+      selected={on}
+      onClick={() => onChange(!on)}
+      style={{
+        height: 24, paddingLeft: 8, paddingRight: 8, borderRadius: 5, display: 'flex', alignItems: 'center',
+        borderWidth: 1, borderColor: on ? C.select : C.border, backgroundColor: on ? '#3B82F622' : C.panel2,
+        hover: { backgroundColor: on ? '#3B82F633' : C.raised },
+      }}
+    >
+      <T size={11} color={on ? C.text : C.muted}>{label}</T>
+    </Pressable>
+  )
+}
+
+export function Section({ title, children, right }: { title: string; children: ReactNode; right?: ReactNode }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 12, paddingBottom: 12, paddingLeft: 14, paddingRight: 14, borderBottomWidth: 1, borderColor: C.border }}>
+      <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center' }}>
+        <T size={11} color={C.muted} weight="600" grow>{title}</T>
+        {right}
+      </div>
+      {children}
+    </div>
+  )
+}
+
+export function Row({ children, gap = 8 }: { children: ReactNode; gap?: number }) {
+  return <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap }}>{children}</div>
+}
+
+/** Small segmented control (one choice of several). `label` names the group for screen readers;
+ *  an option's `name` replaces its visible label when that label is a terse symbol like "2×". */
+export function Segmented<V extends string>({ value, options, onChange, label }: { value: V; options: { value: V; label: string; name?: string; testId?: string }[]; onChange: (v: V) => void; label?: string }) {
+  return (
+    <div role="tablist" aria-label={label} style={{ display: 'flex', flexDirection: 'row', gap: 2, padding: 2, borderRadius: 7, backgroundColor: C.panel2, borderWidth: 1, borderColor: C.border }}>
+      {options.map((o) => (
+        <Pressable
+          key={o.value}
+          testId={o.testId}
+          role="tab"
+          label={o.name ?? o.label}
+          selected={o.value === value}
+          onClick={() => onChange(o.value)}
+          style={{
+            flexGrow: 1, height: 24, borderRadius: 5, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            paddingLeft: 6, paddingRight: 6,
+            backgroundColor: o.value === value ? C.raised : undefined,
+            hover: { backgroundColor: C.raised },
+          }}
+        >
+          <T size={11} color={o.value === value ? C.text : C.muted}>{o.label}</T>
+        </Pressable>
+      ))}
+    </div>
+  )
+}
+
+export function Swatch({ color }: { color: string }) {
+  return <div style={{ width: 18, height: 18, borderRadius: 4, backgroundColor: color, borderWidth: 1, borderColor: '#FFFFFF22', flexShrink: 0 }} />
+}

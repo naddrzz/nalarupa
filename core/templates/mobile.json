@@ -1,0 +1,6 @@
+{
+  "version": "2.19",
+  "children": [
+    {"type": "frame", "id": "mob01", "name": "iPhone 16", "x": 0, "y": 0, "width": 393, "height": 852, "fill": "#FFFFFF", "layout": "vertical", "clip": true}
+  ]
+}
