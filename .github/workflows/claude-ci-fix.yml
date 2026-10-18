@@ -40,10 +40,10 @@ jobs:
           github_token: ${{ secrets.GH_PAT }}
           bot_id: "129574549"
           bot_name: naddrzz
-          settings: '{"includeCoAuthoredBy": false}'
+          settings: '{"includeCoAuthoredBy": false, "fastMode": false}'
           additional_permissions: |
             actions: read
-          claude_args: --model claude-opus-5-5 --max-turns 150 --allowedTools "Bash,Read,Edit,Write,Glob,Grep"
+          claude_args: --model claude-sonnet-5-5 --effort high --max-turns 150 --allowedTools "Bash,Read,Edit,Write,Glob,Grep"
           prompt: |
             Nalarupa repo; follow AGENTS.md. ci failed on branch `${{ github.event.workflow_run.head_branch }}`
             (run ${{ github.event.workflow_run.id }}, commit ${{ github.event.workflow_run.head_sha }}), which is checked out.
@@ -55,7 +55,7 @@ jobs:
                If the failure is outside this repo's control (runner down, network), make no commit and explain.
             3. Run the full set before pushing: (cd core && cargo build --release && cargo test --release) && (cd app &&
                bun run typecheck && bun run smoke && bun run editor-check && bun run mcp-check && bun run doc-check &&
-               bash scripts/wl-run.sh bun run e2e && bash scripts/wl-run.sh bun run file-e2e).
+               bash scripts/wl-run.sh bun run e2e && bash scripts/wl-run.sh bun run file-e2e && bash scripts/wl-run.sh bun run editor-e2e).
             4. Commit with a subject starting `Fix CI: ` (no Co-authored-by trailer) and `git push`.
             5. Comment on the PR (gh pr comment ${{ github.event.workflow_run.head_branch }} --body ...) with the cause and the fix.
             Do not open a new PR and do not reference issues the PR does not already reference.

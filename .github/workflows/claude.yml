@@ -40,19 +40,20 @@ jobs:
           branch_prefix: claude/
           bot_id: "129574549"
           bot_name: naddrzz
-          settings: '{"includeCoAuthoredBy": false}'
+          settings: '{"includeCoAuthoredBy": false, "fastMode": false}'
           additional_permissions: |
             actions: read
           claude_args: |
-            --model claude-opus-5-5 --max-turns 150
+            --model claude-sonnet-5-5 --effort high --max-turns 150
             --allowedTools "Bash,Read,Edit,Write,Glob,Grep"
-            --append-system-prompt "Nalarupa repo; follow AGENTS.md. Fix bugs at the root cause; keep diffs small and in the style of the surrounding code. Before finishing, run: (cd core && cargo test --release) && (cd app && bun run typecheck && bun run smoke && bun run editor-check && bun run mcp-check && bun run doc-check && bash scripts/wl-run.sh bun run e2e && bash scripts/wl-run.sh bun run file-e2e). Add or extend a check for every bug fix. Windows-only checks (a11y-check, window-check, exe-check) and editor-e2e cannot run here; say so in the PR. When working from an issue: push your branch and open the PR yourself with `gh pr create --base dev`, and put `Fixes #<issue number>` in its body. When working on an existing PR, push to its branch and do not open another PR; reference an issue only if the PR already relates to one. Never add Co-authored-by trailers or 'Generated with Claude Code' lines."
+            --append-system-prompt "Nalarupa repo; follow AGENTS.md. Fix bugs at the root cause; keep diffs small and in the style of the surrounding code. Before finishing, run: (cd core && cargo test --release) && (cd app && bun run typecheck && bun run smoke && bun run editor-check && bun run mcp-check && bun run doc-check && bash scripts/wl-run.sh bun run e2e && bash scripts/wl-run.sh bun run file-e2e && bash scripts/wl-run.sh bun run editor-e2e). Add or extend a check for every bug fix. Windows-only checks (a11y-check, window-check, exe-check) cannot run here; say so in the PR. When working from an issue: push your branch and open the PR yourself with `gh pr create --base dev`, and put `Fixes #<issue number>` in its body. When working on an existing PR, push to its branch and do not open another PR; reference an issue only if the PR already relates to one. Never add Co-authored-by trailers or 'Generated with Claude Code' lines."
 
   review-fix:
     # cubic reviews once per push with all its findings; fix them, at most 3 rounds per PR.
     if: |
       github.event_name == 'pull_request_review' &&
       github.event.review.user.login == 'cubic-dev-ai[bot]' &&
+      github.event.pull_request.state == 'open' &&
       github.event.pull_request.head.repo.full_name == github.repository
     concurrency: { group: "review-fix-${{ github.event.pull_request.number }}", cancel-in-progress: false }
     runs-on: [self-hosted, nalarupa]
@@ -78,8 +79,8 @@ jobs:
           allowed_bots: cubic-dev-ai
           bot_id: "129574549"
           bot_name: naddrzz
-          settings: '{"includeCoAuthoredBy": false}'
-          claude_args: --model claude-opus-5-5 --max-turns 150 --allowedTools "Bash,Read,Edit,Write,Glob,Grep"
+          settings: '{"includeCoAuthoredBy": false, "fastMode": false}'
+          claude_args: --model claude-sonnet-5-5 --effort high --max-turns 150 --allowedTools "Bash,Read,Edit,Write,Glob,Grep"
           prompt: |
             Nalarupa repo; follow AGENTS.md. cubic reviewed PR #${{ github.event.pull_request.number }} (${{ github.repository }}),
             branch `${{ github.event.pull_request.head.ref }}`, which is checked out.
@@ -91,7 +92,7 @@ jobs:
                surrounding style. Do not change code for findings that are wrong; explain why instead.
             3. Run the checks: (cd core && cargo test --release) && (cd app && bun run typecheck && bun run smoke &&
                bun run editor-check && bun run mcp-check && bun run doc-check && bash scripts/wl-run.sh bun run e2e &&
-               bash scripts/wl-run.sh bun run file-e2e). Everything must pass before you push.
+               bash scripts/wl-run.sh bun run file-e2e && bash scripts/wl-run.sh bun run editor-e2e). Everything must pass before you push.
             4. Commit with a subject starting `Address review: ` (no Co-authored-by trailer) and `git push`.
             5. Reply on every thread you handled (gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments/<databaseId>/replies -f body=...)
                saying what you changed or why not, then resolve it:
