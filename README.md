@@ -182,7 +182,7 @@ cd app && bun run a11y-check && bun run motion-check && bun run window-check
 - `exe-check` runs the built binary; `model-check` runs two real agent turns.
 - On a Linux server without a display, prefix each windowed check (`e2e`, `editor-e2e`, `file-e2e`) with
   `bash scripts/wl-run.sh` from `app/`, e.g. `cd app && bash scripts/wl-run.sh bun run file-e2e`, to run the window under a headless
-  Wayland compositor (needs `sway`, `grim`, `mesa-vulkan-drivers`). CI does this on a self-hosted runner.
+  Wayland compositor (needs `sway`, `grim`, `mesa-vulkan-drivers`). CI does this on GitHub-hosted Ubuntu, and also runs the Windows-only checks on a Windows runner.
 - `bun run shots` regenerates the README screenshots in `docs/screenshots/`.
 
 Canvas performance:
