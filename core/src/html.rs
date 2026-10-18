@@ -113,7 +113,13 @@ struct Html<'a> {
 }
 
 fn css_color(v: &str) -> Option<String> {
+    css_color_alpha(v, 1.0)
+}
+
+/// `css_color` with the alpha scaled by `k` (a paint's `opacity`).
+fn css_color_alpha(v: &str, k: f64) -> Option<String> {
     let (c, a) = color(v)?;
+    let a = a * k;
     if a >= 0.999 {
         return Some(c);
     }
@@ -121,6 +127,51 @@ fn css_color(v: &str) -> Option<String> {
     let p = |i: usize| u8::from_str_radix(&h[i..i + 2], 16).unwrap_or(0);
     Some(format!("rgba({}, {}, {}, {:.3})", p(0), p(2), p(4), a))
 }
+
+/// CSS gradient of a gradient paint. Backgrounds have no per-layer opacity, so `opacity` goes into the stop alphas.
+fn gradient_css(o: &serde_json::Map<String, Value>) -> Option<String> {
+    let opacity = o.get("opacity").and_then(num).unwrap_or(1.0).clamp(0.0, 1.0);
+    let stops: Vec<String> = o.get("colors").and_then(Value::as_array).into_iter().flatten().filter_map(|c| {
+        Some(format!("{} {}%", css_color_alpha(c["color"].as_str()?, opacity)?, num(&c["position"]).unwrap_or(0.0) * 100.0))
+    }).collect();
+    if stops.is_empty() {
+        return None;
+    }
+    let rot = o.get("rotation").and_then(num).unwrap_or(0.0);
+    let at = |k: &str, d: f64| o.get("center").and_then(|c| c.get(k)).and_then(num).unwrap_or(d) * 100.0;
+    Some(match o.get("gradientType").and_then(Value::as_str) {
+        Some("radial") => format!("radial-gradient({})", stops.join(",")),
+        // Angle 0 points up and runs clockwise, like the canvas; rotation is CCW.
+        Some("angular") => format!("conic-gradient(from {}deg at {}% {}%,{})", -rot, at("x", 0.5), at("y", 0.5), stops.join(",")),
+        _ => format!("linear-gradient({}deg,{})", -rot, stops.join(",")),
+    })
+}
+
+/// A gradient stroke: the gradient fills a box inset by `inset` px, masked down to its `pad` px ring.
+fn stroke_overlay(grad: &str, w: &Value, alignment: Option<&str>) -> Option<String> {
+    let (inset, pad) = match w {
+        Value::Object(s) => {
+            let side = |k: &str| s.get(k).and_then(num).unwrap_or(0.0).max(0.0);
+            (0.0, format!("{}px {}px {}px {}px", side("top"), side("right"), side("bottom"), side("left")))
+        }
+        v => {
+            let w = num(v).filter(|w| *w > 0.0)?;
+            let inset = match alignment {
+                Some("inner" | "inside") => 0.0,
+                Some("outer" | "outside") => -w,
+                _ => -w / 2.0,
+            };
+            (inset, format!("{w}px"))
+        }
+    };
+    Some(format!(
+        "<div style=\"{}inset:{inset}px;padding:{pad};background:{grad};-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);mask-composite:exclude;\"></div>\n",
+        OVERLAY
+    ))
+}
+
+/// Overlay boxes sit above the node's own background and below its children.
+const OVERLAY: &str = "position:absolute;z-index:-1;border-radius:inherit;pointer-events:none;";
 
 fn size_css(v: Option<&Value>, prop: &str, parent_dir: Option<&str>, horiz_axis: bool, measured: f64) -> String {
     let main_axis = match parent_dir {
@@ -180,9 +231,7 @@ impl Html<'_> {
         }
         // Shapes CSS cannot draw are inlined as SVG, which carries their own paint.
         let as_svg = matches!(n.ty.as_str(), "path" | "polygon" | "line") || n.ty == "ellipse" && (n.f("innerRadius").unwrap_or(0.0) > 0.0 || n.f("sweepAngle").is_some_and(|s| s.abs() < 360.0));
-        if !as_svg {
-            self.paint_css(n, &mut css);
-        }
+        let under = if as_svg { String::new() } else { self.paint_css(n, &mut css) };
         let attrs = self.attrs(n);
         match n.ty.as_str() {
             "text" => {
@@ -255,6 +304,7 @@ impl Html<'_> {
                     css += "border-radius:50%;";
                 }
                 let _ = writeln!(self.out, "<div{attrs} style=\"{css}\">");
+                self.out.push_str(&under);
                 for k in &n.kids {
                     self.node(k, Some(n));
                 }
@@ -274,26 +324,20 @@ impl Html<'_> {
         a
     }
 
-    fn paint_css(&mut self, n: &RNode, css: &mut String) {
+    /// Background, radius, stroke, shadows and blur. Returns the overlay boxes (translucent image fills, gradient
+    /// strokes) that go first inside the element.
+    fn paint_css(&mut self, n: &RNode, css: &mut String) -> String {
         let mut shadows: Vec<String> = Vec::new();
+        let mut under = String::new();
         if n.ty != "text" && n.ty != "icon" {
-            let mut layers = Vec::new();
-            for f in fills(n.p.get("fill")).into_iter().rev() {
+            // Bottom to top, with the paint's opacity where CSS cannot fold it into the layer.
+            let mut layers: Vec<(String, f64)> = Vec::new();
+            for f in fills(n.p.get("fill")) {
                 match f {
-                    Value::String(s) => layers.extend(css_color(s).map(|c| format!("linear-gradient({c},{c})"))),
+                    Value::String(s) => layers.extend(css_color(s).map(|c| (format!("linear-gradient({c},{c})"), 1.0))),
                     Value::Object(o) => match o.get("type").and_then(Value::as_str).unwrap_or("color") {
-                        "color" => layers.extend(o.get("color").and_then(Value::as_str).and_then(css_color).map(|c| format!("linear-gradient({c},{c})"))),
-                        "gradient" => {
-                            let stops: Vec<String> = o.get("colors").and_then(Value::as_array).into_iter().flatten().filter_map(|c| {
-                                Some(format!("{} {}%", css_color(c["color"].as_str()?)?, num(&c["position"]).unwrap_or(0.0) * 100.0))
-                            }).collect();
-                            let rot = o.get("rotation").and_then(num).unwrap_or(0.0);
-                            if o.get("gradientType").and_then(Value::as_str) == Some("radial") {
-                                layers.push(format!("radial-gradient({})", stops.join(",")));
-                            } else {
-                                layers.push(format!("linear-gradient({}deg,{})", -rot, stops.join(",")));
-                            }
-                        }
+                        "color" => layers.extend(o.get("color").and_then(Value::as_str).and_then(css_color).map(|c| (format!("linear-gradient({c},{c})"), 1.0))),
+                        "gradient" => layers.extend(gradient_css(o).map(|g| (g, 1.0))),
                         "image" => {
                             let url = o.get("url").and_then(Value::as_str).unwrap_or("");
                             if !url.is_empty() {
@@ -302,7 +346,8 @@ impl Html<'_> {
                                     Some("fill") => "cover",
                                     _ => "100% 100%",
                                 };
-                                layers.push(format!("url('{}') center/{size} no-repeat", esc(url)));
+                                let opacity = o.get("opacity").and_then(num).unwrap_or(1.0).clamp(0.0, 1.0);
+                                layers.push((format!("url('{}') center/{size} no-repeat", esc(url)), opacity));
                             }
                         }
                         _ => {}
@@ -310,25 +355,32 @@ impl Html<'_> {
                     _ => {}
                 }
             }
-            if !layers.is_empty() {
-                layers.reverse();
-                let _ = write!(css, "background:{};", layers.join(","));
+            // CSS lists the topmost background first. A translucent image cannot be a background layer: it and
+            // every fill above it become overlays.
+            let split = layers.iter().position(|l| l.1 < 1.0).unwrap_or(layers.len());
+            if split > 0 {
+                let _ = write!(css, "background:{};", layers[..split].iter().rev().map(|l| l.0.as_str()).collect::<Vec<_>>().join(","));
+            }
+            for (l, a) in &layers[split..] {
+                let _ = writeln!(under, "<div style=\"{OVERLAY}inset:0;background:{l};opacity:{a};\"></div>");
             }
             let r = crate::svg::radii(n);
             if r.iter().any(|v| *v > 0.0) {
                 let _ = write!(css, "border-radius:{}px {}px {}px {}px;", r[0], r[1], r[2], r[3]);
             }
             // No stroke without a width; alignment defaults to center.
-            let stroke = fills(n.p.get("stroke")).first().and_then(|f| f.as_str().map(str::to_string).or_else(|| f["color"].as_str().map(str::to_string))).and_then(|c| css_color(&c));
-            match (stroke, n.p.get("strokeWidth")) {
-                (Some(c), Some(Value::Object(s))) => {
+            let paint = fills(n.p.get("stroke")).first().copied();
+            let stroke = paint.and_then(|f| f.as_str().map(str::to_string).or_else(|| f["color"].as_str().map(str::to_string))).and_then(|c| css_color(&c));
+            let gradient = paint.and_then(Value::as_object).filter(|o| o.get("type").and_then(Value::as_str) == Some("gradient")).and_then(gradient_css);
+            match (stroke, gradient, n.p.get("strokeWidth")) {
+                (Some(c), _, Some(Value::Object(s))) => {
                     for side in ["top", "right", "bottom", "left"] {
                         if let Some(w) = s.get(side).and_then(num).filter(|w| *w > 0.0) {
                             let _ = write!(css, "border-{side}:{w}px solid {c};");
                         }
                     }
                 }
-                (Some(c), Some(v)) => {
+                (Some(c), _, Some(v)) => {
                     if let Some(w) = num(v).filter(|w| *w > 0.0) {
                         match n.s("strokeAlignment") {
                             Some("inner" | "inside") => shadows.push(format!("inset 0 0 0 {w}px {c}")),
@@ -337,6 +389,7 @@ impl Html<'_> {
                         }
                     }
                 }
+                (None, Some(g), Some(w)) => under += &stroke_overlay(&g, w, n.s("strokeAlignment")).unwrap_or_default(),
                 _ => {}
             }
         }
@@ -350,9 +403,28 @@ impl Html<'_> {
             let c = css_color(e["color"].as_str().unwrap_or("#000000"))?;
             Some(format!("{}{}px {}px {}px {c}", if e["shadowType"] == "inner" { "inset " } else { "" }, num(&e["offset"]["x"]).unwrap_or(0.0), num(&e["offset"]["y"]).unwrap_or(0.0), num(&e["blur"]).unwrap_or(0.0)))
         }));
+        // Overlays would cover the element's own inset shadows (inner strokes and shadows): paint those above them.
+        if !under.is_empty() {
+            let inner: Vec<String> = shadows.iter().filter(|s| s.starts_with("inset ")).cloned().collect();
+            shadows.retain(|s| !s.starts_with("inset "));
+            if !inner.is_empty() {
+                let _ = writeln!(under, "<div style=\"{OVERLAY}inset:0;box-shadow:{};\"></div>", inner.join(","));
+            }
+            // Overlays stack against this box, inside it.
+            if !css.contains("position:") {
+                css.push_str("position:relative;");
+            }
+            css.push_str("isolation:isolate;");
+        }
         if !shadows.is_empty() {
             let _ = write!(css, "box-shadow:{};", shadows.join(","));
         }
+        // CSS `blur()` takes the standard deviation, which is half the radius.
+        let blur = crate::svg::Effects::of(n).blur;
+        if blur > 0.0 {
+            let _ = write!(css, "filter:blur({}px);", (blur * 100.0).round() / 100.0);
+        }
+        under
     }
 
     fn text_css(&mut self, n: &RNode, css: &mut String) {
@@ -399,6 +471,53 @@ pub fn file_name(p: &Path) -> String {
 mod tests {
     use crate::engine::Engine;
     use serde_json::json;
+
+    /// The `style` of a rectangle exported as an HTML fragment, plus the whole fragment.
+    fn rect_html(extra: serde_json::Value) -> (String, String) {
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        e.load_template("empty");
+        let mut node = json!({"type": "rectangle", "x": 0, "y": 0, "width": 160, "height": 100});
+        node.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        let id = e.insert_root(node).unwrap();
+        let html = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
+        let style = html.split("style=\"").nth(1).unwrap().split('"').next().unwrap().to_string();
+        (style, html)
+    }
+
+    #[test]
+    fn html_paints_match_the_canvas() {
+        let grad = |extra: serde_json::Value| {
+            let mut g = json!({"type": "gradient", "rotation": 90, "colors": [{"color": "#ff0000", "position": 0}, {"color": "#0000ff", "position": 1}]});
+            g.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            g
+        };
+        // The first fill is painted first, so it is the last CSS layer.
+        let (s, _) = rect_html(json!({"fill": ["#ff0000", "#0000ff80"]}));
+        assert!(s.contains("background:linear-gradient(rgba(0, 0, 255, 0.502),rgba(0, 0, 255, 0.502)),linear-gradient(#ff0000,#ff0000);"), "{s}");
+        // Gradient opacity is folded into the stops.
+        let (s, _) = rect_html(json!({"fill": grad(json!({"opacity": 0.4}))}));
+        assert!(s.contains("linear-gradient(-90deg,rgba(255, 0, 0, 0.400) 0%,rgba(0, 0, 255, 0.400) 100%)"), "{s}");
+        // A translucent image and the fills above it are overlays; the fills below stay backgrounds.
+        let img = json!({"type": "image", "url": "a.png", "mode": "stretch", "opacity": 0.5});
+        let (s, h) = rect_html(json!({"fill": ["#ffff00", img.clone(), "#00ff0080"]}));
+        assert!(s.contains("background:linear-gradient(#ffff00,#ffff00);") && s.contains("isolation:isolate"), "{s}");
+        let (i, g) = (h.find("url('a.png')").unwrap(), h.find("rgba(0, 255, 0, 0.502)").unwrap());
+        assert!(h.contains("opacity:0.5;") && i < g, "{h}");
+        // Inner strokes are not hidden by the overlay.
+        let (_, h) = rect_html(json!({"fill": img, "stroke": "#000000", "strokeWidth": 4, "strokeAlignment": "inner"}));
+        assert!(h.contains("box-shadow:inset 0 0 0 4px #000000;") && h.find("url('a.png')") < h.rfind("box-shadow:inset"), "{h}");
+        // A gradient stroke is a masked ring.
+        let (s, h) = rect_html(json!({"fill": "#ffff00", "stroke": grad(json!({})), "strokeWidth": 12}));
+        assert!(s.contains("isolation:isolate") && !s.contains("border"), "{s}");
+        assert!(h.contains("padding:12px;background:linear-gradient(-90deg,#ff0000 0%,#0000ff 100%);") && h.contains("mask-composite:exclude"), "{h}");
+        // Layer blur: CSS takes the standard deviation, half the radius.
+        let (s, _) = rect_html(json!({"fill": "#ff0000", "effect": {"type": "blur", "radius": 4}}));
+        assert!(s.contains("filter:blur(2px);"), "{s}");
+        // Angular gradients are conic, rotated like the canvas.
+        let (s, _) = rect_html(json!({"fill": grad(json!({"gradientType": "angular"}))}));
+        assert!(s.contains("conic-gradient(from -90deg at 50% 50%,#ff0000 0%,#0000ff 100%)"), "{s}");
+    }
 
     #[test]
     fn exports_slides_deck_and_rasters() {

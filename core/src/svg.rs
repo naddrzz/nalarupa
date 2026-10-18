@@ -253,15 +253,15 @@ struct Shadow {
 }
 
 #[derive(Default)]
-struct Effects {
+pub(crate) struct Effects {
     shadows: Vec<Shadow>,
     /// Layer blur sigma (radius / 2; several blurs compound).
-    blur: f64,
+    pub(crate) blur: f64,
     backdrop: f64,
 }
 
 impl Effects {
-    fn of(n: &RNode) -> Effects {
+    pub(crate) fn of(n: &RNode) -> Effects {
         let mut fx = Effects::default();
         let list: Vec<&Value> = match n.p.get("effect") {
             Some(Value::Array(a)) => a.iter().collect(),
