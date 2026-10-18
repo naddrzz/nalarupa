@@ -60,6 +60,8 @@ pub struct AgentState {
     pub running: bool,
     active: usize,
     pub cancel: Arc<AtomicBool>,
+    /// Counts `stop()` calls, so a turn handing over to the next one can tell it was stopped meanwhile.
+    stops: u64,
     pub profiles: Vec<Profile>,
     pub main: Option<String>,
     /// Prompts sent while agents were busy; flushed as one message afterwards.
@@ -83,6 +85,15 @@ pub struct Chat {
 }
 
 impl AgentState {
+    /// True (and idle again) when `stop()` ran since `since`, the stop count a handoff started from.
+    fn stopped_since(&mut self, since: Option<u64>) -> bool {
+        let stopped = since.is_some_and(|s| s != self.stops);
+        if stopped {
+            self.running = false;
+        }
+        stopped
+    }
+
     pub fn profile(&self, id: &str) -> Option<&Profile> {
         self.profiles.iter().find(|p| p.id == id)
     }
@@ -192,14 +203,18 @@ pub fn send(prompt: String, parallel: usize, mode: &str, designs: usize, iterate
             return Ok(());
         }
     }
-    begin(prompt, parallel, mode, designs, iterate);
+    begin(prompt, parallel, mode, designs, iterate, None);
     Ok(())
 }
 
-/// Start the first turn of a run (the agent is idle, or the previous turn is handing over).
-fn begin(prompt: String, parallel: usize, mode: &str, designs: usize, iterate: &str) {
+/// Start the first turn of a run (the agent is idle, or the previous turn is handing over:
+/// `since` is then the stop count at the handoff, and a `stop()` after it cancels the run).
+fn begin(prompt: String, parallel: usize, mode: &str, designs: usize, iterate: &str, since: Option<u64>) {
     {
         let mut e = engine();
+        if e.agent.stopped_since(since) {
+            return;
+        }
         e.agent.parallel = (parallel.clamp(1, MAX_CHILDREN + 1), if mode == "side" { "side".into() } else { "split".into() });
         e.agent.cook = (designs.clamp(1, MAX_DESIGNS), if iterate == "style" { "style".into() } else { "layout".into() });
     }
@@ -207,13 +222,16 @@ fn begin(prompt: String, parallel: usize, mode: &str, designs: usize, iterate: &
     if designs > 1 {
         text = format!("{text}\n\n{FIRST_DESIGN}");
     }
-    start_turn(&prompt, text);
+    start_turn(&prompt, text, since);
 }
 
 /// Send `prompt` to the main agent (same conversation), showing `shown` as the user's message.
-fn start_turn(shown: &str, prompt: String) {
+fn start_turn(shown: &str, prompt: String, since: Option<u64>) {
     let main = {
         let mut e = engine();
+        if e.agent.stopped_since(since) {
+            return;
+        }
         if e.agent.chat.is_none() {
             let id = format!("{:x}{:04x}", now_ms(), crate::doc::random_u64() & 0xffff);
             e.agent.chat = Some(Chat { id, title: shown.trim().chars().take(100).collect(), events: Vec::new() });
@@ -292,11 +310,11 @@ fn start_thread(p: Profile, prompt: String, child: Option<String>) {
             Iterate(&'static str),
             Queued(String),
         }
-        let next = {
+        let (next, since) = {
             let mut e = engine();
             e.agent.active -= 1;
             if e.agent.active > 0 {
-                None
+                (None, None)
             } else {
                 e.emit(json!({"type": "agent", "kind": "all_done"}));
                 // The next variation starts before the queue: queued prompts wait for the last variation.
@@ -308,14 +326,14 @@ fn start_thread(p: Profile, prompt: String, child: Option<String>) {
                 };
                 // Stay busy across the handoff so a document switch cannot slip in before the next turn starts.
                 e.agent.running = next.is_some();
-                next
+                (next, Some(e.agent.stops))
             }
         };
         match next {
-            Some(Next::Iterate(prompt)) => start_turn(ITERATING, wrap_parallel(prompt)),
+            Some(Next::Iterate(prompt)) => start_turn(ITERATING, wrap_parallel(prompt), since),
             Some(Next::Queued(q)) => {
                 let (n, mode) = engine().agent.parallel.clone();
-                begin(q, n, &mode, 1, "");
+                begin(q, n, &mode, 1, "", since);
             }
             None => {}
         }
@@ -325,6 +343,7 @@ fn start_thread(p: Profile, prompt: String, child: Option<String>) {
 pub fn stop() {
     let mut e = engine();
     e.agent.cancel.store(true, Ordering::SeqCst);
+    e.agent.stops += 1;
     e.agent.queue.clear();
     e.agent.cook.0 = 1;
     for (_, (_, waiting)) in e.agent.permissions.drain() {
