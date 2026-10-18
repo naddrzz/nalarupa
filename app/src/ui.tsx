@@ -1,8 +1,17 @@
-import { forwardRef, useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode, type Ref } from 'react'
+import { forwardRef, useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode, type Ref } from 'react'
 import type { EventPayload } from '@gpuix/native'
-import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
+import { useGpuixRequired, type ImgInstance, type PublicInstance } from '@gpuix/react'
 import { ICONS, type IconName } from './icons'
-import { C, FONT, MONO } from './theme'
+import { C, DPR, FONT, MONO } from './theme'
+import type { Rect } from './geometry'
+
+/** Screen-space SVG markup inside `box` (rotated outlines and the vector-edit overlay): GPUI cannot rotate divs, so it paints as an <img>. */
+export function SvgOverlay({ body, box, testId }: { body: string; box: Rect; testId?: string }) {
+  const img = useRef<ImgInstance>(null)
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(box.w * DPR)}" height="${Math.round(box.h * DPR)}" viewBox="${box.x} ${box.y} ${box.w} ${box.h}">${body}</svg>`
+  useLayoutEffect(() => img.current?.setImage(Buffer.from(svg)), [svg])
+  return <img ref={img} testId={testId} objectFit="fill" style={{ position: 'absolute', left: box.x, top: box.y, width: box.w, height: box.h, pointerEvents: 'none' }} />
+}
 
 /** Show a message. Errors stay until dismissed and must say how to recover. */
 export type Toast = (message: string, error?: boolean) => void
