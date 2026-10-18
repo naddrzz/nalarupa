@@ -21,9 +21,9 @@ jobs:
       - uses: actions/checkout@v4
       - run: cargo build --release && cargo test --release
         working-directory: core
-      - run: bun install --frozen-lockfile && bun run typecheck && bun run smoke && bun run editor-check
+      - run: bun install --frozen-lockfile && bun run typecheck && bun run smoke && bun run editor-check && bun run mcp-check && bun run doc-check
         working-directory: app
-      - run: bash scripts/wl-run.sh bun run e2e
+      - run: bash scripts/wl-run.sh bun run e2e && bash scripts/wl-run.sh bun run file-e2e
         working-directory: app
       # editor-e2e stops at the first text entry on Linux (GPUIX automation `fill` types nothing under
       # Wayland); run it on Windows until that is fixed.
