@@ -38,8 +38,12 @@ try {
     if (owner[0] === pid && u32.IsWindowVisible(hwnd)) break
   }
   if (!hwnd) throw new Error('no window for the app')
-  // Measure after decorateWindow (it polls every 100 ms) has set the icon and moved the window into the work area.
-  await new Promise((r) => setTimeout(r, 500))
+  // Measure after decorateWindow has run: its last step sets the caption colour, after the icon and the move into
+  // the work area. Poll for that (bounded) rather than guess a delay.
+  const captionWanted = parseInt(C.panel.slice(5, 7) + C.panel.slice(3, 5) + C.panel.slice(1, 3), 16)
+  const captionNow = new Uint32Array(1)
+  const decorated = () => dwm.DwmGetWindowAttribute(hwnd, 35, ptr(captionNow), 4) === 0 && captionNow[0] === captionWanted
+  for (let i = 0; i < 50 && !decorated(); i++) await new Promise((r) => setTimeout(r, 100))
   const wr = new Int32Array(4), cr = new Int32Array(4), origin = new Int32Array(2)
   u32.GetWindowRect(hwnd, ptr(wr))
   u32.GetClientRect(hwnd, ptr(cr))
@@ -57,7 +61,7 @@ try {
   if (!u32.SendMessageW(hwnd, 0x7f, 0, null) || !u32.SendMessageW(hwnd, 0x7f, 1, null)) failures.push('the window has no Nalarupa icon')
   const caption = new Uint32Array(1)
   if (dwm.DwmGetWindowAttribute(hwnd, 35, ptr(caption), 4) === 0) {
-    const want = parseInt(C.panel.slice(5, 7) + C.panel.slice(3, 5) + C.panel.slice(1, 3), 16)
+    const want = captionWanted
     console.log(`caption colour 0x${caption[0].toString(16)} (want 0x${want.toString(16)})`)
     if (caption[0] !== want) failures.push('the title bar is not in the app colour')
   }
