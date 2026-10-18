@@ -821,6 +821,7 @@ fn run_claude_code(p: &Profile, prompt: &str, child: bool) -> Result<Value, Stri
     let mut last_preview: HashMap<String, Instant> = HashMap::new();
     let mut usage = json!({});
     let mut reported = false;
+    let mut textless_error = false;
     for line in BufReader::new(stdout).lines() {
         let Ok(line) = line else { break };
         let Ok(ev) = serde_json::from_str::<Value>(&line) else { continue };
@@ -892,8 +893,14 @@ fn run_claude_code(p: &Profile, prompt: &str, child: bool) -> Result<Value, Stri
                 usage = json!({"input": u["input_tokens"], "output": u["output_tokens"], "cacheRead": u["cache_read_input_tokens"],
                                "cacheWrite": u["cache_creation_input_tokens"], "turns": ev["num_turns"], "costUsd": ev["total_cost_usd"]});
                 if ev["is_error"] == true {
-                    emit(p, "error", json!({"text": ev["result"].as_str().unwrap_or("Claude Code reported an error")}));
-                    reported = true;
+                    // Without text the card would hide the real cause; leave that to the exit error (stderr).
+                    match ev["result"].as_str().map(str::trim).filter(|t| !t.is_empty()) {
+                        Some(text) => {
+                            emit(p, "error", json!({"text": text}));
+                            reported = true;
+                        }
+                        None => textless_error = true,
+                    }
                 }
             }
             _ => {}
@@ -905,6 +912,9 @@ fn run_claude_code(p: &Profile, prompt: &str, child: bool) -> Result<Value, Stri
     let err = err_reader.join().unwrap_or_default();
     if !cancel.load(Ordering::SeqCst) && !status.success() {
         return Err(exit_error(&status.to_string(), &err, reported));
+    }
+    if textless_error && !cancel.load(Ordering::SeqCst) {
+        emit(p, "error", json!({"text": "Claude Code reported an error"}));
     }
     Ok(usage)
 }
