@@ -288,7 +288,9 @@ export function App() {
           title={state.title}
           save={() => {
             try {
-              return saveTo(state.path ?? defaultSavePath(state.title))
+              // Fresh like `dirty`: an open or Save As moments ago is not in the polled state yet.
+              const current = tryCall<State>('state') ?? state
+              return saveTo(current.path ?? defaultSavePath(current.title))
             } catch {
               toast('Unable to save the document. Check that the folder exists and is writable.', true)
               return false

@@ -122,6 +122,6 @@ try {
   console.log('file-e2e ok')
 } finally {
   await app?.close()
-  if (saved) rmSync(saved, { force: true })
+  if (saved) rmSync(saved, { recursive: true, force: true })
   rmSync(data, { recursive: true, force: true })
 }
