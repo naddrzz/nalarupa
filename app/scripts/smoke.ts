@@ -27,6 +27,23 @@ await Bun.sleep(700)
 renderPixels(320, 180, 0, 0, 1920 / 320 / 6, 0x1c1c1f)
 assert(!call('state').animating, 'slide settled after ~0.6 s')
 call('undo')
+// Present renders one frame alone (solo): the sliding node and its reflowed siblings must still show, not blank the slide.
+const lit = () => {
+  const p = renderPixels(480, 270, 0, 0, 0.25, 0x000000, 'sld01', true)!
+  let n = 0
+  for (let i = 0; i < p.length; i += 4) if (p[i] > 120) n++
+  return n
+}
+const before = lit()
+assert(before > 0, 'presented slide shows its content')
+call('tool', { name: 'execute', args: { input: 'Insert("sld01", {type:"rectangle", name:"BigGreen", x:100, y:100, width:900, height:500, fill:"#22ff55"})' } })
+assert(call('state').animating, 'insert into a presented slide is animating')
+assert(lit() > 0, 'presented slide keeps its content while the insert glides in')
+await Bun.sleep(700)
+renderPixels(480, 270, 0, 0, 0.25, 0x000000, 'sld01', true)
+assert(!call('state').animating, 'presented slide settled after ~0.6 s')
+assert(lit() >= before, 'presented slide shows its final content')
+call('undo')
 // Reduced motion (an OS preference the app passes in): agent inserts appear in place.
 call('reduce_motion', { on: true })
 call('tool', { name: 'execute', args: { input: 'Insert("sld01", {type:"rectangle", name:"Still", width:100, height:100, fill:"#0000ff"})' } })
