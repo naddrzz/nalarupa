@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { basename } from 'node:path'
 import { existsSync } from 'node:fs'
 import { useGpuixRequired } from '@gpuix/react'
@@ -18,8 +19,12 @@ const TEMPLATES: { id: string; title: string; desc: string; icon: IconName }[] =
   { id: 'empty', title: 'Empty canvas', desc: 'Start from nothing', icon: 'plus' },
 ]
 
-export function Home({ recent, onOpened, toast }: { recent: string[]; onOpened: () => void; toast: Toast }) {
+/** `dirty` documents ask Save / Don't save / Cancel before a new or opened one replaces them; `back` returns to the open document. */
+export function Home({ recent, dirty, title, save, back, onOpened, toast }: {
+  recent: string[]; dirty: boolean; title: string; save: () => boolean; back?: () => void; onOpened: () => void; toast: Toast
+}) {
   const renderer = useGpuixRequired()
+  const [pending, setPending] = useState<(() => void) | null>(null)
   // The core refuses a switch while the agent runs; its message says what to do, so toast it as is.
   const switchTo = (cmd: string, args: Record<string, unknown>, failed: string) => {
     try {
@@ -30,8 +35,15 @@ export function Home({ recent, onOpened, toast }: { recent: string[]; onOpened: 
       toast(msg.startsWith('Stop the agent') ? msg : failed, true)
     }
   }
-  const create = (template: string) => switchTo('new', { template }, 'Unable to create that document.')
-  const open = (path: string) => switchTo('open', { path }, `Unable to open ${basename(path)}. Check that the file still exists and is a .nala or .pen document.`)
+  const guarded = (go: () => void) => (dirty ? setPending(() => go) : go())
+  const create = (template: string) => guarded(() => switchTo('new', { template }, 'Unable to create that document.'))
+  const open = (path: string) => guarded(() => switchTo('open', { path }, `Unable to open ${basename(path)}. Check that the file still exists and is a .nala or .pen document.`))
+  const proceed = (saveFirst: boolean) => {
+    if (saveFirst && !save()) return
+    const go = pending
+    setPending(null)
+    go?.()
+  }
   const browse = async () => {
     const paths = await renderer.promptForPaths?.({ files: true, multiple: false, prompt: 'Open' })
     if (paths?.[0]) open(paths[0])
@@ -46,6 +58,22 @@ export function Home({ recent, onOpened, toast }: { recent: string[]; onOpened: 
           </div>
           <T size={14} color={C.muted}>Design on an infinite canvas with an AI agent. Rust core, GPU-native UI.</T>
         </div>
+        {pending ? (
+          <div
+            testId="unsaved-prompt"
+            role="dialog"
+            aria-label="Unsaved changes"
+            tabIndex={0}
+            autoFocus
+            onKeyDown={(e) => { if (e.key === 'escape') setPending(null) }}
+            style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8, padding: 12, borderRadius: 10, backgroundColor: C.panel2, borderWidth: 1, borderColor: C.border }}
+          >
+            <T size={13} grow style={{ minWidth: 0 }}>{`Save changes to ${title} first? Without saving they are lost.`}</T>
+            <Button onClick={() => setPending(null)} testId="unsaved-cancel">Cancel</Button>
+            <Button danger onClick={() => proceed(false)} testId="unsaved-discard">Don't save</Button>
+            <Button primary onClick={() => proceed(true)} testId="unsaved-save">Save</Button>
+          </div>
+        ) : null}
         <div style={{ display: 'flex', flexDirection: 'row', gap: 12 }}>
           {TEMPLATES.map((t) => (
             <Pressable
@@ -67,6 +95,7 @@ export function Home({ recent, onOpened, toast }: { recent: string[]; onOpened: 
         </div>
         <div style={{ display: 'flex', flexDirection: 'row', gap: 8 }}>
           <Button icon="open" onClick={browse} testId="open-file">Open .nala / .pen…</Button>
+          {back ? <Button icon="frame" onClick={back} testId="home-back">{`Back to ${title}`}</Button> : null}
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <T size={12} color={C.muted} weight="600">Recent</T>
