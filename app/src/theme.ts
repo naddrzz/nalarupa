@@ -110,7 +110,8 @@ export function decorateWindow(tries = 50) {
       LoadImageW: { args: [FFIType.ptr, FFIType.ptr, FFIType.u32, FFIType.i32, FFIType.i32, FFIType.u32], returns: FFIType.ptr },
       SendMessageW: { args: [FFIType.ptr, FFIType.u32, FFIType.u64, FFIType.ptr], returns: FFIType.ptr },
       GetWindowRect: { args: [FFIType.ptr, FFIType.ptr], returns: FFIType.i32 },
-      SystemParametersInfoW: { args: [FFIType.u32, FFIType.u32, FFIType.ptr, FFIType.u32], returns: FFIType.i32 },
+      MonitorFromWindow: { args: [FFIType.ptr, FFIType.u32], returns: FFIType.ptr },
+      GetMonitorInfoW: { args: [FFIType.ptr, FFIType.ptr], returns: FFIType.i32 },
       SetWindowPos: { args: [FFIType.ptr, FFIType.ptr, FFIType.i32, FFIType.i32, FFIType.i32, FFIType.i32, FFIType.u32], returns: FFIType.i32 },
     })
     const { symbols: dwm } = dlopen('dwmapi.dll', { DwmSetWindowAttribute: { args: [FFIType.ptr, FFIType.u32, FFIType.ptr, FFIType.u32], returns: FFIType.i32 } })
@@ -135,10 +136,14 @@ export function decorateWindow(tries = 50) {
       }
     }
     // GPUI centres the window on the whole display, so on a short screen its bottom slides under the taskbar
-    // (1024×768 with a 48 px taskbar: 2 px off). Re-centre it in the work area when it does not fit there.
+    // (1024×768 with a 48 px taskbar: 2 px off). Re-centre it in the work area of the monitor it is on when it
+    // does not fit there. GetWindowRect and GetMonitorInfoW answer in the same DPI space (this thread's).
     const win = new Int32Array(4)
-    const area = new Int32Array(4)
-    if (u.GetWindowRect(hwnd, ptr(win)) && u.SystemParametersInfoW(0x30, 0, ptr(area), 0)) {
+    const info = new Int32Array(10) // MONITORINFO: cbSize, rcMonitor, rcWork, dwFlags
+    info[0] = 40
+    const mon = u.GetWindowRect(hwnd, ptr(win)) ? u.MonitorFromWindow(hwnd, 2) : null // MONITOR_DEFAULTTONEAREST
+    if (mon && u.GetMonitorInfoW(mon, ptr(info))) {
+      const area = info.subarray(6, 10)
       const [w, h] = [win[2] - win[0], win[3] - win[1]]
       if (win[0] < area[0] || win[1] < area[1] || win[2] > area[2] || win[3] > area[3]) {
         const x = area[0] + Math.max(0, Math.floor((area[2] - area[0] - w) / 2))
