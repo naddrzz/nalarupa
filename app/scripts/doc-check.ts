@@ -111,6 +111,10 @@ throws(() => call('export', { ids: ['sld02'], format: 'bmp', path: out }), /unkn
 throws(() => call('export', { ids: ['nope'], format: 'png', path: out }), /node not found: nope/, 'exporting a missing node')
 call('new', { template: 'empty' })
 throws(() => call('export', { format: 'pdf', path: join(out, 'empty.pdf') }), /nothing to export/, 'pdf of an empty document')
+// A plain base value plus one themed override keeps the base as the default theme (the override is not the default).
+const themed = exec('SetVariables({bg: {type: "color", value: [{value: "#ffffff"}, {value: "#111111", theme: {mode: "dark"}}]}}); f = Insert(document, {type: "frame", name: "Page", width: 100, height: 100, fill: "$bg"}); g = Insert(document, {type: "frame", name: "Night", width: 100, height: 100, fill: "$bg", theme: {mode: "dark"}}); Print(JSON.stringify(GetVariables().themes)); Print(Get(f, {resolveVariables: true}).fill); Print(Get(g, {resolveVariables: true}).fill)')
+const themedOut = themed.split('Print output\n')[1]?.trim().split('\n')
+assert(themedOut?.join('|') === '{"mode":["default","dark"]}|#ffffff|#111111', `base value stays the default theme: ${themed}`)
 
 // Settings persist to the data folder; the API key is never read back.
 call('settings_set', { key: 'anthropic_api_key', value: 'sk-test-not-real' })

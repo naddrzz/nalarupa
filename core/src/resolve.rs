@@ -371,6 +371,22 @@ mod tests {
         assert_eq!(comp.kids[0].p["fill"], "#111111");
     }
 
+    /// A base value plus one themed override must keep the base as the default theme.
+    #[test]
+    fn base_value_stays_default_with_one_override() {
+        let mut d = crate::doc::Doc::new();
+        d.set_variables(&json!({"bg": {"type": "color", "value": [{"value": "#ffffff"}, {"value": "#111111", "theme": {"mode": "dark"}}]}}), false).unwrap();
+        let mut root = d.root.clone();
+        root["children"] = json!([
+            {"type": "frame", "id": "f", "fill": "$bg"},
+            {"type": "frame", "id": "g", "fill": "$bg", "theme": {"mode": "dark"}}
+        ]);
+        let empty = Map::new();
+        let r = Resolver::new(&root, &[], &empty);
+        assert_eq!(r.resolve(&root["children"][0]).unwrap().p["fill"], "#ffffff");
+        assert_eq!(r.resolve(&root["children"][1]).unwrap().p["fill"], "#111111");
+    }
+
     /// A component that is itself an instance (ref of a ref) expands through the whole chain,
     /// keeping each level's overrides (the shadcn kit's modals are built this way).
     #[test]
