@@ -21,8 +21,13 @@ const count = (testId: string) => app.getByTestId(testId).count()
 // CPU rendering (lavapipe on the CI VPS) can lag a fixed sleep: poll a check for up to `ms`.
 const until = async (ok: () => Promise<boolean>, ms = 3000) => {
   const end = Date.now() + ms
-  while (!(await ok()) && Date.now() < end) await sleep(100)
-  return ok()
+  // Return the result that ended the loop: asking again could catch the UI mid-update.
+  let r = await ok()
+  while (!r && Date.now() < end) {
+    await sleep(100)
+    r = await ok()
+  }
+  return r
 }
 const val = async (testId: string) => {
   const e = await app.getByTestId(testId).element()

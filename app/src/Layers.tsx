@@ -130,13 +130,21 @@ function Layers({ version, selection, select, focus, hover }: { version: number;
     tryCall('reparent', { ids, parent: target.parent, index })
   }
 
-  // Enter passes the field's own value: the change that typed it may not have re-rendered this closure yet.
+  // The rename as of the last event, ahead of renders: Enter and the blur that follows it may both run
+  // before a re-render, and must commit once, with the typed value.
+  const live = useRef<{ id: string; draft: string } | null>(null)
+  const rename = (r: { id: string; draft: string } | null) => {
+    live.current = r
+    setRenaming(r)
+  }
+  // Enter passes the field's own value: the change that typed it may not have reached `live` yet.
   const commitRename = (value?: string) => {
-    if (!renaming) return
-    const name = (value ?? renaming.draft).trim()
-    const row = layers.find((l) => l.id === renaming.id)
-    if (name && row && name !== row.name) tryCall('update', { ids: [renaming.id], props: { name } })
-    setRenaming(null)
+    const r = live.current
+    if (!r) return
+    const name = (value ?? r.draft).trim()
+    const row = layers.find((l) => l.id === r.id)
+    if (name && row && name !== row.name) tryCall('update', { ids: [r.id], props: { name } })
+    rename(null)
   }
 
   if (!layers.length) {
@@ -190,7 +198,7 @@ function Layers({ version, selection, select, focus, hover }: { version: number;
                   const now = performance.now()
                   const double = (e.clickCount ?? 1) >= 2 || (lastDown.current.id === l.id && now - lastDown.current.at < 450)
                   lastDown.current = { id: l.id, at: double ? 0 : now }
-                  if (double) return setRenaming({ id: l.id, draft: l.name })
+                  if (double) return rename({ id: l.id, draft: l.name })
                   const m = e.modifiers
                   // A plain press on a selected row keeps the selection for a drag; the release narrows it.
                   const next = active && !(m?.ctrl || m?.cmd || m?.shift) ? selection : pick(l.id, row, m)
@@ -225,8 +233,10 @@ function Layers({ version, selection, select, focus, hover }: { version: number;
                 style={{
                   position: 'relative', display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, height: 28, marginLeft: 6, marginRight: 6,
                   paddingLeft: 6 + l.depth * 14, paddingRight: 4, borderRadius: 6, cursor: 'pointer',
-                  // 0.6 keeps a hidden layer's name at 4.5:1 on the panel (0.4 measured 2.8:1).
-                  opacity: l.hidden ? 0.6 : 1,
+                  // Hidden layers keep their name at 4.5:1 on the panel and its hover fill: 0.6 for the grey
+                  // name, 0.85 for the violet component name (0.6 measured 3.17:1), and none on a selected
+                  // component row (0.85 over the selection fill measures 4.13:1).
+                  opacity: l.hidden ? (l.reusable || l.type === 'ref' ? (active ? 1 : 0.85) : 0.6) : 1,
                   backgroundColor: mark === 'inside' ? '#3B82F655' : active ? '#3B82F633' : undefined,
                   hover: { backgroundColor: active ? '#3B82F633' : C.panel2 },
                 }}
@@ -260,10 +270,10 @@ function Layers({ version, selection, select, focus, hover }: { version: number;
                       aria-label="Layer name"
                       autoFocus
                       value={renaming.draft}
-                      onChange={(e) => setRenaming((r) => (r ? { ...r, draft: e.value ?? '' } : r))}
+                      onChange={(e) => rename(live.current && { ...live.current, draft: e.value ?? '' })}
                       onSubmit={(e) => commitRename(e.value)}
                       onBlur={() => commitRename()}
-                      onKeyDown={(e) => { if ((e.key ?? '').toLowerCase() === 'escape') setRenaming(null) }}
+                      onKeyDown={(e) => { if ((e.key ?? '').toLowerCase() === 'escape') rename(null) }}
                       style={{ flexGrow: 1, minWidth: 0, fontSize: 12, color: C.text }}
                     />
                   </div>
