@@ -130,13 +130,16 @@ if (process.platform !== 'win32') {
     assert(fn(), msg)
   }
   call('new', { template: 'empty' })
-  call('agent_send', { text: 'Design a landing page' })
-  await until(() => call('state').agentRunning, 'the agent starts')
-  const chat = call('chat_list').current
-  assert(chat, 'the running agent has a chat')
-  throws(() => call('agent_reset'), /Stop the agent/, 'new conversation while an agent runs')
-  assert(call('chat_list').current === chat && call('state').agentRunning, 'the refused reset keeps the running chat')
-  call('agent_stop')
+  try {
+    call('agent_send', { text: 'Design a landing page' })
+    await until(() => call('state').agentRunning, 'the agent starts')
+    const chat = call('chat_list').current
+    assert(chat, 'the running agent has a chat')
+    throws(() => call('agent_reset'), /Stop the agent/, 'new conversation while an agent runs')
+    assert(call('chat_list').current === chat && call('state').agentRunning, 'the refused reset keeps the running chat')
+  } finally {
+    call('agent_stop')
+  }
   await until(() => !call('state').agentRunning, 'the agent stops')
   assert(call('agent_reset') === true && call('chat_list').current === null, 'new conversation once the agent has stopped')
 }
