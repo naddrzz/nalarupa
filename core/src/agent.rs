@@ -326,8 +326,15 @@ pub fn stop() {
     }
 }
 
-pub fn reset() {
-    engine().agent.clear();
+/// `agent_reset`: start a new conversation. The running thread keeps writing into whatever chat and
+/// session are current, so it is refused until the agents have stopped.
+pub fn reset() -> Result<(), String> {
+    let mut e = engine();
+    if e.agent.running {
+        return Err("Stop the agent before starting a new conversation.".into());
+    }
+    e.agent.clear();
+    Ok(())
 }
 
 /// Name of our MCP tool that Claude Code asks before running a tool it may not use on its own
