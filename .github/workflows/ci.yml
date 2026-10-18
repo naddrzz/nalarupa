@@ -1,19 +1,28 @@
 name: ci
+# GitHub-hosted runners: free for this public repo, a clean machine per job, and nothing from a fork PR touches the
+# VPS. The VPS only runs the Claude workflows.
 on:
   push: { branches: [dev, main] }
   pull_request:
   workflow_dispatch:
 
-# CI has its own runner (label nalarupa-ci) so checks never wait behind long Claude jobs. Its .env sets
-# CARGO_TARGET_DIR and NALARUPA_CORE to ~/.cache/ci-target, apart from the Claude runner's build.
+concurrency: { group: "ci-${{ github.ref }}", cancel-in-progress: true }
+
 jobs:
   checks:
-    # The self-hosted runner never runs code from forks.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, nalarupa-ci]
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
+      # Headless Wayland desktop for the GUI checks (GPUIX's Linux build has no X11): sway + grim + lavapipe.
+      - run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends sway grim mesa-vulkan-drivers libvulkan1 \
+            libxkbcommon0 libxkbcommon-x11-0 libwayland-client0 libfontconfig1 fonts-noto-core fonts-noto-color-emoji >/dev/null
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: core }
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: 1.4.3 }
       - run: cargo build --release && cargo test --release
         working-directory: core
       - run: bun install --frozen-lockfile && bun run typecheck && bun run smoke && bun run editor-check && bun run mcp-check && bun run doc-check
@@ -24,4 +33,46 @@ jobs:
         working-directory: app
       - uses: actions/upload-artifact@v4
         if: always()
-        with: { name: screenshots, path: app/screenshots/, retention-days: 7 }
+        with: { name: screenshots-linux, path: app/screenshots/, retention-days: 7 }
+
+  windows:
+    # The release platform, and the only place a11y-check (UI Automation), window-check and exe-check can run.
+    # No GPU on hosted runners: GPUI falls back to the WARP software rasterizer.
+    runs-on: windows-latest
+    timeout-minutes: 50
+    continue-on-error: true # experimental until it has proven stable
+    defaults: { run: { shell: bash } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: core }
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: 1.4.3 }
+      - run: cargo build --release && cargo test --release
+        working-directory: core
+      - run: bun install --frozen-lockfile && bun run typecheck && bun run smoke && bun run editor-check && bun run mcp-check && bun run doc-check
+        working-directory: app
+      # The hosted desktop is 1024×768; the GUI suites assume the full 1440×900 window, as on a real screen.
+      - shell: pwsh
+        run: |
+          Set-DisplayResolution -Width 1920 -Height 1080 -Force
+          $mode = Get-CimInstance Win32_VideoController | Select-Object CurrentHorizontalResolution, CurrentVerticalResolution
+          $mode
+          if (-not ($mode | Where-Object { $_.CurrentHorizontalResolution -eq 1920 -and $_.CurrentVerticalResolution -eq 1080 })) { throw 'Display resolution was not set to 1920x1080' }
+      - run: bun run e2e
+        working-directory: app
+      - if: always()
+        run: bun run editor-e2e
+        working-directory: app
+      - if: always()
+        run: bun run file-e2e
+        working-directory: app
+      - if: always()
+        run: bun run a11y-check && bun run motion-check && bun run window-check
+        working-directory: app
+      - if: always()
+        run: bun run build && bun run exe-check && bun run window-check dist/nalarupa.exe
+        working-directory: app
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: screenshots-windows, path: app/screenshots/, retention-days: 7 }
