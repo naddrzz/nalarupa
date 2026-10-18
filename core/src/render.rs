@@ -890,7 +890,7 @@ fn compose(p: Option<[f64; 6]>, m: [f64; 6]) -> [f64; 6] {
 }
 
 /// Canvas point → box coordinates (inverse of `m`).
-fn unapply(m: [f64; 6], x: f64, y: f64) -> (f64, f64) {
+pub fn unapply(m: [f64; 6], x: f64, y: f64) -> (f64, f64) {
     let det = m[0] * m[3] - m[1] * m[2];
     let (x, y) = (x - m[4], y - m[5]);
     ((m[3] * x - m[2] * y) / det, (m[0] * y - m[1] * x) / det)
