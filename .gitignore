@@ -1,0 +1,7 @@
+core/target/
+app/node_modules/
+app/dist/
+app/screenshots/
+*.tmp-nalarupa
+docs/screenshots/live/
+*.log

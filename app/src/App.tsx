@@ -1,0 +1,331 @@
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
+import { existsSync, mkdirSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+import { useGpuixRequired, useWindowSize, type PublicInstance } from '@gpuix/react'
+import { call, tryCall, type Box, type State } from './core'
+import { applyEvents, store } from './agents'
+import { Canvas, fitCam, type Cam, type Mods, type Tool } from './Canvas'
+import { readClipboard, writeClipboard } from './clipboard'
+import { LeftPanel } from './Layers'
+import { Inspector } from './Inspector'
+import { AgentPanel } from './Agent'
+import { Home } from './Home'
+import { Present } from './Present'
+import { C, LEFT_W, REDUCED_MOTION, RIGHT_W, TOP_H } from './theme'
+import { Icon, IconButton, Pressable, Segmented, T, type Toast } from './ui'
+import type { IconName } from './icons'
+
+const TOOLS: { tool: Tool; icon: IconName; key: string; label: string }[] = [
+  { tool: 'move', icon: 'cursor', key: 'v', label: 'Move (V)' },
+  { tool: 'frame', icon: 'frame', key: 'f', label: 'Frame (F / A)' },
+  { tool: 'rectangle', icon: 'square', key: 'r', label: 'Rectangle (R)' },
+  { tool: 'ellipse', icon: 'circle', key: 'o', label: 'Ellipse (O)' },
+  { tool: 'text', icon: 'type', key: 't', label: 'Text (T)' },
+  { tool: 'pen', icon: 'pen', key: 'p', label: 'Pen (P)' },
+  { tool: 'hand', icon: 'hand', key: 'h', label: 'Hand (H)' },
+]
+
+function defaultSavePath(title: string): string {
+  const dir = join(homedir(), 'Documents', 'Nalarupa')
+  mkdirSync(dir, { recursive: true })
+  const base = title.replace(/[\\/:*?"<>|]/g, '').trim() || 'Untitled'
+  for (let i = 0; ; i++) {
+    const p = join(dir, `${base}${i ? `-${i}` : ''}.nala`)
+    if (!existsSync(p)) return p
+  }
+}
+
+// The side panels ignore the camera: with stable props, panning and zooming re-render only the canvas.
+const Left = memo(LeftPanel)
+const Design = memo(Inspector)
+const Chat = memo(AgentPanel)
+
+export function App() {
+  const renderer = useGpuixRequired()
+  const win = useWindowSize()
+  const [init] = useState(() => call('init'))
+  const [screen, setScreen] = useState<'home' | 'editor' | 'present'>('home')
+  const [state, setState] = useState<State>(init.state)
+  const [selection, setSelection] = useState<string[]>([])
+  const [tool, setTool] = useState<Tool>('move')
+  const [cam, setCam] = useState<Cam>({ x: -100, y: -100, zoom: 0.5 })
+  const [rightTab, setRightTab] = useState<'design' | 'agent'>('agent')
+  const [chatTick, setChatTick] = useState(0)
+  const [toastMsg, setToastMsg] = useState<{ text: string; error: boolean } | null>(null)
+  const [presentFrom, setPresentFrom] = useState<string | undefined>()
+  const [hoverId, setHoverId] = useState<string | null>(null)
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const canvasEl = useRef<PublicInstance>(null)
+
+  const cw = Math.max(100, (win?.width ?? 1440) - LEFT_W - RIGHT_W)
+  const ch = Math.max(100, (win?.height ?? 900) - TOP_H)
+
+  const toast = useCallback<Toast>((m, error = false) => {
+    setToastMsg({ text: m, error })
+    if (toastTimer.current) clearTimeout(toastTimer.current)
+    // Confirmations fade after 3.5 s; an error waits for the user to read it and dismiss it.
+    toastTimer.current = error ? null : setTimeout(() => setToastMsg(null), 3500)
+  }, [])
+  // Agent inserts appear in place when the OS asks for reduced motion.
+  useEffect(() => void tryCall('reduce_motion', { on: REDUCED_MOTION }), [])
+
+  const select = useCallback((ids: string[]) => {
+    setSelection(ids)
+    tryCall('select', { ids })
+    if (ids.length) setRightTab((t) => (t === 'agent' && store.items.length === 0 ? 'design' : t))
+  }, [])
+
+  const fitTo = useCallback((ids?: string[]) => {
+    const b = tryCall<Box | null>('bounds', { ids: ids ?? [] })
+    if (b) setCam(fitCam(b, cw, ch, 60, 1))
+  }, [cw, ch])
+
+  const openedDoc = useCallback(() => {
+    setSelection([])
+    setScreen('editor')
+    setTimeout(() => fitTo(), 0)
+  }, [fitTo])
+
+  // Poll the core for document changes (agent / MCP edits) and agent events.
+  useEffect(() => {
+    const t = setInterval(() => {
+      const r = tryCall<{ state: State; events: any[] }>('poll')
+      if (!r) return
+      setState((s) => (s.version === r.state.version && s.agentRunning === r.state.agentRunning && s.dirty === r.state.dirty && s.title === r.state.title && s.animating === r.state.animating ? s : r.state))
+      if (applyEvents(r.events, performance.now())) setChatTick((n) => n + 1)
+      const toastEv = r.events.find((e) => e.type === 'toast')
+      if (toastEv) toast(toastEv.text)
+      if (r.events.some((e) => e.type === 'document_opened')) openedDoc()
+    }, 120)
+    return () => clearInterval(t)
+  }, [openedDoc])
+
+  useEffect(() => {
+    renderer.setWindowTitle?.(`${state.title}${state.dirty ? ' •' : ''} — Nalarupa`)
+  }, [state.title, state.dirty])
+
+  useEffect(() => {
+    // Drop selected ids that no longer exist (undo, agent deletes).
+    if (!selection.length) return
+    const boxes = tryCall<Box[]>('boxes', { ids: selection }) ?? []
+    if (boxes.length !== selection.length) setSelection(boxes.map((b) => b.id))
+  }, [state.version])
+
+  const save = (as = false) => {
+    const run = (path?: string) => {
+      const r = tryCall('save', { path })
+      if (r) toast(`Saved ${r.path}`)
+    }
+    if (as) {
+      renderer.promptForPaths?.({ directories: true, prompt: 'Save here' }).then((dirs) => {
+        if (dirs?.[0]) run(join(dirs[0], `${state.title}.nala`))
+      })
+    } else run(state.path ?? defaultSavePath(state.title))
+  }
+
+  const present = useCallback((from?: string) => {
+    setPresentFrom(from ?? selection[0])
+    setScreen('present')
+  }, [selection])
+  const focusLayer = useCallback((id: string) => fitTo([id]), [fitTo])
+  // Keys go back to the canvas once a prompt is sent: Space-pan and shortcuts work while the agent designs.
+  const sent = useCallback(() => canvasEl.current && renderer.focusElement?.(canvasEl.current.id), [renderer])
+
+  const zoomBy = (f: number) => {
+    const z = Math.min(64, Math.max(0.02, cam.zoom * f))
+    const cx = cam.x + cw / 2 / cam.zoom
+    const cy = cam.y + ch / 2 / cam.zoom
+    setCam({ zoom: z, x: cx - cw / 2 / z, y: cy - ch / 2 / z })
+  }
+
+  const run = <R = any,>(cmd: string, args: Record<string, unknown>, then?: (r: R) => void) => {
+    const r = tryCall<R>(cmd, args)
+    if (r === null) toast('That action needs a different selection. Select the layers it applies to and try again.', true)
+    else then?.(r)
+    return true
+  }
+  const nodeOf = (id: string) => tryCall('node', { id })
+  const parentOf = (id: string) => (tryCall<Box[]>('boxes', { ids: [id] }) ?? [])[0]?.parent ?? 'document'
+  const childIds = (parent: string) => (parent === 'document' ? tryCall<Box[]>('frames') : tryCall<Box[]>('children_boxes', { id: parent }))?.map((b) => b.id) ?? []
+  const copySelection = () => {
+    const r = tryCall<{ html: string; text: string; ids: string[] }>('copy', { ids: selection })
+    if (!r?.ids.length) return false
+    writeClipboard({ html: r.html, text: r.text })
+    return true
+  }
+  const ALIGN: Record<string, string> = { w: 'top', a: 'left', s: 'bottom', d: 'right', h: 'hcenter', v: 'vcenter' }
+
+  const onShortcut = (key: string, m: Mods): boolean => {
+    const sel = selection
+    const has = sel.length > 0
+    if (m.mod && key === 'g' && has) {
+      if (m.shift) return run<{ ids: string[] }>('unwrap', { ids: sel }, (r) => select(r.ids))
+      return run<{ id: string }>('wrap', { ids: sel, kind: m.alt ? 'frame' : 'group' }, (r) => select([r.id]))
+    }
+    if (m.mod && key === 'backspace' && has) return run<{ ids: string[] }>('unwrap', { ids: sel }, (r) => select(r.ids))
+    if (key === 'a' && m.shift && !m.mod && has) {
+      if (m.alt) return run('remove_layout', { ids: sel })
+      return run<{ id: string }>('add_layout', { ids: sel }, (r) => select([r.id]))
+    }
+    if (m.alt && !m.mod && !m.shift && ALIGN[key] && has) return run('align', { ids: sel, dir: ALIGN[key] })
+    if (m.shift && !m.mod && !m.alt && (key === 'h' || key === 'v') && has) {
+      const k = key === 'h' ? 'flipX' : 'flipY'
+      for (const id of sel) tryCall('update', { ids: [id], props: { [k]: nodeOf(id)?.node?.[k] ? null : true } })
+      return true
+    }
+    const t = TOOLS.find((x) => x.key === key) ?? (key === 'a' ? TOOLS[1] : undefined)
+    if (t && !m.mod && !m.shift && !m.alt) return setTool(t.tool), true
+    if ((key === 'delete' || key === 'backspace') && has) {
+      tryCall('delete', { ids: sel })
+      select([])
+      return true
+    }
+    if (m.mod && key === 'z') return tryCall(m.shift ? 'redo' : 'undo'), true
+    if (m.mod && key === 'y') return tryCall('redo'), true
+    if (m.mod && key === 'd' && has) {
+      const r = tryCall('duplicate', { ids: sel })
+      if (r?.ids) select(r.ids)
+      return true
+    }
+    if (m.mod && key === 'c' && has) return copySelection(), true
+    if (m.mod && key === 'x' && has) {
+      if (copySelection()) {
+        tryCall('delete', { ids: sel })
+        select([])
+      }
+      return true
+    }
+    if (m.mod && key === 'v') {
+      const c = readClipboard()
+      const view = { x: cam.x, y: cam.y, w: cw / cam.zoom, h: ch / cam.zoom }
+      return run<{ ids: string[] }>('paste', { html: c.html ?? '', text: c.text ?? '', targets: sel, view }, (r) => { if (r.ids.length) select(r.ids) })
+    }
+    if (m.mod && key === 'a') {
+      // Nothing selected: every top-level layer; else every child of the selection's shared parent.
+      const parents = [...new Set(sel.map(parentOf))]
+      if (!has || parents.length === 1) select(childIds(has ? parents[0] : 'document'))
+      return true
+    }
+    if ((key === '[' || key === ']') && has) {
+      const dir = key === ']' ? (m.mod ? 'up' : 'front') : m.mod ? 'down' : 'back'
+      return run('reorder', { ids: sel, dir })
+    }
+    if (m.mod && key === 's') return save(m.shift), true
+    if (m.mod && key === 'enter') return present(), true
+    if (m.mod && key === '0') return setCam({ ...cam, zoom: 1 }), true
+    if (key === 'escape') {
+      if (tool !== 'move') setTool('move')
+      select([])
+      return true
+    }
+    if (key === 'enter' && m.shift) {
+      const parents = [...new Set(sel.map(parentOf))].filter((p) => p !== 'document')
+      if (parents.length) select(parents)
+      return true
+    }
+    if (key === 'enter' && has) {
+      const kids = sel.flatMap((id) => (tryCall<Box[]>('children_boxes', { id }) ?? []).map((b) => b.id))
+      if (kids.length) select(kids)
+      return true
+    }
+    if ((key === '1' || key === '!') && m.shift) return fitTo(), true
+    if ((key === '2' || key === '@') && m.shift) return fitTo(selection), true
+    if (key === '=' || key === '+') return zoomBy(1.25), true
+    if (key === '-') return zoomBy(0.8), true
+    const nudge: Record<string, [number, number]> = { left: [-1, 0], right: [1, 0], up: [0, -1], down: [0, 1] }
+    if (nudge[key] && has) {
+      // Inside auto layout arrows reorder along the layout axis (Alt: to the end); elsewhere they nudge.
+      const free: string[] = []
+      for (const id of sel) {
+        const info = nodeOf(id)
+        const layout = info?.node?.layoutPosition !== 'absolute' ? info?.parentLayout : 'none'
+        if (!layout || layout === 'none') free.push(id)
+        else if ((layout === 'vertical') === (key === 'up' || key === 'down')) {
+          const later = key === 'right' || key === 'down'
+          tryCall('reorder', { ids: [id], dir: m.alt ? (later ? 'front' : 'back') : later ? 'up' : 'down' })
+        }
+      }
+      const s = m.shift ? 10 : 1
+      if (free.length) tryCall('move_by', { ids: free, dx: nudge[key][0] * s, dy: nudge[key][1] * s })
+      return true
+    }
+    return false
+  }
+
+  const toastEl = toastMsg ? (
+    <div
+      testId="toast"
+      role={toastMsg.error ? 'alert' : 'status'}
+      style={{
+        position: 'absolute', left: screen === 'editor' ? LEFT_W + 16 : 16, bottom: 16, maxWidth: 560, display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8,
+        paddingLeft: 12, paddingRight: toastMsg.error ? 4 : 12, paddingTop: 6, paddingBottom: 6, borderRadius: 8, backgroundColor: C.raised, borderWidth: 1,
+        borderColor: toastMsg.error ? C.danger : C.border, boxShadow: { offsetX: 0, offsetY: 8, blurRadius: 24, spreadRadius: 0, color: '#00000080' },
+      }}
+    >
+      {toastMsg.error ? <Icon name="alert" size={14} color={C.danger} /> : null}
+      <T size={12} grow style={{ minWidth: 0 }}>{toastMsg.text}</T>
+      {toastMsg.error ? <IconButton icon="x" size={24} title="Dismiss message" testId="toast-dismiss" onClick={() => setToastMsg(null)} /> : null}
+    </div>
+  ) : null
+
+  if (screen === 'present') {
+    return <Present w={win?.width ?? 1440} h={win?.height ?? 900} start={presentFrom} version={state.version} exit={() => setScreen('editor')} />
+  }
+  if (screen === 'home') {
+    return (
+      <>
+        <Home recent={init.recent ?? []} onOpened={openedDoc} toast={toast} />
+        {toastEl}
+      </>
+    )
+  }
+
+  return (
+    <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', backgroundColor: C.bg }}>
+      <div style={{ height: TOP_H, flexShrink: 0, display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 4, paddingLeft: 8, paddingRight: 10, backgroundColor: C.panel, borderBottomWidth: 1, borderColor: C.border }}>
+        <IconButton icon="home" title="Home" testId="home" onClick={() => setScreen('home')} />
+        <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, width: LEFT_W - 48, paddingLeft: 4 }}>
+          <T size={13} weight="600" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{state.title}</T>
+          {state.dirty ? <div style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: C.accent }} /> : null}
+        </div>
+        {TOOLS.map((t) => (
+          <IconButton key={t.tool} icon={t.icon} title={t.label} testId={`tool-${t.tool}`} active={tool === t.tool} onClick={() => setTool(t.tool)} />
+        ))}
+        <div style={{ width: 1, height: 20, backgroundColor: C.border, marginLeft: 6, marginRight: 6 }} />
+        <IconButton icon="undo" title="Undo (Ctrl+Z)" testId="undo" onClick={() => tryCall('undo')} />
+        <IconButton icon="redo" title="Redo (Ctrl+Shift+Z)" testId="redo" onClick={() => tryCall('redo')} />
+        <div style={{ flexGrow: 1 }} />
+        <IconButton icon="minus" title="Zoom out" onClick={() => zoomBy(0.8)} />
+        <Pressable testId="zoom-level" label={`Zoom ${Math.round(cam.zoom * 100)}%. Fit to screen`} onClick={() => fitTo()} style={{ width: 52, height: 28, borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', hover: { backgroundColor: C.raised } }}>
+          <T size={12} color={C.muted}>{`${Math.round(cam.zoom * 100)}%`}</T>
+        </Pressable>
+        <IconButton icon="plus" title="Zoom in" onClick={() => zoomBy(1.25)} />
+        <IconButton icon="maximize" title="Zoom to fit (Shift+1)" testId="fit" onClick={() => fitTo()} />
+        <div style={{ width: 1, height: 20, backgroundColor: C.border, marginLeft: 6, marginRight: 6 }} />
+        <IconButton icon="play" title="Present (Ctrl+Enter)" testId="present" onClick={() => present()} />
+        <IconButton icon="save" title="Save (Ctrl+S)" testId="save" onClick={() => save()} />
+        <IconButton icon="open" title="Save as… (Ctrl+Shift+S)" onClick={() => save(true)} />
+      </div>
+      <div style={{ flexGrow: 1, minHeight: 0, display: 'flex', flexDirection: 'row' }}>
+        <Left version={state.version} selection={selection} select={select} focus={focusLayer} present={present} toast={toast} hover={setHoverId} />
+        <Canvas
+          w={cw} h={ch} cam={cam} setCam={setCam} version={state.version} selection={selection}
+          select={select} tool={tool} setTool={setTool} toast={toast} onShortcut={onShortcut} chatOpen={rightTab === 'agent'} hoverId={hoverId}
+          animating={!!state.animating} rootRef={canvasEl}
+        />
+        <div style={{ width: RIGHT_W, flexShrink: 0, height: '100%', display: 'flex', flexDirection: 'column', backgroundColor: C.panel, borderLeftWidth: 1, borderColor: C.border }}>
+          <div style={{ padding: 10, borderBottomWidth: 1, borderColor: C.border }}>
+            <Segmented value={rightTab} onChange={setRightTab} label="Right panel" options={[{ value: 'design', label: 'Design', testId: 'tab-design' }, { value: 'agent', label: state.agentRunning ? 'Agent •' : 'Agent', name: state.agentRunning ? 'Agent, running' : 'Agent', testId: 'tab-agent' }]} />
+          </div>
+          {rightTab === 'design' ? (
+            <Design version={state.version} selection={selection} select={select} toast={toast} />
+          ) : (
+            <Chat tick={chatTick} running={state.agentRunning} mcpUrl={init.mcpUrl} toast={toast} onSent={sent} />
+          )}
+        </div>
+      </div>
+      {toastEl}
+    </div>
+  )
+}

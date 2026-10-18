@@ -1,0 +1,661 @@
+//! Editor state shared by the UI (FFI), the MCP server and the built-in agent.
+
+use crate::doc::{Doc, ROOT};
+use crate::render::{Ctx, Renderer};
+use crate::svg::Assets;
+use crate::text::Fonts;
+use serde_json::{json, Map, Value};
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard, OnceLock};
+
+pub struct ToolOut {
+    pub text: String,
+    /// Base64 PNGs; screenshots land here only after `finish`.
+    pub images: Vec<String>,
+    pub error: bool,
+    /// Screenshots (node id, tree, scale) still to rasterize: `finish` does it once the caller has
+    /// released the engine lock, so the canvas keeps drawing while the agent looks at its work.
+    pub shots: Vec<(String, resvg::usvg::Tree, f64)>,
+}
+
+impl ToolOut {
+    pub fn ok(text: impl Into<String>) -> ToolOut {
+        ToolOut { text: text.into(), images: Vec::new(), error: false, shots: Vec::new() }
+    }
+    pub fn err(text: impl Into<String>) -> ToolOut {
+        ToolOut { error: true, ..ToolOut::ok(text) }
+    }
+    /// Rasterize pending screenshots. Call without holding `engine()`.
+    pub fn finish(mut self) -> ToolOut {
+        for (id, tree, scale) in std::mem::take(&mut self.shots) {
+            match crate::render::encode_tree(&tree, "png", scale, 0) {
+                Ok(png) => self.images.push(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, png)),
+                Err(err) => self.text += &format!("Screenshot of {id} failed: {err}\n"),
+            }
+        }
+        self
+    }
+}
+
+pub struct Engine {
+    pub doc: Doc,
+    pub libs: Vec<(String, Value)>,
+    pub fonts: Fonts,
+    pub assets: Assets,
+    pub renderer: Renderer,
+    pub version: u64,
+    synced: u64,
+    pub saved: u64,
+    undo: Vec<Value>,
+    redo: Vec<Value>,
+    pub selection: Vec<String>,
+    pub events: Vec<Value>,
+    pub script: crate::script::ScriptState,
+    pub data_dir: PathBuf,
+    pub settings: Map<String, Value>,
+    pub mcp_port: u16,
+    pub agent: crate::agent::AgentState,
+    /// Document snapshot taken when a drag starts; committed as one undo step on release.
+    pub drag_before: Option<Value>,
+    /// `execute` calls the model is still writing (key = tool call id).
+    pub streams: Vec<Stream>,
+    /// Document as displayed while streams are active: real doc + every stream's complete statements.
+    pub preview: Option<Doc>,
+    /// True while JavaScript runs; layout queries then read the document being edited.
+    pub executing: bool,
+    /// Visible canvas area in document units (x, y, w, h), reported by the UI.
+    pub viewport: Option<(f64, f64, f64, f64)>,
+    /// The OS asks for reduced motion: agent inserts appear in place instead of sliding in.
+    pub reduce_motion: bool,
+    /// Key of the last undo step when it may absorb the next edit with the same key
+    /// (one inspector field focus or scrub gesture = one undo step).
+    coalesce: Option<String>,
+    /// Nodes that already slid in: a streamed insert committed again, undo/redo or a preview
+    /// rebuild never replays the animation.
+    slid: std::collections::HashSet<String>,
+}
+
+pub struct Stream {
+    pub key: String,
+    pub agent: String,
+    pub source: String,
+    pub seed: u64,
+    pub touched: usize,
+}
+
+static ENGINE: OnceLock<Mutex<Engine>> = OnceLock::new();
+
+/// The process-wide engine. Poisoned locks are recovered: state stays usable after a panic.
+pub fn engine() -> MutexGuard<'static, Engine> {
+    ENGINE.get_or_init(|| Mutex::new(Engine::new(crate::render::data_dir()))).lock().unwrap_or_else(|e| e.into_inner())
+}
+
+const UNDO_LIMIT: usize = 100;
+
+impl Engine {
+    pub fn new(data_dir: PathBuf) -> Engine {
+        let _ = std::fs::create_dir_all(&data_dir);
+        let settings = std::fs::read_to_string(data_dir.join("settings.json"))
+            .ok()
+            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+            .and_then(|v| v.as_object().cloned())
+            .unwrap_or_default();
+        let mut e = Engine {
+            doc: Doc::new(),
+            libs: Vec::new(),
+            fonts: Fonts::new(data_dir.join("fonts")),
+            assets: Assets::new(data_dir.join("cache")),
+            renderer: Renderer::default(),
+            version: 1,
+            synced: 0,
+            saved: 1,
+            undo: Vec::new(),
+            redo: Vec::new(),
+            selection: Vec::new(),
+            events: Vec::new(),
+            script: Default::default(),
+            data_dir,
+            settings,
+            mcp_port: 0,
+            agent: Default::default(),
+            drag_before: None,
+            streams: Vec::new(),
+            preview: None,
+            executing: false,
+            viewport: None,
+            reduce_motion: false,
+            coalesce: None,
+            slid: Default::default(),
+        };
+        e.load_template("blank");
+        e.saved = e.version;
+        e
+    }
+
+    pub fn offline(&mut self) {
+        self.fonts.online = false;
+        self.assets.online = false;
+    }
+
+    /// Bring the cached render layers up to date with the document.
+    pub fn sync(&mut self) {
+        if self.synced == self.version {
+            return;
+        }
+        let doc = match &self.preview {
+            Some(p) if !self.executing => p,
+            _ => &self.doc,
+        };
+        let mut cx = Ctx { doc, libs: &self.libs, fonts: &mut self.fonts, assets: &mut self.assets };
+        let roots = self.renderer.shift_siblings(&mut cx);
+        let rebuilt = self.renderer.sync(&mut cx);
+        if !self.renderer.slides.is_empty() {
+            self.renderer.refresh_slides(&mut cx, &rebuilt, roots);
+        }
+        self.synced = self.version;
+    }
+
+    /// An agent `Insert` below the top level slides into place.
+    pub fn slide_in(&mut self, id: &str) {
+        // Sibling glides start from these slides too, so this one check stills both.
+        if self.reduce_motion {
+            return;
+        }
+        if self.slid.insert(id.to_string()) {
+            self.renderer.slides.push(crate::render::Slide::new(id));
+        }
+    }
+
+    /// Settled slides go back into the cached view at the next sync (the document is unchanged).
+    pub fn expire_slides(&mut self) {
+        if self.renderer.expire_slides() {
+            self.synced = 0;
+        }
+    }
+
+    /// The model streamed more of an `execute` call: run its newly completed statements, once,
+    /// in the stream's live JS context against the preview document, so the design appears
+    /// while the agent is still writing. Anything that is not a plain append rebuilds the preview.
+    pub fn stream_update(&mut self, key: &str, agent: &str, source: &str) {
+        let prefix = &source[..crate::stream::complete_prefix(source)];
+        let i = match self.streams.iter().position(|s| s.key == key) {
+            Some(i) if self.streams[i].source == prefix => return,
+            Some(i) => {
+                self.streams[i].source = prefix.to_string();
+                i
+            }
+            None => {
+                self.streams.push(Stream {
+                    key: key.to_string(),
+                    agent: agent.to_string(),
+                    source: prefix.to_string(),
+                    seed: crate::svg::fxhash(key),
+                    touched: 0,
+                });
+                self.streams.len() - 1
+            }
+        };
+        if let Some(mut preview) = self.preview.take() {
+            let seed = self.streams[i].seed;
+            std::mem::swap(&mut self.doc, &mut preview);
+            let touched = crate::script::stream_step(self, key, prefix, seed);
+            std::mem::swap(&mut self.doc, &mut preview);
+            self.preview = Some(preview);
+            if let Some(touched) = touched {
+                self.version += 1;
+                let s = &mut self.streams[i];
+                let seen = std::mem::replace(&mut s.touched, touched.len());
+                if touched.len() > seen {
+                    let ev = json!({"type": "agent_activity", "agent": s.agent, "op": "write", "ids": touched[seen..], "streaming": true});
+                    self.emit(ev);
+                }
+                return;
+            }
+        }
+        self.rebuild_preview();
+    }
+
+    pub fn stream_end(&mut self, key: &str) {
+        let before = self.streams.len();
+        self.streams.retain(|s| s.key != key);
+        if self.streams.len() != before {
+            self.rebuild_preview();
+        }
+    }
+
+    pub fn streams_of_agent_end(&mut self, agent: &str) {
+        let keys: Vec<String> = self.streams.iter().filter(|s| s.agent == agent).map(|s| s.key.clone()).collect();
+        for k in keys {
+            self.stream_end(&k);
+        }
+    }
+
+    /// The final `execute` for a streamed call arrived: retire its preview and reuse its id seed.
+    fn take_stream(&mut self, key: Option<&str>, source: &str) -> Option<Stream> {
+        let src = source.trim();
+        let i = self.streams.iter().position(|s| key == Some(s.key.as_str()) || (!s.source.trim().is_empty() && src.starts_with(s.source.trim())))?;
+        let s = self.streams.remove(i);
+        self.rebuild_preview();
+        Some(s)
+    }
+
+    /// Preview from scratch: real document + every stream's complete statements, each stream
+    /// in a fresh JS context.
+    fn rebuild_preview(&mut self) {
+        crate::script::reset_streams(self);
+        if self.streams.is_empty() {
+            if self.preview.take().is_some() {
+                self.version += 1;
+            }
+            return;
+        }
+        let mut scratch = self.doc.clone();
+        std::mem::swap(&mut self.doc, &mut scratch);
+        let jobs: Vec<(String, String, String, u64, usize)> = self.streams.iter().map(|s| (s.key.clone(), s.agent.clone(), s.source.clone(), s.seed, s.touched)).collect();
+        let mut activity = Vec::new();
+        for (i, (key, agent, source, seed, seen)) in jobs.into_iter().enumerate() {
+            let touched = crate::script::stream_step(self, &key, &source, seed).unwrap_or_default();
+            if touched.len() > seen {
+                activity.push(json!({"type": "agent_activity", "agent": agent, "op": "write", "ids": touched[seen..].to_vec(), "streaming": true}));
+            }
+            self.streams[i].touched = touched.len();
+        }
+        std::mem::swap(&mut self.doc, &mut scratch);
+        self.preview = Some(scratch);
+        self.version += 1;
+        for a in activity {
+            self.emit(a);
+        }
+    }
+
+    pub fn ctx(&mut self) -> Ctx<'_> {
+        Ctx { doc: &self.doc, libs: &self.libs, fonts: &mut self.fonts, assets: &mut self.assets }
+    }
+
+    /// Record `before` as an undo step and mark the document changed.
+    pub fn commit(&mut self, before: Value) {
+        if before == self.doc.root {
+            return;
+        }
+        self.coalesce = None;
+        self.undo.push(before);
+        if self.undo.len() > UNDO_LIMIT {
+            self.undo.remove(0);
+        }
+        self.redo.clear();
+        self.touch();
+    }
+
+    pub fn touch(&mut self) {
+        self.version += 1;
+        self.selection.retain(|id| id.contains('/') || self.doc.find(id).is_some());
+        // Keep in-flight agent previews layered on top of the latest document.
+        if !self.streams.is_empty() && !self.executing {
+            self.rebuild_preview();
+        }
+    }
+
+    pub fn undo(&mut self) -> bool {
+        let Some(prev) = self.undo.pop() else { return false };
+        self.coalesce = None;
+        self.redo.push(std::mem::replace(&mut self.doc.root, prev));
+        self.touch();
+        true
+    }
+
+    pub fn redo(&mut self) -> bool {
+        let Some(next) = self.redo.pop() else { return false };
+        self.coalesce = None;
+        self.undo.push(std::mem::replace(&mut self.doc.root, next));
+        self.touch();
+        true
+    }
+
+    /// During a drag, mutations apply live and are committed once by `drag_end`.
+    pub fn edit_or_drag<R>(&mut self, f: impl FnOnce(&mut Doc) -> Result<R, String>) -> Result<R, String> {
+        if self.drag_before.is_none() {
+            return self.edit(f);
+        }
+        let r = f(&mut self.doc)?;
+        self.touch();
+        Ok(r)
+    }
+
+    /// Like `edit`, but consecutive edits with the same `key` share one undo step.
+    pub fn edit_coalesced<R>(&mut self, key: &str, f: impl FnOnce(&mut Doc) -> Result<R, String>) -> Result<R, String> {
+        if self.drag_before.is_some() {
+            return self.edit_or_drag(f);
+        }
+        let merge = self.coalesce.as_deref() == Some(key) && !self.undo.is_empty();
+        let before = self.doc.root.clone();
+        let r = f(&mut self.doc).inspect_err(|_| self.doc.root = before.clone())?;
+        if before != self.doc.root {
+            if merge {
+                self.redo.clear();
+                self.touch();
+            } else {
+                self.commit(before);
+            }
+            self.coalesce = Some(key.to_string());
+        }
+        Ok(r)
+    }
+
+    /// Run several edits as one undo step (they must use `edit_or_drag`); all or nothing.
+    pub fn batch<R>(&mut self, f: impl FnOnce(&mut Engine) -> Result<R, String>) -> Result<R, String> {
+        if self.drag_before.is_some() {
+            return f(self);
+        }
+        let before = self.doc.root.clone();
+        self.drag_before = Some(before.clone());
+        let r = f(self);
+        self.drag_before = None;
+        match r {
+            Ok(_) => self.commit(before),
+            Err(_) => {
+                self.doc.root = before;
+                self.touch();
+            }
+        }
+        r
+    }
+
+    /// Apply a document mutation as one undoable step.
+    pub fn edit<R>(&mut self, f: impl FnOnce(&mut Doc) -> Result<R, String>) -> Result<R, String> {
+        let before = self.doc.root.clone();
+        match f(&mut self.doc) {
+            Ok(r) => {
+                self.commit(before);
+                Ok(r)
+            }
+            Err(e) => {
+                self.doc.root = before;
+                Err(e)
+            }
+        }
+    }
+
+    pub fn dirty(&self) -> bool {
+        self.version != self.saved
+    }
+
+    pub fn title(&self) -> String {
+        self.doc.path.as_ref().and_then(|p| p.file_stem()).map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "Untitled".into())
+    }
+
+    pub fn emit(&mut self, ev: Value) {
+        // Agent events also build the saved chat; it is written when a message or turn ends.
+        if ev["type"] == "agent" && self.agent.record(&ev) {
+            if let Err(err) = crate::agent::save_chat(&self.data_dir, &self.agent) {
+                self.events.push(json!({"type": "toast", "text": format!("Could not save the chat: {err}")}));
+            }
+        }
+        self.events.push(ev);
+        if self.events.len() > 2000 {
+            self.events.drain(..1000);
+        }
+    }
+
+    fn reset_history(&mut self) {
+        self.undo.clear();
+        self.redo.clear();
+        self.selection.clear();
+        self.renderer.slides.clear();
+        self.slid.clear();
+        self.script = Default::default();
+        self.touch();
+        self.saved = self.version;
+    }
+
+    pub fn open(&mut self, path: &Path) -> Result<(), String> {
+        let mut doc = Doc::load(path)?;
+        crate::resolve::migrate(&mut doc.root);
+        self.doc = doc;
+        self.load_libs();
+        self.reset_history();
+        self.remember_recent(path);
+        Ok(())
+    }
+
+    pub fn load_template(&mut self, name: &str) {
+        let text = match name {
+            "slides" => include_str!("../templates/slides.json"),
+            "mobile" => include_str!("../templates/mobile.json"),
+            "empty" => r#"{"version":"2.19","children":[]}"#,
+            _ => include_str!("../templates/blank.json"),
+        };
+        self.doc = Doc::from_json(text).unwrap_or_default();
+        self.libs.clear();
+        self.reset_history();
+    }
+
+    /// Load `imports` (alias → relative .pen path) so `alias:id` refs resolve. One level deep.
+    fn load_libs(&mut self) {
+        self.libs.clear();
+        let Some(imports) = self.doc.root["imports"].as_object().cloned() else { return };
+        let base = self.doc.dir().unwrap_or_default();
+        for (alias, uri) in imports {
+            let Some(rel) = uri.as_str() else { continue };
+            let rel = rel.replace("%20", " ");
+            if let Ok(mut lib) = Doc::load(&base.join(&rel)) {
+                crate::resolve::migrate(&mut lib.root);
+                self.libs.push((alias, lib.root));
+            }
+        }
+    }
+
+    pub fn save(&mut self, path: Option<&str>) -> Result<String, String> {
+        let target = match path.filter(|p| !p.is_empty()) {
+            Some(p) => PathBuf::from(p),
+            None => self.doc.path.clone().ok_or("document has no path yet; pass a path to save")?,
+        };
+        self.doc.root["version"] = json!(crate::doc::FORMAT_VERSION);
+        self.doc.save(&target)?;
+        self.doc.path = Some(target.clone());
+        self.saved = self.version;
+        self.remember_recent(&target);
+        Ok(target.to_string_lossy().to_string())
+    }
+
+    fn remember_recent(&mut self, path: &Path) {
+        let p = path.to_string_lossy().to_string();
+        let mut recent: Vec<Value> = self.settings.get("recent").and_then(Value::as_array).cloned().unwrap_or_default();
+        recent.retain(|r| r.as_str() != Some(&p));
+        recent.insert(0, json!(p));
+        recent.truncate(20);
+        self.settings.insert("recent".into(), Value::Array(recent));
+        self.save_settings();
+    }
+
+    pub fn save_settings(&self) {
+        if let Ok(text) = serde_json::to_string_pretty(&self.settings) {
+            let _ = std::fs::write(self.data_dir.join("settings.json"), text);
+        }
+    }
+
+    pub fn setting(&self, key: &str) -> Option<String> {
+        self.settings.get(key).and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string)
+    }
+
+    /// Markdown summary the agent reads before editing.
+    pub fn editor_state(&mut self) -> String {
+        self.sync();
+        let mut s = String::from("# Nalarupa editor state\n\n");
+        let path = self.doc.path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "Untitled (not saved yet)".into());
+        s += &format!("- Document: {path}{}\n", if self.dirty() { " (unsaved changes)" } else { "" });
+        let sel: Vec<String> = self.selection.iter().map(|id| match self.renderer.find(id) {
+            Some(f) => format!("`{id}` \"{}\" {} {}x{}", f.name, f.ty, f.w.round(), f.h.round()),
+            None => format!("`{id}`"),
+        }).collect();
+        s += &format!("- Selection: {}\n", if sel.is_empty() { "nothing".into() } else { sel.join(", ") });
+        let vp = self.viewport;
+        let mut tops: Vec<(bool, String)> = self.doc.children().iter().filter_map(|n| {
+            let id = n["id"].as_str()?;
+            let f = self.renderer.find(id)?;
+            let visible = vp.is_none_or(|(x, y, w, h)| f.x < x + w && f.y < y + h && f.x + f.w > x && f.y + f.h > y);
+            Some((visible, format!("  - `{id}` \"{}\" {} at ({}, {}) size {}x{}{}{}", f.name, f.ty, f.x.round(), f.y.round(), f.w.round(), f.h.round(),
+                if n["reusable"] == true { " [component]" } else { "" },
+                if vp.is_some() { if visible { " [user visible]" } else { " [outside viewport]" } } else { "" })))
+        }).collect();
+        tops.sort_by_key(|(visible, _)| !visible);
+        let more = tops.len().saturating_sub(40);
+        let mut tops: Vec<String> = tops.into_iter().take(40).map(|(_, l)| l).collect();
+        if more > 0 {
+            tops.push(format!("  - ... +{more} others"));
+        }
+        s += &format!("- Top-level nodes ({}):\n{}\n", self.doc.children().len(), tops.join("\n"));
+        let mut comps = Vec::new();
+        crate::doc::walk(self.doc.children(), &mut |n| {
+            if n["reusable"] == true && comps.len() < 80 {
+                comps.push(format!("`{}` \"{}\"", n["id"].as_str().unwrap_or(""), n["name"].as_str().unwrap_or("")));
+            }
+        });
+        if !comps.is_empty() {
+            s += &format!("- Components: {}\n", comps.join(", "));
+        }
+        let vars = self.doc.root["variables"].as_object().map(|v| v.len()).unwrap_or(0);
+        let themes = self.doc.root["themes"].as_object().map(|t| t.keys().cloned().collect::<Vec<_>>().join(", ")).unwrap_or_default();
+        s += &format!("- Variables: {vars}{}\n", if themes.is_empty() { String::new() } else { format!(" (theme axes: {themes})") });
+        if let Some(b) = self.renderer.bounds() {
+            s += &format!("- Canvas content bounds: x {} y {} w {} h {}\n", b.0.round(), b.1.round(), b.2.round(), b.3.round());
+        }
+        s += "\nCall `read_guide` (no arguments) before your first `execute`; it explains the .pen schema and the execute API.\n";
+        s
+    }
+
+    /// Dispatch one agent tool call (shared by MCP and the built-in agent).
+    pub fn tool(&mut self, name: &str, args: &Value) -> ToolOut {
+        match name {
+            "get_editor_state" => ToolOut::ok(self.editor_state()),
+            "read_guide" => crate::guide::read(args["topic"].as_str().unwrap_or("")),
+            "get_style" => crate::guide::style(args["name"].as_str().unwrap_or("")),
+            "execute" => {
+                let source = args["input"].as_str().unwrap_or("");
+                let stream = self.take_stream(args["__stream"].as_str(), source);
+                let mut args = args.clone();
+                if let Some(s) = &stream {
+                    args["__seed"] = json!(s.seed);
+                }
+                let seen = stream.as_ref().map_or(0, |s| s.touched);
+                let agent = stream.map(|s| s.agent).or_else(|| args["__agent"].as_str().map(str::to_string)).unwrap_or_else(|| "agent".into());
+                let marker = self.events.len();
+                let out = crate::script::execute(self, &args);
+                if let Some(ev) = self.events[marker.min(self.events.len())..].iter().rev().find(|e| e["type"] == "agent_edit").cloned() {
+                    let writes: Vec<Value> = ev["ids"].as_array().map(|a| a.iter().skip(seen).cloned().collect()).unwrap_or_default();
+                    if !writes.is_empty() {
+                        self.emit(json!({"type": "agent_activity", "agent": agent, "op": "write", "ids": writes, "streaming": false}));
+                    }
+                    if ev["read"].as_array().is_some_and(|r| !r.is_empty()) {
+                        self.emit(json!({"type": "agent_activity", "agent": agent, "op": "read", "ids": ev["read"], "streaming": false}));
+                    }
+                }
+                out
+            }
+            "open_document" => {
+                let Some(path) = args["path"].as_str() else { return ToolOut::err("path is required") };
+                let p = Path::new(path);
+                let res = if p.exists() {
+                    self.open(p)
+                } else {
+                    self.load_template("empty");
+                    self.save(Some(path)).map(|_| ())
+                };
+                match res {
+                    Ok(()) => {
+                        self.emit(json!({"type": "document_opened"}));
+                        ToolOut::ok(format!("Opened {path}"))
+                    }
+                    Err(e) => ToolOut::err(e),
+                }
+            }
+            _ => ToolOut::err(format!("unknown tool: {name}")),
+        }
+    }
+
+    /// A background image finished: swap the pending url for the real one everywhere
+    /// (no undo step). Empty url = failed.
+    pub fn resolve_pending(&mut self, pending: &str, url: &str) {
+        fn walk(v: &mut Value, from: &str, to: &str) -> bool {
+            match v {
+                Value::String(s) if s == from => {
+                    *s = to.to_string();
+                    true
+                }
+                Value::Array(a) => a.iter_mut().fold(false, |acc, x| walk(x, from, to) || acc),
+                Value::Object(o) => o.values_mut().fold(false, |acc, x| walk(x, from, to) || acc),
+                _ => false,
+            }
+        }
+        let mut hit = walk(&mut self.doc.root, pending, url);
+        for v in self.undo.iter_mut().chain(self.redo.iter_mut()) {
+            hit |= walk(v, pending, url);
+        }
+        if hit {
+            self.touch();
+            if url.is_empty() {
+                self.emit(json!({"type": "toast", "text": "Failed to load a generated image"}));
+            }
+        }
+    }
+
+    /// A background generator (the AI Pen) drew into node `id`: set `props` on it without an undo
+    /// step, in the document and the live preview. When `done`,
+    /// every undo/redo snapshot holding the node gets them too, so history never brings back a
+    /// half-drawn result. False when the node is gone.
+    pub fn apply_generated(&mut self, id: &str, props: &Map<String, Value>, done: bool) -> bool {
+        fn node<'a>(v: &'a mut Value, id: &str) -> Option<&'a mut Value> {
+            if v["id"] == id {
+                return Some(v);
+            }
+            v.get_mut("children")?.as_array_mut()?.iter_mut().find_map(|k| node(k, id))
+        }
+        let set = |v: &mut Value| {
+            node(v, id).map(|n| {
+                for (k, x) in props {
+                    n[k] = x.clone();
+                }
+            }).is_some()
+        };
+        let hit = set(&mut self.doc.root);
+        if let Some(p) = &mut self.preview {
+            set(&mut p.root);
+        }
+        if done {
+            for v in self.undo.iter_mut().chain(self.redo.iter_mut()) {
+                set(v);
+            }
+        }
+        if hit {
+            self.version += 1;
+        }
+        hit
+    }
+
+    pub fn select_top_level(&self) -> Vec<String> {
+        self.doc.children().iter().filter_map(|n| n["id"].as_str().map(str::to_string)).collect()
+    }
+
+    pub fn insert_root(&mut self, node: Value) -> Result<String, String> {
+        self.edit(|d| d.insert(ROOT, node, None))
+    }
+}
+
+/// Tool schemas advertised over MCP and to the built-in agent.
+pub fn tool_specs() -> Value {
+    json!([
+        {"name": "get_editor_state", "description": "Summary of the open Nalarupa document: path, selection, top-level frames, components, variables. Call this first.",
+         "inputSchema": {"type": "object", "properties": {}}},
+        {"name": "read_guide", "description": "Read Nalarupa's design guide. No topic returns the overview and the list of topics (schema, execute, components, slides, design, code).",
+         "inputSchema": {"type": "object", "properties": {"topic": {"type": "string", "description": "Guide topic, e.g. 'schema', 'execute', 'slides'"}}}},
+        {"name": "get_style", "description": "Ready-made visual style archetypes (fonts, palette, radius, elevation). No name lists them.",
+         "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}}}},
+        {"name": "execute", "description": "Run a JavaScript snippet against the canvas (Insert/Update/Copy/Replace/Move/Delete/Get/SetVariables/TakeScreenshot/Export...). All operations in one call are a single undoable transaction; on error everything is rolled back. Read the 'execute' guide first. To fix a failed call, send `editId` with `edits` instead of resending the snippet.",
+         "inputSchema": {"type": "object", "properties": {
+            "input": {"type": "string", "description": "JavaScript source"},
+            "editId": {"type": "string", "description": "editId from a failed call, used with edits"},
+            "edits": {"type": "array", "items": {"type": "object", "properties": {"find": {"type": "string"}, "replace": {"type": "string"}, "all": {"type": "boolean"}}, "required": ["find", "replace"]}}
+         }}},
+        {"name": "open_document", "description": "Open a .pen/.nala file in the editor, or create it when it does not exist.",
+         "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}
+    ])
+}

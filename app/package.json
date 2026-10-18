@@ -1,0 +1,33 @@
+{
+  "name": "nalarupa",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --hot app.tsx",
+    "start": "bun app.tsx",
+    "build": "bun scripts/package.ts",
+    "smoke": "bun scripts/smoke.ts",
+    "e2e": "bun scripts/e2e.ts",
+    "agent-check": "bun scripts/agent-check.ts",
+    "model-check": "bun scripts/model-check.ts",
+    "a11y-check": "bun scripts/a11y-check.ts",
+    "motion-check": "bun scripts/motion-check.ts",
+    "window-check": "bun scripts/window-check.ts",
+    "editor-check": "bun scripts/editor-check.ts",
+    "editor-e2e": "bun scripts/editor-e2e.ts",
+    "typecheck": "tsc --noEmit",
+    "exe-check": "bun scripts/exe-check.ts",
+    "shots": "bun scripts/shots.ts"
+  },
+  "dependencies": {
+    "@gpuix/native": "0.10.0",
+    "@gpuix/react": "0.10.0",
+    "react": "19.2.4"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "@types/react": "^19.2.0",
+    "typescript": "^5.6.0"
+  }
+}
