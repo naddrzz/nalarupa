@@ -154,13 +154,14 @@ export function AgentLayer({ cam, w, h, version, chatOpen }: { cam: Cam; w: numb
     const hold = f.longHold ? 1500 : 400
     let alpha = 1
     let expand = 0
+    // Reduced motion: the outline only fades in and out, with no grow-in and no scan band.
     if (g < ATTACK) {
-      const o = easeOutBack(g / ATTACK, 2)
-      expand = 1 - o
+      const o = REDUCED_MOTION ? easeOutCubic(g / ATTACK) : easeOutBack(g / ATTACK, 2)
+      expand = REDUCED_MOTION ? 0 : 1 - o
       alpha = clamp(o, 0, 1)
     } else if (g > ATTACK + hold) {
       const e = easeOutCubic((g - ATTACK - hold) / RELEASE)
-      expand = 0.1 * e
+      expand = REDUCED_MOTION ? 0 : 0.1 * e
       alpha = 1 - e
     }
     const pad = 5 * cam.zoom + 30 * Math.max(0, expand)
@@ -172,7 +173,7 @@ export function AgentLayer({ cam, w, h, version, chatOpen }: { cam: Cam; w: numb
     const radius = Math.min(b.w, b.h) < 20 ? 0 : 3 * cam.zoom
     const scanMs = f.longHold ? clamp((b.h / 350) * 1000, 300, 2000) : 300
     const repeat = f.longHold ? 1.5 : 3
-    const P = g > SCAN_DELAY ? clamp(((g - SCAN_DELAY) / scanMs) % repeat, 0, 1) : -1
+    const P = g > SCAN_DELAY && !REDUCED_MOTION ? clamp(((g - SCAN_DELAY) / scanMs) % repeat, 0, 1) : -1
     const ctr = -H / 2 + P * 2 * H
     flashEls.push(
       <div key={`f${i}-${f.nodeId}`} style={{ position: 'absolute', left: X, top: Y, width: W, height: H, borderRadius: radius, borderWidth: 2, borderColor: hexAlpha(f.color, alpha), overflow: 'hidden', pointerEvents: 'none' }}>

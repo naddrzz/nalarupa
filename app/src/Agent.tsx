@@ -4,9 +4,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { call, tryCall } from './core'
 import { imageSrc, profileOf, resetChat, restoreChat, store, type ChatItem } from './agents'
+import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import * as SelectPrimitive from '@gpuix/react/select'
 import { C, FONT, MONO, REDUCED_MOTION } from './theme'
-import { Button, Field, FocusRing, Icon, IconButton, Pressable, Row, Segmented, T, Toggle, useRing, useTrigger, type Toast } from './ui'
+import { Button, Field, FocusRing, Icon, IconButton, Pressable, Row, Segmented, setKeyboardFocus, T, Toggle, useKeyboardFocusId, useRing, useTrigger, type Toast } from './ui'
 
 // Suggestion set; the empty chat shows 6 random picks of these 12.
 const SUGGESTIONS = [
@@ -133,7 +134,7 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
           <T size={11} color={C.muted}>{running ? `${runningAgents.length}/${agents.length} agents running` : 'Finished'}</T>
           <div style={{ flexGrow: 1, display: 'flex', flexDirection: 'row', gap: 4, overflow: 'hidden' }}>
             {agents.slice(0, 6).map((a) => (
-              <div key={a.id} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 4, paddingLeft: 6, paddingRight: 6, height: 20, borderRadius: 10, backgroundColor: C.raised, opacity: store.running.has(a.id) ? 1 : 0.5 }}>
+              <div key={a.id} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 4, paddingLeft: 6, paddingRight: 6, height: 20, borderRadius: 10, backgroundColor: C.raised, opacity: store.running.has(a.id) ? 1 : 0.6 }}>
                 <div style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: a.color }} />
                 <T size={10} color={C.text}>{a.name}</T>
               </div>
@@ -230,7 +231,8 @@ function Choice({ label, active, dim, onClick, testId, width }: { label: string;
       selected={active}
       onClick={onClick}
       style={{
-        width, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 6, opacity: dim ? 0.5 : 1,
+        // 0.8 keeps the label at 4.5:1; these stay clickable (they turn cooking on), so they must stay readable.
+        width, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 6, opacity: dim ? 0.8 : 1,
         borderWidth: 1, borderColor: active ? C.raised : C.border, backgroundColor: active ? C.raised : undefined, hover: { backgroundColor: C.raised },
       }}
     >
@@ -266,6 +268,8 @@ function CookMenu({ designs, mode, set }: { designs: number; mode: CookMode; set
         <anchored side="top" align="end" gap={4} fit="snap" snapMargin={8} deferred priority={1} occlude>
           <div
             testId="cook-menu"
+            role="dialog"
+            aria-label="Let it cook"
             tabIndex={0}
             autoFocus
             onMouseDownOutside={(e) => { if (!trigger.hit(e)) setOpen(false) }}
@@ -323,6 +327,22 @@ function ChatHistory({ running, toast, changed }: { running: boolean; toast: Toa
   // Removing a saved chat cannot be undone: the first press arms it, the second removes.
   const [armed, setArmed] = useState<string | null>(null)
   const trigger = useTrigger()
+  // Keyboard path to remove one chat: the "x" also shows while its row (or the "x") has keyboard focus,
+  // and arming it from the keyboard moves focus to the "Remove" confirm that replaces it.
+  const renderer = useGpuixRequired()
+  const kb = useKeyboardFocusId()
+  const box = useRef<PublicInstance>(null)
+  const els = useRef(new Map<string, PublicInstance>())
+  const keep = (key: string) => (el: PublicInstance | null) => void (el ? els.current.set(key, el) : els.current.delete(key))
+  const kbChat = kb === null ? null : [...els.current].find(([, el]) => el.id === kb)?.[0].replace(/^\w+:/, '') ?? null
+  const focusKeys = (el?: PublicInstance | null) => {
+    if (!el) return
+    renderer.focusElement?.(el.id)
+    setKeyboardFocus(el.id)
+  }
+  useEffect(() => {
+    if (armed && kbChat === armed) focusKeys(els.current.get(`confirm:${armed}`))
+  }, [armed])
   const refresh = () => setList(tryCall<ChatList>('chat_list') ?? { current: null, chats: [] })
   const close = () => {
     setList(null)
@@ -369,7 +389,10 @@ function ChatHistory({ running, toast, changed }: { running: boolean; toast: Toa
       {list ? (
         <anchored side="bottom" align="end" gap={4} fit="snap" snapMargin={8} deferred priority={1} occlude>
           <div
+            ref={box}
             testId="chat-history"
+            role="dialog"
+            aria-label="Chat history"
             tabIndex={0}
             autoFocus
             onMouseDownOutside={(e) => { if (!trigger.hit(e)) close() }}
@@ -403,6 +426,7 @@ function ChatHistory({ running, toast, changed }: { running: boolean; toast: Toa
                             }}
                           >
                             <Pressable
+                              ref={keep(`row:${c.id}`)}
                               testId={`chat-${c.id}`}
                               label={`Open chat: ${c.title || 'Untitled chat'}`}
                               onClick={() => open(c.id)}
@@ -412,11 +436,17 @@ function ChatHistory({ running, toast, changed }: { running: boolean; toast: Toa
                               <T size={12} color={c.id === list.current ? C.text : '#C9C9D0'} grow style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.title || 'Untitled chat'}</T>
                             </Pressable>
                             {live ? null : armed === c.id ? (
-                              <Pressable testId={`chat-remove-confirm-${c.id}`} label={`Remove chat: ${c.title || 'Untitled chat'}`} onClick={() => { setArmed(null); remove(c.id) }} style={{ height: 24, paddingLeft: 8, paddingRight: 8, borderRadius: 5, display: 'flex', alignItems: 'center', backgroundColor: '#F8717122', hover: { backgroundColor: '#F8717133' } }}>
+                              <Pressable ref={keep(`confirm:${c.id}`)} testId={`chat-remove-confirm-${c.id}`} label={`Remove chat: ${c.title || 'Untitled chat'}`} onClick={() => {
+                                const keys = kbChat === c.id
+                                setArmed(null)
+                                remove(c.id)
+                                // The row is gone: keep keyboard focus inside the popover.
+                                if (keys) focusKeys(box.current)
+                              }} style={{ height: 24, paddingLeft: 8, paddingRight: 8, borderRadius: 5, display: 'flex', alignItems: 'center', backgroundColor: '#F8717122', hover: { backgroundColor: '#F8717133' } }}>
                                 <T size={11} color={C.danger} weight="600">Remove</T>
                               </Pressable>
-                            ) : hover === c.id ? (
-                              <IconButton icon="x" size={24} title={`Remove chat: ${c.title || 'Untitled chat'}`} testId={`chat-remove-${c.id}`} onClick={() => setArmed(c.id)} />
+                            ) : hover === c.id || kbChat === c.id ? (
+                              <IconButton ref={keep(`x:${c.id}`)} icon="x" size={24} title={`Remove chat: ${c.title || 'Untitled chat'}`} testId={`chat-remove-${c.id}`} onClick={() => setArmed(c.id)} />
                             ) : null}
                           </div>
                         )
@@ -494,6 +524,9 @@ function ModelPicker({ settingsOpen }: { settingsOpen: boolean }) {
   const [fast, setFast] = useState(s.agent_fast === true)
   useEffect(() => setModel(current), [current])
   const { ref: triggerRef, on: focused, clear } = useRing()
+  // Arrow keys move the menu's highlight, which is only a 1.1:1 background shift: ring it while the
+  // keyboard drives the menu, not while the mouse does.
+  const [keys, setKeys] = useState(false)
   const pick = (v: string) => {
     setModel(v)
     cachedModel = null
@@ -508,7 +541,8 @@ function ModelPicker({ settingsOpen }: { settingsOpen: boolean }) {
           role="button"
           aria-label={`Model: ${label}`}
           ref={triggerRef}
-          onMouseDown={clear}
+          onMouseDown={() => { clear(); setKeys(false) }}
+          onKeyDown={() => setKeys(true)}
           style={(st) => ({
             display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 4, height: 28, paddingLeft: 8, paddingRight: 6, borderRadius: 6, cursor: 'pointer',
             backgroundColor: st.open ? C.raised : undefined, hover: { backgroundColor: C.raised }, ...(focused ? { position: 'relative' } : {}),
@@ -521,6 +555,7 @@ function ModelPicker({ settingsOpen }: { settingsOpen: boolean }) {
         <SelectPrimitive.Content
           side="top"
           sideOffset={4}
+          onKeyDown={() => setKeys(true)}
           style={{
             width: 200, padding: 4, display: 'flex', flexDirection: 'column', borderRadius: 10, backgroundColor: C.panel2, borderWidth: 1, borderColor: C.border,
             boxShadow: { offsetX: 0, offsetY: 8, blurRadius: 24, spreadRadius: 0, color: '#00000080' },
@@ -534,8 +569,10 @@ function ModelPicker({ settingsOpen }: { settingsOpen: boolean }) {
               role="option"
               aria-label={m.label}
               aria-selected={m.value === model}
+              // GPUI does not bubble mouse events: the pointer taking over shows on the items, not the menu.
+              onMouseEnter={() => { if (keys) setKeys(false) }}
               style={(st) => ({
-                display: 'flex', flexDirection: 'row', alignItems: 'center', height: 30, paddingLeft: 8, paddingRight: 8, borderRadius: 6, cursor: 'pointer',
+                position: 'relative', display: 'flex', flexDirection: 'row', alignItems: 'center', height: 30, paddingLeft: 8, paddingRight: 8, borderRadius: 6, cursor: 'pointer',
                 backgroundColor: st.highlighted ? C.raised : C.panel2,
               })}
             >
@@ -543,6 +580,7 @@ function ModelPicker({ settingsOpen }: { settingsOpen: boolean }) {
                 <>
                   <T size={12} color={st.selected ? C.text : C.muted} weight={st.selected ? '600' : undefined} grow>{m.label}</T>
                   {st.selected ? <T size={12} color={C.text}>✓</T> : null}
+                  {keys && st.highlighted ? <FocusRing inset /> : null}
                 </>
               )}
             </SelectPrimitive.Item>
@@ -561,8 +599,9 @@ function Item({ m, isLast, expanded, toggle }: { m: ChatItem; isLast: boolean; e
     case 'user':
     case 'queued':
       return (
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'end', paddingTop: 8, paddingBottom: 4, opacity: m.kind === 'queued' ? 0.5 : 1 }}>
-          <div style={{ maxWidth: 236, paddingLeft: 12, paddingRight: 12, paddingTop: 8, paddingBottom: 8, borderRadius: 18, backgroundColor: C.raised }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'end', paddingTop: 8, paddingBottom: 4 }}>
+          {/* A queued bubble is faded (0.6 keeps its text at 4.5:1); its caption is not, it is already ghost text. */}
+          <div style={{ maxWidth: 236, paddingLeft: 12, paddingRight: 12, paddingTop: 8, paddingBottom: 8, borderRadius: 18, backgroundColor: C.raised, opacity: m.kind === 'queued' ? 0.6 : 1 }}>
             <text style={{ fontSize: 12, color: C.text, fontFamily: FONT }}>{m.text}</text>
           </div>
           {m.kind === 'queued' ? <T size={10} color={C.ghost}>Queued — sent when the agents finish</T> : null}
@@ -720,6 +759,7 @@ function AgentSettings({ mcpUrl, toast }: { mcpUrl: string; toast: Toast }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 12, borderBottomWidth: 1, borderColor: C.border, backgroundColor: C.panel2 }}>
       <T size={11} color={C.muted} weight="600">Backend</T>
       <Segmented
+        label="Agent backend"
         value={backend}
         onChange={(v) => { setBackend(v); set('agent_backend', v) }}
         options={[{ value: 'api', label: 'Claude API' }, { value: 'claude-code', label: 'Claude Code CLI' }]}
@@ -738,6 +778,7 @@ function AgentSettings({ mcpUrl, toast }: { mcpUrl: string; toast: Toast }) {
           <T size={11} color={C.ghost}>Uses your installed `claude` CLI and its login. Canvas tools are passed in as the nalarupa MCP server.</T>
           <T size={11} color={C.muted} weight="600">Other tools (shell, files outside the document folder)</T>
           <Segmented
+            label="Permission for other tools"
             value={perms}
             onChange={(v) => { setPerms(v); set('agent_auto_permissions', v === 'auto' ? true : null) }}
             options={[{ value: 'ask', label: 'Ask me' }, { value: 'auto', label: 'Auto mode' }]}
