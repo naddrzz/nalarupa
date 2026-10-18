@@ -63,6 +63,22 @@ fn theme_defaults(root: &Value) -> Vec<(String, String)> {
     }).unwrap_or_default()
 }
 
+/// Apply a node's `theme` axes over the active theme.
+fn apply_theme(theme: &mut Vec<(String, String)>, node: &Value) {
+    if let Some(t) = node["theme"].as_object() {
+        for (axis, val) in t {
+            let val = val.as_str().unwrap_or_default().to_string();
+            match theme.iter_mut().find(|(a, _)| a == axis) {
+                Some(slot) => slot.1 = val,
+                None => theme.push((axis.clone(), val)),
+            }
+        }
+    }
+}
+
+/// Prefix on a `$name` string already settled in its written scope, so the component's scope leaves it alone.
+const SETTLED: char = '\u{e000}';
+
 /// Index key of a `ref` written inside `scope`: a library's plain ids live under `alias:`.
 fn scoped(scope: &str, r: &str) -> String {
     if scope.is_empty() || r.contains(':') { r.to_string() } else { format!("{scope}:{r}") }
@@ -106,15 +122,7 @@ impl<'a> Resolver<'a> {
             return None;
         }
         let mut theme = theme.to_vec();
-        if let Some(t) = node["theme"].as_object() {
-            for (axis, val) in t {
-                let val = val.as_str().unwrap_or_default().to_string();
-                match theme.iter_mut().find(|(a, _)| a == axis) {
-                    Some(slot) => slot.1 = val,
-                    None => theme.push((axis.clone(), val)),
-                }
-            }
-        }
+        apply_theme(&mut theme, node);
         let own_id = node["id"].as_str().unwrap_or_default();
         let path = if prefix.is_empty() { own_id.to_string() } else { format!("{prefix}/{own_id}") };
         // Instance roots keep their own id; their children are addressed as instanceId/childId.
@@ -144,6 +152,8 @@ impl<'a> Resolver<'a> {
                     }
                 }
             }
+            // The component root's own theme (merged under the instance's) governs its subtree.
+            apply_theme(&mut theme, &expanded);
             (&expanded, expanded_scope.as_str())
         } else {
             (node, scope)
@@ -189,10 +199,12 @@ impl<'a> Resolver<'a> {
             (comp.clone(), comp_scope.to_string())
         };
         // The instance's own values were written in `scope`; settle their variables there.
-        let outer = |v: &Value| if merged_scope == scope { v.clone() } else { self.subst(v, scope, theme, 0) };
+        let outer = |v: &Value| if merged_scope == scope { v.clone() } else { settled(self.subst(v, scope, theme, 0)) };
         for (k, v) in node.as_object()? {
-            if !matches!(k.as_str(), "id" | "type" | "ref" | "descendants" | "reusable") {
-                merged[k] = outer(v);
+            match k.as_str() {
+                "id" | "type" | "ref" | "descendants" | "reusable" => {}
+                "theme" if merged["theme"].is_object() => merge_into(&mut merged["theme"], v),
+                _ => merged[k] = outer(v),
             }
         }
         merged["reusable"] = json!(false);
@@ -208,6 +220,7 @@ impl<'a> Resolver<'a> {
     /// Unknown names stay literal (so "$49" prices survive).
     fn subst(&self, v: &Value, scope: &str, theme: &[(String, String)], depth: usize) -> Value {
         match v {
+            Value::String(s) if s.starts_with(SETTLED) => Value::String(s[SETTLED.len_utf8()..].to_string()),
             Value::String(s) if s.starts_with('$') && depth < 16 => match self.var_value(scope, &s[1..], theme) {
                 Some(val) => self.subst(&val, scope, theme, depth + 1),
                 None => v.clone(),
@@ -232,6 +245,16 @@ impl<'a> Resolver<'a> {
 impl RNode {
     pub fn leaf(id: String, ty: &str, p: Map<String, Value>, problem: Option<&'static str>) -> RNode {
         RNode { id, ty: ty.to_string(), p, kids: Vec::new(), x: 0.0, y: 0.0, w: 0.0, h: 0.0, bx: 0.0, by: 0.0, lines: Vec::new(), problem, inst: None }
+    }
+}
+
+/// Mark `$name` strings that survived substitution (unknown names, "$49" prices) as settled.
+fn settled(v: Value) -> Value {
+    match v {
+        Value::String(s) if s.starts_with('$') => Value::String(format!("{SETTLED}{s}")),
+        Value::Array(a) => Value::Array(a.into_iter().map(settled).collect()),
+        Value::Object(o) => Value::Object(o.into_iter().map(|(k, x)| (k, settled(x))).collect()),
+        v => v,
     }
 }
 
@@ -452,6 +475,32 @@ mod tests {
         assert_eq!(c.kids[0].p["fill"], "#ff0000");
         assert_eq!((c.kids[0].kids[0].id.as_str(), c.kids[0].kids[0].p["fill"].as_str()), ("c/inner/lbl", Some("#111111")));
         assert_eq!(r.resolve(&root["children"][2]).unwrap().p["stroke"], "#0000ff");
+    }
+
+    /// Values written in the open document are settled there: an unknown `$name` stays literal
+    /// even when the library happens to define it. A component root's own theme governs its subtree.
+    #[test]
+    fn library_scope_settles_instance_values() {
+        let lib = json!({
+            "themes": {"mode": ["light", "dark"]},
+            "variables": {"brand": {"type": "color", "value": "#ff0000"}, "fg": {"type": "color", "value": [{"value": "#111111"}, {"value": "#eeeeee", "theme": {"mode": "dark"}}]}},
+            "children": [
+                {"type": "frame", "id": "btn", "reusable": true, "theme": {"mode": "dark"}, "fill": "$fg", "children": [{"type": "text", "id": "lbl", "content": "Kit", "fill": "$fg"}]}
+            ]
+        });
+        let root = json!({"children": [
+            {"type": "ref", "id": "a", "ref": "kit:btn", "stroke": "$brand", "descendants": {"lbl": {"content": "$brand"}}},
+            {"type": "ref", "id": "b", "ref": "kit:btn", "theme": {"mode": "light"}}
+        ]});
+        let libs = vec![("kit".to_string(), lib)];
+        let empty = Map::new();
+        let r = Resolver::new(&root, &libs, &empty);
+        let a = r.resolve(&root["children"][0]).unwrap();
+        assert_eq!(a.p["stroke"], "$brand");
+        assert_eq!(a.kids[0].p["content"], "$brand");
+        assert_eq!((a.p["fill"].as_str(), a.kids[0].p["fill"].as_str()), (Some("#eeeeee"), Some("#eeeeee")));
+        let b = r.resolve(&root["children"][1]).unwrap();
+        assert_eq!(b.p["fill"], "#111111");
     }
 
     #[test]

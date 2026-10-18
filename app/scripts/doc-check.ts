@@ -84,7 +84,7 @@ throws(() => call('open'), /path required/, 'open without a path')
 }
 
 // Edit commands with undo/redo.
-const x0= node('sld02').node.x
+const x0 = node('sld02').node.x
 call('select', { ids: ['sld02'] })
 assert(call('state').selection.join() === 'sld02', 'select sets the selection')
 call('move_by', { ids: ['sld02'], dx: 10, dy: 0 })
