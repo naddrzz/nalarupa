@@ -8,7 +8,7 @@
 //! - `spawn_agents` starts parallel child agents that each own container frames.
 //! The UI polls the events emitted here.
 
-use crate::engine::{engine, tool_specs};
+use crate::engine::{engine, tool_specs, Engine};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -296,8 +296,12 @@ fn start_thread(p: Profile, prompt: String, child: Option<String>) {
                 if e.agent.cook.0 > 1 && !stopped {
                     e.agent.cook.0 -= 1;
                     Some(Next::Iterate(if e.agent.cook.1 == "style" { NEXT_STYLE } else { NEXT_LAYOUT }))
+                } else if stopped {
+                    // Prompts queued while the stopped agents were shutting down are dropped too.
+                    drop_queue(&mut e);
+                    None
                 } else {
-                    (!e.agent.queue.is_empty() && !stopped).then(|| Next::Queued(std::mem::take(&mut e.agent.queue).join("\n\n")))
+                    (!e.agent.queue.is_empty()).then(|| Next::Queued(std::mem::take(&mut e.agent.queue).join("\n\n")))
                 }
             }
         };
@@ -312,13 +316,17 @@ fn start_thread(p: Profile, prompt: String, child: Option<String>) {
     });
 }
 
-pub fn stop() {
-    let mut e = engine();
-    e.agent.cancel.store(true, Ordering::SeqCst);
-    // Queued prompts are dropped; tell the UI so their bubbles stop promising to send them.
+/// Drop the queued prompts and tell the UI, so their bubbles stop promising to send them.
+fn drop_queue(e: &mut Engine) {
     if !std::mem::take(&mut e.agent.queue).is_empty() {
         e.emit(json!({"type": "agent", "kind": "dequeued"}));
     }
+}
+
+pub fn stop() {
+    let mut e = engine();
+    e.agent.cancel.store(true, Ordering::SeqCst);
+    drop_queue(&mut e);
     e.agent.cook.0 = 1;
     for (_, (_, waiting)) in e.agent.permissions.drain() {
         let _ = waiting.send(false);
@@ -967,15 +975,28 @@ mod tests {
     #[test]
     fn stop_announces_dropped_queue() {
         let kinds = || engine().events.iter().filter(|e| e["type"] == "agent").filter_map(|e| e["kind"].as_str().map(str::to_string)).collect::<Vec<_>>();
-        engine().agent.running = true;
+        let saved = |kind: &str| engine().agent.chat.as_ref().map_or(0, |c| c.events.iter().filter(|e| e["kind"] == kind).count());
+        {
+            let mut e = engine();
+            e.agent.running = true;
+            e.agent.chat = Some(Chat { id: "stop-test".into(), title: "stop".into(), events: Vec::new() });
+        }
         send("also add a footer".into(), 1, "split", 1, "").unwrap();
         assert_eq!(engine().agent.queue.len(), 1);
         stop();
         assert!(engine().agent.queue.is_empty());
         assert_eq!(kinds().iter().filter(|k| *k == "dequeued").count(), 1);
+        assert_eq!(saved("dequeued"), 1, "the chat keeps the announcement for replay");
         stop();
         assert_eq!(kinds().iter().filter(|k| *k == "dequeued").count(), 1, "nothing queued, nothing announced");
-        engine().agent.running = false;
+        // A prompt that arrives while the stopped agents are still shutting down is dropped and announced too.
+        send("one more thing".into(), 1, "split", 1, "").unwrap();
+        drop_queue(&mut engine());
+        assert!(engine().agent.queue.is_empty());
+        assert_eq!(saved("dequeued"), 2);
+        let mut e = engine();
+        e.agent.running = false;
+        e.agent.chat = None;
     }
 
     /// Auto-allowed paths: the workspace for file tools, skills for Read; `..` cannot escape.
