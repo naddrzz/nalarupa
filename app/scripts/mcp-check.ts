@@ -78,7 +78,11 @@ const text = (r: any) => r.content.map((c: any) => c.text ?? '').join('')
   assert((await tool('spawn_agents', { agents: [] })).isError, 'external agents cannot spawn agents')
 
   // Each /mcp/<agent-id> keeps its own execute globals: B reusing `page` must not redirect A.
-  const as = async (agent: string, input: string) => text((await rpc({ id: agent, method: 'tools/call', params: { name: 'execute', arguments: { input } } }, `/mcp/${agent}`)).result)
+  const as = async (agent: string, input: string) => {
+    const r = (await rpc({ id: agent, method: 'tools/call', params: { name: 'execute', arguments: { input } } }, `/mcp/${agent}`)).result
+    assert(!r.isError, `${agent} execute failed: ${text(r)}`)
+    return text(r)
+  }
   await as('agA', 'page = Insert(document, {type:"frame", name:"A page", width:400, height:300})')
   await as('agB', 'page = Insert(document, {type:"frame", name:"B page", x:500, width:400, height:300})')
   await as('agA', 'Insert(page, {type:"text", name:"A text", content:"from A", fill:"#000"})')
