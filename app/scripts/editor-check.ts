@@ -85,9 +85,11 @@ const painted = () => call<(B & { m?: number[] })[]>('boxes', { ids: turned }).m
   return { l: Math.min(...pts.map((p) => p[0])), t: Math.min(...pts.map((p) => p[1])) }
 })
 call('align', { ids: turned, dir: 'left' })
-assert(painted().every((p) => Math.abs(p.l - painted()[0].l) < 0.01), `align left of flipped/rotated ${JSON.stringify(painted())}`)
+const ls = painted()
+assert(ls.every((p) => Math.abs(p.l - ls[0].l) < 0.01), `align left of flipped/rotated ${JSON.stringify(ls)}`)
 call('align', { ids: turned, dir: 'top' })
-assert(painted().every((p) => Math.abs(p.t - painted()[0].t) < 0.01), `align top of flipped/rotated ${JSON.stringify(painted())}`)
+const ts = painted()
+assert(ts.every((p) => Math.abs(p.t - ts[0].t) < 0.01), `align top of flipped/rotated ${JSON.stringify(ts)}`)
 
 // Duplicate: same position, right above the source.
 const d = call('duplicate', { ids: [A] }).ids[0]
