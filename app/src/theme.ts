@@ -139,11 +139,11 @@ export function decorateWindow(tries = 50) {
     // (1024×768 with a 48 px taskbar: 2 px off). Re-centre it in the work area of the monitor it is on when it
     // does not fit there. GetWindowRect and GetMonitorInfoW answer in the same DPI space (this thread's).
     const win = new Int32Array(4)
-    const info = new Int32Array(10) // MONITORINFO: cbSize, rcMonitor, rcWork, dwFlags
+    const info = new Int32Array(10) // MONITORINFO: cbSize [0], rcMonitor [1-4], rcWork [5-8], dwFlags [9]
     info[0] = 40
     const mon = u.GetWindowRect(hwnd, ptr(win)) ? u.MonitorFromWindow(hwnd, 2) : null // MONITOR_DEFAULTTONEAREST
     if (mon && u.GetMonitorInfoW(mon, ptr(info))) {
-      const area = info.subarray(6, 10)
+      const area = info.subarray(5, 9) // rcWork: left, top, right, bottom
       const [w, h] = [win[2] - win[0], win[3] - win[1]]
       if (win[0] < area[0] || win[1] < area[1] || win[2] > area[2] || win[3] > area[3]) {
         const x = area[0] + Math.max(0, Math.floor((area[2] - area[0] - w) / 2))
