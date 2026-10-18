@@ -175,6 +175,30 @@ try {
   await shot('03-marquee')
   assert(await app.getByText('2 layers selected').count(), 'marquee selects both rectangles')
 
+  // Shift+H / Shift+V mirror every selected layer in place; one undo step reverts the whole flip.
+  const boxes = async () => JSON.stringify((await app.getByTestId('selection-box').all()).map((n: any) => n.bounds))
+  const still = async (a: string) => until(async () => (await boxes()) === a)
+  const placed = await boxes()
+  const flipKey = async (key: string) => {
+    await canvas.press(key)
+    await sleep(500)
+  }
+  for (const key of ['shift-h', 'shift-v']) {
+    await flipKey(key)
+    assert(await still(placed), `${key} keeps both layers where they were painted (${placed} → ${await boxes()})`)
+    await canvas.press('ctrl-z')
+    await sleep(500)
+    assert(await still(placed), `one undo step reverts the ${key} flip of both layers`)
+  }
+  // Flipped twice (a second Shift+H) the layers are back to unflipped and still in place.
+  await flipKey('shift-h')
+  await flipKey('shift-h')
+  assert(await still(placed), 'flipping twice returns the layers to where they started')
+  await canvas.press('ctrl-z')
+  await canvas.press('ctrl-z')
+  await sleep(500)
+  assert(await still(placed), 'two undo steps revert the two flips')
+
   // Ctrl+G groups, Ctrl+Shift+G ungroups.
   await canvas.press('ctrl-g')
   await sleep(400)

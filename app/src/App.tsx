@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { useGpuixRequired, useWindowSize, type PublicInstance } from '@gpuix/react'
 import { call, tryCall, type Box, type State } from './core'
 import { applyEvents, store } from './agents'
-import { Canvas, fitCam, type Cam, type Mods, type Tool } from './Canvas'
+import { Canvas, fitCam, isMovable, type Cam, type Mods, type Tool } from './Canvas'
 import { readClipboard, writeClipboard } from './clipboard'
 import { LeftPanel } from './Layers'
 import { Inspector } from './Inspector'
@@ -14,7 +14,10 @@ import { Home } from './Home'
 import { Present } from './Present'
 import { C, LEFT_W, REDUCED_MOTION, RIGHT_W, TOP_H } from './theme'
 import { Icon, IconButton, Pressable, Segmented, T, type Toast } from './ui'
+import { centerOffset } from './geometry'
 import type { IconName } from './icons'
+
+let flips = 0
 
 const TOOLS: { tool: Tool; icon: IconName; key: string; label: string }[] = [
   { tool: 'move', icon: 'cursor', key: 'v', label: 'Move (V)' },
@@ -171,7 +174,22 @@ export function App() {
     if (m.alt && !m.mod && !m.shift && ALIGN[key] && has) return run('align', { ids: sel, dir: ALIGN[key] })
     if (m.shift && !m.mod && !m.alt && (key === 'h' || key === 'v') && has) {
       const k = key === 'h' ? 'flipX' : 'flipY'
-      for (const id of sel) tryCall('update', { ids: [id], props: { [k]: nodeOf(id)?.node?.[k] ? null : true } })
+      const undoKey = `flip:${++flips}`
+      for (const id of sel) {
+        const info = nodeOf(id)
+        const n = info?.node
+        if (!n) continue
+        const props: Record<string, unknown> = { [k]: n[k] ? null : true }
+        if (info.box && (isMovable(info) || info.parent === 'document')) {
+          // The flip mirrors about the origin: move the origin so the center stays put.
+          const [rot, fx, fy] = [Number(n.rotation ?? 0), !!n.flipX, !!n.flipY]
+          const [ox0, oy0] = centerOffset(info.box.w, info.box.h, rot, fx, fy)
+          const [ox, oy] = centerOffset(info.box.w, info.box.h, rot, k === 'flipX' ? !fx : fx, k === 'flipY' ? !fy : fy)
+          props.x = Math.round((Number(n.x ?? 0) + ox0 - ox) * 100) / 100
+          props.y = Math.round((Number(n.y ?? 0) + oy0 - oy) * 100) / 100
+        }
+        tryCall('update', { ids: [id], props, coalesce: undoKey })
+      }
       return true
     }
     const t = TOOLS.find((x) => x.key === key) ?? (key === 'a' ? TOOLS[1] : undefined)
