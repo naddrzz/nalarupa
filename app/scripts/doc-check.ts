@@ -62,6 +62,27 @@ throws(() => call('open', { path: join(data, 'broken.pen') }), /invalid document
 assert(call('state').path === b && ids() === 'sld01,sld02,sld03', 'a failed open keeps the current document')
 throws(() => call('open'), /path required/, 'open without a path')
 
+// An imported library resolves its own variables and its internal component refs.
+{
+  const dir = mkdtempSync(join(data, 'imp-'))
+  mkdirSync(join(dir, 'lib'))
+  writeFileSync(join(dir, 'lib', 'kit.pen'), JSON.stringify({ version: '2.19', variables: { brand: { type: 'color', value: '#ff0000' } }, children: [
+    { id: 'btn', type: 'frame', name: 'KitBtn', reusable: true, x: 0, y: 0, padding: 10, fill: '$brand', children: [{ id: 'lbl', type: 'text', content: 'Kit', fontSize: 14, fontFamily: 'Inter', fill: '#ffffff' }] },
+    { id: 'card', type: 'frame', name: 'KitCard', reusable: true, x: 0, y: 100, layout: 'vertical', children: [{ id: 'inner', type: 'ref', ref: 'btn' }] },
+  ] }))
+  writeFileSync(join(dir, 'main.pen'), JSON.stringify({ version: '2.19', imports: { kit: 'lib/kit.pen' }, children: [
+    { id: 'page', type: 'frame', name: 'Page', x: 0, y: 0, width: 300, height: 200, layout: 'vertical', fill: '#ffffff', children: [
+      { id: 'b', type: 'ref', ref: 'kit:btn' },
+      { id: 'c', type: 'ref', ref: 'kit:card' },
+    ] }] }))
+  call('open', { path: join(dir, 'main.pen') })
+  const [, cb] = call('boxes', { ids: ['b', 'c'] })
+  assert(cb.w > 0 && cb.h > 0, `a library component's internal ref resolves (card box ${cb.w}x${cb.h})`)
+  const fill = JSON.parse(exec('Print(JSON.stringify(Get("b",{resolveInstances:true,resolveVariables:true})))').split('Print output\n')[1]).fill
+  assert(fill === '#ff0000', `a library variable resolves for its own nodes (fill ${fill})`)
+  call('open', { path: b })
+}
+
 // Edit commands with undo/redo.
 const x0 = node('sld02').node.x
 call('select', { ids: ['sld02'] })
@@ -111,6 +132,29 @@ throws(() => call('export', { ids: ['sld02'], format: 'bmp', path: out }), /unkn
 throws(() => call('export', { ids: ['nope'], format: 'png', path: out }), /node not found: nope/, 'exporting a missing node')
 call('new', { template: 'empty' })
 throws(() => call('export', { format: 'pdf', path: join(out, 'empty.pdf') }), /nothing to export/, 'pdf of an empty document')
+// A plain base value plus one themed override keeps the base as the default theme (the override is not the default).
+const themed = exec('SetVariables({bg: {type: "color", value: [{value: "#ffffff"}, {value: "#111111", theme: {mode: "dark"}}]}}); f = Insert(document, {type: "frame", name: "Page", width: 100, height: 100, fill: "$bg"}); g = Insert(document, {type: "frame", name: "Night", width: 100, height: 100, fill: "$bg", theme: {mode: "dark"}}); Print(JSON.stringify(GetVariables().themes)); Print(Get(f, {resolveVariables: true}).fill); Print(Get(g, {resolveVariables: true}).fill)')
+const themedOut = themed.split('Print output\n')[1]?.trim().split('\n')
+assert(themedOut?.join('|') === '{"mode":["default","dark"]}|#ffffff|#111111', `base value stays the default theme: ${themed}`)
+
+// A rotated or flipped node exports the box it paints, not its unrotated box.
+const rect = (extra: object) => ({ type: 'rectangle', width: 100, height: 60, fill: '#ff0000', x: 200, y: 200, ...extra })
+const png = (id: string) => {
+  const buf = readFileSync(call('export', { ids: [id], format: 'png', path: out, opts: { scale: 1 } })[0])
+  return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20), buf }
+}
+for (const [name, extra, w, h, origin] of [['rot90', { rotation: 90 }, 60, 100, '200 100'], ['flipx', { flipX: true }, 100, 60, '100 200'], ['flipy', { flipY: true }, 100, 60, '200 140'], ['rot30', { rotation: 30 }, 117, 102, '200 150']] as const) {
+  const id = call('insert', { parent: 'document', node: rect({ name, ...extra }) }).id
+  const p = png(id)
+  assert(p.w === w && p.h === h, `${name} exports ${w}x${h} (got ${p.w}x${p.h})`)
+  const svg = readFileSync(call('export', { ids: [id], format: 'svg', path: out })[0], 'utf8')
+  assert(svg.includes(`width="${w}" height="${h}" viewBox="${origin}`), `${name} svg is ${w}x${h} at ${origin}: ${svg.slice(0, 160)}`)
+  assert(readFileSync(call('export', { ids: [id], format: 'pdf', path: join(out, `${name}.pdf`) })[0], 'latin1').includes(`/MediaBox[0 0 ${w} ${h}]`), `${name} pdf page is ${w}x${h}`)
+}
+const frame = call('insert', { parent: 'document', node: { type: 'frame', width: 300, height: 300, x: 500, y: 500 } }).id
+const kid = call('insert', { parent: frame, node: rect({ name: 'kid', flipX: true, x: 150, y: 20 }) }).id
+const kidSvg = readFileSync(call('export', { ids: [kid], format: 'svg', path: out })[0], 'utf8')
+assert(kidSvg.includes('width="100" height="60" viewBox="500 500 100 60"'), `a flipped child of a frame exports its painted box: ${kidSvg.slice(0, 160)}`)
 
 // Settings persist to the data folder; the API key is never read back.
 call('settings_set', { key: 'anthropic_api_key', value: 'sk-test-not-real' })

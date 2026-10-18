@@ -1,7 +1,7 @@
 // Save and reopen through the real window: `bun scripts/file-e2e.ts`
 // Draw → Save (toolbar) → Home lists it under Recent → reopen shows the drawing; a second Save keeps the
-// same file; a recent file that vanished from disk is no longer offered. No OS file dialogs involved.
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+// same file; Home asks before it replaces unsaved edits (Cancel / Escape / Back, Save, a failed Save, Don't save); a recent file that vanished from disk is no longer offered. No OS file dialogs involved.
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { launch } from '@gpuix/react/automation'
@@ -57,6 +57,63 @@ try {
   await app.getByTestId('layer-toggle-frm01').click() // a reopened document starts with the Desktop frame collapsed
   await until(async () => (await app.getByTestId('layers').getByText('Rectangle').count()) === 2, 'reopening shows both saved rectangles')
 
+  // An unsaved edit is never replaced silently: Home asks first, and Cancel keeps the document reachable.
+  const rects = async () => app!.getByTestId('layers').getByText('Rectangle').count()
+  const rectsAre = (n: number, msg: string) => until(async () => (await rects()) === n, msg)
+  const toggleFrame = () => app!.getByTestId('layer-toggle-frm01').click()
+  const prompt = app.getByTestId('unsaved-prompt')
+  await app.getByTestId('canvas').press('ctrl-v')
+  await rectsAre(3, 'pasting adds a third rectangle') // the layer list and the dirty flag update in the same poll
+  await app.getByTestId('home').click()
+  await app.getByTestId('template-empty').click()
+  await prompt.waitFor()
+  await app.getByTestId('unsaved-cancel').click()
+  await until(async () => !(await prompt.count()), 'Cancel closes the prompt')
+  await app.getByTestId('template-empty').click()
+  await prompt.waitFor()
+  await prompt.press('escape')
+  await until(async () => !(await prompt.count()), 'Escape closes the prompt')
+  await app.getByTestId('home-back').click()
+  await app.getByTestId('canvas').waitFor()
+  await rectsAre(3, 'Cancel and Back keep the unsaved rectangle')
+
+  // A failed Save (a folder stands where the file should be) shows an error and keeps the prompt, and the document, in place.
+  const aside = `${saved}.bak`
+  renameSync(saved, aside)
+  mkdirSync(saved)
+  await app.getByTestId('home').click()
+  await app.getByTestId('template-empty').click()
+  await prompt.waitFor()
+  await app.getByTestId('unsaved-save').click()
+  await app.getByText('Unable to save the document').waitFor()
+  assert(await prompt.count(), 'a failed Save keeps the prompt open')
+  rmSync(saved, { recursive: true })
+  renameSync(aside, saved)
+
+  // Save writes the open file first, then the new document replaces it.
+  await app.getByTestId('unsaved-save').click()
+  await app.getByTestId('canvas').waitFor()
+  await until(() => (readFileSync(saved, 'utf8').match(/"rectangle"/g) ?? []).length === 3, 'Save in the prompt wrote the third rectangle')
+  await rectsAre(0, 'the empty canvas replaced the document')
+
+  // A saved document opens without a prompt; Don't save drops the edit and leaves the file as it was.
+  await app.getByTestId('home').click()
+  await recent.click()
+  await app.getByTestId('canvas').waitFor()
+  assert(!(await prompt.count()), 'a clean document is replaced without a prompt')
+  await toggleFrame()
+  await rectsAre(3, 'the saved file reopens with three rectangles')
+  await app.getByTestId('canvas').press('ctrl-v')
+  await rectsAre(4, 'pasting adds a fourth rectangle')
+  await app.getByTestId('home').click()
+  await recent.click()
+  await prompt.waitFor()
+  await app.getByTestId('unsaved-discard').click()
+  await app.getByTestId('canvas').waitFor()
+  await toggleFrame()
+  await rectsAre(3, "Don't save reopened the file without the fourth rectangle")
+  assert((readFileSync(saved, 'utf8').match(/"rectangle"/g) ?? []).length === 3, "Don't save left the file untouched")
+
   // A recent file deleted from disk is not offered any more.
   rmSync(saved)
   await app.getByTestId('home').click()
@@ -65,6 +122,6 @@ try {
   console.log('file-e2e ok')
 } finally {
   await app?.close()
-  if (saved) rmSync(saved, { force: true })
+  if (saved) rmSync(saved, { recursive: true, force: true })
   rmSync(data, { recursive: true, force: true })
 }

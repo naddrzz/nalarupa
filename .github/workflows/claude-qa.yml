@@ -3,8 +3,6 @@ name: claude-qa
 # "bug" + "claude", which hands it to the claude workflow: it fixes the bug and opens a PR with "Fixes #N".
 on:
   schedule: [{ cron: "0 18 * * *" }] # 01:00 WIB
-  # A change to this file runs the full QA once on dev, so a new or changed area is tried right away.
-  push: { branches: [dev], paths: [.github/workflows/claude-qa.yml] }
   workflow_dispatch:
     inputs:
       areas:
@@ -12,7 +10,7 @@ on:
         required: false
 
 # Runs of one trigger type queue behind each other, and a pending run is only replaced by the same type, so a manual run
-# never drops the full QA a workflow-file push asked for. The single runner still runs one job at a time.
+# never drops the nightly scheduled QA. The single runner still runs one job at a time.
 concurrency: { group: "claude-qa-${{ github.event_name }}", cancel-in-progress: false }
 
 env:

@@ -115,6 +115,9 @@ function Get(a, b, c) {
   tree.forEach((t, i) => walk(t, undefined, 0, i));
   return out;
 }
+var __rejected = new Map();
+function __track(p, reason, handled) { if (handled) __rejected.delete(p); else __rejected.set(p, reason); }
+function __unhandled() { for (const r of __rejected.values()) return [r]; }
 var __base = new Set(Object.getOwnPropertyNames(globalThis));
 "#;
 
@@ -491,6 +494,11 @@ fn sandbox(globals: &Map<String, Value>) -> Result<Context, String> {
     rt.set_memory_limit(MEMORY_LIMIT);
     rt.set_max_stack_size(STACK_LIMIT);
     rt.set_interrupt_handler(Some(Box::new(over_time)));
+    rt.set_host_promise_rejection_tracker(Some(Box::new(|ctx, promise, reason, handled| {
+        if let Ok(track) = ctx.globals().get::<_, Function>("__track") {
+            let _ = track.call::<_, ()>((promise, reason, handled));
+        }
+    })));
     let js = Context::full(&rt).map_err(|e| e.to_string())?;
     js.with(|ctx| {
         install(&ctx).map_err(|e| format!("host functions: {e}"))?;
@@ -519,6 +527,22 @@ fn eval<'js, V: FromJs<'js>>(ctx: &Ctx<'js>, src: &str, file: Option<&str>) -> R
     opts.strict = false;
     opts.filename = file.map(str::to_string);
     ctx.eval_with_options(src, opts).map_err(|err| describe(ctx, err))
+}
+
+/// Run the jobs the snippet queued (code after an `await`, `.then` callbacks) within the same
+/// deadline. A promise left rejected fails the call like a throw does.
+fn settle(ctx: &Ctx<'_>) -> Result<(), String> {
+    while ctx.execute_pending_job() {
+        if over_time() {
+            return Err(describe(ctx, rquickjs::Error::Exception));
+        }
+    }
+    // Boxed in an array so a rejection with an `undefined` reason still counts as found.
+    let reason: Option<rquickjs::Array> = ctx.globals().get::<_, Function>("__unhandled").and_then(|f| f.call(())).map_err(|e| describe(ctx, e))?;
+    match reason {
+        Some(r) => Err(describe(ctx, ctx.throw(r.get(0).map_err(|e| describe(ctx, e))?))),
+        None => Ok(()),
+    }
 }
 
 fn describe(ctx: &Ctx<'_>, err: rquickjs::Error) -> String {
@@ -579,6 +603,7 @@ fn run(source: &str, globals: &Map<String, Value>) -> Result<Map<String, Value>,
     let js = sandbox(globals)?;
     js.with(|ctx| {
         eval::<()>(&ctx, source, Some("input"))?;
+        settle(&ctx)?;
         let out: String = eval(&ctx, EXPORT_GLOBALS, None)?;
         Ok(serde_json::from_str::<Value>(&out).ok().and_then(|v| v.as_object().cloned()).unwrap_or_default())
     })
@@ -622,7 +647,7 @@ pub fn stream_step(e: &mut Engine, key: &str, agent: &str, source: &str, seed: u
     let chunk = &source[live.ran.len()..];
     if !chunk.trim().is_empty() {
         resume_ids(seed, live.draws);
-        let (r, ex) = bind(e, true, PREVIEW_TIMEOUT, || live.js.with(|ctx| eval::<()>(&ctx, chunk, Some("input"))));
+        let (r, ex) = bind(e, true, PREVIEW_TIMEOUT, || live.js.with(|ctx| eval::<()>(&ctx, chunk, Some("input")).and_then(|_| settle(&ctx))));
         match ids_drawn(seed, live.draws) {
             Some(n) => live.draws = n,
             None => live.broken = true,
@@ -1430,6 +1455,31 @@ Insert(card, {type:\"text\", name:\"Title\", content:\"Hi\", fill:\"#111111\"})
         assert!(e.doc.children().is_empty(), "rolled back");
         let next = execute(&mut e, &json!({"input": "Insert(document, {type:'frame', name:'Y'})"}));
         assert!(!next.error, "{}", next.text);
+    }
+
+    #[test]
+    fn promise_jobs_run_and_rejections_fail_the_call() {
+        let mut e = engine();
+        let ok = execute(&mut e, &json!({"input": "(async () => { Insert(document, {type:'frame', name:'Before'}); await null; Insert(document, {type:'frame', name:'After'}) })();\nPromise.resolve().then(() => Insert(document, {type:'frame', name:'Then'}))"}));
+        assert!(!ok.error, "{}", ok.text);
+        let names: Vec<_> = e.doc.children().iter().map(|n| n["name"].as_str().unwrap_or("").to_string()).collect();
+        assert_eq!(names, ["Before", "After", "Then"]);
+        // A rejection (a throw after an await, or a bare rejected promise) rolls the call back.
+        for src in ["(async () => { Insert(document, {type:'frame', name:'Late'}); await null; throw new Error('late failure') })()", "Insert(document, {type:'frame', name:'Late'}); Promise.reject(new Error('late failure'))"] {
+            let r = execute(&mut e, &json!({"input": src}));
+            assert!(r.error && r.text.contains("late failure") && r.text.contains("editId"), "{}", r.text);
+            assert_eq!(e.doc.children().len(), 3, "rolled back");
+        }
+        // A rejection whose reason is undefined fails too.
+        for src in ["Promise.reject()", "(async () => { await null; throw undefined })()"] {
+            let r = execute(&mut e, &json!({"input": src}));
+            assert!(r.error && r.text.contains("Uncaught"), "{}", r.text);
+        }
+        // A rejection that is handled later is not a failure; a job loop stops at the deadline.
+        let handled = execute(&mut e, &json!({"input": "const p = Promise.reject(new Error('x')); p.catch(() => Print('caught'))"}));
+        assert!(!handled.error && handled.text.contains("caught"), "{}", handled.text);
+        let spin = execute_within(&mut e, &json!({"input": "const f = () => Promise.resolve().then(f); f()"}), Duration::from_millis(300));
+        assert!(spin.error && spin.text.contains("time limit"), "{}", spin.text);
     }
 
     #[test]

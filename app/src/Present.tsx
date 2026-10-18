@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ImgInstance } from '@gpuix/react'
 import { renderPixels, tryCall, type Box } from './core'
 import { fitCam } from './Canvas'
@@ -6,7 +6,7 @@ import { C, DPR } from './theme'
 import { T } from './ui'
 
 /** Presentation mode: each top-level frame is a slide, shown alone and fitted to the window. */
-export function Present({ w, h, start, version, exit }: { w: number; h: number; start?: string; version: number; exit: () => void }) {
+export function Present({ w, h, start, version, animating, exit }: { w: number; h: number; start?: string; version: number; animating?: boolean; exit: () => void }) {
   const slides = useMemo(() => (tryCall<Box[]>('frames') ?? []).filter((f) => f.type === 'frame'), [version])
   const [i, setI] = useState(() => Math.max(0, slides.findIndex((s) => s.id === start)))
   const img = useRef<ImgInstance>(null)
@@ -15,14 +15,22 @@ export function Present({ w, h, start, version, exit }: { w: number; h: number; 
   const at = Math.max(0, Math.min(i, slides.length - 1))
   const slide = slides[at]
 
-  useLayoutEffect(() => {
+  const draw = () => {
     if (!slide || w < 2 || h < 2) return
     const cam = fitCam(slide, w, h, 40, 8)
     const pw = Math.round(w * DPR)
     const ph = Math.round(h * DPR)
     const px = renderPixels(pw, ph, cam.x, cam.y, cam.zoom * DPR, 0x000000, slide.id)
     if (px) img.current?.setImagePixels(pw, ph, px)
-  }, [slide?.id, w, h, version])
+  }
+  // `animating` also redraws once it ends: the settled nodes move back into the cached layer without a version bump.
+  useLayoutEffect(draw, [slide?.id, w, h, version, animating])
+  // Agent inserts glide in frame by frame, as on the canvas.
+  useEffect(() => {
+    if (!animating) return
+    const t = setInterval(draw, 16)
+    return () => clearInterval(t)
+  }, [animating, slide?.id, w, h, version])
 
   const last = Math.max(0, slides.length - 1)
   const step = (d: number) => setI((v) => Math.min(last, Math.max(0, Math.min(v, last) + d)))
