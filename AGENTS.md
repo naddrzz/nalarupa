@@ -20,7 +20,7 @@ AI design editor: a Rust core (`core/`, a cdylib loaded through `bun:ffi`) and a
 
 - Build checks against your own core: set `CARGO_TARGET_DIR` to a separate folder and `NALARUPA_CORE=<that dir>/release/nalarupa_core.dll` (`libnalarupa_core.so` on Linux); a running app or e2e locks `core/target/release/nalarupa_core.dll` (link error LNK1104).
 - On Linux run GUI checks as `bash scripts/wl-run.sh bun run e2e` from `app/`; Xvfb does not work, GPUIX's Linux build has no X11 backend.
-- On Linux `editor-e2e` stops at its first `fill()`, and `a11y-check`, `window-check`, `exe-check` are Windows-only; name the skipped checks in the PR.
+- On Linux `a11y-check`, `window-check`, `exe-check` are Windows-only; name the skipped checks in the PR.
 - On Windows a real mouse moving over the background e2e window cancels simulated drags; rerun a step that "dropped early" with the cursor idle.
 
 ## Conventions that differ from defaults
@@ -34,6 +34,7 @@ AI design editor: a Rust core (`core/`, a cdylib loaded through `bun:ffi`) and a
 ## Known pitfalls
 
 - GPUIX automation: chords use hyphens (`ctrl-a`; `ctrl+a` silently does nothing); `fill()` hangs on text containing double quotes; `<input>` values and `style` cannot be read, so assert on visible text or bounds; synthetic clicks carry no `clickCount` (double-click handlers use a 450 ms fallback).
+- GPUIX `fill()` can miss an `<input>` inside `<virtual-list>` (an orphan focus handle); click the field, then send keystrokes without an `elementId` (see `editor-e2e`). Under the slow Linux renderer, poll with `until()` instead of fixed sleeps.
 - Give every `<textarea>` an `aria-label`; its placeholder is not its screen-reader name and `a11y-check` fails.
 - Match each file's line endings when patching by string; the repo mixes CRLF and LF.
 
