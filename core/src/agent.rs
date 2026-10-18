@@ -191,6 +191,15 @@ pub fn send(prompt: String, parallel: usize, mode: &str, designs: usize, iterate
             e.emit(json!({"type": "agent", "kind": "queued", "text": prompt}));
             return Ok(());
         }
+    }
+    begin(prompt, parallel, mode, designs, iterate, false);
+    Ok(())
+}
+
+/// Start a turn without the busy check: also how a finished run hands over to its continuation (`resume`).
+fn begin(prompt: String, parallel: usize, mode: &str, designs: usize, iterate: &str, resume: bool) {
+    {
+        let mut e = engine();
         e.agent.parallel = (parallel.clamp(1, MAX_CHILDREN + 1), if mode == "side" { "side".into() } else { "split".into() });
         e.agent.cook = (designs.clamp(1, MAX_DESIGNS), if iterate == "style" { "style".into() } else { "layout".into() });
     }
@@ -198,14 +207,27 @@ pub fn send(prompt: String, parallel: usize, mode: &str, designs: usize, iterate
     if designs > 1 {
         text = format!("{text}\n\n{FIRST_DESIGN}");
     }
-    start_turn(&prompt, text);
-    Ok(())
+    start_turn(&prompt, text, resume);
 }
 
 /// Send `prompt` to the main agent (same conversation), showing `shown` as the user's message.
-fn start_turn(shown: &str, prompt: String) {
+/// A `resume` turn continues a finished run: it is dropped when Stop came in since that run ended.
+fn start_turn(shown: &str, prompt: String, resume: bool) {
     let main = {
         let mut e = engine();
+        if resume && e.agent.cancel.load(Ordering::SeqCst) {
+            // Prompts sent after Stop queued behind this continuation: run them now as a fresh turn,
+            // keeping the agent busy so nothing else slips in, instead of leaving them stranded.
+            let queued = std::mem::take(&mut e.agent.queue);
+            if queued.is_empty() {
+                e.agent.running = false;
+                return;
+            }
+            let (n, mode) = e.agent.parallel.clone();
+            drop(e);
+            begin(queued.join("\n\n"), n, &mode, 1, "", false);
+            return;
+        }
         if e.agent.chat.is_none() {
             let id = format!("{:x}{:04x}", now_ms(), crate::doc::random_u64() & 0xffff);
             e.agent.chat = Some(Chat { id, title: shown.trim().chars().take(100).collect(), events: Vec::new() });
@@ -293,13 +315,12 @@ fn start_thread(p: Profile, prompt: String, child: Option<String>) {
         let next = {
             let mut e = engine();
             e.agent.active -= 1;
-            e.agent.running = e.agent.active > 0;
-            if e.agent.running {
+            if e.agent.active > 0 {
                 None
             } else {
                 e.emit(json!({"type": "agent", "kind": "all_done"}));
                 // The next variation starts before the queue: queued prompts wait for the last variation.
-                if e.agent.cook.0 > 1 && !stopped {
+                let next = if e.agent.cook.0 > 1 && !stopped {
                     e.agent.cook.0 -= 1;
                     Some(Next::Iterate(if e.agent.cook.1 == "style" { NEXT_STYLE } else { NEXT_LAYOUT }))
                 } else if stopped {
@@ -308,14 +329,17 @@ fn start_thread(p: Profile, prompt: String, child: Option<String>) {
                     None
                 } else {
                     (!e.agent.queue.is_empty()).then(|| Next::Queued(std::mem::take(&mut e.agent.queue).join("\n\n")))
-                }
+                };
+                // A continuation keeps the agent busy until its thread starts, so a reset cannot slip in between.
+                e.agent.running = next.is_some();
+                next
             }
         };
         match next {
-            Some(Next::Iterate(prompt)) => start_turn(ITERATING, wrap_parallel(prompt)),
+            Some(Next::Iterate(prompt)) => start_turn(ITERATING, wrap_parallel(prompt), true),
             Some(Next::Queued(q)) => {
                 let (n, mode) = engine().agent.parallel.clone();
-                let _ = send(q, n, &mode, 1, "");
+                begin(q, n, &mode, 1, "", true);
             }
             None => {}
         }
@@ -343,8 +367,15 @@ pub fn stop() {
     }
 }
 
-pub fn reset() {
-    engine().agent.clear();
+/// `agent_reset`: start a new conversation. The running thread keeps writing into whatever chat and
+/// session are current, so it is refused until the agents have stopped.
+pub fn reset() -> Result<(), String> {
+    let mut e = engine();
+    if e.agent.running {
+        return Err("Stop the agent before starting a new conversation.".into());
+    }
+    e.agent.clear();
+    Ok(())
 }
 
 /// Name of our MCP tool that Claude Code asks before running a tool it may not use on its own
