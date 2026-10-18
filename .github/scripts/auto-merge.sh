@@ -11,6 +11,23 @@ prs=$(gh pr list -R "$R" --state open --base dev --limit 1000 --json number,isDr
         --jq '.[] | select((.isDraft|not) and (.isCrossRepository|not) and ([.labels[].name]|index("no-auto-merge")|not)) | .number') \
   || { echo "gh pr list failed"; exit 1; }
 me=$(gh api user --jq .login) || me=
+# ask KIND TEXT: post an @claude request on PR $n as the owner, so the claude workflow handles it. Once per head commit
+# and at most 3 times per PR for each KIND; only markers from our own account count (anyone can comment), and a failed
+# lookup waits instead of asking again.
+ask() {
+  local kind=$1 text=$2 head comments marks
+  if ! head=$(gh pr view "$n" -R "$R" --json headRefOid --jq .headRefOid) || [ -z "$head" ] || [ -z "$me" ]      || ! comments=$(gh api "repos/$R/issues/$n/comments" --paginate --jq ".[]|select(.user.login==\"$me\")|.body"); then
+    echo "wait #$n ($kind, cannot read head or comment history) $title"; return
+  fi
+  marks=$(grep -o "<!-- auto-merge:$kind [0-9a-f]* -->" <<<"$comments" || :)
+  if grep -qF "$head" <<<"$marks"; then echo "wait #$n ($kind, claude already asked for ${head:0:7}) $title"
+  elif [ "$(grep -c . <<<"$marks")" -ge 3 ]; then echo "wait #$n ($kind, asked 3 times: needs a person) $title"
+  elif [ "${DRY_RUN:-}" = 1 ]; then echo "would ask claude ($kind) in #$n $title"
+  else
+    gh pr comment "$n" -R "$R" --body "@claude $text
+<!-- auto-merge:$kind $head -->" >/dev/null && echo "asked claude ($kind) in #$n $title"
+  fi
+}
 for n in $prs; do
   info=$(gh pr view "$n" -R "$R" --json mergeable,statusCheckRollup,title --jq '
     [.mergeable,
@@ -30,21 +47,12 @@ for n in $prs; do
     elif gh pr merge "$n" -R "$R" --merge --subject "Merge #$n: $title"; then echo "merged #$n $title"
     else echo "merge failed #$n ($state)"; fi
   elif [ "$mergeable" = CONFLICTING ]; then
-    # Nothing else resolves conflicts (parallel fix PRs often touch the same files): ask the claude workflow, through
-    # an @claude comment as the owner, to merge dev in. Once per head commit, at most 3 times per PR.
-    # Only markers from our own account count (anyone can comment), and a failed lookup waits instead of asking again.
-    if ! head=$(gh pr view "$n" -R "$R" --json headRefOid --jq .headRefOid) || [ -z "$head" ] || [ -z "$me" ] \
-       || ! comments=$(gh api "repos/$R/issues/$n/comments" --paginate --jq ".[]|select(.user.login==\"$me\")|.body"); then
-      echo "wait #$n (conflict, cannot read head or comment history) $title"; continue
-    fi
-    marks=$(grep -o '<!-- auto-merge:conflict [0-9a-f]* -->' <<<"$comments" || :)
-    if grep -qF "$head" <<<"$marks"; then echo "wait #$n (conflict, claude already asked for ${head:0:7}) $title"
-    elif [ "$(grep -c . <<<"$marks")" -ge 3 ]; then echo "wait #$n (conflict, asked 3 times: needs a person) $title"
-    elif [ "${DRY_RUN:-}" = 1 ]; then echo "would ask claude to resolve the conflict in #$n $title"
-    else
-      gh pr comment "$n" -R "$R" --body "@claude This PR conflicts with \`dev\`. Merge \`origin/dev\` into this branch and resolve every conflict so both sides keep working: the fixes already merged into dev stay, and this PR's change still does what it set out to do. Run the checks from the claude workflow, then push to this branch. Do not open a new PR.
-<!-- auto-merge:conflict $head -->" >/dev/null && echo "asked claude to resolve the conflict in #$n $title"
-    fi
+    # Nothing else resolves conflicts (parallel fix PRs often touch the same files).
+    ask conflict "This PR conflicts with \`dev\`. Merge \`origin/dev\` into this branch and resolve every conflict so both sides keep working: the fixes already merged into dev stay, and this PR's change still does what it set out to do. Run the checks from the claude workflow, then push to this branch. Do not open a new PR."
+  elif [ "$running" = 0 ] && [ "$cubic" = COMPLETED ] && [ "$rabbit" != PENDING ] && [ -n "$open" ] && [ "$open" -gt 0 ]; then
+    # Review threads still open with nothing queued to handle them: review-fix ended without resolving them (or never
+    # ran), and no new review will start it again.
+    ask threads "$open review thread(s) from cubic or CodeRabbit are still unresolved on this PR and nothing is queued to handle them. For each one: fix a real problem at the root cause, or reply on the thread explaining why the finding is wrong; then resolve the thread (gh api graphql resolveReviewThread). Run the checks from the claude workflow before you push to this branch. Do not open a new PR."
   else
     echo "wait #$n ($state) $title"
   fi
