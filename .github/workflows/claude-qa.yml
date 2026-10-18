@@ -11,8 +11,9 @@ on:
         description: "Comma-separated areas to run (checks,core,layers,editor,canvas-motion,motion,agent,chat,design,tests); empty = all"
         required: false
 
-# A manual run and the nightly one never interleave on the single runner.
-concurrency: { group: claude-qa, cancel-in-progress: false }
+# Runs of one trigger type queue behind each other, and a pending run is only replaced by the same type, so a manual run
+# never drops the full QA a workflow-file push asked for. The single runner still runs one job at a time.
+concurrency: { group: "claude-qa-${{ github.event_name }}", cancel-in-progress: false }
 
 env:
   CARGO_TARGET_DIR: /home/nalarupa-ci/.cache/nalarupa-target
@@ -21,6 +22,17 @@ env:
   CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
 jobs:
+  # The same whole-name selection as the qa matrix (see its pick step), for the tests job's job-level `if`.
+  select:
+    runs-on: [self-hosted, nalarupa]
+    outputs: { tests: "${{ steps.pick.outputs.run }}" }
+    steps:
+      - id: pick
+        env: { AREAS: "${{ github.event.inputs.areas }}" }
+        run: |
+          areas=",$(tr -d ' ' <<< "$AREAS"),"
+          if [ "$areas" = ",," ] || [[ "$areas" == *",tests,"* ]]; then echo "run=true" >> "$GITHUB_OUTPUT"; else echo "run=false" >> "$GITHUB_OUTPUT"; fi
+
   qa:
     strategy:
       fail-fast: false
@@ -171,8 +183,8 @@ jobs:
   # (installed for the runner user; _bmad/custom/bmad-qa-generate-e2e-tests.toml holds this repo's conventions).
   # Passing checks go to one PR; a check that exposes a product bug becomes a "claude" issue instead.
   tests:
-    if: always() && (github.event.inputs.areas == '' || contains(github.event.inputs.areas, 'tests'))
-    needs: qa
+    if: always() && needs.select.outputs.tests == 'true'
+    needs: [select, qa]
     runs-on: [self-hosted, nalarupa]
     timeout-minutes: 150
     permissions: { contents: write, pull-requests: write, issues: write, id-token: write }
