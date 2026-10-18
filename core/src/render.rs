@@ -821,7 +821,7 @@ fn prepare_layer(cx: &mut Ctx, index: usize, hash: u64, hidden: &HashSet<String>
         index.truncate(depth + 1);
         turned.truncate(depth);
         mats.truncate(depth);
-        let rotated = n.f("rotation").is_some_and(|r| r.abs() > 1e-6) || n.b("flipX") || n.b("flipY");
+        let rotated = is_turned(n);
         turned.push(rotated || turned.last() == Some(&true));
         let parent_m = mats.last().copied().flatten();
         mats.push(if rotated { Some(compose(parent_m, own_matrix(n))) } else { parent_m });
@@ -870,8 +870,13 @@ fn prepare_layer(cx: &mut Ctx, index: usize, hash: u64, hidden: &HashSet<String>
     (Layer { hash, tree: None, scene: None, bbox, paint: padded, flat }, Some(svg.finish(None)))
 }
 
+/// The node has its own rotation or flip (`svg::transform` is not empty).
+pub fn is_turned(n: &RNode) -> bool {
+    n.f("rotation").is_some_and(|r| r.abs() > 1e-6) || n.b("flipX") || n.b("flipY")
+}
+
 /// A node's own rotation (CCW) and flips about its origin, as in `svg::transform`.
-fn own_matrix(n: &RNode) -> [f64; 6] {
+pub fn own_matrix(n: &RNode) -> [f64; 6] {
     let t = -n.f("rotation").unwrap_or(0.0).to_radians();
     let (sx, sy) = (if n.b("flipX") { -1.0 } else { 1.0 }, if n.b("flipY") { -1.0 } else { 1.0 });
     let (a, b, c, d) = (t.cos() * sx, t.sin() * sx, -t.sin() * sy, t.cos() * sy);

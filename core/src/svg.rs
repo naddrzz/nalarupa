@@ -1302,9 +1302,27 @@ fn extent(n: &RNode) -> Rect {
     n.kids.iter().map(extent).fold(own, union)
 }
 
+/// Axis-aligned box of `r` (in the node's own space) after the node's rotation and flips, so it
+/// matches what `transform` paints. Rounded to 1e-6 to drop trig noise (cos 90° ≠ 0), which would
+/// add a pixel row on export.
+fn turn(n: &RNode, r: Rect) -> Rect {
+    if !crate::render::is_turned(n) {
+        return r;
+    }
+    let m = crate::render::own_matrix(n);
+    let (x1, y1) = (r.0 + r.2, r.1 + r.3);
+    let mut o = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
+    for (x, y) in [(r.0, r.1), (x1, r.1), (r.0, y1), (x1, y1)] {
+        let (x, y) = (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]);
+        o = [o[0].min(x), o[1].min(y), o[2].max(x), o[3].max(y)];
+    }
+    let [x0, y0, x1, y1] = o.map(|v| (v * 1e6).round() / 1e6);
+    (x0, y0, x1 - x0, y1 - y0)
+}
+
 /// Visual bounds, the area an export covers: the box,
 /// the stroke's outer part, the children of groups and unclipped frames, drop shadows
-/// (offset ± 3σ, no spread) and layer blur (± 3σ).
+/// (offset ± 3σ, no spread) and layer blur (± 3σ), all under the node's own rotation and flips.
 pub fn visual_bounds(n: &RNode) -> Rect {
     let w = if n.p.get("stroke").is_some() { max_stroke(n) } else { 0.0 };
     let out = match n.s("strokeAlignment") {
@@ -1325,7 +1343,7 @@ pub fn visual_bounds(n: &RNode) -> Rect {
     for s in fx.shadows.iter().filter(|s| !s.inner) {
         b = union(b, inflate((base.0 + s.dx, base.1 + s.dy, base.2, base.3), 3.0 * s.sigma));
     }
-    inflate(b, 3.0 * fx.blur)
+    turn(n, inflate(b, 3.0 * fx.blur))
 }
 
 fn max_stroke(n: &RNode) -> f64 {
@@ -1550,6 +1568,19 @@ mod tests {
             "effect": [{"type": "shadow", "offset": {"x": 0, "y": 4}, "blur": 8}, {"type": "shadow", "shadowType": "inner", "blur": 40}]}), (0.0, 0.0, 100.0, 50.0));
         assert_eq!(visual_bounds(&n), (-14.0, -10.0, 128.0, 78.0));
         assert_eq!(visual_bounds(&node("rectangle", json!({}), (5.0, 6.0, 7.0, 8.0))), (5.0, 6.0, 7.0, 8.0));
+    }
+
+    /// Rotated and flipped nodes export the box they paint, not their unrotated box.
+    #[test]
+    fn export_visual_bounds_follow_rotation_and_flips() {
+        let rot = |p: Value| visual_bounds(&node("rectangle", p, (340.0, 40.0, 100.0, 60.0)));
+        assert_eq!(rot(json!({"rotation": 90})), (340.0, -60.0, 60.0, 100.0));
+        assert_eq!(rot(json!({"flipX": true})), (240.0, 40.0, 100.0, 60.0));
+        assert_eq!(rot(json!({"flipY": true})), (340.0, -20.0, 100.0, 60.0));
+        let (x, y, w, h) = rot(json!({"rotation": 30}));
+        let (c, s) = (30f64.to_radians().cos(), 30f64.to_radians().sin());
+        assert!((w - (100.0 * c + 60.0 * s)).abs() < 1e-5 && (h - (100.0 * s + 60.0 * c)).abs() < 1e-5, "{w}x{h}");
+        assert!((x - 340.0).abs() < 1e-5 && (y - (40.0 - 100.0 * s)).abs() < 1e-5, "{x},{y}");
     }
 
     #[test]

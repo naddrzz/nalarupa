@@ -112,6 +112,24 @@ throws(() => call('export', { ids: ['nope'], format: 'png', path: out }), /node 
 call('new', { template: 'empty' })
 throws(() => call('export', { format: 'pdf', path: join(out, 'empty.pdf') }), /nothing to export/, 'pdf of an empty document')
 
+// A rotated or flipped node exports the box it paints, not its unrotated box.
+const rect = (extra: object) => ({ type: 'rectangle', width: 100, height: 60, fill: '#ff0000', x: 200, y: 200, ...extra })
+const png = (id: string) => {
+  const buf = readFileSync(call('export', { ids: [id], format: 'png', path: out, opts: { scale: 1 } })[0])
+  return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20), buf }
+}
+for (const [name, extra, w, h, origin] of [['rot90', { rotation: 90 }, 60, 100, '200 100'], ['flipx', { flipX: true }, 100, 60, '100 200'], ['flipy', { flipY: true }, 100, 60, '200 140'], ['rot30', { rotation: 30 }, 117, 102, '']] as const) {
+  const id = call('insert', { parent: 'document', node: rect({ name, ...extra }) }).id
+  const p = png(id)
+  assert(p.w === w && p.h === h, `${name} exports ${w}x${h} (got ${p.w}x${p.h})`)
+  const svg = readFileSync(call('export', { ids: [id], format: 'svg', path: out })[0], 'utf8')
+  assert(svg.includes(`width="${w}" height="${h}" viewBox="${origin}`), `${name} svg is ${w}x${h} at ${origin}: ${svg.slice(0, 160)}`)
+  assert(readFileSync(call('export', { ids: [id], format: 'pdf', path: join(out, `${name}.pdf`) })[0], 'latin1').includes(`/MediaBox[0 0 ${w} ${h}]`), `${name} pdf page is ${w}x${h}`)
+}
+const frame = call('insert', { parent: 'document', node: { type: 'frame', width: 300, height: 300, x: 500, y: 500 } }).id
+const kid = call('insert', { parent: frame, node: rect({ name: 'kid', flipX: true, x: 150, y: 20 }) }).id
+assert(png(kid).w === 100, 'a flipped child of a frame exports its painted box')
+
 // Settings persist to the data folder; the API key is never read back.
 call('settings_set', { key: 'anthropic_api_key', value: 'sk-test-not-real' })
 call('settings_set', { key: 'agent_backend', value: 'claude-code' })
