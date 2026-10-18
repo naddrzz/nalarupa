@@ -173,6 +173,16 @@ TakeScreenshot([s])`,
   await sleep(400)
   if (await app.getByTestId('permission-allow').count()) throw new Error('the answered permission card stayed')
 
+  // The parallel-agents mode control sits on its own row, so it stays inside the composer card
+  // (it used to share the "Agents" row and stick out past the card's right edge).
+  await app.getByText('2×').click()
+  await app.getByText('Side by side').waitFor()
+  const field = (await app.getByTestId('agent-input').bounds())!
+  const mode = (await app.getByText('Side by side').bounds())!
+  if (mode.x + mode.width > field.x + field.width) throw new Error(`the "Side by side" label ends at ${mode.x + mode.width}, past the composer field's right edge ${field.x + field.width}`)
+  await app.getByText('1×').click()
+  await sleep(200)
+
   // Let it cook: pick 3 style variations, then back to "Don't iterate" (the choice persists).
   await app.getByTestId('agent-cook').click()
   await app.getByTestId('cook-menu').waitFor()
