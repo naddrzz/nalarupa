@@ -8,7 +8,7 @@
 use crate::doc::Doc;
 use crate::raster;
 use crate::resolve::{RNode, Resolver};
-use crate::svg::{fxhash, Assets, Svg};
+use crate::svg::{fxhash, is_turned, own_matrix, Assets, Svg};
 use crate::text::Fonts;
 use resvg::{tiny_skia, usvg};
 use serde_json::{json, Map, Value};
@@ -868,20 +868,6 @@ fn prepare_layer(cx: &mut Ctx, index: usize, hash: u64, hidden: &HashSet<String>
     svg.skip = hidden.clone();
     svg.node(&root);
     (Layer { hash, tree: None, scene: None, bbox, paint: padded, flat }, Some(svg.finish(None)))
-}
-
-/// The node has its own rotation or flip (`svg::transform` is not empty).
-pub fn is_turned(n: &RNode) -> bool {
-    n.f("rotation").is_some_and(|r| r.abs() > 1e-6) || n.b("flipX") || n.b("flipY")
-}
-
-/// A node's own rotation (CCW) and flips about its origin, as in `svg::transform`.
-pub fn own_matrix(n: &RNode) -> [f64; 6] {
-    let t = -n.f("rotation").unwrap_or(0.0).to_radians();
-    let (sx, sy) = (if n.b("flipX") { -1.0 } else { 1.0 }, if n.b("flipY") { -1.0 } else { 1.0 });
-    let (a, b, c, d) = (t.cos() * sx, t.sin() * sx, -t.sin() * sy, t.cos() * sy);
-    let (px, py) = (n.x - n.bx, n.y - n.by);
-    [a, b, c, d, px - a * px - c * py, py - b * px - d * py]
 }
 
 /// `p ∘ m` (m applies first).

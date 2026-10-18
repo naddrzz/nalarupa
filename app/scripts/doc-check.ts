@@ -118,7 +118,7 @@ const png = (id: string) => {
   const buf = readFileSync(call('export', { ids: [id], format: 'png', path: out, opts: { scale: 1 } })[0])
   return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20), buf }
 }
-for (const [name, extra, w, h, origin] of [['rot90', { rotation: 90 }, 60, 100, '200 100'], ['flipx', { flipX: true }, 100, 60, '100 200'], ['flipy', { flipY: true }, 100, 60, '200 140'], ['rot30', { rotation: 30 }, 117, 102, '']] as const) {
+for (const [name, extra, w, h, origin] of [['rot90', { rotation: 90 }, 60, 100, '200 100'], ['flipx', { flipX: true }, 100, 60, '100 200'], ['flipy', { flipY: true }, 100, 60, '200 140'], ['rot30', { rotation: 30 }, 117, 102, '200 150']] as const) {
   const id = call('insert', { parent: 'document', node: rect({ name, ...extra }) }).id
   const p = png(id)
   assert(p.w === w && p.h === h, `${name} exports ${w}x${h} (got ${p.w}x${p.h})`)
@@ -128,7 +128,8 @@ for (const [name, extra, w, h, origin] of [['rot90', { rotation: 90 }, 60, 100, 
 }
 const frame = call('insert', { parent: 'document', node: { type: 'frame', width: 300, height: 300, x: 500, y: 500 } }).id
 const kid = call('insert', { parent: frame, node: rect({ name: 'kid', flipX: true, x: 150, y: 20 }) }).id
-assert(png(kid).w === 100, 'a flipped child of a frame exports its painted box')
+const kidSvg = readFileSync(call('export', { ids: [kid], format: 'svg', path: out })[0], 'utf8')
+assert(kidSvg.includes('width="100" height="60" viewBox="500 500 100 60"'), `a flipped child of a frame exports its painted box: ${kidSvg.slice(0, 160)}`)
 
 // Settings persist to the data folder; the API key is never read back.
 call('settings_set', { key: 'anthropic_api_key', value: 'sk-test-not-real' })

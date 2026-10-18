@@ -1246,6 +1246,20 @@ fn has_backdrop_blur(n: &RNode) -> bool {
     own || n.kids.iter().any(has_backdrop_blur)
 }
 
+/// The node has its own rotation or flip (`transform` is not empty).
+pub fn is_turned(n: &RNode) -> bool {
+    n.f("rotation").is_some_and(|r| r.abs() > 1e-6) || n.b("flipX") || n.b("flipY")
+}
+
+/// A node's own rotation (CCW) and flips about its origin, the matrix form of `transform`.
+pub fn own_matrix(n: &RNode) -> [f64; 6] {
+    let t = -n.f("rotation").unwrap_or(0.0).to_radians();
+    let (sx, sy) = (if n.b("flipX") { -1.0 } else { 1.0 }, if n.b("flipY") { -1.0 } else { 1.0 });
+    let (a, b, c, d) = (t.cos() * sx, t.sin() * sx, -t.sin() * sy, t.cos() * sy);
+    let (px, py) = (n.x - n.bx, n.y - n.by);
+    [a, b, c, d, px - a * px - c * py, py - b * px - d * py]
+}
+
 /// Rotation (CCW) and flips about the node's origin, as an SVG transform list (flip applies first).
 fn transform(n: &RNode) -> String {
     let (px, py) = (n.x - n.bx, n.y - n.by);
@@ -1306,10 +1320,10 @@ fn extent(n: &RNode) -> Rect {
 /// matches what `transform` paints. Rounded to 1e-6 to drop trig noise (cos 90° ≠ 0), which would
 /// add a pixel row on export.
 fn turn(n: &RNode, r: Rect) -> Rect {
-    if !crate::render::is_turned(n) {
+    if !is_turned(n) {
         return r;
     }
-    let m = crate::render::own_matrix(n);
+    let m = own_matrix(n);
     let (x1, y1) = (r.0 + r.2, r.1 + r.3);
     let mut o = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
     for (x, y) in [(r.0, r.1), (x1, r.1), (r.0, y1), (x1, y1)] {
