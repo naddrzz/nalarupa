@@ -62,8 +62,29 @@ throws(() => call('open', { path: join(data, 'broken.pen') }), /invalid document
 assert(call('state').path === b && ids() === 'sld01,sld02,sld03', 'a failed open keeps the current document')
 throws(() => call('open'), /path required/, 'open without a path')
 
+// An imported library resolves its own variables and its internal component refs.
+{
+  const dir = mkdtempSync(join(data, 'imp-'))
+  mkdirSync(join(dir, 'lib'))
+  writeFileSync(join(dir, 'lib', 'kit.pen'), JSON.stringify({ version: '2.19', variables: { brand: { type: 'color', value: '#ff0000' } }, children: [
+    { id: 'btn', type: 'frame', name: 'KitBtn', reusable: true, x: 0, y: 0, padding: 10, fill: '$brand', children: [{ id: 'lbl', type: 'text', content: 'Kit', fontSize: 14, fontFamily: 'Inter', fill: '#ffffff' }] },
+    { id: 'card', type: 'frame', name: 'KitCard', reusable: true, x: 0, y: 100, layout: 'vertical', children: [{ id: 'inner', type: 'ref', ref: 'btn' }] },
+  ] }))
+  writeFileSync(join(dir, 'main.pen'), JSON.stringify({ version: '2.19', imports: { kit: 'lib/kit.pen' }, children: [
+    { id: 'page', type: 'frame', name: 'Page', x: 0, y: 0, width: 300, height: 200, layout: 'vertical', fill: '#ffffff', children: [
+      { id: 'b', type: 'ref', ref: 'kit:btn' },
+      { id: 'c', type: 'ref', ref: 'kit:card' },
+    ] }] }))
+  call('open', { path: join(dir, 'main.pen') })
+  const [, cb] = call('boxes', { ids: ['b', 'c'] })
+  assert(cb.w > 0 && cb.h > 0, `a library component's internal ref resolves (card box ${cb.w}x${cb.h})`)
+  const fill = JSON.parse(exec('Print(JSON.stringify(Get("b",{resolveInstances:true,resolveVariables:true})))').split('Print output\n')[1]).fill
+  assert(fill === '#ff0000', `a library variable resolves for its own nodes (fill ${fill})`)
+  call('open', { path: b })
+}
+
 // Edit commands with undo/redo.
-const x0 = node('sld02').node.x
+const x0= node('sld02').node.x
 call('select', { ids: ['sld02'] })
 assert(call('state').selection.join() === 'sld02', 'select sets the selection')
 call('move_by', { ids: ['sld02'], dx: 10, dy: 0 })
