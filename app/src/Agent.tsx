@@ -212,8 +212,8 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
           <Row gap={6}>
             <T size={11} color={C.muted}>Agents</T>
             <Segmented label="Agents working in parallel" value={parallel} onChange={setParallel} options={['1', '2', '3', '4'].map((v) => ({ value: v, label: `${v}×`, name: v === '1' ? '1 agent' : `${v} agents` }))} />
-            {parallel !== '1' ? <Segmented label="How agents share the work" value={mode} onChange={setMode} options={[{ value: 'split', label: 'Split' }, { value: 'side', label: 'Side by side' }]} /> : null}
           </Row>
+          {parallel !== '1' ? <Segmented label="How agents share the work" value={mode} onChange={setMode} options={[{ value: 'split', label: 'Split' }, { value: 'side', label: 'Side by side' }]} /> : null}
           <Row gap={6}>
             <ModelPicker settingsOpen={settings} />
             <div style={{ flexGrow: 1 }} />
