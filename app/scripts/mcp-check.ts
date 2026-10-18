@@ -1,0 +1,81 @@
+// MCP HTTP contract (no window): `bun scripts/mcp-check.ts`
+// What external agents (Claude Code / Cursor / Codex) rely on: routing, status codes, the DNS-rebinding
+// guard, JSON-RPC errors and batches, per-agent tool lists, and each tool's happy path and error.
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { call } from '../src/core'
+
+const assert = (ok: unknown, msg: string) => {
+  if (!ok) throw new Error(`mcp-check failed: ${msg}`)
+}
+// The core reads NALARUPA_DATA through libc, which `process.env` writes don't reach: rerun in a child
+// with a fresh data folder so settings and documents written here never touch the real ones.
+if (!process.env.NALARUPA_DATA) {
+  const data = mkdtempSync(join(tmpdir(), 'nalarupa-mcp-'))
+  const run = Bun.spawnSync([process.execPath, import.meta.path], { env: { ...process.env, NALARUPA_DATA: data }, stdio: ['inherit', 'inherit', 'inherit'] })
+  rmSync(data, { recursive: true, force: true })
+  process.exit(run.exitCode)
+}
+const data = process.env.NALARUPA_DATA
+const { mcpPort, mcpUrl, dataDir } = call('init')
+assert(dataDir === data, `core uses this run's NALARUPA_DATA (got ${dataDir})`)
+call('new', { template: 'slides' })
+
+const post = (body: string, path = '/mcp', headers: Record<string, string> = {}) =>
+  fetch(`http://127.0.0.1:${mcpPort}${path}`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body })
+const rpc = async (msg: object, path?: string) => (await post(JSON.stringify({ jsonrpc: '2.0', ...msg }), path)).json()
+const tool = async (name: string, args: object = {}) => (await rpc({ id: name, method: 'tools/call', params: { name, arguments: args } })).result
+const text = (r: any) => r.content.map((c: any) => c.text ?? '').join('')
+
+{
+  // Routing and HTTP status codes.
+  assert((await post('{}', '/other')).status === 404, 'unknown path is 404')
+  assert((await post('{}', '/mcpx')).status === 404, '/mcpx is not /mcp')
+  const get = await fetch(`http://127.0.0.1:${mcpPort}/mcp`)
+  assert(get.status === 405 && get.headers.get('allow') === 'POST', `GET is 405 with Allow: POST (got ${get.status})`)
+  // DNS-rebinding guard: a page on another origin must not drive the editor; local pages may.
+  assert((await post('{}', '/mcp', { origin: 'https://evil.example' })).status === 403, 'foreign Origin is 403')
+  assert((await post('{}', '/mcp', { origin: 'http://localhost:5173' })).status !== 403, 'localhost Origin is allowed')
+  // JSON-RPC: notifications get 202, bad JSON and unknown methods get JSON-RPC errors (HTTP 200).
+  assert((await post(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }))).status === 202, 'notification is 202')
+  const bad = await (await post('{not json')).json()
+  assert(bad.error?.code === -32700 && bad.id === null, `parse error is -32700: ${JSON.stringify(bad)}`)
+  const unknown = await rpc({ id: 9, method: 'nope' })
+  assert(unknown.id === 9 && unknown.error?.code === -32601, `unknown method is -32601: ${JSON.stringify(unknown)}`)
+  const batch = await (await post(JSON.stringify([{ jsonrpc: '2.0', id: 1, method: 'ping' }, { jsonrpc: '2.0', method: 'notifications/x' }, { jsonrpc: '2.0', id: 2, method: 'ping' }]))).json()
+  assert(Array.isArray(batch) && batch.map((m: any) => m.id).join() === '1,2', `batch answers requests only, in order: ${JSON.stringify(batch)}`)
+
+  // initialize echoes the client's protocol version and names the server.
+  const init = await rpc({ id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26' } })
+  assert(init.result.protocolVersion === '2025-03-26' && init.result.serverInfo.name === 'nalarupa' && init.result.instructions, `initialize: ${JSON.stringify(init).slice(0, 200)}`)
+
+  // Tool lists: external agents get the five public tools; built-in agents also get the permission tool.
+  const names = (r: any) => r.result.tools.map((t: any) => t.name).sort().join()
+  assert(names(await rpc({ id: 1, method: 'tools/list' })) === 'execute,get_editor_state,get_style,open_document,read_guide', 'external tool list')
+  assert(names(await rpc({ id: 1, method: 'tools/list' }, '/mcp/ag1')).includes('approve'), 'built-in agent gets the permission tool')
+
+  // Each tool: happy path and a failure that comes back as isError (not an HTTP or JSON-RPC error).
+  const state = await tool('get_editor_state')
+  assert(!state.isError && text(state).includes('sld01'), 'get_editor_state lists the slides')
+  const guide = await tool('read_guide')
+  assert(!guide.isError && /schema/.test(text(guide)), 'read_guide without a topic lists topics')
+  assert(!(await tool('read_guide', { topic: 'execute' })).isError, 'read_guide execute')
+  assert((await tool('read_guide', { topic: 'no-such-topic' })).isError, 'unknown guide topic is an error')
+  assert(!(await tool('get_style')).isError, 'get_style without a name lists styles')
+  assert((await tool('get_style', { name: 'no-such-style' })).isError, 'unknown style is an error')
+  const ok = await tool('execute', { input: 'Insert("sld01", {type:"rectangle", name:"McpRect", width:10, height:10})' })
+  assert(!ok.isError && text(ok).includes('McpRect'), `execute inserts: ${text(ok)}`)
+  const broken = await tool('execute', { input: 'Insert("missing-parent", {type:"rectangle"})' })
+  assert(broken.isError, 'execute against a missing parent is an error')
+  assert(!text(await tool('get_editor_state')).includes('missing-parent'), 'a failed execute changes nothing')
+  assert((await tool('no_such_tool')).isError, 'unknown tool is an error')
+  assert((await tool('open_document')).isError, 'open_document needs a path')
+  const doc = join(data, 'created.pen')
+  assert(!(await tool('open_document', { path: doc })).isError && existsSync(doc), 'open_document creates a missing file')
+  assert(!(await tool('open_document', { path: doc })).isError, 'open_document reopens it')
+  assert((await tool('spawn_agents', { agents: [] })).isError, 'external agents cannot spawn agents')
+
+  console.log('mcp-check ok — MCP at', mcpUrl)
+}
+process.exit(0)
