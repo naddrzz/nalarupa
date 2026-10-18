@@ -15,9 +15,11 @@ const until = async (ok: () => unknown, msg: string, ms = 5000) => {
 }
 // Fresh data folder: Recent starts empty and lists only what this run saves.
 const data = mkdtempSync(join(tmpdir(), 'nalarupa-file-'))
-const app = await launch({ command: 'bun', args: ['app.tsx'], cwd: join(import.meta.dir, '..'), env: { ...process.env, GPUIX_BACKGROUND: '1', NALARUPA_DATA: data } })
 let saved = ''
+let app: Awaited<ReturnType<typeof launch>> | undefined
 try {
+  // HOME too: untitled documents save under ~/Documents/Nalarupa, which must stay out of the real home.
+  app = await launch({ command: 'bun', args: ['app.tsx'], cwd: join(import.meta.dir, '..'), env: { ...process.env, GPUIX_BACKGROUND: '1', NALARUPA_DATA: data, HOME: data } })
   await app.getByTestId('template-blank').waitFor({ timeoutMs: 30000 })
   assert(await app.getByText('No recent files yet.').count(), 'a fresh data folder has no recent files')
   await app.getByTestId('template-blank').click()
@@ -61,7 +63,7 @@ try {
   assert(!(await recent.count()), 'a vanished recent file is hidden')
   console.log('file-e2e ok')
 } finally {
-  await app.close()
+  await app?.close()
   if (saved) rmSync(saved, { force: true })
   rmSync(data, { recursive: true, force: true })
 }

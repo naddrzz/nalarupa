@@ -11,11 +11,11 @@ const assert = (ok: unknown, msg: string) => {
 }
 // The core reads NALARUPA_DATA through libc, which `process.env` writes don't reach: rerun in a child
 // with a fresh data folder so settings and documents written here never touch the real ones.
-if (!process.env.NALARUPA_DATA) {
+if (!process.env.NALARUPA_CHECK_CHILD) {
   const data = mkdtempSync(join(tmpdir(), 'nalarupa-mcp-'))
-  const run = Bun.spawnSync([process.execPath, import.meta.path], { env: { ...process.env, NALARUPA_DATA: data }, stdio: ['inherit', 'inherit', 'inherit'] })
+  const run = Bun.spawnSync([process.execPath, import.meta.path], { env: { ...process.env, NALARUPA_DATA: data, NALARUPA_CHECK_CHILD: '1' }, stdio: ['inherit', 'inherit', 'inherit'] })
   rmSync(data, { recursive: true, force: true })
-  process.exit(run.exitCode)
+  process.exit(run.exitCode ?? 1)
 }
 const data = process.env.NALARUPA_DATA
 const { mcpPort, mcpUrl, dataDir } = call('init')
@@ -36,7 +36,7 @@ const text = (r: any) => r.content.map((c: any) => c.text ?? '').join('')
   assert(get.status === 405 && get.headers.get('allow') === 'POST', `GET is 405 with Allow: POST (got ${get.status})`)
   // DNS-rebinding guard: a page on another origin must not drive the editor; local pages may.
   assert((await post('{}', '/mcp', { origin: 'https://evil.example' })).status === 403, 'foreign Origin is 403')
-  assert((await post('{}', '/mcp', { origin: 'http://localhost:5173' })).status !== 403, 'localhost Origin is allowed')
+  assert((await post('{}', '/mcp', { origin: 'http://localhost:5173' })).status === 202, 'localhost Origin is allowed (an empty request is acknowledged with 202)')
   // JSON-RPC: notifications get 202, bad JSON and unknown methods get JSON-RPC errors (HTTP 200).
   assert((await post(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }))).status === 202, 'notification is 202')
   const bad = await (await post('{not json')).json()
@@ -53,7 +53,7 @@ const text = (r: any) => r.content.map((c: any) => c.text ?? '').join('')
   // Tool lists: external agents get the five public tools; built-in agents also get the permission tool.
   const names = (r: any) => r.result.tools.map((t: any) => t.name).sort().join()
   assert(names(await rpc({ id: 1, method: 'tools/list' })) === 'execute,get_editor_state,get_style,open_document,read_guide', 'external tool list')
-  assert(names(await rpc({ id: 1, method: 'tools/list' }, '/mcp/ag1')).includes('approve'), 'built-in agent gets the permission tool')
+  assert(names(await rpc({ id: 1, method: 'tools/list' }, '/mcp/ag1')).includes('approve'), 'a /mcp/<agent-id> path serves the tool list with the permission tool')
 
   // Each tool: happy path and a failure that comes back as isError (not an HTTP or JSON-RPC error).
   const state = await tool('get_editor_state')
@@ -66,9 +66,10 @@ const text = (r: any) => r.content.map((c: any) => c.text ?? '').join('')
   assert((await tool('get_style', { name: 'no-such-style' })).isError, 'unknown style is an error')
   const ok = await tool('execute', { input: 'Insert("sld01", {type:"rectangle", name:"McpRect", width:10, height:10})' })
   assert(!ok.isError && text(ok).includes('McpRect'), `execute inserts: ${text(ok)}`)
+  const before = text(await tool('get_editor_state'))
   const broken = await tool('execute', { input: 'Insert("missing-parent", {type:"rectangle"})' })
   assert(broken.isError, 'execute against a missing parent is an error')
-  assert(!text(await tool('get_editor_state')).includes('missing-parent'), 'a failed execute changes nothing')
+  assert(text(await tool('get_editor_state')) === before, 'a failed execute changes nothing')
   assert((await tool('no_such_tool')).isError, 'unknown tool is an error')
   assert((await tool('open_document')).isError, 'open_document needs a path')
   const doc = join(data, 'created.pen')

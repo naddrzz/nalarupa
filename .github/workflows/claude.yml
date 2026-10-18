@@ -12,7 +12,6 @@ on:
 env:
   CARGO_TARGET_DIR: /home/nalarupa-ci/.cache/nalarupa-target
   NALARUPA_CORE: /home/nalarupa-ci/.cache/nalarupa-target/release/libnalarupa_core.so
-  GH_TOKEN: ${{ secrets.GH_PAT }}
 
 jobs:
   claude:
@@ -32,6 +31,7 @@ jobs:
       - run: bun install --frozen-lockfile
         working-directory: app
       - uses: anthropics/claude-code-action@v1
+        env: { GH_TOKEN: "${{ secrets.GH_PAT }}" }
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GH_PAT }}
@@ -71,6 +71,7 @@ jobs:
         working-directory: app
       - if: steps.guard.outputs.rounds < 3
         uses: anthropics/claude-code-action@v1
+        env: { GH_TOKEN: "${{ secrets.GH_PAT }}" }
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GH_PAT }}
@@ -84,7 +85,7 @@ jobs:
             branch `${{ github.event.pull_request.head.ref }}`, which is checked out.
 
             1. List the unresolved review threads with their comment ids:
-               gh api graphql -f query='query{repository(owner:"${{ github.repository_owner }}",name:"${{ github.event.repository.name }}"){pullRequest(number:${{ github.event.pull_request.number }}){reviewThreads(first:100){nodes{id isResolved path line comments(first:5){nodes{databaseId author{login} body}}}}}}}'
+               gh api graphql --paginate -f query='query($endCursor:String){repository(owner:"${{ github.repository_owner }}",name:"${{ github.event.repository.name }}"){pullRequest(number:${{ github.event.pull_request.number }}){reviewThreads(first:100,after:$endCursor){pageInfo{hasNextPage endCursor} nodes{id isResolved path line comments(first:5){nodes{databaseId author{login} body}}}}}}}'
                Work only on unresolved threads started by cubic-dev-ai.
             2. For each one, decide whether it is a real problem. Fix real ones at the root cause, small and in the
                surrounding style. Do not change code for findings that are wrong; explain why instead.

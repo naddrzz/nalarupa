@@ -20,8 +20,8 @@ All three use a throwaway `NALARUPA_DATA` folder (the API checks re-run themselv
 `file-e2e` fails on the old `App.tsx` (verified) and passes 3/3 with the fix.
 
 ## Coverage
-- MCP endpoints/methods: 5/5 tools, 4/4 JSON-RPC methods, all 5 HTTP error paths (previously 2 tools, no error paths).
-- Core FFI commands exercised by a check: 51/58. Still uncovered by any script: `bounds`, `down` (reorder), `live`, `viewport`, `chat_clear`; `drag_begin`/`drag_end` and `chat_load` are covered only through UI flows in `editor-e2e`/`e2e`.
+- MCP endpoints/methods: 5/5 tools, 4/4 JSON-RPC methods, the HTTP error statuses 403, 404 and 405 (the 400 for an unreadable body is not exercised; previously 2 tools, no error paths).
+- Core FFI commands not exercised by any script: `bounds`, `live`, `viewport`, `chat_clear`. `drag_begin`, `drag_end` and `chat_load` are covered only through UI flows in `editor-e2e`/`e2e`.
 - UI flows: Save / Recent / reopen now covered; the Open… and Save-as dialogs (OS file pickers) are not automatable and stay manual.
 
 ## Verification
@@ -30,4 +30,4 @@ All three use a throwaway `NALARUPA_DATA` folder (the API checks re-run themselv
 
 ## Next Steps
 - CI (`ci.yml`) runs the new checks on every PR; nightly QA and the Claude dev workflow include them too.
-- Add `bounds`/`viewport`/`down` to `doc-check` if those commands start changing.
+- Add `bounds`/`viewport`/`live` to `doc-check` if those commands start changing.

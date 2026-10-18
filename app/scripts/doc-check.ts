@@ -17,11 +17,11 @@ const throws = (fn: () => unknown, re: RegExp, msg: string) => {
 }
 // The core reads NALARUPA_DATA through libc, which `process.env` writes don't reach: rerun in a child
 // with a fresh data folder so settings and documents written here never touch the real ones.
-if (!process.env.NALARUPA_DATA) {
+if (!process.env.NALARUPA_CHECK_CHILD) {
   const data = mkdtempSync(join(tmpdir(), 'nalarupa-doc-'))
-  const run = Bun.spawnSync([process.execPath, import.meta.path], { env: { ...process.env, NALARUPA_DATA: data }, stdio: ['inherit', 'inherit', 'inherit'] })
+  const run = Bun.spawnSync([process.execPath, import.meta.path], { env: { ...process.env, NALARUPA_DATA: data, NALARUPA_CHECK_CHILD: '1' }, stdio: ['inherit', 'inherit', 'inherit'] })
   rmSync(data, { recursive: true, force: true })
-  process.exit(run.exitCode)
+  process.exit(run.exitCode ?? 1)
 }
 const data = process.env.NALARUPA_DATA
 assert(call('init').dataDir === data, "core uses this run's NALARUPA_DATA")

@@ -12,7 +12,6 @@ on:
 env:
   CARGO_TARGET_DIR: /home/nalarupa-ci/.cache/nalarupa-target
   NALARUPA_CORE: /home/nalarupa-ci/.cache/nalarupa-target/release/libnalarupa_core.so
-  GH_TOKEN: ${{ secrets.GH_PAT }}
   # The in-app agent runs the `claude` CLI (Claude Code backend); this logs it in.
   CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
@@ -27,7 +26,7 @@ jobs:
             focus: |
               Run every automated check and turn each failure into an issue.
               - core: cd core && cargo test --release
-              - headless: cd app && bun run typecheck && bun run smoke && bun run editor-check && bun run mcp-check && bun run doc-check
+              - headless: cd app; bun run typecheck; bun run smoke; bun run editor-check; bun run mcp-check; bun run doc-check
               - window (one at a time): bash scripts/wl-run.sh bun run <e2e | editor-e2e | file-e2e | motion-check>
               - real agent turns (Claude Code backend): bun run agent-check, bun run model-check, bash scripts/wl-run.sh bun scripts/agent-e2e.ts
               Rerun a failure once to separate flakes from bugs; a flake that reproduces in 2 of 5 runs is a bug too (say so).
@@ -79,6 +78,7 @@ jobs:
         working-directory: app
       - if: steps.pick.outputs.run == 'true'
         uses: anthropics/claude-code-action@v1
+        env: { GH_TOKEN: "${{ secrets.GH_PAT }}" }
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # The owner's token: issues it labels "claude" start the claude workflow (GITHUB_TOKEN events don't).
