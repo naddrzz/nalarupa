@@ -1,7 +1,7 @@
 // Documents, export, variables, settings and edit commands through the core (no window): `bun scripts/doc-check.ts`
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { call } from '../src/core'
 
 const assert = (ok: unknown, msg: string) => {
@@ -19,7 +19,12 @@ const throws = (fn: () => unknown, re: RegExp, msg: string) => {
 // with a fresh data folder so settings and documents written here never touch the real ones.
 if (!process.env.NALARUPA_CHECK_CHILD) {
   const data = mkdtempSync(join(tmpdir(), 'nalarupa-doc-'))
-  const run = Bun.spawnSync([process.execPath, import.meta.path], { env: { ...process.env, NALARUPA_DATA: data, NALARUPA_CHECK_CHILD: '1' }, stdio: ['inherit', 'inherit', 'inherit'] })
+  // A stand-in `claude` that just waits, so an agent run stays "running" for the switch check below.
+  const bin = join(data, 'bin')
+  mkdirSync(bin)
+  writeFileSync(join(bin, 'claude'), '#!/bin/sh\nexec sleep 60\n', { mode: 0o755 })
+  const path = `${bin}${delimiter}${process.env.PATH}`
+  const run = Bun.spawnSync([process.execPath, import.meta.path], { env: { ...process.env, PATH: path, NALARUPA_DATA: data, NALARUPA_CHECK_CHILD: '1' }, stdio: ['inherit', 'inherit', 'inherit'] })
   rmSync(data, { recursive: true, force: true })
   process.exit(run.exitCode ?? 1)
 }
@@ -115,6 +120,26 @@ assert(JSON.parse(readFileSync(join(data, 'settings.json'), 'utf8')).agent_backe
 call('settings_set', { key: 'anthropic_api_key', value: null })
 assert(!('anthropic_api_key' in call('settings_get')), 'a null value removes the setting')
 throws(() => call('settings_set', { value: 1 }), /key required/, 'settings_set without a key')
+
+// A document switch while the agent runs is refused: the run would keep editing the new document.
+// (The sh stand-in for `claude` is POSIX only; Windows has no `sh`, so skip it there.)
+if (process.platform !== 'win32') {
+  call('new', { template: 'empty' })
+  call('settings_set', { key: 'agent_backend', value: 'claude-code' })
+  call('agent_send', { text: 'Design a landing page' })
+  const until = async (fn: () => boolean, msg: string) => {
+    for (let i = 0; i < 100 && !fn(); i++) await new Promise((r) => setTimeout(r, 100))
+    assert(fn(), msg)
+  }
+  await until(() => call('state').agentRunning, 'the agent starts running')
+  throws(() => call('new', { template: 'slides' }), /Stop the agent/, 'new while the agent runs')
+  throws(() => call('open', { path: a }), /Stop the agent/, 'open while the agent runs')
+  assert(call('frames').length === 0 && call('state').path === null, 'a refused switch keeps the document')
+  call('agent_stop')
+  await until(() => !call('state').agentRunning, 'the agent stops')
+  call('new', { template: 'slides' })
+  assert(ids() === 'sld01,sld02,sld03', 'switching works again once the agent stopped')
+}
 
 console.log('doc-check ok')
 process.exit(0)
