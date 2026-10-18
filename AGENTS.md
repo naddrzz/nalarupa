@@ -1,5 +1,5 @@
 <!-- bmad:context -->
-<!-- Verified 2026-10-18 against 31eac66. Managed by bmad-project-context; edits inside this block are replaced on refresh. Keep anything you want preserved outside the markers. -->
+<!-- Verified 2026-10-18 against c7a6a33. Managed by bmad-project-context; edits inside this block are replaced on refresh. Keep anything you want preserved outside the markers. -->
 
 ## nalarupa
 

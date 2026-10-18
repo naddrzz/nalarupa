@@ -32,7 +32,7 @@ const exec = (input: string) => {
 }
 const node = (id: string) => call('node', { id })
 const ids = () => call('frames').map((f: any) => f.id).join()
-const magic = (file: string, bytes: number[]) => readFileSync(file).subarray(0, bytes.length).equals(Buffer.from(bytes))
+const magic = (file: string, bytes: number[], at = 0) => readFileSync(file).subarray(at, at + bytes.length).equals(Buffer.from(bytes))
 
 // Save → open round trip is lossless, and the dirty flag follows edits and saves.
 call('new', { template: 'slides' })
@@ -51,9 +51,9 @@ call('save', { path: b })
 assert(readFileSync(a, 'utf8') === readFileSync(b, 'utf8'), 'save → open → save is byte-identical')
 
 // Open failures leave the open document alone.
-throws(() => call('open', { path: join(data, 'missing.pen') }), /./, 'opening a missing file')
+throws(() => call('open', { path: join(data, 'missing.pen') }), /cannot read .*missing\.pen/, 'opening a missing file')
 writeFileSync(join(data, 'broken.pen'), '{not json')
-throws(() => call('open', { path: join(data, 'broken.pen') }), /./, 'opening invalid JSON')
+throws(() => call('open', { path: join(data, 'broken.pen') }), /invalid document JSON/, 'opening invalid JSON')
 assert(call('state').path === b && ids() === 'sld01,sld02,sld03', 'a failed open keeps the current document')
 throws(() => call('open'), /path required/, 'open without a path')
 
@@ -91,10 +91,11 @@ const out = join(data, 'out')
 const one = (format: string, magicBytes: number[]) => {
   const [file] = call('export', { ids: ['sld02'], format, path: out, opts: { scale: 0.25 } })
   assert(existsSync(file) && magic(file, magicBytes), `${format} export is a valid file (${file})`)
+  return file
 }
 one('png', [0x89, 0x50, 0x4e, 0x47])
 one('jpg', [0xff, 0xd8, 0xff])
-one('webp', [0x52, 0x49, 0x46, 0x46])
+assert(magic(one('webp', [0x52, 0x49, 0x46, 0x46]), [0x57, 0x45, 0x42, 0x50], 8), 'webp export is a RIFF WEBP file')
 assert(readFileSync(call('export', { ids: ['sld02'], format: 'svg', path: out })[0], 'utf8').includes('<svg'), 'svg export')
 const [pdf] = call('export', { format: 'pdf', path: join(out, 'deck.pdf') })
 assert(readFileSync(pdf, 'latin1').startsWith('%PDF-') && readFileSync(pdf, 'latin1').match(/\/Type ?\/Page\b(?!s)/g)?.length === 3, 'deck pdf has one page per slide')
@@ -102,7 +103,7 @@ const [html] = call('export', { ids: ['sld02'], format: 'html-css', path: join(o
 assert(/<html[\s>]/i.test(readFileSync(html, 'utf8')) && readFileSync(html, 'utf8').includes('Hello'), 'html export contains the text')
 assert(Buffer.from(call('png', { id: 'sld01', scale: 0.1 }), 'base64').subarray(0, 4).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47])), 'png command returns a PNG')
 throws(() => call('export', { ids: ['sld02'], format: 'bmp', path: out }), /unknown export format/, 'unknown export format')
-throws(() => call('export', { ids: ['nope'], format: 'png', path: out }), /./, 'exporting a missing node')
+throws(() => call('export', { ids: ['nope'], format: 'png', path: out }), /node not found: nope/, 'exporting a missing node')
 call('new', { template: 'empty' })
 throws(() => call('export', { format: 'pdf', path: join(out, 'empty.pdf') }), /nothing to export/, 'pdf of an empty document')
 
@@ -110,7 +111,7 @@ throws(() => call('export', { format: 'pdf', path: join(out, 'empty.pdf') }), /n
 call('settings_set', { key: 'anthropic_api_key', value: 'sk-test-not-real' })
 call('settings_set', { key: 'agent_backend', value: 'claude-code' })
 const s = call('settings_get')
-assert(s.agent_backend === 'claude-code' && s.anthropic_api_key !== 'sk-test-not-real', 'settings_get masks the API key')
+assert(s.agent_backend === 'claude-code' && s.anthropic_api_key === '••••••••', 'settings_get masks the API key')
 assert(JSON.parse(readFileSync(join(data, 'settings.json'), 'utf8')).agent_backend === 'claude-code', 'settings are saved to settings.json')
 call('settings_set', { key: 'anthropic_api_key', value: null })
 assert(!('anthropic_api_key' in call('settings_get')), 'a null value removes the setting')

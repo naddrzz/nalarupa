@@ -162,9 +162,18 @@ export function Field({ label, value, onCommit, width, mono, testId, placeholder
   name?: string
 }) {
   const [draft, setDraft] = useState(value)
-  useEffect(() => setDraft(value), [value])
-  const commit = (v = draft) => {
-    if (v !== value) onCommit(v)
+  // Typed and committed values as of the last event: Enter and the blur after it may both run before a
+  // re-render, and the blur must neither send a stale draft nor repeat the commit.
+  const typed = useRef(value)
+  const sent = useRef(value)
+  useEffect(() => {
+    setDraft(value)
+    typed.current = sent.current = value
+  }, [value])
+  const commit = (v = typed.current) => {
+    if (v === sent.current) return
+    sent.current = v
+    onCommit(v)
   }
   return (
     <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, width, flexGrow: width ? undefined : 1, minWidth: 0 }}>
@@ -175,8 +184,8 @@ export function Field({ label, value, onCommit, width, mono, testId, placeholder
           aria-label={name ?? label}
           value={draft}
           placeholder={placeholder}
-          onChange={(e) => setDraft(e.value ?? '')}
-          onSubmit={(e) => commit(e.value ?? draft)}
+          onChange={(e) => setDraft((typed.current = e.value ?? ''))}
+          onSubmit={(e) => commit(e.value ?? typed.current)}
           onBlur={() => commit()}
           theme={{ caret: C.accent }}
           style={{ flexGrow: 1, minWidth: 0, fontSize: 12, color: C.text, fontFamily: mono ? MONO : FONT }}
