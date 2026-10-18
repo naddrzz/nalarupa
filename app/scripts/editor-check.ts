@@ -74,6 +74,21 @@ call('align', { ids: [A, Bid], dir: 'left' })
 assert(box(Bid).x === a0.x && box(A).x === a0.x, 'align left')
 call('undo')
 
+// Align works on painted bounds: a flipped and a rotated layer line up with a plain one.
+const T = call('insert', { parent: 'document', node: { type: 'frame', name: 'T', x: 600, y: 0, width: 400, height: 400, layout: 'none' } }).id
+const turned = [{ x: 100, y: 50 }, { x: 200, y: 150, flipX: true }, { x: 300, y: 250, rotation: 90 }].map(
+  (p) => call('insert', { parent: T, node: { type: 'rectangle', width: 40, height: 40, ...p } }).id,
+)
+const painted = () => call<(B & { m?: number[] })[]>('boxes', { ids: turned }).map((b) => {
+  const m = b.m ?? [1, 0, 0, 1, 0, 0]
+  const pts = [[0, 0], [b.w, 0], [0, b.h], [b.w, b.h]].map(([x, y]) => [m[0] * (b.x + x) + m[2] * (b.y + y) + m[4], m[1] * (b.x + x) + m[3] * (b.y + y) + m[5]])
+  return { l: Math.min(...pts.map((p) => p[0])), t: Math.min(...pts.map((p) => p[1])) }
+})
+call('align', { ids: turned, dir: 'left' })
+assert(painted().every((p) => Math.abs(p.l - painted()[0].l) < 0.01), `align left of flipped/rotated ${JSON.stringify(painted())}`)
+call('align', { ids: turned, dir: 'top' })
+assert(painted().every((p) => Math.abs(p.t - painted()[0].t) < 0.01), `align top of flipped/rotated ${JSON.stringify(painted())}`)
+
 // Duplicate: same position, right above the source.
 const d = call('duplicate', { ids: [A] }).ids[0]
 assert(same(box(d), a0) && node(d).parent === F, 'duplicate in place')

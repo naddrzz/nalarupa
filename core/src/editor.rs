@@ -4,7 +4,7 @@
 
 use crate::doc::{random_u64, walk, Doc, ROOT};
 use crate::engine::Engine;
-use crate::render::Flat;
+use crate::render::{unapply, Flat};
 use base64::Engine as _;
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
@@ -82,6 +82,18 @@ impl<'a> View<'a> {
 
     fn rect(&self, id: &str) -> Option<Rect> {
         self.flat(id).map(|f| (f.x, f.y, f.w, f.h))
+    }
+
+    /// Bounds of what the node paints (its box through its rotation/flip matrix), on the canvas
+    /// or, with `frame` (a container's matrix), in that container's own coordinates.
+    fn painted(&self, id: &str, frame: Option<[f64; 6]>) -> Option<Rect> {
+        let f = self.flat(id)?;
+        let pts = [(0.0, 0.0), (f.w, 0.0), (0.0, f.h), (f.w, f.h)].map(|(dx, dy)| {
+            let (x, y) = (f.x + dx, f.y + dy);
+            let (x, y) = f.m.map_or((x, y), |m| (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]));
+            frame.map_or((x, y), |m| unapply(m, x, y))
+        });
+        union(pts.into_iter().map(|p| (p.0, p.1, 0.0, 0.0)))
     }
 
     fn ty(&self, id: &str) -> &'a str {
@@ -564,22 +576,24 @@ pub fn remove_layout(e: &mut Engine, ids: &[String]) -> Result<(), String> {
 
 /// Align (left, hcenter, right, top, vcenter, bottom). One layer aligns to its parent (a
 /// top-level frame aligns its children inside it); several align to their union. Layers
-/// placed by auto layout are skipped.
+/// placed by auto layout are skipped. Edges and centers are those of the painted (rotated,
+/// flipped) bounds.
 pub fn align(e: &mut Engine, ids: &[String], dir: &str) -> Result<(), String> {
     e.sync();
     let moves: Vec<(String, f64, f64)> = {
         let v = View::new(e);
         let free: Vec<String> = top_only(&e.doc, ids).into_iter().filter(|id| !id.contains('/') && !v.in_flow(id) && v.rect(id).is_some()).collect();
-        let (targets, to): (Vec<String>, Option<Rect>) = match free.as_slice() {
+        // `frame`: the container whose own coordinates the alignment happens in (none = canvas).
+        let (targets, to, frame): (Vec<String>, Option<Rect>, Option<[f64; 6]>) = match free.as_slice() {
             [one] => match e.doc.parent_of(one) {
-                Some((p, _)) if p != ROOT => (free.clone(), v.rect(&p)),
-                _ => (kids(&e.doc, one).iter().filter_map(|k| k["id"].as_str()).filter(|k| !v.in_flow(k) && v.rect(k).is_some()).map(str::to_string).collect(), v.rect(one)),
+                Some((p, _)) if p != ROOT => (free.clone(), v.rect(&p), v.flat(&p).and_then(|f| f.m)),
+                _ => (kids(&e.doc, one).iter().filter_map(|k| k["id"].as_str()).filter(|k| !v.in_flow(k) && v.rect(k).is_some()).map(str::to_string).collect(), v.rect(one), v.flat(one).and_then(|f| f.m)),
             },
-            _ => (free.clone(), v.union(&free)),
+            _ => (free.clone(), union(free.iter().filter_map(|id| v.painted(id, None))), None),
         };
         let Some(to) = to else { return Ok(()) };
         targets.into_iter().filter_map(|id| {
-            let b = v.rect(&id)?;
+            let b = v.painted(&id, frame)?;
             let (dx, dy) = match dir {
                 "left" => (to.0 - b.0, 0.0),
                 "hcenter" => (to.0 + to.2 / 2.0 - b.0 - b.2 / 2.0, 0.0),
@@ -588,6 +602,15 @@ pub fn align(e: &mut Engine, ids: &[String], dir: &str) -> Result<(), String> {
                 "vcenter" => (0.0, to.1 + to.3 / 2.0 - b.1 - b.3 / 2.0),
                 "bottom" => (0.0, to.1 + to.3 - b.1 - b.3),
                 _ => return None,
+            };
+            // A canvas delta becomes a step in the node's parent space (x/y are relative to it).
+            let (dx, dy) = match v.flat(&id).and_then(|f| f.parent.as_deref()).and_then(|p| v.flat(p)).and_then(|p| p.m).filter(|_| frame.is_none()) {
+                Some(m) => {
+                    let o = unapply(m, 0.0, 0.0);
+                    let d = unapply(m, dx, dy);
+                    (d.0 - o.0, d.1 - o.1)
+                }
+                None => (dx, dy),
             };
             (dx.abs() > 1e-9 || dy.abs() > 1e-9).then_some((id, dx, dy))
         }).collect()
@@ -1050,6 +1073,37 @@ mod tests {
         let d = path_d(&cs);
         assert_eq!(d, "M0 0 L10 0 C15 0 20 5 20 10 C20 16.667 16.667 20 10 20 L0 0 Z M30 0 L35 0");
         assert_eq!(path_d(&contours_of(&d)), d, "reading and writing again is lossless");
+    }
+
+    #[test]
+    fn align_uses_the_painted_bounds() {
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        e.load_template("empty");
+        let frame = e.edit(|d| d.insert(ROOT, json!({"type": "frame", "x": 0, "y": 0, "width": 400, "height": 400, "layout": "none"}), None)).unwrap();
+        let mut ids = Vec::new();
+        for n in [json!({"x": 100, "y": 50}), json!({"x": 200, "y": 150, "flipX": true}), json!({"x": 300, "y": 250, "rotation": 90})] {
+            let mut n = n;
+            (n["type"], n["width"], n["height"]) = (json!("rectangle"), json!(40), json!(40));
+            ids.push(e.edit(|d| d.insert(&frame, n.clone(), None)).unwrap());
+        }
+        let edges = |e: &mut Engine, ids: &[String]| {
+            e.sync();
+            let v = View::new(e);
+            ids.iter().map(|id| v.painted(id, None).unwrap()).collect::<Vec<Rect>>()
+        };
+        align(&mut e, &ids, "left").unwrap();
+        assert!(edges(&mut e, &ids).iter().all(|r| (r.0 - 100.0).abs() < 1e-6), "left edges");
+        align(&mut e, &ids, "top").unwrap();
+        assert!(edges(&mut e, &ids).iter().all(|r| (r.1 - 50.0).abs() < 1e-6), "top edges");
+        align(&mut e, &ids, "right").unwrap();
+        assert!(edges(&mut e, &ids).iter().all(|r| (r.0 + r.2 - 140.0).abs() < 1e-6), "right edges");
+        align(&mut e, &ids, "vcenter").unwrap();
+        let cy: Vec<f64> = edges(&mut e, &ids).iter().map(|r| r.1 + r.3 / 2.0).collect();
+        assert!(cy.iter().all(|c| (c - cy[0]).abs() < 1e-6), "{cy:?}");
+        // One rotated layer aligns to its parent's box.
+        align(&mut e, &ids[2..], "left").unwrap();
+        assert!((edges(&mut e, &ids[2..])[0].0).abs() < 1e-6, "left of the parent");
     }
 
     #[test]
