@@ -1,13 +1,19 @@
 name: claude-qa
-# Nightly deep QA in five areas plus new checks (tests job), one Claude session each. Every reproducible bug becomes an issue labeled
+# Nightly deep QA in nine areas plus new checks (tests job), one Claude session each. Every reproducible bug becomes an issue labeled
 # "bug" + "claude", which hands it to the claude workflow: it fixes the bug and opens a PR with "Fixes #N".
 on:
   schedule: [{ cron: "0 18 * * *" }] # 01:00 WIB
+  # A change to this file runs the full QA once on dev, so a new or changed area is tried right away.
+  push: { branches: [dev], paths: [.github/workflows/claude-qa.yml] }
   workflow_dispatch:
     inputs:
       areas:
-        description: "Comma-separated areas to run (checks,core,editor,agent,design,tests); empty = all"
+        description: "Comma-separated areas to run (checks,core,layers,editor,canvas-motion,motion,agent,chat,design,tests); empty = all"
         required: false
+
+# Runs of one trigger type queue behind each other, and a pending run is only replaced by the same type, so a manual run
+# never drops the full QA a workflow-file push asked for. The single runner still runs one job at a time.
+concurrency: { group: "claude-qa-${{ github.event_name }}", cancel-in-progress: false }
 
 env:
   CARGO_TARGET_DIR: /home/nalarupa-ci/.cache/nalarupa-target
@@ -16,6 +22,17 @@ env:
   CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
 jobs:
+  # The same whole-name selection as the qa matrix (see its pick step), for the tests job's job-level `if`.
+  select:
+    runs-on: [self-hosted, nalarupa]
+    outputs: { tests: "${{ steps.pick.outputs.run }}" }
+    steps:
+      - id: pick
+        env: { AREAS: "${{ github.event.inputs.areas }}" }
+        run: |
+          areas=",$(tr -d '[:space:]' <<< "$AREAS"),"
+          if [ "$areas" = ",," ] || [[ "$areas" == *",tests,"* ]]; then echo "run=true" >> "$GITHUB_OUTPUT"; else echo "run=false" >> "$GITHUB_OUTPUT"; fi
+
   qa:
     strategy:
       fail-fast: false
@@ -44,14 +61,55 @@ jobs:
               Alt-measure, group/ungroup, auto layout, the Layers panel (expand, rename, drag, keyboard tree), the
               Inspector (every field, scrubbing, arrow keys, colors, effects), Slides panel, Present mode, zoom/pan,
               keyboard shortcuts, undo/redo across all of these, Save/Recent/reopen. Look at every screenshot you take.
+          - area: layers
+            focus: |
+              The canvas, layer by layer. Build documents through FFI/MCP that cover every node type (frame, group,
+              rectangle, ellipse, line, path, text, image, component, instance/ref) and every visual property (solid,
+              linear/radial/angular gradient and image fills, multiple fills, strokes with width/align/dash, corner radii,
+              opacity, blend modes, shadows/blur effects, rotation, flip, clip content, auto layout child sizing, variables
+              and themes). For each layer: render it alone with `renderPixels(..., solo=<id>)` from app/src/core.ts (solo draws
+              top-level nodes only; check nested layers inside their top-level ancestor's solo render), render the whole scene,
+              export it (png/svg/pdf/html), and compare the pixels against what the properties say it should look like and
+              against each other (solo vs scene vs export). Then check layer order operations (front/back/up/
+              down, reparent, wrap/unwrap, group/ungroup), hidden layers, nested clipping and deep nesting, and that each
+              stays correct after undo/redo and after save → open. Read the rendered PNGs and look at them.
+          - area: canvas-motion
+            focus: |
+              Animations on the canvas, frame by frame. Agent inserts slide into place (engine slide_in, ~0.6 s, then
+              settle back into the cached view; `state().animating`), sibling glides, agent cursors gliding to touched
+              nodes with name pills, flashes on touched nodes, the "generating" glow on placeholder frames, the shimmer on
+              pending images (`live` command), zoom/pan/fit transitions, and that the canvas stops animating and repaints
+              cleanly afterwards (no ghost frames, no stale cached view, no layer drawn twice). Capture bursts of frames:
+              headless with `renderPixels` at known times, and in the window with `grim` in quick succession. Read them in
+              order. Repeat everything with NALARUPA_REDUCED_MOTION=1: nothing may move, everything must still land in its
+              final state. app/scripts/motion-check.ts and app/scripts/smoke.ts show how the animations are driven.
+          - area: motion
+            focus: |
+              Animations in the app UI (AgentLayer.tsx, Agent.tsx, Present.tsx, ui.tsx): the typewriter reveal and animated
+              ellipsis in chat replies, running dots, message pills (3 s), cursor fade-in/out, toasts appearing and leaving,
+              hover/press/focus transitions, panel and tab switches, Present slide changes. Check timing and easing look
+              right in frame bursts (`grim` in quick succession), that nothing stutters, jumps, flickers or keeps animating
+              after it should stop (CPU idle afterwards), and that under NALARUPA_REDUCED_MOTION=1 every one of them is still
+              (text appears whole, dots stay still) without losing any information.
           - area: agent
             focus: |
-              The built-in agent chat (Claude Code backend), in the real window: send design prompts of different kinds
-              (landing page, mobile screen, slide deck, edit the selection, follow-up changes), parallel agents (2×/3×,
-              split and side-by-side modes), Stop mid-run, chat history (new, reopen, delete), permission prompts,
-              errors (bad prompt, agent failure), and that edits land on the canvas, are undoable and attributed.
-              Judge the produced designs from screenshots: broken layout, overflowing or clipped text, overlapping
-              elements, unreadable contrast, empty frames. Keep each prompt small (2–3 execute calls) to bound time.
+              The built-in agent's features, through the real window and the core: runs from design prompts of different
+              kinds (landing page, mobile screen, slide deck, edit the selection, follow-up changes in the same chat),
+              parallel agents (2×/3×/4×, split and side-by-side modes), "Let it cook" variations (designs > 1, iterate by
+              layout and by style), the model picker and fast mode, Stop at different moments (thinking, mid-execute,
+              between variations, while prompts are queued), new conversation and document switches while running (must be
+              refused), external agents editing over MCP at the same time, permission prompts (allow, deny, stop while
+              asked), edits landing on the canvas as one undoable step each, and attribution. Judge the produced designs
+              from screenshots: broken layout, overflowing or clipped text, overlaps, unreadable contrast, empty frames.
+              Keep each prompt small (2–3 execute calls) to bound time.
+          - area: chat
+            focus: |
+              The agent chat panel itself: the composer (multi-line, Enter vs Shift+Enter, long prompts, unicode/emoji,
+              paste, sending while running → queued bubble), streaming text and thinking, tool cards (execute progress,
+              results, screenshots shown inline, errors), markdown rendering (code blocks, lists, links, tables), the
+              history list (new, reopen, delete with confirm, a vanished chat file), restoring a chat after restart,
+              error cards (one per failure, with a way out), the settings panel (backend, model, fast, API key masking),
+              scrolling and long conversations, and keyboard access. Check what is saved to disk matches what was shown.
           - area: design
             focus: |
               Review Nalarupa's own interface for quality, from screenshots of every screen and state (Home, Editor
@@ -65,10 +123,13 @@ jobs:
     timeout-minutes: 150
     permissions: { contents: read, issues: write, id-token: write }
     steps:
-      # workflow_dispatch can pick areas; matrix values are not available in a job-level `if`. No area name contains another,
-      # so a substring match accepts "checks,tests" and "checks, tests" alike.
+      # workflow_dispatch can pick areas; matrix values are not available in a job-level `if`. Whole names are matched,
+      # because "motion" is a substring of "canvas-motion"; spaces are ignored, so "checks,tests" and "checks, tests" both work.
       - id: pick
-        run: echo "run=${{ github.event.inputs.areas == '' || contains(github.event.inputs.areas, matrix.area) }}" >> "$GITHUB_OUTPUT"
+        env: { AREAS: "${{ github.event.inputs.areas }}", AREA: "${{ matrix.area }}" }
+        run: |
+          areas=",$(tr -d '[:space:]' <<< "$AREAS"),"
+          if [ "$areas" = ",," ] || [[ "$areas" == *",$AREA,"* ]]; then echo "run=true" >> "$GITHUB_OUTPUT"; else echo "run=false" >> "$GITHUB_OUTPUT"; fi
       - if: steps.pick.outputs.run == 'true'
         uses: actions/checkout@v4
       - if: steps.pick.outputs.run == 'true'
@@ -122,8 +183,8 @@ jobs:
   # (installed for the runner user; _bmad/custom/bmad-qa-generate-e2e-tests.toml holds this repo's conventions).
   # Passing checks go to one PR; a check that exposes a product bug becomes a "claude" issue instead.
   tests:
-    if: always() && (github.event.inputs.areas == '' || contains(github.event.inputs.areas, 'tests'))
-    needs: qa
+    if: always() && needs.select.outputs.tests == 'true'
+    needs: [select, qa]
     runs-on: [self-hosted, nalarupa]
     timeout-minutes: 150
     permissions: { contents: write, pull-requests: write, issues: write, id-token: write }
