@@ -315,7 +315,10 @@ fn start_thread(p: Profile, prompt: String, child: Option<String>) {
 pub fn stop() {
     let mut e = engine();
     e.agent.cancel.store(true, Ordering::SeqCst);
-    e.agent.queue.clear();
+    // Queued prompts are dropped; tell the UI so their bubbles stop promising to send them.
+    if !std::mem::take(&mut e.agent.queue).is_empty() {
+        e.emit(json!({"type": "agent", "kind": "dequeued"}));
+    }
     e.agent.cook.0 = 1;
     for (_, (_, waiting)) in e.agent.permissions.drain() {
         let _ = waiting.send(false);
@@ -958,6 +961,21 @@ mod tests {
         assert_eq!(events[1]["text"], "Hello");
         assert!(read_chat(&dir, "../settings").is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Stop drops the queued prompts and says so, so the chat does not keep promising to send them.
+    #[test]
+    fn stop_announces_dropped_queue() {
+        let kinds = || engine().events.iter().filter(|e| e["type"] == "agent").filter_map(|e| e["kind"].as_str().map(str::to_string)).collect::<Vec<_>>();
+        engine().agent.running = true;
+        send("also add a footer".into(), 1, "split", 1, "").unwrap();
+        assert_eq!(engine().agent.queue.len(), 1);
+        stop();
+        assert!(engine().agent.queue.is_empty());
+        assert_eq!(kinds().iter().filter(|k| *k == "dequeued").count(), 1);
+        stop();
+        assert_eq!(kinds().iter().filter(|k| *k == "dequeued").count(), 1, "nothing queued, nothing announced");
+        engine().agent.running = false;
     }
 
     /// Auto-allowed paths: the workspace for file tools, skills for Read; `..` cannot escape.

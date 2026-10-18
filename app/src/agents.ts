@@ -132,6 +132,10 @@ export function applyEvents(events: any[], now: number): boolean {
       case 'queued':
         store.items.push({ kind: 'queued', id: nextId++, text: ev.text })
         break
+      case 'dequeued':
+        store.items = store.items.filter((i) => i.kind !== 'queued')
+        store.items.push({ kind: 'note', id: nextId++, text: 'Queued message discarded.' })
+        break
       case 'start':
         store.running.add(aid)
         if (p) poke(p, now)
