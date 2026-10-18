@@ -1,12 +1,12 @@
 name: claude-qa
-# Nightly deep QA in five areas, one Claude session each. Every reproducible bug becomes an issue labeled
+# Nightly deep QA in five areas plus new checks (tests job), one Claude session each. Every reproducible bug becomes an issue labeled
 # "bug" + "claude", which hands it to the claude workflow: it fixes the bug and opens a PR with "Fixes #N".
 on:
   schedule: [{ cron: "0 18 * * *" }] # 01:00 WIB
   workflow_dispatch:
     inputs:
       areas:
-        description: "Comma-separated areas to run (checks,core,editor,agent,design); empty = all"
+        description: "Comma-separated areas to run (checks,core,editor,agent,design,tests); empty = all"
         required: false
 
 env:
@@ -115,4 +115,50 @@ jobs:
             or things you could not reproduce. Do not commit, push or open PRs.
             End with a summary: what you covered, what you could not, and the issues you filed or updated.
       - if: always() && steps.pick.outputs.run == 'true'
+        run: rm -rf app/.qa
+
+  # New automated checks for features nothing covers yet, written with the bmad-qa-generate-e2e-tests skill
+  # (installed for the runner user; _bmad/custom/bmad-qa-generate-e2e-tests.toml holds this repo's conventions).
+  # Passing checks go to one PR; a check that exposes a product bug becomes a "claude" issue instead.
+  tests:
+    if: always() && (github.event.inputs.areas == '' || contains(format(',{0},', github.event.inputs.areas), ',tests,'))
+    needs: qa
+    runs-on: [self-hosted, nalarupa]
+    timeout-minutes: 150
+    permissions: { contents: write, pull-requests: write, issues: write, id-token: write }
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0, token: "${{ secrets.GH_PAT }}" }
+      - run: cargo build --release
+        working-directory: core
+      - run: bun install --frozen-lockfile
+        working-directory: app
+      - uses: anthropics/claude-code-action@v1
+        env: { GH_TOKEN: "${{ secrets.GH_PAT }}" }
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GH_PAT }}
+          bot_id: "129574549"
+          bot_name: naddrzz
+          settings: '{"includeCoAuthoredBy": false, "fastMode": false}'
+          claude_args: --model claude-sonnet-5-5 --effort high --max-turns 300 --allowedTools "Bash,Read,Glob,Grep,Write,Edit,Skill"
+          prompt: |
+            Run the bmad-qa-generate-e2e-tests skill for Nalarupa (repo ${{ github.repository }}, branch dev), unattended.
+            Read AGENTS.md first. The core is built (NALARUPA_CORE points at it) and app deps are installed.
+            - Nobody is there to answer the skill's questions. At "what to test", choose auto-discover. Pick at most 3
+              features that no check in app/scripts/ exercises. Compare the commands in core/src/lib.rs `dispatch`, the
+              MCP tools, and the UI flows in app/src against the existing checks, and prefer what breaks most often.
+            - Write the checks the way the skill and _bmad/custom/bmad-qa-generate-e2e-tests.toml describe. Run each one 3 times
+              (windowed checks under `bash scripts/wl-run.sh` from app/); keep only checks that pass all 3 times.
+            - A check that fails because of a product bug, not the test: leave it out of the PR. File an issue
+              (`gh issue create --label bug --label claude --title "[qa/tests] <short>"`) with the failing script as the repro,
+              after searching for duplicates with `gh issue list --state all --search`.
+            - If you have passing checks: put them on a new branch `qa/tests-${{ github.run_id }}` with their package.json
+              scripts, the ci.yml step and the README line, plus the skill's summary. Run the full set first:
+              (cd core && cargo test --release) && (cd app && bun run typecheck && bun run smoke && bun run editor-check &&
+              bun run mcp-check && bun run doc-check). Commit with no Co-authored-by trailer, push, and open ONE PR against
+              dev (`gh pr create --base dev`) titled "Add checks for <features>", with the summary as the body. Don't reference
+              any issue, and don't add a "Generated with Claude Code" line.
+            - Nothing new worth adding: open no PR, and say so.
+      - if: always()
         run: rm -rf app/.qa
