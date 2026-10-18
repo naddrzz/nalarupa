@@ -1107,6 +1107,33 @@ mod tests {
     }
 
     #[test]
+    fn align_inside_a_rotated_parent() {
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        e.load_template("empty");
+        let frame = e.edit(|d| d.insert(ROOT, json!({"type": "frame", "x": 100, "y": 100, "width": 400, "height": 300, "rotation": 30, "layout": "none"}), None)).unwrap();
+        let ids: Vec<String> = [json!({"x": 40, "y": 30, "width": 60, "height": 20}), json!({"x": 200, "y": 150, "width": 30, "height": 50, "rotation": 15})]
+            .into_iter()
+            .map(|mut n| {
+                n["type"] = json!("rectangle");
+                e.edit(|d| d.insert(&frame, n.clone(), None)).unwrap()
+            })
+            .collect();
+        let painted = |e: &mut Engine| {
+            e.sync();
+            let v = View::new(e);
+            ids.iter().map(|id| v.painted(id, None).unwrap()).collect::<Vec<Rect>>()
+        };
+        let before = painted(&mut e);
+        align(&mut e, &ids, "left").unwrap();
+        let after = painted(&mut e);
+        let left = before.iter().map(|r| r.0).fold(f64::MAX, f64::min);
+        // Positions are stored to 0.01, so a parent-space step lands within that of the canvas edge.
+        assert!(after.iter().all(|r| (r.0 - left).abs() < 0.01), "canvas-space left edges: {after:?}");
+        assert!(before.iter().any(|r| (r.0 - left).abs() > 1e-6), "the layers started unaligned");
+    }
+
+    #[test]
     fn path_write_keeps_the_canvas_position() {
         let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
         e.offline();
