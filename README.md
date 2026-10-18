@@ -6,7 +6,7 @@
 
 <p align="center">
   An infinite-canvas design editor with AI agents.<br>
-  <b>Rust</b> core, <b>GPU-native</b> UI (GPUIX: React on top of GPUI) — no Electron, no webview.
+  <b>Rust</b> core, <b>GPU-native</b> UI (GPUIX: React on top of GPUI).
 </p>
 
 <p align="center">
