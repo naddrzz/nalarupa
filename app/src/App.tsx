@@ -46,6 +46,7 @@ export function App() {
   const win = useWindowSize()
   const [init] = useState(() => call('init'))
   const [screen, setScreen] = useState<'home' | 'editor' | 'present'>('home')
+  const [opened, setOpened] = useState(false)
   const [state, setState] = useState<State>(init.state)
   const [selection, setSelection] = useState<string[]>([])
   const [tool, setTool] = useState<Tool>('move')
@@ -83,6 +84,7 @@ export function App() {
 
   const openedDoc = useCallback(() => {
     setSelection([])
+    setOpened(true)
     setScreen('editor')
     setTimeout(() => fitTo(), 0)
   }, [fitTo])
@@ -112,16 +114,18 @@ export function App() {
     if (boxes.length !== selection.length) setSelection(boxes.map((b) => b.id))
   }, [state.version])
 
+  const saveTo = (path?: string) => {
+    const r = tryCall('save', { path })
+    if (r) toast(`Saved ${r.path}`)
+    else toast('Unable to save the document. Check that the folder exists and is writable.', true)
+    return !!r
+  }
   const save = (as = false) => {
-    const run = (path?: string) => {
-      const r = tryCall('save', { path })
-      if (r) toast(`Saved ${r.path}`)
-    }
     if (as) {
       renderer.promptForPaths?.({ directories: true, prompt: 'Save here' }).then((dirs) => {
-        if (dirs?.[0]) run(join(dirs[0], `${state.title}.nala`))
+        if (dirs?.[0]) saveTo(join(dirs[0], `${state.title}.nala`))
       })
-    } else run(state.path ?? defaultSavePath(state.title))
+    } else saveTo(state.path ?? defaultSavePath(state.title))
   }
 
   const present = useCallback((from?: string) => {
@@ -277,7 +281,25 @@ export function App() {
     return (
       <div style={{ width: '100%', height: '100%' }}>
         {/* Read fresh: files saved or opened since startup belong in Recent too. */}
-        <Home recent={tryCall<{ recent?: string[] }>('settings_get')?.recent ?? []} onOpened={openedDoc} toast={toast} />
+        <Home
+          recent={tryCall<{ recent?: string[] }>('settings_get')?.recent ?? []}
+          // The polled flag lags an edit by up to 120 ms, so ask the core when a template or file is picked.
+          dirty={() => tryCall<State>('state')?.dirty ?? state.dirty}
+          title={state.title}
+          save={() => {
+            try {
+              // Fresh like `dirty`: an open or Save As moments ago is not in the polled state yet.
+              const current = tryCall<State>('state') ?? state
+              return saveTo(current.path ?? defaultSavePath(current.title))
+            } catch {
+              toast('Unable to save the document. Check that the folder exists and is writable.', true)
+              return false
+            }
+          }}
+          back={opened ? () => setScreen('editor') : undefined}
+          onOpened={openedDoc}
+          toast={toast}
+        />
         {toastEl}
       </div>
     )
