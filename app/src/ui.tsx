@@ -155,9 +155,9 @@ export function Button({ children, onClick, primary, icon, testId, grow, danger 
   )
 }
 
-/** Text field that commits on Enter or blur (not on every keystroke). */
+/** Text field that commits on Enter or blur (not on every keystroke). `onCommit` returns false to reject: the field reverts. */
 export function Field({ label, value, onCommit, width, mono, testId, placeholder, name }: {
-  label?: string; value: string; onCommit: (v: string) => void; width?: number; mono?: boolean; testId?: string; placeholder?: string
+  label?: string; value: string; onCommit: (v: string) => void | boolean; width?: number; mono?: boolean; testId?: string; placeholder?: string
   /** Accessible name when the visible label is the section title (a placeholder is not a label). */
   name?: string
 }) {
@@ -174,7 +174,10 @@ export function Field({ label, value, onCommit, width, mono, testId, placeholder
     typed.current = v
     if (v === sent.current) return
     sent.current = v
-    onCommit(v)
+    if (onCommit(v) === false) {
+      typed.current = sent.current = value
+      setDraft(value)
+    }
   }
   return (
     <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, width, flexGrow: width ? undefined : 1, minWidth: 0 }}>
@@ -239,8 +242,9 @@ export function NumField({ label, name = label, value, mixed, onCommit, step = 1
   }
   const typed = () => {
     if (draft === shown) return
-    const v = Number(draft.trim())
-    commit(v)
+    // An empty field is not 0: Number('') would commit it as one.
+    const t = draft.trim()
+    commit(t === '' ? NaN : Number(t))
   }
   return (
     <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, width, flexGrow: width ? undefined : 1, minWidth: 0 }}>
