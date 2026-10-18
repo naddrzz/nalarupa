@@ -15,7 +15,8 @@ const assert = (ok: unknown, msg: string) => {
 }
 
 const app = await launch({ command: 'bun', args: ['app.tsx'], cwd: join(import.meta.dir, '..'), env: { ...process.env, GPUIX_BACKGROUND: '1' } })
-const shot = (name: string) => app.screenshot({ path: join(out, `editor-${name}.png`) })
+// GPUIX can't capture on Linux; there the window runs under a headless Wayland compositor, so grab it with grim.
+const shot = (name: string) => process.platform === 'linux' ? Bun.$`grim ${join(out, `editor-${name}.png`)}`.quiet() : app.screenshot({ path: join(out, `editor-${name}.png`) })
 const count = (testId: string) => app.getByTestId(testId).count()
 const val = async (testId: string) => {
   const e = await app.getByTestId(testId).element()
