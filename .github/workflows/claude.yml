@@ -7,8 +7,6 @@ on:
   pull_request_review_comment: { types: [created] }
   pull_request_review: { types: [submitted] }
 
-concurrency: { group: nalarupa-vps, cancel-in-progress: false }
-
 env:
   CARGO_TARGET_DIR: /home/nalarupa-ci/.cache/nalarupa-target
   NALARUPA_CORE: /home/nalarupa-ci/.cache/nalarupa-target/release/libnalarupa_core.so
@@ -41,4 +39,4 @@ jobs:
           claude_args: |
             --max-turns 150
             --allowedTools "Bash,Read,Edit,Write,Glob,Grep"
-            --append-system-prompt "Nalarupa repo. Fix bugs at the root cause; keep diffs small and in the style of the surrounding code. Before finishing, run: (cd core && cargo test --release) && (cd app && bun run typecheck && bun run smoke && bun run editor-check && bash scripts/wl-run.sh bun run e2e). Add or extend a check for every bug fix. Windows-only checks (a11y-check, window-check, exe-check) and editor-e2e cannot run here; say so in the PR. Open the PR against dev and reference the issue."
+            --append-system-prompt "Nalarupa repo. Fix bugs at the root cause; keep diffs small and in the style of the surrounding code. Before finishing, run: (cd core && cargo test --release) && (cd app && bun run typecheck && bun run smoke && bun run editor-check && bun run mcp-check && bun run doc-check && bash scripts/wl-run.sh bun run e2e && bash scripts/wl-run.sh bun run file-e2e). Add or extend a check for every bug fix. Windows-only checks (a11y-check, window-check, exe-check) and editor-e2e cannot run here; say so in the PR. Open the PR against dev and reference the issue."

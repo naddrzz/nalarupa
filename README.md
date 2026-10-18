@@ -162,12 +162,20 @@ cd app && bun run editor-check && bun run editor-e2e
 ```
 
 ```bash
+cd app && bun run mcp-check && bun run doc-check && bun run file-e2e
+```
+
+```bash
 cd app && bun run a11y-check && bun run motion-check && bun run window-check
 ```
 
 - `e2e` opens a GPU window in the background: Home → slides template → drawing → an external agent adds a
   slide over MCP → Present.
 - `editor-e2e` tests editor interactions (snapping, marquee, group, auto layout, rename, pen tool).
+- `mcp-check` covers the MCP HTTP contract external agents rely on (status codes, foreign-origin guard,
+  JSON-RPC errors, every tool); `doc-check` covers save/open round trips, exports, variables, settings and
+  edit commands; both run without a window in a throwaway data folder. `file-e2e` saves and reopens through
+  the window (toolbar Save → Home → Recent).
 - `a11y-check` reads the Windows UI Automation tree and fails on any unnamed control; `motion-check` makes
   sure animations stop under *reduced motion*; `window-check` makes sure the window fits the screen and its
   frame carries the Nalarupa icon (`bun run window-check dist/nalarupa.exe` for the built exe).

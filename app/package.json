@@ -17,6 +17,9 @@
     "window-check": "bun scripts/window-check.ts",
     "editor-check": "bun scripts/editor-check.ts",
     "editor-e2e": "bun scripts/editor-e2e.ts",
+    "mcp-check": "bun scripts/mcp-check.ts",
+    "doc-check": "bun scripts/doc-check.ts",
+    "file-e2e": "bun scripts/file-e2e.ts",
     "typecheck": "tsc --noEmit",
     "exe-check": "bun scripts/exe-check.ts",
     "shots": "bun scripts/shots.ts"
