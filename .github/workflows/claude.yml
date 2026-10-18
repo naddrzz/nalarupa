@@ -49,10 +49,10 @@ jobs:
             --append-system-prompt "Nalarupa repo; follow AGENTS.md. Fix bugs at the root cause; keep diffs small and in the style of the surrounding code. Before finishing, run: (cd core && cargo test --release) && (cd app && bun run typecheck && bun run smoke && bun run editor-check && bun run mcp-check && bun run doc-check && bash scripts/wl-run.sh bun run e2e && bash scripts/wl-run.sh bun run file-e2e && bash scripts/wl-run.sh bun run editor-e2e). Add or extend a check for every bug fix. Windows-only checks (a11y-check, window-check, exe-check) cannot run here; say so in the PR. When working from an issue: push your branch and open the PR yourself with `gh pr create --base dev`, and put `Fixes #<issue number>` in its body. When working on an existing PR, push to its branch and do not open another PR; reference an issue only if the PR already relates to one. Never add Co-authored-by trailers or 'Generated with Claude Code' lines."
 
   review-fix:
-    # cubic reviews once per push with all its findings; fix them, at most 3 rounds per PR.
+    # cubic and CodeRabbit review once per push with all their findings; fix them, at most 4 rounds per PR.
     if: |
       github.event_name == 'pull_request_review' &&
-      github.event.review.user.login == 'cubic-dev-ai[bot]' &&
+      (github.event.review.user.login == 'cubic-dev-ai[bot]' || github.event.review.user.login == 'coderabbitai[bot]') &&
       github.event.pull_request.state == 'open' &&
       github.event.pull_request.head.repo.full_name == github.repository
     concurrency: { group: "review-fix-${{ github.event.pull_request.number }}", cancel-in-progress: false }
@@ -64,30 +64,33 @@ jobs:
         with: { ref: "${{ github.event.pull_request.head.ref }}", fetch-depth: 0, token: "${{ secrets.GH_PAT }}" }
       - id: guard
         run: echo "rounds=$(git log --oneline origin/${{ github.event.pull_request.base.ref }}..HEAD --grep '^Address review:' | wc -l)" >> "$GITHUB_OUTPUT"
-      - if: steps.guard.outputs.rounds < 3
+      - if: steps.guard.outputs.rounds < 4
         run: cargo build --release
         working-directory: core
-      - if: steps.guard.outputs.rounds < 3
+      - if: steps.guard.outputs.rounds < 4
         run: bun install --frozen-lockfile
         working-directory: app
-      - if: steps.guard.outputs.rounds < 3
+      - if: steps.guard.outputs.rounds < 4
         uses: anthropics/claude-code-action@v1
         env: { GH_TOKEN: "${{ secrets.GH_PAT }}" }
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GH_PAT }}
-          allowed_bots: cubic-dev-ai
+          allowed_bots: cubic-dev-ai,coderabbitai
           bot_id: "129574549"
           bot_name: naddrzz
           settings: '{"includeCoAuthoredBy": false, "fastMode": false}'
           claude_args: --model claude-sonnet-5-5 --effort high --max-turns 150 --allowedTools "Bash,Read,Edit,Write,Glob,Grep"
           prompt: |
-            Nalarupa repo; follow AGENTS.md. cubic reviewed PR #${{ github.event.pull_request.number }} (${{ github.repository }}),
+            Nalarupa repo; follow AGENTS.md. ${{ github.event.review.user.login }} reviewed PR #${{ github.event.pull_request.number }} (${{ github.repository }}),
             branch `${{ github.event.pull_request.head.ref }}`, which is checked out.
 
             1. List the unresolved review threads with their comment ids:
                gh api graphql --paginate -f query='query($endCursor:String){repository(owner:"${{ github.repository_owner }}",name:"${{ github.event.repository.name }}"){pullRequest(number:${{ github.event.pull_request.number }}){reviewThreads(first:100,after:$endCursor){pageInfo{hasNextPage endCursor} nodes{id isResolved path line comments(first:5){nodes{databaseId author{login} body}}}}}}}'
-               Work only on unresolved threads started by cubic-dev-ai.
+               Work on every unresolved thread started by cubic-dev-ai or coderabbitai (both reviewers, not only the one that
+               just reviewed). CodeRabbit also lists findings in the review body ("Actionable comments", nitpicks): handle
+               those too, but only from the review that triggered this run (gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews/${{ github.event.review.id }};
+               earlier reviews were already handled), and answer them in one PR comment, since they have no thread to resolve.
             2. For each one, decide whether it is a real problem. Fix real ones at the root cause, small and in the
                surrounding style. Do not change code for findings that are wrong; explain why instead.
             3. Run the checks: (cd core && cargo test --release) && (cd app && bun run typecheck && bun run smoke &&
