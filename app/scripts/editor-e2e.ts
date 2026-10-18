@@ -18,6 +18,12 @@ const app = await launch({ command: 'bun', args: ['app.tsx'], cwd: join(import.m
 // GPUIX can't capture on Linux; there the window runs under a headless Wayland compositor, so grab it with grim.
 const shot = (name: string) => process.platform === 'linux' ? Bun.$`grim ${join(out, `editor-${name}.png`)}`.quiet() : app.screenshot({ path: join(out, `editor-${name}.png`) })
 const count = (testId: string) => app.getByTestId(testId).count()
+// CPU rendering (lavapipe on the CI VPS) can lag a fixed sleep: poll a check for up to `ms`.
+const until = async (ok: () => Promise<boolean>, ms = 3000) => {
+  const end = Date.now() + ms
+  while (!(await ok()) && Date.now() < end) await sleep(100)
+  return ok()
+}
 const val = async (testId: string) => {
   const e = await app.getByTestId(testId).element()
   return String(e.customProps?.value ?? e.text ?? '')
@@ -85,7 +91,7 @@ try {
   assert(rw1 > rw0 + 50 && Math.abs(rw1 / rh1 - rw0 / rh0) < 0.02, `shift resize keeps the aspect (${rw0}×${rh0} → ${rw1}×${rh1})`)
   await canvas.press('ctrl-z')
   await sleep(300)
-  assert((await size()).join() === [rw0, rh0].join(), "undo restores the size")
+  assert(await until(async () => (await size()).join() === [rw0, rh0].join()), "undo restores the size")
 
   // Rotation zone just outside a corner; Shift snaps to 15°.
   await app.mouse.drag(at(258, 252), at(275, 330), { steps: 6, modifiers: 'shift' })
@@ -105,7 +111,7 @@ try {
   await canvas.press('ctrl-z')
   await canvas.press('ctrl-z')
   await sleep(300)
-  assert(!(await count('rotated-overlay')) && (await size()).join() === [rw0, rh0].join(), 'two undo steps revert the resize and the rotation')
+  assert(await until(async () => !(await count('rotated-overlay')) && (await size()).join() === [rw0, rh0].join()), 'two undo steps revert the resize and the rotation')
 
   // Dragging the right edge past the left one flips the rectangle: it now paints left of its old left edge.
   await app.mouse.drag(at(250, 300), at(100, 300), { steps: 6 })
@@ -147,7 +153,7 @@ try {
   await canvas.press('ctrl-z')
   await sleep(400)
   await shot('01c-alt-undo')
-  assert((await rectRows()) === 2, 'undo removes the Alt-drag copy in one step')
+  assert(await until(async () => (await rectRows()) === 2), 'undo removes the Alt-drag copy in one step')
 
   // Alt-hover: distances from the selection to the other rectangle.
   await app.mouse.click(at(400, 300))
@@ -216,8 +222,15 @@ try {
   await frameRow.click()
   await frameRow.click()
   await app.getByTestId('layer-rename').waitFor({ timeoutMs: 3000 })
-  await app.getByTestId('layer-rename').fill('Cards')
-  await app.getByTestId('layer-rename').press('enter')
+  // Not fill(): GPUIX builds virtual-list rows against the latest tree, so an input whose batch lands
+  // mid-frame is built before its focus handle exists and its editor keeps a private one. fill() focuses
+  // the element's handle and the keys skip the editor (often under slow CPU rendering). A click focuses
+  // the editor's own handle (its right end, after the double-click window, so it is not a third click
+  // on the row); then type into whatever has focus.
+  const rn = (await app.getByTestId('layer-rename').bounds())!
+  await sleep(600)
+  await app.mouse.click({ x: rn.x + rn.width - 8, y: rn.y + rn.height / 2 })
+  await app.call('keystrokes', { keys: 'ctrl-a C a r d s enter' })
   await sleep(400)
   assert(await app.getByText('Cards').count(), 'layer renamed from the layers panel')
   await shot('08-renamed')
@@ -230,24 +243,25 @@ try {
   for (let i = 1; i <= 5; i++) await app.mouse.move({ x: gap.x + i * 4, y: gap.y }, { pressedButton: 0 })
   await app.mouse.up({ x: gap.x + 20, y: gap.y })
   await sleep(400)
+  await until(async () => (await width()) === w0 + 20)
   await shot('09-scrubbed-gap')
   const w1 = await width()
   assert(w1 === w0 + 20, `scrubbing the gap 20 px widens the row by 2 × 10 (${w0} → ${w1})`)
   await canvas.press('ctrl-z')
   await sleep(400)
-  assert((await width()) === w0, 'one undo step reverts the whole scrub')
+  assert(await until(async () => (await width()) === w0), 'one undo step reverts the whole scrub')
   // Up arrow ×3 in the gap field: +3 per gap; leaving the field and one undo revert all three.
   for (let i = 0; i < 3; i++) {
     await app.getByTestId('inspector-gap').press('up')
     await sleep(120)
   }
-  await sleep(400)
+  await until(async () => (await width()) === w0 + 6)
   const wa = await width()
   await shot('09b-arrow-gap')
   assert(wa === w0 + 6, `arrow keys step the gap (${w0} → ${wa})`)
   await canvas.press('ctrl-z')
   await sleep(400)
-  assert((await width()) === w0, 'arrow steps in one focus session undo together')
+  assert(await until(async () => (await width()) === w0), 'arrow steps in one focus session undo together')
 
   // Copy / paste: the pasted frame gets selected; undo removes it in one step.
   await canvas.press('ctrl-c')
@@ -353,31 +367,35 @@ try {
   await canvas.press('escape')
   await sleep(200)
 
-  // Figma copy → editable layers (the fig-kiwi clipboard: auto layout, text, an instance with an override).
-  const { writeClipboard } = await import('../src/clipboard')
-  writeClipboard({ html: await Bun.file(join(import.meta.dir, '..', '..', 'core', 'tests', 'figma-clipboard.html')).text(), text: '' })
-  await canvas.press('escape')
-  await canvas.press('ctrl-v')
-  await sleep(700)
-  await shot('14-figma-paste')
-  assert(await app.getByTestId('layers').getByText('Card').count(), 'the Figma frame pasted as a layer')
+  // Clipboard pastes: only Windows has a system clipboard (src/clipboard.ts); elsewhere it is per process,
+  // so this script can't put data on the app's clipboard.
+  if (process.platform === 'win32') {
+    // Figma copy → editable layers (the fig-kiwi clipboard: auto layout, text, an instance with an override).
+    const { writeClipboard } = await import('../src/clipboard')
+    writeClipboard({ html: await Bun.file(join(import.meta.dir, '..', '..', 'core', 'tests', 'figma-clipboard.html')).text(), text: '' })
+    await canvas.press('escape')
+    await canvas.press('ctrl-v')
+    await sleep(700)
+    await shot('14-figma-paste')
+    assert(await app.getByTestId('layers').getByText('Card').count(), 'the Figma frame pasted as a layer')
 
-  // Mesh gradient fill (a 3×3 mesh with a moved, curved center point), pasted as .pen clipboard data.
-  const mesh = {
-    type: 'rectangle', name: 'Mesh', x: 1000, y: 600, width: 380, height: 240, cornerRadius: 28,
-    fill: {
-      type: 'mesh_gradient', columns: 3, rows: 3,
-      colors: ['#FF5F6D', '#FFC371', '#47CF73', '#7F7FD5', '#FFFFFF', '#91EAE4', '#F7797D', '#C471ED', '#12C2E9'],
-      points: [[0, 0], [0.5, 0], [1, 0], [0, 0.5], { position: [0.62, 0.4], leftHandle: [-0.2, 0.1], rightHandle: [0.2, -0.1] }, [1, 0.5], [0, 1], [0.5, 1], [1, 1]],
-    },
+    // Mesh gradient fill (a 3×3 mesh with a moved, curved center point), pasted as .pen clipboard data.
+    const mesh = {
+      type: 'rectangle', name: 'Mesh', x: 1000, y: 600, width: 380, height: 240, cornerRadius: 28,
+      fill: {
+        type: 'mesh_gradient', columns: 3, rows: 3,
+        colors: ['#FF5F6D', '#FFC371', '#47CF73', '#7F7FD5', '#FFFFFF', '#91EAE4', '#F7797D', '#C471ED', '#12C2E9'],
+        points: [[0, 0], [0.5, 0], [1, 0], [0, 0.5], { position: [0.62, 0.4], leftHandle: [-0.2, 0.1], rightHandle: [0.2, -0.1] }, [1, 0.5], [0, 1], [0.5, 1], [1, 1]],
+      },
+    }
+    const b64 = Buffer.from(JSON.stringify({ source: 'editor-e2e', localData: [], remoteData: { nodes: [mesh] } })).toString('base64')
+    writeClipboard({ html: `<span data-pen-node-clipboard="${b64}">Mesh</span>`, text: 'Mesh' })
+    await canvas.press('escape')
+    await canvas.press('ctrl-v')
+    await sleep(700)
+    await shot('15-mesh-gradient')
+    assert(await app.getByTestId('layers').getByText('Mesh').count(), 'the mesh-filled rectangle pasted')
   }
-  const b64 = Buffer.from(JSON.stringify({ source: 'editor-e2e', localData: [], remoteData: { nodes: [mesh] } })).toString('base64')
-  writeClipboard({ html: `<span data-pen-node-clipboard="${b64}">Mesh</span>`, text: 'Mesh' })
-  await canvas.press('escape')
-  await canvas.press('ctrl-v')
-  await sleep(700)
-  await shot('15-mesh-gradient')
-  assert(await app.getByTestId('layers').getByText('Mesh').count(), 'the mesh-filled rectangle pasted')
   await shot('10-final')
   console.log('editor-e2e ok — screenshots in', out)
 } finally {

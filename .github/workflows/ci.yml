@@ -22,8 +22,8 @@ jobs:
         working-directory: app
       - run: bash scripts/wl-run.sh bun run e2e && bash scripts/wl-run.sh bun run file-e2e
         working-directory: app
-      # editor-e2e stops at the first text entry on Linux (GPUIX automation `fill` types nothing under
-      # Wayland); run it on Windows until that is fixed.
+      - run: bash scripts/wl-run.sh bun run editor-e2e
+        working-directory: app
       - uses: actions/upload-artifact@v4
         if: always()
         with: { name: screenshots, path: app/screenshots/, retention-days: 7 }
