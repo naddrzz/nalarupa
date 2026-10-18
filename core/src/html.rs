@@ -132,9 +132,11 @@ fn css_color_alpha(v: &str, k: f64) -> Option<String> {
 fn gradient_css(o: &serde_json::Map<String, Value>) -> Option<String> {
     let opacity = o.get("opacity").and_then(num).unwrap_or(1.0).clamp(0.0, 1.0);
     // Like the canvas: positions clamped to 0..1 and sorted.
-    let mut stops: Vec<(f64, String)> = o.get("colors").and_then(Value::as_array).into_iter().flatten().filter_map(|c| {
+    // An unparseable colour is transparent black, not a dropped stop.
+    let mut stops: Vec<(f64, String)> = o.get("colors").and_then(Value::as_array).into_iter().flatten().map(|c| {
         let position = num(&c["position"]).unwrap_or(0.0).clamp(0.0, 1.0);
-        Some((position, format!("{} {}%", css_color_alpha(c["color"].as_str()?, opacity)?, position * 100.0)))
+        let col = c["color"].as_str().and_then(|s| css_color_alpha(s, opacity)).unwrap_or_else(|| "rgba(0, 0, 0, 0)".into());
+        (position, format!("{col} {}%", position * 100.0))
     }).collect();
     if stops.is_empty() {
         return None;
@@ -532,6 +534,9 @@ mod tests {
         // Radial gradients carry center and size; stops are sorted like the canvas.
         let (s, _) = rect_html(json!({"fill": grad(json!({"gradientType": "radial", "rotation": 0, "center": {"x": 0.3, "y": 0.4}, "size": {"width": 0.5, "height": 1.0}, "colors": [{"color": "#0000ff", "position": 1.5}, {"color": "#ff0000", "position": 0}]}))}));
         assert!(s.contains("radial-gradient(25% 50% at 30% 40%,#ff0000 0%,#0000ff 100%)"), "{s}");
+        // An unparseable stop colour stays as transparent black, like the canvas.
+        let (s, _) = rect_html(json!({"fill": grad(json!({"colors": [{"color": "#ff0000", "position": 0}, {"color": "transparent", "position": 1}]}))}));
+        assert!(s.contains("linear-gradient(-90deg,#ff0000 0%,rgba(0, 0, 0, 0) 100%)"), "{s}");
     }
 
     #[test]
