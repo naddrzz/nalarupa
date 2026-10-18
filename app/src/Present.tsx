@@ -25,6 +25,10 @@ export function Present({ w, h, start, version, exit }: { w: number; h: number; 
   return (
     <div
       testId="presentation"
+      // The focused surface carries the slide, so a screen reader has something to announce.
+      role="group"
+      aria-label={slide ? `Slide ${i + 1} of ${slides.length}: ${slide.name}` : 'No slides'}
+      aria-description="Right arrow or Space for the next slide, Left arrow for the previous one, Escape to exit"
       tabIndex={0}
       autoFocus
       onClick={() => step(1)}

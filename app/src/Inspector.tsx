@@ -139,20 +139,20 @@ export function Inspector({ version, selection, select, toast }: Props) {
         </Row>
         {!infos.some(inFlow) ? (
           <Row>
-            <NumField label="X" {...numOf((i) => i.node.x)} onCommit={(v, k) => update({ x: v }, k)} testId="inspector-x" />
-            <NumField label="Y" {...numOf((i) => i.node.y)} onCommit={(v, k) => update({ y: v }, k)} testId="inspector-y" />
+            <NumField label="X" name="X position" {...numOf((i) => i.node.x)} onCommit={(v, k) => update({ x: v }, k)} testId="inspector-x" />
+            <NumField label="Y" name="Y position" {...numOf((i) => i.node.y)} onCommit={(v, k) => update({ y: v }, k)} testId="inspector-y" />
           </Row>
         ) : null}
         <Row>
-          <NumField label="↻" {...numOf((i) => i.node.rotation)} onCommit={(v, k) => update({ rotation: v || null }, k)} testId="inspector-rotation" />
-          <NumField label="α" {...numOf((i) => (i.node.opacity ?? 1) * 100)} onCommit={(v, k) => update({ opacity: v >= 100 ? null : Math.max(0, v) / 100 }, k)} testId="inspector-opacity" />
+          <NumField label="↻" name="Rotation" {...numOf((i) => i.node.rotation)} onCommit={(v, k) => update({ rotation: v || null }, k)} testId="inspector-rotation" />
+          <NumField label="α" name="Opacity" {...numOf((i) => (i.node.opacity ?? 1) * 100)} onCommit={(v, k) => update({ opacity: v >= 100 ? null : Math.max(0, v) / 100 }, k)} testId="inspector-opacity" />
         </Row>
       </Section>
 
       <Section title={!multi && inFlow(infos[0]) ? 'Size (auto layout child)' : 'Size'}>
         <Row>
-          <NumField label="W" {...numOf((i) => i.box?.w)} onCommit={(v, k) => setSize('width', v, k)} testId="inspector-w" />
-          <NumField label="H" {...numOf((i) => i.box?.h)} onCommit={(v, k) => setSize('height', v, k)} testId="inspector-h" />
+          <NumField label="W" name="Width" {...numOf((i) => i.box?.w)} onCommit={(v, k) => setSize('width', v, k)} testId="inspector-w" />
+          <NumField label="H" name="Height" {...numOf((i) => i.box?.h)} onCommit={(v, k) => setSize('height', v, k)} testId="inspector-h" />
         </Row>
         {canHug || canFill ? (
           <Row gap={6}>
@@ -168,6 +168,7 @@ export function Inspector({ version, selection, select, toast }: Props) {
       {isFrame ? (
         <Section title="Layout">
           <Segmented
+            label="Layout"
             value={(n.layout ?? 'horizontal') as string}
             onChange={(v) => (v === 'none' ? tryCall('remove_layout', { ids: selection }) : update({ layout: v }))}
             options={[{ value: 'none', label: 'Free' }, { value: 'horizontal', label: 'Row' }, { value: 'vertical', label: 'Column' }]}
@@ -175,15 +176,17 @@ export function Inspector({ version, selection, select, toast }: Props) {
           {n.layout !== 'none' ? (
             <>
               <Row>
-                <NumField label="G" value={Number(n.gap ?? 0) || 0} onCommit={(v, k) => update({ gap: v }, k)} testId="inspector-gap" />
-                <Field label="P" value={str(n.padding ?? 0)} onCommit={(v) => update({ padding: parse(v) })} />
+                <NumField label="G" name="Gap" value={Number(n.gap ?? 0) || 0} onCommit={(v, k) => update({ gap: v }, k)} testId="inspector-gap" />
+                <Field label="P" name="Padding" value={str(n.padding ?? 0)} onCommit={(v) => update({ padding: parse(v) })} />
               </Row>
               <Segmented
+                label="Distribute"
                 value={(n.justifyContent ?? 'start') as string}
                 onChange={(v) => update({ justifyContent: v })}
                 options={[{ value: 'start', label: 'Start' }, { value: 'center', label: 'Mid' }, { value: 'end', label: 'End' }, { value: 'space_between', label: 'Between' }]}
               />
               <Segmented
+                label="Align"
                 value={(n.alignItems ?? 'start') as string}
                 onChange={(v) => update({ alignItems: v })}
                 options={[{ value: 'start', label: 'Top/Left' }, { value: 'center', label: 'Center' }, { value: 'end', label: 'Bottom/Right' }]}
@@ -192,7 +195,7 @@ export function Inspector({ version, selection, select, toast }: Props) {
           ) : (
             <Button onClick={() => tryCall('add_layout', { ids: selection })}>Add auto layout (Shift+A)</Button>
           )}
-          <Segmented value={n.clip ? 'clip' : 'visible'} onChange={(v) => update({ clip: v === 'clip' })} options={[{ value: 'visible', label: 'Overflow visible' }, { value: 'clip', label: 'Clip content' }]} />
+          <Segmented label="Overflow" value={n.clip ? 'clip' : 'visible'} onChange={(v) => update({ clip: v === 'clip' })} options={[{ value: 'visible', label: 'Overflow visible' }, { value: 'clip', label: 'Clip content' }]} />
         </Section>
       ) : null}
 
@@ -200,6 +203,7 @@ export function Inspector({ version, selection, select, toast }: Props) {
         <Section title="Text">
           <div style={{ borderRadius: 6, backgroundColor: C.panel2, borderWidth: 1, borderColor: C.border, padding: 6 }}>
             <textarea
+              aria-label="Text content"
               value={str(n.content)}
               minRows={2}
               maxRows={8}
@@ -210,21 +214,23 @@ export function Inspector({ version, selection, select, toast }: Props) {
             />
           </div>
           <T size={10} color={C.ghost}>Enter applies · Shift+Enter new line</T>
-          <Field value={str(n.fontFamily ?? 'Inter')} onCommit={(v) => update({ fontFamily: v })} />
+          <Field name="Font family" value={str(n.fontFamily ?? 'Inter')} onCommit={(v) => update({ fontFamily: v })} />
           <Row>
-            <NumField label="S" value={Number(n.fontSize ?? 14) || 14} onCommit={(v, k) => update({ fontSize: Math.max(1, v) }, k)} testId="inspector-font-size" />
-            <Field label="W" value={str(n.fontWeight ?? '400')} onCommit={(v) => update({ fontWeight: v })} />
+            <NumField label="S" name="Font size" value={Number(n.fontSize ?? 14) || 14} onCommit={(v, k) => update({ fontSize: Math.max(1, v) }, k)} testId="inspector-font-size" />
+            <Field label="W" name="Font weight" value={str(n.fontWeight ?? '400')} onCommit={(v) => update({ fontWeight: v })} />
           </Row>
           <Row>
-            <Field label="L" value={str(n.lineHeight ?? '')} onCommit={(v) => update({ lineHeight: parse(v) })} />
-            <NumField label="K" value={Number(n.letterSpacing ?? 0) || 0} step={0.1} onCommit={(v, k) => update({ letterSpacing: v || null }, k)} />
+            <Field label="L" name="Line height" value={str(n.lineHeight ?? '')} onCommit={(v) => update({ lineHeight: parse(v) })} />
+            <NumField label="K" name="Letter spacing" value={Number(n.letterSpacing ?? 0) || 0} step={0.1} onCommit={(v, k) => update({ letterSpacing: v || null }, k)} />
           </Row>
           <Segmented
+            label="Text align"
             value={(n.textAlign ?? 'left') as string}
             onChange={(v) => update({ textAlign: v })}
             options={[{ value: 'left', label: 'Left' }, { value: 'center', label: 'Center' }, { value: 'right', label: 'Right' }]}
           />
           <Segmented
+            label="Text resizing"
             value={(n.textGrowth ?? 'auto') as string}
             onChange={(v) => update(v === 'auto' ? { textGrowth: null, width: null, height: null } : { textGrowth: v, width: n.width ?? Math.round(box.w) })}
             options={[{ value: 'auto', label: 'Auto' }, { value: 'fixed-width', label: 'Wrap' }, { value: 'fixed-width-height', label: 'Fixed' }]}
@@ -234,8 +240,8 @@ export function Inspector({ version, selection, select, toast }: Props) {
 
       {!multi && n.type === 'icon' ? (
         <Section title="Icon">
-          <Field value={str(n.icon)} onCommit={(v) => update({ icon: v })} />
-          <Field value={str(n.library ?? 'lucide')} onCommit={(v) => update({ library: v })} />
+          <Field name="Icon name" value={str(n.icon)} onCommit={(v) => update({ icon: v })} />
+          <Field name="Icon library" value={str(n.library ?? 'lucide')} onCommit={(v) => update({ library: v })} />
         </Section>
       ) : null}
 
@@ -257,8 +263,8 @@ export function Inspector({ version, selection, select, toast }: Props) {
           </Row>
           {n.type !== 'ellipse' && n.type !== 'path' ? (
             typeof (n.cornerRadius ?? 0) === 'number'
-              ? <NumField label="R" value={n.cornerRadius ?? 0} onCommit={(v, k) => update({ cornerRadius: Math.max(0, v) || null }, k)} testId="inspector-radius" />
-              : <Field label="R" value={str(n.cornerRadius)} onCommit={(v) => update({ cornerRadius: parse(v) })} testId="inspector-radii" />
+              ? <NumField label="R" name="Corner radius" value={n.cornerRadius ?? 0} onCommit={(v, k) => update({ cornerRadius: Math.max(0, v) || null }, k)} testId="inspector-radius" />
+              : <Field label="R" name="Corner radius" value={str(n.cornerRadius)} onCommit={(v) => update({ cornerRadius: parse(v) })} testId="inspector-radii" />
           ) : null}
         </Section>
       ) : null}

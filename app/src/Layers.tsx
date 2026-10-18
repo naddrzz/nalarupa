@@ -225,7 +225,8 @@ function Layers({ version, selection, select, focus, hover }: { version: number;
                 style={{
                   position: 'relative', display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, height: 28, marginLeft: 6, marginRight: 6,
                   paddingLeft: 6 + l.depth * 14, paddingRight: 4, borderRadius: 6, cursor: 'pointer',
-                  opacity: l.hidden ? 0.4 : 1,
+                  // 0.6 keeps a hidden layer's name at 4.5:1 on the panel (0.4 measured 2.8:1).
+                  opacity: l.hidden ? 0.6 : 1,
                   backgroundColor: mark === 'inside' ? '#3B82F655' : active ? '#3B82F633' : undefined,
                   hover: { backgroundColor: active ? '#3B82F633' : C.panel2 },
                 }}
@@ -256,6 +257,7 @@ function Layers({ version, selection, select, focus, hover }: { version: number;
                   <div style={{ flexGrow: 1, minWidth: 0, height: 22, borderRadius: 4, borderWidth: 1, borderColor: C.select, backgroundColor: C.panel2, display: 'flex', alignItems: 'center', paddingLeft: 4 }}>
                     <input
                       testId="layer-rename"
+                      aria-label="Layer name"
                       autoFocus
                       value={renaming.draft}
                       onChange={(e) => setRenaming((r) => (r ? { ...r, draft: e.value ?? '' } : r))}
@@ -274,7 +276,7 @@ function Layers({ version, selection, select, focus, hover }: { version: number;
                   <div
                     testId={`layer-eye-${l.id}`}
                     role="button"
-                    aria-label={l.hidden ? 'Show' : 'Hide'}
+                    aria-label={`${l.hidden ? 'Show' : 'Hide'} ${l.name}`}
                     onMouseDown={() => { eyeAt.current = performance.now() }}
                     onClick={() => tryCall('update', { ids: [l.id], props: { enabled: l.hidden ? null : false } })}
                     style={{ width: 22, height: 22, borderRadius: 5, display: 'flex', alignItems: 'center', justifyContent: 'center', hover: { backgroundColor: C.raised } }}

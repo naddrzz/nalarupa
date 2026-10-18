@@ -26,9 +26,11 @@ export const useKeyboardFocusId = () => useSyncExternalStore(subscribeFocus, () 
 
 /** Keyboard focus ring: a 2 px outline 3 px outside the element, drawn over it. Render it as the last
  *  child of a positioned element. (A spread box-shadow does not work: GPUI paints shadows as a filled
- *  box, which showed as a solid block behind transparent buttons.) */
-export function FocusRing({ radius = 6 }: { radius?: number }) {
-  return <div style={{ position: 'absolute', left: -3, top: -3, right: -3, bottom: -3, borderRadius: radius + 3, borderWidth: 2, borderColor: C.focus, pointerEvents: 'none' }} />
+ *  box, which showed as a solid block behind transparent buttons.) `inset` draws it on the element's own
+ *  edge, for elements that clip their overflow or sit flush against their neighbours. */
+export function FocusRing({ radius = 6, inset }: { radius?: number; inset?: boolean }) {
+  const o = inset ? 0 : -3
+  return <div style={{ position: 'absolute', left: o, top: o, right: o, bottom: o, borderRadius: radius - o, borderWidth: 2, borderColor: C.focus, pointerEvents: 'none' }} />
 }
 
 type Handler = (e: EventPayload) => void
@@ -108,11 +110,12 @@ export function T({ children, size = 12, color = C.text, weight, mono, grow, sty
   )
 }
 
-export function IconButton({ icon, onClick, active, title, testId, color, size = 28 }: {
+export const IconButton = forwardRef<PublicInstance, {
   icon: IconName; onClick?: () => void; active?: boolean; title?: string; testId?: string; color?: string; size?: number
-}) {
+}>(function IconButton({ icon, onClick, active, title, testId, color, size = 28 }, ref) {
   return (
     <Pressable
+      ref={ref}
       testId={testId}
       label={title}
       selected={active}
@@ -127,7 +130,7 @@ export function IconButton({ icon, onClick, active, title, testId, color, size =
       <Icon name={icon} color={color ?? (active ? C.accent : C.muted)} />
     </Pressable>
   )
-}
+})
 
 export function Button({ children, onClick, primary, icon, testId, grow, danger }: {
   children: ReactNode; onClick?: () => void; primary?: boolean; icon?: IconName; testId?: string; grow?: boolean; danger?: boolean
@@ -204,8 +207,10 @@ function scrubMove(e: EventPayload) {
  * Number field: drag the label to scrub, Up/Down ±step (Shift ×10), Enter/blur
  * commits. `onCommit` gets a coalescing key: one focus session or one scrub = one undo step.
  */
-export function NumField({ label, value, mixed, onCommit, step = 1, testId, width }: {
+export function NumField({ label, name = label, value, mixed, onCommit, step = 1, testId, width }: {
   label: string; value: number; mixed?: boolean; onCommit: (v: number, coalesce: string) => void; step?: number; testId?: string; width?: number
+  /** Accessible name when the visible label is a letter or symbol ("W", "↻"). */
+  name?: string
 }) {
   const fmt = (v: number) => String(Number(v.toFixed(2)))
   const shown = mixed ? '' : fmt(value)
@@ -232,7 +237,7 @@ export function NumField({ label, value, mixed, onCommit, step = 1, testId, widt
       <div
         testId={testId ? `${testId}-scrub` : undefined}
         role="slider"
-        aria-label={`${label}: drag to change`}
+        aria-label={`${name}: drag to change`}
         onMouseDown={(e) => {
           const base = mixed ? 0 : Number(latest.current) || 0
           const k = `scrub:${testId ?? label}:${++gesture}`
@@ -247,7 +252,7 @@ export function NumField({ label, value, mixed, onCommit, step = 1, testId, widt
       <div style={{ flexGrow: 1, minWidth: 0, height: 26, borderRadius: 6, backgroundColor: C.panel2, borderWidth: 1, borderColor: C.field, display: 'flex', alignItems: 'center', paddingLeft: 7, paddingRight: 4 }}>
         <input
           testId={testId}
-          aria-label={label}
+          aria-label={name}
           value={draft}
           placeholder={mixed ? 'Mixed' : undefined}
           onChange={(e) => setDraft(e.value ?? '')}
