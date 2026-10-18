@@ -130,9 +130,10 @@ function Layers({ version, selection, select, focus, hover }: { version: number;
     tryCall('reparent', { ids, parent: target.parent, index })
   }
 
-  const commitRename = () => {
+  // Enter passes the field's own value: the change that typed it may not have re-rendered this closure yet.
+  const commitRename = (value?: string) => {
     if (!renaming) return
-    const name = renaming.draft.trim()
+    const name = (value ?? renaming.draft).trim()
     const row = layers.find((l) => l.id === renaming.id)
     if (name && row && name !== row.name) tryCall('update', { ids: [renaming.id], props: { name } })
     setRenaming(null)
@@ -258,8 +259,8 @@ function Layers({ version, selection, select, focus, hover }: { version: number;
                       autoFocus
                       value={renaming.draft}
                       onChange={(e) => setRenaming((r) => (r ? { ...r, draft: e.value ?? '' } : r))}
-                      onSubmit={commitRename}
-                      onBlur={commitRename}
+                      onSubmit={(e) => commitRename(e.value)}
+                      onBlur={() => commitRename()}
                       onKeyDown={(e) => { if ((e.key ?? '').toLowerCase() === 'escape') setRenaming(null) }}
                       style={{ flexGrow: 1, minWidth: 0, fontSize: 12, color: C.text }}
                     />

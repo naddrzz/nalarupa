@@ -160,8 +160,8 @@ export function Field({ label, value, onCommit, width, mono, testId, placeholder
 }) {
   const [draft, setDraft] = useState(value)
   useEffect(() => setDraft(value), [value])
-  const commit = () => {
-    if (draft !== value) onCommit(draft)
+  const commit = (v = draft) => {
+    if (v !== value) onCommit(v)
   }
   return (
     <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, width, flexGrow: width ? undefined : 1, minWidth: 0 }}>
@@ -173,8 +173,8 @@ export function Field({ label, value, onCommit, width, mono, testId, placeholder
           value={draft}
           placeholder={placeholder}
           onChange={(e) => setDraft(e.value ?? '')}
-          onSubmit={commit}
-          onBlur={commit}
+          onSubmit={(e) => commit(e.value ?? draft)}
+          onBlur={() => commit()}
           theme={{ caret: C.accent }}
           style={{ flexGrow: 1, minWidth: 0, fontSize: 12, color: C.text, fontFamily: mono ? MONO : FONT }}
         />
