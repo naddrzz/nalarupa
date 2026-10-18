@@ -1,0 +1,24 @@
+name: auto-merge
+# Merges PRs into dev once they pass the gate in .github/scripts/auto-merge.sh (green ci, cubic and CodeRabbit done,
+# every bot thread resolved, mergeable). Runs every 15 minutes and whenever ci finishes; label a PR no-auto-merge
+# to hold it. Merges as the repo owner (GH_PAT), so the merge triggers ci on dev like a manual one.
+on:
+  schedule: [{ cron: "*/15 * * * *" }]
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+  workflow_dispatch:
+
+# One pass at a time; a newer trigger replaces a waiting one.
+concurrency: { group: auto-merge, cancel-in-progress: false }
+permissions: { contents: read }
+
+jobs:
+  auto-merge:
+    runs-on: [self-hosted, nalarupa]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with: { sparse-checkout: .github/scripts, persist-credentials: false }
+      - run: bash .github/scripts/auto-merge.sh
+        env: { GH_TOKEN: "${{ secrets.GH_PAT }}", GITHUB_REPOSITORY: "${{ github.repository }}" }
