@@ -28,7 +28,7 @@ jobs:
         with: { bun-version: 1.4.3 }
       - run: cargo build --release && cargo test --release
         working-directory: core
-      - run: bun install --frozen-lockfile && bun run typecheck && bun run smoke && bun run editor-check && bun run mcp-check && bun run doc-check
+      - run: bun install --frozen-lockfile && bun run typecheck && bun run smoke && bun run editor-check && bun run mcp-check && bun run doc-check && bun run script-check && bun run chat-check && bun run mcp-install-check
         working-directory: app
       - run: bash scripts/wl-run.sh bun run e2e && bash scripts/wl-run.sh bun run file-e2e
         working-directory: app
