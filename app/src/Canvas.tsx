@@ -7,7 +7,7 @@ import { CANVAS_BG, C, DPR, FONT, LEFT_W, TOP_H } from './theme'
 import { FocusRing, setKeyboardFocus, T, useRing, type Toast } from './ui'
 import { AgentLayer } from './AgentLayer'
 import {
-  anchorPoints, apply, corners, dragPoints, lin, measure, own, painted, resizeBox, resizeCursor, snap, turned, unapply, unionRect,
+  anchorPoints, apply, centerOffset, corners, dragPoints, lin, measure, own, painted, resizeBox, resizeCursor, snap, turned, unapply, unionRect,
   type Guide, type M, type Measure, type Pt, type Rect,
 } from './geometry'
 import {
@@ -96,8 +96,6 @@ function handlePoints(b: { x: number; y: number; w: number; h: number }): Record
 
 const isMovable = (n: any) => n && (n.parentLayout === 'none' || n.node?.layoutPosition === 'absolute')
 const inFlow = (n: any) => !!n && n.parentLayout !== 'none' && n.node?.layoutPosition !== 'absolute'
-/** Offset from a node's origin to its center in its parent's space (rotation and flips about the origin). */
-const centerOffset = (w: number, h: number, deg: number, flipX: boolean, flipY: boolean) => lin(own(deg, flipX, flipY), w / 2, h / 2)
 /** cornerRadius as [tl, tr, br, bl]; variable references count as 0. */
 function radiiOf(n: any): number[] {
   const r = n?.cornerRadius

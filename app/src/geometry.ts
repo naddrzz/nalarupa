@@ -27,6 +27,8 @@ export const own = (deg: number, flipX: boolean, flipY: boolean): M => {
   const [sx, sy] = [flipX ? -1 : 1, flipY ? -1 : 1]
   return [Math.cos(t) * sx, Math.sin(t) * sx, -Math.sin(t) * sy, Math.cos(t) * sy, 0, 0]
 }
+/** Offset from a node's origin to its center in its parent's space (rotation and flips about the origin). */
+export const centerOffset = (w: number, h: number, deg: number, flipX: boolean, flipY: boolean): Pt => lin(own(deg, flipX, flipY), w / 2, h / 2)
 /** Corners tl, tr, br, bl of `r` under `m`. */
 export const corners = (r: Rect, m?: M | null): Pt[] =>
   ([[r.x, r.y], [r.x + r.w, r.y], [r.x + r.w, r.y + r.h], [r.x, r.y + r.h]] as Pt[]).map(([x, y]) => apply(m, x, y))
