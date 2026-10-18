@@ -91,6 +91,8 @@ pub fn engine() -> MutexGuard<'static, Engine> {
 }
 
 const UNDO_LIMIT: usize = 100;
+/// The agent edits whatever document is open, so a document switch waits for it to stop.
+pub const SWITCH_BUSY: &str = "Stop the agent before opening another document.";
 
 impl Engine {
     pub fn new(data_dir: PathBuf) -> Engine {
@@ -552,6 +554,9 @@ impl Engine {
                 out
             }
             "open_document" => {
+                if self.agent.running {
+                    return ToolOut::err(SWITCH_BUSY);
+                }
                 let Some(path) = args["path"].as_str() else { return ToolOut::err("path is required") };
                 let p = Path::new(path);
                 let res = if p.exists() {

@@ -131,11 +131,16 @@ if (process.platform !== 'win32') {
     for (let i = 0; i < 100 && !fn(); i++) await new Promise((r) => setTimeout(r, 100))
     assert(fn(), msg)
   }
-  await until(() => call('state').agentRunning, 'the agent starts running')
-  throws(() => call('new', { template: 'slides' }), /Stop the agent/, 'new while the agent runs')
-  throws(() => call('open', { path: a }), /Stop the agent/, 'open while the agent runs')
-  assert(call('frames').length === 0 && call('state').path === null, 'a refused switch keeps the document')
-  call('agent_stop')
+  try {
+    await until(() => call('state').agentRunning, 'the agent starts running')
+    throws(() => call('new', { template: 'slides' }), /Stop the agent/, 'new while the agent runs')
+    throws(() => call('open', { path: a }), /Stop the agent/, 'open while the agent runs')
+    const doc = call('tool', { name: 'open_document', args: { path: a } })
+    assert(doc.error && /Stop the agent/.test(doc.text), 'open_document while the agent runs')
+    assert(call('frames').length === 0 && call('state').path === null, 'a refused switch keeps the document')
+  } finally {
+    call('agent_stop')
+  }
   await until(() => !call('state').agentRunning, 'the agent stops')
   call('new', { template: 'slides' })
   assert(ids() === 'sld01,sld02,sld03', 'switching works again once the agent stopped')

@@ -191,6 +191,15 @@ pub fn send(prompt: String, parallel: usize, mode: &str, designs: usize, iterate
             e.emit(json!({"type": "agent", "kind": "queued", "text": prompt}));
             return Ok(());
         }
+    }
+    begin(prompt, parallel, mode, designs, iterate);
+    Ok(())
+}
+
+/// Start the first turn of a run (the agent is idle, or the previous turn is handing over).
+fn begin(prompt: String, parallel: usize, mode: &str, designs: usize, iterate: &str) {
+    {
+        let mut e = engine();
         e.agent.parallel = (parallel.clamp(1, MAX_CHILDREN + 1), if mode == "side" { "side".into() } else { "split".into() });
         e.agent.cook = (designs.clamp(1, MAX_DESIGNS), if iterate == "style" { "style".into() } else { "layout".into() });
     }
@@ -199,7 +208,6 @@ pub fn send(prompt: String, parallel: usize, mode: &str, designs: usize, iterate
         text = format!("{text}\n\n{FIRST_DESIGN}");
     }
     start_turn(&prompt, text);
-    Ok(())
 }
 
 /// Send `prompt` to the main agent (same conversation), showing `shown` as the user's message.
@@ -287,25 +295,27 @@ fn start_thread(p: Profile, prompt: String, child: Option<String>) {
         let next = {
             let mut e = engine();
             e.agent.active -= 1;
-            e.agent.running = e.agent.active > 0;
-            if e.agent.running {
+            if e.agent.active > 0 {
                 None
             } else {
                 e.emit(json!({"type": "agent", "kind": "all_done"}));
                 // The next variation starts before the queue: queued prompts wait for the last variation.
-                if e.agent.cook.0 > 1 && !stopped {
+                let next = if e.agent.cook.0 > 1 && !stopped {
                     e.agent.cook.0 -= 1;
                     Some(Next::Iterate(if e.agent.cook.1 == "style" { NEXT_STYLE } else { NEXT_LAYOUT }))
                 } else {
                     (!e.agent.queue.is_empty() && !stopped).then(|| Next::Queued(std::mem::take(&mut e.agent.queue).join("\n\n")))
-                }
+                };
+                // Stay busy across the handoff so a document switch cannot slip in before the next turn starts.
+                e.agent.running = next.is_some();
+                next
             }
         };
         match next {
             Some(Next::Iterate(prompt)) => start_turn(ITERATING, wrap_parallel(prompt)),
             Some(Next::Queued(q)) => {
                 let (n, mode) = engine().agent.parallel.clone();
-                let _ = send(q, n, &mode, 1, "");
+                begin(q, n, &mode, 1, "");
             }
             None => {}
         }

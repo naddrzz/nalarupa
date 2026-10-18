@@ -78,9 +78,6 @@ fn state(e: &Engine) -> Value {
            "agentRunning": e.agent.running, "mcpPort": e.mcp_port, "animating": !e.renderer.slides.is_empty()})
 }
 
-/// The agent edits whatever document is open, so a document switch waits for it to stop.
-const SWITCH_BUSY: &str = "Stop the agent before opening another document.";
-
 /// Execute one UI command.
 pub fn dispatch(req: &Value) -> Result<Value, String> {
     let cmd = req["cmd"].as_str().unwrap_or("");
@@ -107,7 +104,7 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
         "new" => {
             let mut e = engine();
             if e.agent.running {
-                return Err(SWITCH_BUSY.into());
+                return Err(engine::SWITCH_BUSY.into());
             }
             e.load_template(req["template"].as_str().unwrap_or("blank"));
             Ok(state(&e))
@@ -115,7 +112,7 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
         "open" => {
             let mut e = engine();
             if e.agent.running {
-                return Err(SWITCH_BUSY.into());
+                return Err(engine::SWITCH_BUSY.into());
             }
             e.open(std::path::Path::new(req["path"].as_str().ok_or("path required")?))?;
             Ok(state(&e))
