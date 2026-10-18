@@ -6,18 +6,22 @@
 set -u
 R=${GITHUB_REPOSITORY:?}
 owner=${R%%/*} name=${R#*/}
-for n in $(gh pr list -R "$R" --state open --base dev --json number,isDraft,isCrossRepository,labels \
-             --jq '.[] | select((.isDraft|not) and (.isCrossRepository|not) and ([.labels[].name]|index("no-auto-merge")|not)) | .number'); do
+prs=$(gh pr list -R "$R" --state open --base dev --limit 1000 --json number,isDraft,isCrossRepository,labels \
+        --jq '.[] | select((.isDraft|not) and (.isCrossRepository|not) and ([.labels[].name]|index("no-auto-merge")|not)) | .number') \
+  || { echo "gh pr list failed"; exit 1; }
+for n in $prs; do
   info=$(gh pr view "$n" -R "$R" --json mergeable,statusCheckRollup,title --jq '
     [.mergeable,
-     ([.statusCheckRollup[]|select(.__typename=="CheckRun" and .status!="COMPLETED" and .name!="auto-merge")]|length),
+     ([.statusCheckRollup[]|select((.__typename=="CheckRun" and .status!="COMPLETED" and .name!="auto-merge") or (.__typename=="StatusContext" and (.state=="PENDING" or .state=="EXPECTED")))]|length),
      ([.statusCheckRollup[]|select(.name=="checks")|.conclusion]|last // "NONE"),
      ([.statusCheckRollup[]|select((.name // "")|startswith("cubic"))|.status]|last // "NONE"),
      ([.statusCheckRollup[]|select(.context=="CodeRabbit")|.state]|last // "NONE"),
      .title] | map(tostring) | join("|")')
   IFS="|" read -r mergeable running ci cubic rabbit title <<<"$info"
-  open=$(gh api graphql -f query="{repository(owner:\"$owner\",name:\"$name\"){pullRequest(number:$n){reviewThreads(first:100){nodes{isResolved comments(first:1){nodes{author{login}}}}}}}}" \
-           --jq '[.data.repository.pullRequest.reviewThreads.nodes[]|select((.comments.nodes[0].author.login=="cubic-dev-ai" or .comments.nodes[0].author.login=="coderabbitai") and (.isResolved|not))]|length')
+  # --paginate runs the query once per page of 100 threads; --jq prints one line per open bot thread, wc counts them.
+  # A failed query leaves $open empty, which the gate treats as "wait".
+  open=$(gh api graphql --paginate -f query="query(\$endCursor:String){repository(owner:\"$owner\",name:\"$name\"){pullRequest(number:$n){reviewThreads(first:100,after:\$endCursor){pageInfo{hasNextPage endCursor} nodes{isResolved comments(first:1){nodes{author{login}}}}}}}}" \
+           --jq '.data.repository.pullRequest.reviewThreads.nodes[]|select((.comments.nodes[0].author.login=="cubic-dev-ai" or .comments.nodes[0].author.login=="coderabbitai") and (.isResolved|not))|"open"' | wc -l; [ "${PIPESTATUS[0]}" = 0 ]) || open=
   state="mergeable=$mergeable running=$running ci=$ci cubic=$cubic coderabbit=$rabbit open_bot_threads=$open"
   if [ "$mergeable" = MERGEABLE ] && [ "$running" = 0 ] && [ "$ci" = SUCCESS ] && [ "$cubic" = COMPLETED ] && [ "$rabbit" != PENDING ] && [ "$open" = 0 ]; then
     if [ "${DRY_RUN:-}" = 1 ]; then echo "would merge #$n ($state) $title"
