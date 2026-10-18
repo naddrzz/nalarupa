@@ -399,10 +399,7 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             agent::stop();
             Ok(json!(true))
         }
-        "agent_reset" => {
-            agent::reset();
-            Ok(json!(true))
-        }
+        "agent_reset" => agent::reset().map(|_| json!(true)),
         "agent_permission" => agent::answer_permission(req["id"].as_str().ok_or("id required")?, req["answer"].as_str().unwrap_or("deny")).map(|_| json!(true)),
         "chat_list" => Ok(agent::chats()),
         "chat_load" => agent::load_chat(req["id"].as_str().ok_or("id required")?),

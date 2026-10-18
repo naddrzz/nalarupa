@@ -103,6 +103,16 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
       onSent?.()
     } else toast('Unable to start the agent. Check the backend in Agent settings and try again.', true)
   }
+  // The core refuses while an agent runs ("Stop the agent before …"): keep the chat and say why.
+  const newChat = () => {
+    try {
+      call('agent_reset')
+    } catch (e) {
+      return toast((e as Error).message, true)
+    }
+    resetChat()
+    toast('New conversation')
+  }
   const toggle = (id: number) => setOpen((s) => {
     const n = new Set(s)
     if (n.has(id)) n.delete(id)
@@ -125,7 +135,7 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
         <Icon name="sparkles" size={14} color={C.accent} />
         <T weight="600" grow>Design agent</T>
         <ChatHistory running={running} toast={toast} changed={() => setChatVersion((n) => n + 1)} />
-        <IconButton icon="plus" title="New agent" testId="agent-new" onClick={() => { tryCall('agent_reset'); resetChat(); toast('New conversation') }} />
+        <IconButton icon="plus" title="New agent" testId="agent-new" onClick={newChat} />
         <IconButton icon="settings" title="Agent settings" testId="agent-settings" active={settings} onClick={() => setSettings((s) => !s)} />
       </div>
       {settings ? <AgentSettings mcpUrl={mcpUrl} toast={toast} /> : null}

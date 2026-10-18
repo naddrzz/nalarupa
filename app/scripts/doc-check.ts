@@ -1,7 +1,7 @@
 // Documents, export, variables, settings and edit commands through the core (no window): `bun scripts/doc-check.ts`
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { call } from '../src/core'
 
 const assert = (ok: unknown, msg: string) => {
@@ -19,7 +19,12 @@ const throws = (fn: () => unknown, re: RegExp, msg: string) => {
 // with a fresh data folder so settings and documents written here never touch the real ones.
 if (!process.env.NALARUPA_CHECK_CHILD) {
   const data = mkdtempSync(join(tmpdir(), 'nalarupa-doc-'))
-  const run = Bun.spawnSync([process.execPath, import.meta.path], { env: { ...process.env, NALARUPA_DATA: data, NALARUPA_CHECK_CHILD: '1' }, stdio: ['inherit', 'inherit', 'inherit'] })
+  // A stand-in `claude` that runs long and prints nothing: a running agent without a login.
+  const bin = join(data, 'bin')
+  mkdirSync(bin)
+  writeFileSync(join(bin, 'claude'), '#!/bin/sh\nexec sleep 60\n', { mode: 0o755 })
+  const PATH = `${bin}${delimiter}${process.env.PATH ?? ''}`
+  const run = Bun.spawnSync([process.execPath, import.meta.path], { env: { ...process.env, PATH, NALARUPA_DATA: data, NALARUPA_CHECK_CHILD: '1' }, stdio: ['inherit', 'inherit', 'inherit'] })
   rmSync(data, { recursive: true, force: true })
   process.exit(run.exitCode ?? 1)
 }
@@ -116,6 +121,29 @@ assert(JSON.parse(readFileSync(join(data, 'settings.json'), 'utf8')).agent_backe
 call('settings_set', { key: 'anthropic_api_key', value: null })
 assert(!('anthropic_api_key' in call('settings_get')), 'a null value removes the setting')
 throws(() => call('settings_set', { value: 1 }), /key required/, 'settings_set without a key')
+
+// New conversation while an agent runs is refused: the run keeps its chat, and Stop then allows it.
+// (The stand-in `claude` is a shell script: skipped on Windows.)
+if (process.platform !== 'win32') {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+  const until = async (fn: () => boolean, msg: string) => {
+    for (let i = 0; i < 100 && !fn(); i++) await sleep(100)
+    assert(fn(), msg)
+  }
+  call('new', { template: 'empty' })
+  try {
+    call('agent_send', { text: 'Design a landing page' })
+    await until(() => call('state').agentRunning, 'the agent starts')
+    const chat = call('chat_list').current
+    assert(chat, 'the running agent has a chat')
+    throws(() => call('agent_reset'), /Stop the agent/, 'new conversation while an agent runs')
+    assert(call('chat_list').current === chat && call('state').agentRunning, 'the refused reset keeps the running chat')
+  } finally {
+    call('agent_stop')
+  }
+  await until(() => !call('state').agentRunning, 'the agent stops')
+  assert(call('agent_reset') === true && call('chat_list').current === null, 'new conversation once the agent has stopped')
+}
 
 console.log('doc-check ok')
 process.exit(0)
