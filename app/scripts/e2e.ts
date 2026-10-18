@@ -10,6 +10,10 @@ mkdirSync(out, { recursive: true })
 // GPUIX can't capture on Linux; there the window runs under a headless Wayland compositor, so grab it with grim.
 const shot = (name: string) => process.platform === 'linux' ? Bun.$`grim ${join(out, `${name}.png`)}`.quiet() : app!.screenshot({ path: join(out, `${name}.png`) })
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+const until = async (ok: () => Promise<boolean>, what: string, ms = 8000) => {
+  for (const end = Date.now() + ms; Date.now() < end; await sleep(100)) if (await ok()) return
+  throw new Error(`timed out waiting for ${what}`)
+}
 
 // The core takes the next free port of 47700–47719 when another Nalarupa already holds one; find this window's.
 const alive = (p: number) => fetch(`http://127.0.0.1:${p}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }) }).then(() => true, () => false)
@@ -216,6 +220,13 @@ TakeScreenshot([s])`,
     await app.getByTestId(menu).press('escape')
     await sleep(150)
   }
+  // + (New agent) repaints the panel at once: the open chat gives way to the empty state, without another re-render.
+  await app.getByTestId('agent-new').click()
+  await until(async () => !!(await app.getByText('Ask me to design anything').count()), 'the empty state after + (New agent)')
+  if (await app.getByType('markdown').count()) throw new Error('+ (New agent) left the old conversation on screen')
+  await app.getByTestId('agent-history').click()
+  await app.getByTestId(`chat-${chatId}`).click()
+  await until(async () => (await app.getByType('markdown').count()) === 1, 'the saved chat to reopen')
   await app.getByTestId('agent-history').click()
   await app.getByTestId(`chat-${chatId}`).hover()
   // Removal cannot be undone, so the first press only arms it.
