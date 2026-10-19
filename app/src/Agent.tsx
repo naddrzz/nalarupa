@@ -755,6 +755,8 @@ function PermissionCard({ m }: { m: Extract<ChatItem, { kind: 'permission' }> })
 function AgentSettings({ mcpUrl, toast }: { mcpUrl: string; toast: Toast }) {
   const s = useMemo(() => tryCall<Record<string, string>>('settings_get') ?? {}, [])
   const [backend, setBackend] = useState(s.agent_backend ?? (s.anthropic_api_key ? 'api' : 'claude-code'))
+  const [hasKey, setHasKey] = useState(!!s.anthropic_api_key)
+  const [keyBox, setKeyBox] = useState(0)
   const [perms, setPerms] = useState<'ask' | 'auto'>((s as Record<string, unknown>).agent_auto_permissions === true ? 'auto' : 'ask')
   const set = (key: string, value: unknown) => {
     tryCall('settings_set', { key, value })
@@ -776,7 +778,17 @@ function AgentSettings({ mcpUrl, toast }: { mcpUrl: string; toast: Toast }) {
       />
       {backend === 'api' ? (
         <>
-          <Field name="Anthropic API key" value={s.anthropic_api_key ?? ''} placeholder="sk-ant-…" onCommit={(v) => { set('anthropic_api_key', v || null); toast('API key saved locally') }} testId="api-key" />
+          {/* settings_get only returns a mask for a saved key: never edit it, an empty box means keep the key. */}
+          <Row gap={6}>
+            <Field key={keyBox} name="Anthropic API key" value="" placeholder={hasKey ? 'Key saved. Paste a new key to replace it' : 'sk-ant-…'} onCommit={(v) => {
+              if (!v) return
+              set('anthropic_api_key', v)
+              setHasKey(true)
+              setKeyBox((n) => n + 1) // remount: the new key must not stay readable in the box
+              toast('API key saved locally')
+            }} testId="api-key" />
+            {hasKey ? <Button testId="api-key-remove" onClick={() => { set('anthropic_api_key', null); setHasKey(false); toast('API key removed') }}>Remove</Button> : null}
+          </Row>
           <T size={11} color={C.ghost}>Or set ANTHROPIC_API_KEY. Pick the model below the chat box.</T>
           <Row>
             <T size={11} color={C.muted}>Effort</T>

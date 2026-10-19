@@ -248,6 +248,39 @@ TakeScreenshot([s])`,
   if (await app.getByTestId('toast').count()) throw new Error('dismissing the error toast left it on screen')
   if (await app.getByTestId('chat-history').count()) await app.getByTestId('chat-history').press('escape')
 
+  // The saved API key shows as a mask: the box stays empty (never the bullets as editable text), editing it
+  // cannot overwrite the key, and only a non-empty new value replaces it.
+  const settingsFile = join(data, 'settings.json')
+  const savedKey = () => (JSON.parse(readFileSync(settingsFile, 'utf8')) as Record<string, unknown>).anthropic_api_key
+  const openKeyBox = async () => {
+    await app!.getByTestId('agent-settings').click()
+    await app!.getByText('Claude API').click()
+    await app!.getByTestId('api-key').waitFor()
+  }
+  const settled = async (ok: () => unknown) => {
+    for (let i = 0; i < 30 && !ok(); i++) await sleep(100)
+    return ok()
+  }
+  await openKeyBox()
+  await app.getByTestId('api-key').fill('sk-ant-first')
+  await app.getByTestId('api-key').press('enter')
+  if (!(await settled(() => savedKey() === 'sk-ant-first'))) throw new Error(`typing a key did not save it: ${savedKey()}`)
+  await app.getByTestId('agent-settings').click()
+  await openKeyBox()
+  await app.getByTestId('api-key').click()
+  await app.call('keyDown', { key: 'backspace' })
+  await app.call('keyDown', { key: 'enter' })
+  await sleep(500)
+  if (savedKey() !== 'sk-ant-first') throw new Error(`backspace and enter in the saved key box changed the key: ${savedKey()}`)
+  await app.getByTestId('api-key').fill('sk-ant-second')
+  await app.getByTestId('api-key').press('enter')
+  if (!(await settled(() => savedKey() === 'sk-ant-second'))) throw new Error(`a new key did not replace the saved one: ${savedKey()}`)
+  await app.getByTestId('api-key-remove').click()
+  if (!(await settled(() => savedKey() === undefined))) throw new Error(`Remove left the key saved: ${savedKey()}`)
+  await app.getByText('Claude Code CLI').click()
+  await app.getByTestId('agent-settings').click()
+  await sleep(300)
+
   await app.getByTestId('present').click()
   await sleep(1500)
   await shot('06-present')
