@@ -1,7 +1,8 @@
 name: auto-merge
 # Merges PRs into dev once they pass the gate in .github/scripts/auto-merge.sh (green ci, cubic and CodeRabbit done,
 # every bot thread resolved, mergeable). Runs every 15 minutes and whenever ci finishes; label a PR no-auto-merge
-# to hold it. Merges as the repo owner (GH_PAT), so the merge triggers ci on dev like a manual one.
+# to hold it. Merges as the repo owner (GH_PAT), so the merge triggers ci on dev like a manual one. Also reruns
+# Claude jobs that an API error such as the usage limit ended (.github/scripts/retry-claude.sh).
 on:
   schedule: [{ cron: "*/15 * * * *" }]
   workflow_run:
@@ -22,4 +23,8 @@ jobs:
       - uses: actions/checkout@v4
         with: { sparse-checkout: .github/scripts, persist-credentials: false }
       - run: bash .github/scripts/auto-merge.sh
+        env: { GH_TOKEN: "${{ secrets.GH_PAT }}", GITHUB_REPOSITORY: "${{ github.repository }}" }
+      # Same runner and cadence: rerun Claude jobs that the usage limit (or another API error) ended.
+      - run: bash .github/scripts/retry-claude.sh
+        if: ${{ !cancelled() }}
         env: { GH_TOKEN: "${{ secrets.GH_PAT }}", GITHUB_REPOSITORY: "${{ github.repository }}" }
