@@ -735,6 +735,8 @@ fn shadow(ctx: &mut RenderContext, s: &Shadow, t: Affine) {
         return;
     }
     ctx.set_transform(t);
+    // A gradient fill earlier leaves its paint transform set; it would skew the blurred rect.
+    ctx.reset_paint_transform();
     let outline = RoundedRect::from_rect(s.rect, s.radius).to_path(0.01);
     if s.inner {
         for &(off, sigma, color) in &s.list {
@@ -1264,6 +1266,28 @@ mod tests {
                 let pm = tiny_skia::Pixmap::from_vec(px.to_vec(), tiny_skia::IntSize::from_wh(pw, ph).unwrap()).unwrap();
                 pm.save_png(format!("{dir}/scene-{name}.png")).unwrap();
             }
+        }
+    }
+
+    /// A gradient fill or stroke must not leak its paint transform into later shadows.
+    #[test]
+    fn shadows_after_gradients_match_resvg() {
+        let lin = r##"{"type":"gradient","gradientType":"linear","rotation":0,"colors":[{"color":"#000000","position":0},{"color":"#ffffff","position":1}]}"##;
+        let outer = r##"{"type":"shadow","shadowType":"outer","offset":{"x":0,"y":8},"blur":4,"color":"#ff0000"}"##;
+        let inner = r##"{"type":"shadow","shadowType":"inner","offset":{"x":6,"y":4},"blur":4,"color":"#00000080"}"##;
+        let json = format!(
+            r##"{{"version":"2.19","children":[
+            {{"type":"rectangle","id":"a","x":10,"y":20,"width":60,"height":40,"fill":{lin}}},
+            {{"type":"rectangle","id":"s","x":10,"y":20,"width":60,"height":40,"stroke":{lin},"strokeWidth":2,"strokeAlignment":"inner"}},
+            {{"type":"rectangle","id":"b","x":100,"y":20,"width":60,"height":40,"fill":"#00aa00","effect":{outer}}},
+            {{"type":"rectangle","id":"c","x":20,"y":100,"width":60,"height":60,"fill":{lin},"effect":{inner}}}]}}"##
+        );
+        let doc = Doc::from_json(&json).unwrap();
+        let (w, h) = (200, 180);
+        let [v, s] = both(&doc, w, h, (0.0, 0.0), 1.0);
+        for (id, area) in [("drop shadow", (100, 20, 60, 60)), ("inner shadow", (20, 100, 60, 60))] {
+            let d = mean_diff(&v, &s, w, area);
+            assert!(d <= 1.0, "{id} after a gradient: mean diff {d:.3}");
         }
     }
 
