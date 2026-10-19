@@ -4,7 +4,7 @@
 // Positions are kept in document units and projected with the camera every frame.
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { tryCall, type Box } from './core'
-import { FADE_DELAY, FADE_DUR, FADE_IN, GONE, PILL_MS, PRESENCE, needsFrame, profileOf, store, type CursorState } from './agents'
+import { FADE_DELAY, FADE_DUR, FADE_IN, GONE, PILL_MS, PRESENCE, cursorFaded, needsFrame, profileOf, store, type CursorState } from './agents'
 import { ICONS } from './icons'
 import { painted, turned, type M, type Rect } from './geometry'
 import { SvgOverlay } from './ui'
@@ -59,7 +59,7 @@ function pickTarget(b: Box) {
 function moveToBounds(agent: string, b: Box, now: number): 'spawned' | 'kept' {
   const t = pickTarget(b)
   let c = store.cursors.get(agent)
-  const faded = !c || now - c.lastActivity > GONE
+  const faded = cursorFaded(agent, c, now)
   if (!c) {
     c = { profile: profileOf(agent), x: t.x, y: t.y, tx: t.x, ty: t.y, appearAt: now, lastActivity: now, wobble: 0, phase: Math.random() * Math.PI * 2 }
     store.cursors.set(agent, c)
