@@ -69,7 +69,9 @@ export const REDUCED_MOTION = detectReducedMotion()
  *  and the pulse is sampled ~25 times per period instead of strobing. */
 export const INDICATOR_TICK_MS = 50
 export const ellipsisAt = (now: number) => '.'.repeat(1 + (Math.floor(now / 400) % 3))
-export const pulseAt = (now: number) => 0.5 + 0.5 * Math.sin(now / 200)
+/** The dots `ellipsisAt` leaves out, painted transparent so a label after it keeps its x. */
+export const ellipsisPadAt = (now: number) => '.'.repeat(3 - ellipsisAt(now).length)
+export const pulseAt =(now: number) => 0.5 + 0.5 * Math.sin(now / 200)
 
 /** The primary monitor's work area (screen minus taskbar) in logical px, or null where unknown. */
 function workArea(): { w: number; h: number } | null {

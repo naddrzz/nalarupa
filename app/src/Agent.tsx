@@ -6,7 +6,7 @@ import { call, tryCall } from './core'
 import { barAgents, imageSrc, profileOf, resetChat, restoreChat, store, type ChatItem } from './agents'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import * as SelectPrimitive from '@gpuix/react/select'
-import { C, FONT, INDICATOR_TICK_MS, MONO, REDUCED_MOTION, ellipsisAt, pulseAt } from './theme'
+import { C, FONT, INDICATOR_TICK_MS, MONO, REDUCED_MOTION, ellipsisAt, ellipsisPadAt, pulseAt } from './theme'
 import { Button, Field, FocusRing, Icon, IconButton, Pressable, Row, Segmented, setKeyboardFocus, T, Toggle, useKeyboardFocusId, useRing, useTrigger, type Toast } from './ui'
 
 // Suggestion set; the empty chat shows 6 random picks of these 12.
@@ -59,7 +59,8 @@ function useTick(ms: number, active: boolean) {
 }
 
 // Under reduced motion the ellipsis stays still and replies appear whole (no typewriter).
-const dots = () => (REDUCED_MOTION ? '…' : ellipsisAt(performance.now()))
+const dots = (now = performance.now()) => (REDUCED_MOTION ? '…' : ellipsisAt(now))
+const dotsPad = (now: number) => (REDUCED_MOTION ? '' : ellipsisPadAt(now))
 
 // Typewriter: ~5 words per 16 ms frame, instant once a later message exists.
 const revealed = new Map<number, number>()
@@ -660,12 +661,18 @@ function Item({ m, isLast, expanded, toggle }: { m: ChatItem; isLast: boolean; e
     case 'tool': {
       if (m.name === 'TodoWrite') return <div style={{ height: 0 }} />
       const label = toolLabel(m.name, m.running)
+      const now = performance.now() // one sample, so the dots and their pad always add up to three
       const src = m.name === 'execute' && typeof m.input?.input === 'string' ? (m.input.input as string) : null
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 3, paddingBottom: 3 }}>
           <Pressable label={m.running ? `${label}, running` : `${label}, ${m.error ? 'failed' : 'done'}`} expanded={expanded} onClick={toggle} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 24, borderRadius: 4 }}>
-            <div style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: m.agent.color, opacity: m.running && !REDUCED_MOTION ? pulseAt(performance.now()) : 1 }} />
-            <T size={12} color={m.running ? C.text : C.muted}>{m.running ? `${label}${dots()}` : label}</T>
+            <div style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: m.agent.color, opacity: m.running && !REDUCED_MOTION ? pulseAt(now) : 1 }} />
+            {m.running ? (
+              <div style={{ display: 'flex', flexDirection: 'row' }}>
+                <T size={12} color={C.text}>{`${label}${dots(now)}`}</T>
+                <T size={12} color="#00000000">{dotsPad(now)}</T>
+              </div>
+            ) : <T size={12} color={C.muted}>{label}</T>}
             {m.running && m.lines ? <T size={11} color={C.ghost}>{`${m.lines} lines`}</T> : null}
             {!m.running ? <T size={12} color={m.error ? C.ghost : C.ok}>{m.error ? '✕' : '✓'}</T> : null}
             <div style={{ flexGrow: 1 }} />
