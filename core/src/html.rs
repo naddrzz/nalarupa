@@ -191,6 +191,8 @@ fn size_css(v: Option<&Value>, prop: &str, parent_dir: Option<&str>, horiz_axis:
     let main_axis = match parent_dir {
         Some("horizontal") => horiz_axis,
         Some("vertical") => !horiz_axis,
+        // Like the layout engine, any other layout value on a frame (e.g. an imported one) is a row.
+        Some(dir) if dir != "none" => horiz_axis,
         _ => false,
     };
     match v {
@@ -584,6 +586,8 @@ mod tests {
         let v = html(&mut e, "vertical");
         assert_eq!(v.matches("height:20px;flex-shrink:0;").count(), 3, "{v}");
         assert!(!v.contains("width:60px;flex-shrink:0;"), "{v}");
+        let u = html(&mut e, "diagonal");
+        assert_eq!(u.matches("width:60px;flex-shrink:0;").count(), 2, "{u}");
         // Groups take their size from their children and must not shrink either.
         let id = e.insert_root(json!({"type": "frame", "width": 100, "height": 60, "layout": "horizontal", "children": [{"type": "group", "children": [{"type": "rectangle", "width": 80, "height": 20, "fill": "#ff0000"}]}]})).unwrap();
         let g = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
