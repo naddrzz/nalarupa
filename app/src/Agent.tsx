@@ -747,9 +747,9 @@ function PermissionCard({ m }: { m: Extract<ChatItem, { kind: 'permission' }> })
   const target = m.input.file_path ?? m.input.command ?? m.input.url ?? m.input.path ?? m.input.pattern
   const desc = typeof m.input.description === 'string' ? m.input.description : null
   // Allow runs the whole input, so the card shows all of it (Edit's new text, Write's content, ...), never a cut.
-  const fields = Object.entries(m.input).filter(([k, v]) => k !== 'description' && v !== undefined && v !== null && v !== '')
+  const fields = Object.entries(m.input).filter(([k, v]) => k !== 'description' && v !== undefined && v !== null)
   const shown = fields.map(([k, v]) => { const s = typeof v === 'string' ? v : JSON.stringify(v); return fields.length > 1 ? `${k}: ${s}` : s }).join('\n')
-  const answer =(a: 'auto' | 'allow' | 'deny') => {
+  const answer = (a: 'auto' | 'allow' | 'deny') => {
     if (tryCall('agent_permission', { id: m.reqId, answer: a }) !== null) setAnswered(a)
   }
   return (
