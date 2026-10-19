@@ -1503,10 +1503,10 @@ mod tests {
             for (let i = 0; i < 300; i++) Insert(root, {type:"rectangle", name:"r"+i, x:i, y:0, width:10, height:10});
         "##}));
         assert!(!out.error, "{}", out.text);
-        let max = crate::render::MAX_SLIDES;
-        assert_eq!(e.renderer.slides.len(), max);
+        assert_eq!(crate::render::MAX_SLIDES, 32);
+        assert_eq!(e.renderer.slides.len(), 32);
         e.sync();
-        assert_eq!(e.renderer.slides.len(), max);
+        assert_eq!(e.renderer.slides.len(), 32);
 
         let mut e = engine();
         let out = execute(&mut e, &json!({"input": r##"

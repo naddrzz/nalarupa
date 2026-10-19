@@ -198,6 +198,11 @@ impl Engine {
         if self.reduce_motion {
             return;
         }
+        // Past the cap nothing more slides, so skip the parent lookup (a linear search per insert).
+        if self.renderer.slides.len() >= crate::render::MAX_SLIDES {
+            self.slid.insert(id.to_string());
+            return;
+        }
         let room = self.doc.parent_of(id).is_some_and(|(p, _)| self.renderer.can_slide_into(&self.doc, &p));
         if self.slid.insert(id.to_string()) && room {
             self.renderer.slides.push(crate::render::Slide::new(id));
