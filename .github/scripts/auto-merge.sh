@@ -16,7 +16,8 @@ me=$(gh api user --jq .login) || me=
 # lookup waits instead of asking again.
 ask() {
   local kind=$1 text=$2 head comments marks
-  if ! head=$(gh pr view "$n" -R "$R" --json headRefOid --jq .headRefOid) || [ -z "$head" ] || [ -z "$me" ]      || ! comments=$(gh api "repos/$R/issues/$n/comments" --paginate --jq ".[]|select(.user.login==\"$me\")|.body"); then
+  if ! head=$(gh pr view "$n" -R "$R" --json headRefOid --jq .headRefOid) || [ -z "$head" ] || [ -z "$me" ] \
+     || ! comments=$(gh api "repos/$R/issues/$n/comments" --paginate --jq ".[]|select(.user.login==\"$me\")|.body"); then
     echo "wait #$n ($kind, cannot read head or comment history) $title"; return
   fi
   marks=$(grep -o "<!-- auto-merge:$kind [0-9a-f]* -->" <<<"$comments" || :)
@@ -52,7 +53,7 @@ for n in $prs; do
   elif [ "$running" = 0 ] && [ "$ci" != FAILURE ] && [ "$cubic" = COMPLETED ] && [ "$rabbit" != PENDING ] && [ -n "$open" ] && [ "$open" -gt 0 ]; then
     # Review threads still open with nothing queued to handle them: review-fix ended without resolving them (or never
     # ran), and no new review will start it again. A failed ci run is left to claude-ci-fix: both would push to the branch.
-    ask threads "$open review thread(s) from cubic or CodeRabbit are still unresolved on this PR and nothing is queued to handle them. For each one: fix a real problem at the root cause, or reply on the thread explaining why the finding is wrong; then resolve the thread (gh api graphql -f query='mutation{resolveReviewThread(input:{threadId:\"<thread id>\"}){thread{isResolved}}}'). Run the checks from the claude workflow before you push to this branch. Do not open a new PR."
+    ask threads "$open review thread(s) from cubic or CodeRabbit are still unresolved on this PR and nothing is queued to handle them. For each one: fix a real problem at the root cause, or reply on the thread explaining why the finding is wrong. Run the checks from the claude workflow, then push to this branch. Only after the push, resolve each thread (gh api graphql -f query='mutation{resolveReviewThread(input:{threadId:\"<thread id>\"}){thread{isResolved}}}'): with no open thread left the PR can merge, so resolving first could merge the old head. Do not open a new PR."
   else
     echo "wait #$n ($state) $title"
   fi
