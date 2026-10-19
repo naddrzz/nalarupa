@@ -654,9 +654,14 @@ fn bind<R>(e: &mut Engine, preview: bool, budget: Duration, f: impl FnOnce() -> 
     EXEC.with(|c| *c.borrow_mut() = Some(Exec::new(Some(e as *mut Engine), preview, budget, None)));
     // A preview step can run while another thread's `execute` has the flag up.
     let was = std::mem::replace(&mut e.executing, true);
-    let r = f();
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
     e.executing = was;
-    (r, EXEC.with(|c| c.borrow_mut().take()).expect("execute state"))
+    let ex = EXEC.with(|c| c.borrow_mut().take()).expect("execute state");
+    match r {
+        Ok(r) => (r, ex),
+        // The state is restored; the caller decides what a panic means.
+        Err(p) => std::panic::resume_unwind(p),
+    }
 }
 
 /// A panic in a host function becomes an ordinary error, so the call rolls back, `executing`
@@ -714,14 +719,23 @@ pub fn stream_step(e: &mut Engine, key: &str, agent: &str, source: &str, seed: u
     let chunk = &source[live.ran.len()..];
     if !chunk.trim().is_empty() {
         resume_ids(seed, live.draws);
-        let (r, ex) = bind(e, true, PREVIEW_TIMEOUT, || live.js.with(|ctx| eval::<()>(&ctx, chunk, Some("input"))).and_then(|_| settle(&live.js)));
+        // A panic in a host function breaks this stream (the caller rebuilds the preview) instead of
+        // unwinding past the caller's document swap.
+        let stepped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            bind(e, true, PREVIEW_TIMEOUT, || live.js.with(|ctx| eval::<()>(&ctx, chunk, Some("input"))).and_then(|_| settle(&live.js)))
+        }));
         match ids_drawn(seed, live.draws) {
             Some(n) => live.draws = n,
             None => live.broken = true,
         }
-        live.touched.extend(ex.touched);
-        live.stalled = ex.limit;
-        live.broken |= r.is_err();
+        match stepped {
+            Ok((r, ex)) => {
+                live.touched.extend(ex.touched);
+                live.stalled = ex.limit;
+                live.broken |= r.is_err();
+            }
+            Err(_) => live.broken = true,
+        }
         live.ran = source.to_string();
     }
     let touched = live.touched.clone();

@@ -234,7 +234,7 @@ impl Doc {
                         let slot = find_mut_in_node(&mut node, &target).unwrap();
                         if over.get("type").is_some() {
                             let mut repl = over.clone();
-                            validate_node(&repl)?;
+                            validate_node(&repl).map_err(|e| format!("descendant '{key}': {e}"))?;
                             self.assign_ids(&mut repl, &mut Vec::new());
                             *slot = repl;
                         } else {
