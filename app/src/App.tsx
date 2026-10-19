@@ -190,8 +190,8 @@ export function App() {
         const l = info?.local
         if (!l) continue
         const slash = id.includes('/')
-        // Descendants of component instances are overridden: write the flip explicitly, `null` would fall back to the component's.
-        const props: Record<string, unknown> = { [k]: l[k] ? (slash ? false : null) : true }
+        // Instances and their descendants inherit the component's flip: write it explicitly, `null` would fall back to it.
+        const props: Record<string, unknown> = { [k]: l[k] ? (slash || info.node?.type === 'ref' ? false : null) : true }
         if (info.box && !slash && (isMovable(info) || info.parent === 'document')) {
           // The flip mirrors about the origin: move the origin so the center stays put.
           const [rot, fx, fy] = [Number(l.rotation), !!l.flipX, !!l.flipY]
