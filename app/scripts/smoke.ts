@@ -158,6 +158,24 @@ resetChat()
   store.running.clear()
   store.cursors.clear()
 }
+// A reply keeps the model that wrote it: a later turn on another model does not re-label it, and a chat
+// saved before replies recorded their model shows none.
+{
+  const profile = { id: 'm', name: 'M', color: '#0f0' }
+  const turn = (model: string | null, text: string, extra: object = { backend: 'claude-code', model }) => {
+    applyEvents([{ type: 'agent', agent: profile, kind: 'start', ...extra }, { type: 'agent', agent: profile, kind: 'text_delta', text }, { type: 'agent', agent: profile, kind: 'done' }], 0)
+  }
+  resetChat()
+  turn('claude-opus-5-5', 'one')
+  turn('claude-sonnet-5-5', 'two')
+  turn(null, 'three')
+  turn(null, 'four', {})
+  const replies = store.items.filter((i) => i.kind === 'assistant')
+  assert(JSON.stringify(replies.map((i) => i.kind === 'assistant' && i.by)) === JSON.stringify([
+    { backend: 'claude-code', model: 'claude-opus-5-5' }, { backend: 'claude-code', model: 'claude-sonnet-5-5' }, { backend: 'claude-code', model: null }, undefined,
+  ]), `each reply records its own model: ${JSON.stringify(replies)}`)
+  resetChat()
+}
 const mcp = await fetch(`http://127.0.0.1:${init.mcpPort}/mcp`, {
   method: 'POST',
   headers: { 'content-type': 'application/json' },

@@ -302,8 +302,15 @@ fn start_thread(p: Profile, prompt: String, child: Option<String>) {
     }
     std::thread::spawn(move || {
         let started = Instant::now();
-        emit(&p, "start", json!({"child": child.is_some()}));
-        let result = if backend() == "claude-code" { run_claude_code(&p, &prompt, child.is_some()) } else { run_api(&p, &prompt, child.is_some()) };
+        // The chat keeps which model wrote each reply: the settings may change before it is read again.
+        let (backend, model) = {
+            let e = engine();
+            let backend = e.backend();
+            let model = e.setting("agent_model").or_else(|| (backend != "claude-code").then(|| DEFAULT_MODEL.into()));
+            (backend, model)
+        };
+        emit(&p, "start", json!({"child": child.is_some(), "backend": backend, "model": model}));
+        let result = if backend == "claude-code" { run_claude_code(&p, &prompt, child.is_some()) } else { run_api(&p, &prompt, child.is_some()) };
         let stopped = engine().agent.cancel.load(Ordering::SeqCst);
         let usage = match result {
             Ok(u) => u,
