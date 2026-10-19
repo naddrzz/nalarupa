@@ -717,10 +717,8 @@ pub fn spawn_children(parent: &str, config: &Value) -> crate::engine::ToolOut {
             }
             let child = e.agent.new_profile(Some(parent.to_string()));
             let nodes: Vec<Value> = ids.iter().filter_map(|id| e.doc.find(id).cloned()).collect();
-            let mut context = serde_json::to_string(&nodes).unwrap_or_default();
-            context.truncate(12000);
-            let mut vars = e.doc.variables().to_string();
-            vars.truncate(4000);
+            let context = truncate(&serde_json::to_string(&nodes).unwrap_or_default(), 12000);
+            let vars = truncate(&e.doc.variables().to_string(), 4000);
             (child, format!("{context}\n\nDocument variables: {vars}"), e.agent.parallel.0)
         };
         let task = entry["prompt"].as_str().unwrap_or("").trim().to_string();
@@ -1156,6 +1154,15 @@ fn tool_result_parts(content: &Value) -> (String, Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn truncate_cuts_at_a_char_boundary() {
+        assert_eq!(truncate("abc", 5), "abc");
+        assert_eq!(truncate("abcdef", 3), "abc…");
+        // Byte 4 is inside the second 3-byte char; a plain `String::truncate(4)` would panic.
+        assert_eq!(truncate("日本語", 4), "日…");
+        assert_eq!(truncate("日本語", 9), "日本語");
+    }
 
     #[test]
     fn chat_session_roundtrips() {
