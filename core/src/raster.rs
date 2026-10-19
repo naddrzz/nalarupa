@@ -1719,7 +1719,11 @@ mod tests {
         let ink = |px: &[u8]| px.chunks(4).filter(|p| p[..3].iter().zip(BG).any(|(a, b)| a.abs_diff(b) > 40)).count();
         let [v, s] = both(&doc, w, h, (1000.0, 1480.0), 1.0);
         let (vello, resvg) = (ink(&v), ink(&s));
-        assert!(count(&convert(&doc), |o| matches!(o, Op::Image { .. })) > 0, "the emoji are colour images, not monochrome glyphs");
+        // Noto Color Emoji (Linux CI) draws emoji as bitmap images, the case this test is about; Windows' Segoe UI Emoji
+        // draws them as vector glyphs, which were never culled.
+        if cfg!(target_os = "linux") {
+            assert!(count(&convert(&doc), |o| matches!(o, Op::Image { .. })) > 0, "the emoji are colour images, not monochrome glyphs");
+        }
         assert!(resvg > 500, "the reference draws the emoji: {resvg}");
         assert!(vello * 10 >= resvg * 9, "vello {vello} vs resvg {resvg}");
     }
