@@ -174,8 +174,10 @@ jobs:
             At most 6 new issues per area per night, most severe first. Nothing for style opinions, Windows-only behavior,
             or things you could not reproduce. Do not commit, push or open PRs.
             End with a summary: what you covered (each command you ran and its result), what you could not, and the
-            issues you filed or updated. Write it to app/.qa/summary.md and append it to the run page:
-            `cat app/.qa/summary.md >> "$GITHUB_STEP_SUMMARY"`.
+            issues you filed or updated. Write it to app/.qa/summary.md (the workflow puts it on the run page).
+      # The summary goes on the run page here, so a session that stops early cannot skip it.
+      - if: always() && steps.pick.outputs.run == 'true'
+        run: '[ -f app/.qa/summary.md ] && cat app/.qa/summary.md >> "$GITHUB_STEP_SUMMARY" || echo "No summary written for ${{ matrix.area }}." >> "$GITHUB_STEP_SUMMARY"'
       # The scripts and screenshots behind the filed issues.
       - if: always() && steps.pick.outputs.run == 'true'
         uses: actions/upload-artifact@v4
@@ -226,5 +228,7 @@ jobs:
               dev (`gh pr create --base dev`) titled "Add checks for <features>", with the summary as the body. Don't reference
               any issue, and don't add a "Generated with Claude Code" line.
             - Nothing new worth adding: open no PR, and say so.
-            - Finally write a summary (features covered, checks kept or dropped and why, PR and issues) and append it to
-              the run page: `cat >> "$GITHUB_STEP_SUMMARY"`.
+            - Finally write a summary (features covered, checks kept or dropped and why, PR and issues) to
+              app/.qa/summary.md (mkdir -p app/.qa first; it is gitignored and the workflow puts it on the run page).
+      - if: always()
+        run: '[ -f app/.qa/summary.md ] && cat app/.qa/summary.md >> "$GITHUB_STEP_SUMMARY" || echo "No summary written." >> "$GITHUB_STEP_SUMMARY"'
