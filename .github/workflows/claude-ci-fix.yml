@@ -37,6 +37,8 @@ jobs:
         env: { GH_TOKEN: "${{ secrets.GH_PAT }}" }
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Shows what Claude did (and why it stopped) on the run page.
+          display_report: true
           github_token: ${{ secrets.GH_PAT }}
           bot_id: "129574549"
           bot_name: naddrzz
