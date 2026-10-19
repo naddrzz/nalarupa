@@ -310,7 +310,7 @@ impl Build {
             self.failed = true;
             return;
         }
-        if let Some(b) = n.abs_layer_bounding_box() {
+        if let Some(b) = painted_box(n) {
             let op = Op::Fallback { at: self.at.clone().into(), parent, blend };
             self.push(rect(b.to_rect()), Affine::IDENTITY, op);
         }
@@ -786,11 +786,22 @@ struct Frame {
     y0: i32,
 }
 
+/// Everything `n` paints: usvg's layer box of a path leaves out its stroke, which a resvg
+/// fallback (a pattern stroke, e.g. an angular gradient) would then lose outside the fill box.
+fn painted_box(n: &usvg::Node) -> Option<usvg::NonZeroRect> {
+    match n {
+        usvg::Node::Path(p) => p.abs_stroke_bounding_box().to_non_zero_rect(),
+        _ => n.abs_layer_bounding_box(),
+    }
+}
+
 /// Rasterize a subtree with resvg over its device box ∩ `view` (the band, grown inside filter
 /// layers) and draw it at that integer offset.
 fn fallback(ctx: &mut RenderContext, tree: &usvg::Tree, at: &[u32], parent: tiny_skia::Transform, blend: BlendMode, f: &Frame, view: Rect) {
     let Some(node) = node_at(tree.root(), at) else { return };
-    let Some(b) = node.abs_layer_bounding_box() else { return };
+    // resvg's render_node origin is the layer box; the pixmap covers everything painted.
+    let Some(origin) = node.abs_layer_bounding_box() else { return };
+    let Some(b) = painted_box(node) else { return };
     let z = f.zoom;
     let x0 = (b.left() as f64).max(view.0) * z;
     let y0 = (b.top() as f64).max(view.1) * z;
@@ -807,7 +818,7 @@ fn fallback(ctx: &mut RenderContext, tree: &usvg::Tree, at: &[u32], parent: tiny
     }
     let Some(mut pm) = tiny_skia::Pixmap::new(w, h) else { return };
     let tf = tiny_skia::Transform::from_row(z as f32, 0.0, 0.0, z as f32, -(f.x0 as i64 + x0) as f32, -(f.y0 as i64 + y0) as f32).pre_concat(parent);
-    resvg::render_node(node, tf.pre_translate(b.x(), b.y()), &mut pm.as_mut());
+    resvg::render_node(node, tf.pre_translate(origin.x(), origin.y()), &mut pm.as_mut());
     let pix = Pixmap::from_parts(pm.take(), w as u16, h as u16, PixelMetadata::default());
     ctx.set_transform(Affine::translate((x0 as f64, y0 as f64)));
     ctx.set_blend_mode(blend);
@@ -1459,6 +1470,20 @@ mod tests {
 
     /// The glass (60, 60, 280, 180) without its rounded corners.
     const GLASS: (u32, u32, u32, u32) = (66, 66, 268, 168);
+
+    /// An angular-gradient stroke is a pattern stroke drawn through the resvg fallback, which must
+    /// cover the whole stroke band: the outer half lies outside the node's fill box.
+    #[test]
+    fn angular_stroke_is_not_clipped_to_the_fill_box() {
+        for kind in ["ellipse", "rectangle"] {
+            let json = format!(r##"{{"version":"2.19","children":[
+                {{"type":"frame","id":"f","x":0,"y":0,"width":140,"height":140,"fill":"#ffffff","layout":"none","children":[
+                  {{"type":"{kind}","id":"n","x":20,"y":20,"width":100,"height":100,"stroke":{{"type":"gradient","gradientType":"angular","colors":[{{"color":"#00ff00","position":0}},{{"color":"#00ff00","position":1}}]}},"strokeWidth":12,"strokeAlignment":"outer"}}]}}]}}"##);
+            let px = vello(&Doc::from_json(&json).unwrap(), 140, 140);
+            let i = (70 * 140 + 16) * 4; // 4 px outside the left edge, mid height
+            assert_eq!(px[i..i + 3], [0, 255, 0], "{kind}: the outer stroke is missing");
+        }
+    }
 
     /// A background blur blurs whatever is painted beneath it, also other top-level frames
     /// (resvg's approximation only sees its own frame, which here holds everything beneath).
