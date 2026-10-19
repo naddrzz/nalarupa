@@ -234,6 +234,7 @@ impl Doc {
                         let slot = find_mut_in_node(&mut node, &target).unwrap();
                         if over.get("type").is_some() {
                             let mut repl = over.clone();
+                            validate_node(&repl)?;
                             self.assign_ids(&mut repl, &mut Vec::new());
                             *slot = repl;
                         } else {
@@ -466,7 +467,11 @@ fn override_levels(inst_depth: usize) -> usize {
     2 * inst_depth + 2
 }
 
+/// Check a node and, recursively, every child: each must be an object with a valid `type`.
 fn validate_node(node: &Value) -> Result<(), String> {
+    if !node.is_object() {
+        return Err(format!("node must be an object, got {}", node.to_string().chars().take(40).collect::<String>()));
+    }
     let ty = node["type"].as_str().ok_or("node needs a string `type`")?;
     if !NODE_TYPES.contains(&ty) {
         return Err(format!("unknown node type '{ty}' (valid: {})", NODE_TYPES.join(", ")));
@@ -476,6 +481,15 @@ fn validate_node(node: &Value) -> Result<(), String> {
     }
     if node.get("children").is_some_and(|c| !c.is_null()) && !matches!(ty, "frame" | "group") {
         return Err(format!("only frame and group nodes can have children ({ty} cannot)"));
+    }
+    match node.get("children") {
+        None | Some(Value::Null) => {}
+        Some(Value::Array(kids)) => {
+            for (i, k) in kids.iter().enumerate() {
+                validate_node(k).map_err(|e| format!("children[{i}] of '{ty}': {e}"))?;
+            }
+        }
+        Some(_) => return Err(format!("`children` of '{ty}' must be an array")),
     }
     Ok(())
 }
@@ -562,6 +576,23 @@ mod tests {
         assert!(d.find(&c).is_none());
         d.set_variables(&json!({"bg":{"type":"color","value":[{"value":"#fff","theme":{"mode":"light"}},{"value":"#000","theme":{"mode":"dark"}}]}}), false).unwrap();
         assert_eq!(d.root["themes"]["mode"], json!(["light","dark"]));
+    }
+
+    #[test]
+    fn children_are_validated_like_the_top_level_node() {
+        let mut d = Doc::new();
+        let f = d.insert(ROOT, json!({"type":"frame"}), None).unwrap();
+        for bad in [json!("x"), json!(5), json!(null), json!({"type":"nope"}), json!({"name":"x"}), json!({"type":"ref"}), json!({"type":"text","children":[]})] {
+            let node = json!({"type":"frame","children":[bad.clone()]});
+            let err = d.insert(ROOT, node.clone(), None).unwrap_err();
+            assert!(err.contains("children[0]"), "{bad}: {err}");
+            assert!(d.replace(&f, node).is_err(), "{bad}");
+        }
+        let deep = json!({"type":"frame","children":[{"type":"group","children":[{"type":"text"}, "x"]}]});
+        assert!(d.insert(ROOT, deep, None).unwrap_err().contains("children[1]"));
+        assert!(d.insert(ROOT, json!({"type":"frame","children":"x"}), None).is_err());
+        assert_eq!(d.children().len(), 1, "nothing was stored");
+        d.insert(ROOT, json!({"type":"frame","children":[{"type":"group","children":[{"type":"text"}]}]}), None).unwrap();
     }
 
     #[test]

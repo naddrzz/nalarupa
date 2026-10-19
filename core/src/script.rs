@@ -659,7 +659,14 @@ fn bind<R>(e: &mut Engine, preview: bool, budget: Duration, f: impl FnOnce() -> 
     (r, EXEC.with(|c| c.borrow_mut().take()).expect("execute state"))
 }
 
+/// A panic in a host function becomes an ordinary error, so the call rolls back, `executing`
+/// clears and the agent gets an `editId` to repair.
 fn run(source: &str, globals: &Map<String, Value>) -> Result<Map<String, Value>, String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_unguarded(source, globals)))
+        .unwrap_or_else(|_| Err("internal error (panic) while running the script".into()))
+}
+
+fn run_unguarded(source: &str, globals: &Map<String, Value>) -> Result<Map<String, Value>, String> {
     let js = sandbox(globals)?;
     js.with(|ctx| eval::<()>(&ctx, source, Some("input")))?;
     settle(&js)?;
@@ -1463,6 +1470,17 @@ mod tests {
         e.offline();
         e.load_template("empty");
         e
+    }
+
+    #[test]
+    fn bad_children_fail_the_call_with_a_repairable_error() {
+        let mut e = engine();
+        for kids in [r#"["str"]"#, "[5]", "[null]", r#"[{type:"nope",name:"bad"}]"#] {
+            let out = execute(&mut e, &json!({"input": format!(r#"Insert(document, {{type:"frame", width:10, height:10, children:{kids}}})"#)}));
+            assert!(out.error && out.text.contains("children[0]") && out.text.contains("editId"), "{kids}: {}", out.text);
+            assert!(e.doc.children().is_empty(), "{kids}: rolled back");
+            assert!(!e.executing);
+        }
     }
 
     #[test]
