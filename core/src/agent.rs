@@ -624,6 +624,10 @@ fn list_chats(data_dir: &Path) -> Vec<Value> {
             continue;
         }
         let Some(id) = path.file_stem().and_then(|s| s.to_str()).filter(|_| path.extension().is_some_and(|x| x == "json")) else { continue };
+        // Only ids `chat_path` accepts are listed: a row that load and delete reject could never be opened or removed.
+        if chat_path(data_dir, id).is_err() {
+            continue;
+        }
         // ponytail: parses every file for its title; keep an index file if the history gets large.
         let Some(v) = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()) else { continue };
         chats.push(json!({"id": id, "title": v["title"], "updatedAt": v["updatedAt"]}));
