@@ -123,6 +123,23 @@ fn nonblank(v: Option<String>) -> Option<String> {
     v.map(|k| k.trim().to_string()).filter(|k| !k.is_empty())
 }
 
+/// A file saved while a background image was loading keeps its pending url, and no thread will ever
+/// resolve it: count it as a failed load (empty url, like `resolve_pending`) so the node settles.
+fn drop_pending(v: &mut Value) {
+    match v {
+        Value::Array(a) => a.iter_mut().for_each(drop_pending),
+        Value::Object(o) => {
+            for (k, x) in o.iter_mut() {
+                match x {
+                    Value::String(s) if k == "url" && crate::render::is_pending_url(s) => s.clear(),
+                    _ => drop_pending(x),
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 const UNDO_LIMIT: usize = 100;
 /// The agent edits whatever document is open, so a document switch waits for it to stop.
 pub const SWITCH_BUSY: &str = "Stop the agent before opening another document.";
@@ -463,6 +480,7 @@ impl Engine {
     pub fn open(&mut self, path: &Path) -> Result<(), String> {
         let mut doc = Doc::load(path)?;
         crate::resolve::migrate(&mut doc.root);
+        drop_pending(&mut doc.root);
         self.doc = doc;
         self.load_libs();
         self.reset_history();
@@ -492,6 +510,7 @@ impl Engine {
             let rel = rel.replace("%20", " ");
             if let Ok(mut lib) = Doc::load(&base.join(&rel)) {
                 crate::resolve::migrate(&mut lib.root);
+                drop_pending(&mut lib.root);
                 self.libs.push((alias, lib.root));
             }
         }
