@@ -3,7 +3,7 @@
 // usage rows, queued prompts, parallel agents.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { call, tryCall } from './core'
-import { barAgents, imageSrc, profileOf, resetChat, restoreChat, store, type ChatItem } from './agents'
+import { barAgents, imageSrc, lastContentId, profileOf, resetChat, restoreChat, store, type ChatItem } from './agents'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import * as SelectPrimitive from '@gpuix/react/select'
 import { C, FONT, INDICATOR_TICK_MS, MONO, REDUCED_MOTION, ellipsisAt, pulseAt } from './theme'
@@ -90,7 +90,7 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
     tryCall('settings_set', { key: 'agent_iterate', value: m })
   }
   const items = store.items
-  const lastId = items[items.length - 1]?.id
+  const lastId = lastContentId(items)
   const typing = items.some((i) => i.kind === 'assistant' && i.id === lastId && (revealed.get(i.id) ?? 0) < i.text.split(/(\s+)/).length)
   useTick(16, typing)
   useTick(REDUCED_MOTION ? 400 : INDICATOR_TICK_MS, running)
