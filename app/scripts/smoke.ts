@@ -157,8 +157,11 @@ for (; levels < 100; levels++) {
 }
 assert(levels >= 50 && levels < 100, `nesting is capped (got ${levels} levels)`)
 const deepDir = mkdtempSync(join(tmpdir(), 'nalarupa-deep-'))
-call('save', { path: join(deepDir, 'deep.pen') })
-call('open', { path: join(deepDir, 'deep.pen') })
-rmSync(deepDir, { recursive: true, force: true })
+try {
+  call('save', { path: join(deepDir, 'deep.pen') })
+  call('open', { path: join(deepDir, 'deep.pen') })
+} finally {
+  rmSync(deepDir, { recursive: true, force: true })
+}
 console.log('smoke ok — MCP at', init.mcpUrl)
 process.exit(0)

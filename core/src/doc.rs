@@ -147,19 +147,22 @@ impl Doc {
     /// Merge properties into a node; `null` removes a property. Paths with `/`
     /// address descendants of component instances and become overrides.
     pub fn update(&mut self, path: &str, data: &Value) -> Result<(), String> {
-        let data = data.as_object().ok_or("update data must be an object")?;
+        let props = data.as_object().ok_or("update data must be an object")?;
         if let Some((inst, rest)) = path.split_once('/') {
-            let node = self.find_mut(inst).ok_or_else(|| format!("node not found: {inst}"))?;
+            let ip = self.index_path(inst).ok_or_else(|| format!("node not found: {inst}"))?;
+            let node = self.node_at_mut(&ip);
             if node["type"] != "ref" {
                 return Err(format!("'{inst}' is not a component instance; '/' paths only address instance descendants"));
             }
+            check_levels(override_levels(ip.len()), data)?;
             let desc = ensure_obj(&mut node["descendants"]);
             let entry = desc.entry(rest.to_string()).or_insert_with(|| json!({}));
-            merge_props(entry, data, true);
+            merge_props(entry, props, true);
             return Ok(());
         }
-        let node = self.find_mut(path).ok_or_else(|| format!("node not found: {path}"))?;
-        merge_props(node, data, false);
+        let ip = self.index_path(path).ok_or_else(|| format!("node not found: {path}"))?;
+        check_depth(ip.len() - 1, data)?;
+        merge_props(self.node_at_mut(&ip), props, false);
         Ok(())
     }
 
@@ -246,12 +249,14 @@ impl Doc {
     pub fn replace(&mut self, path: &str, mut node: Value) -> Result<String, String> {
         validate_node(&node)?;
         if let Some((inst, rest)) = path.split_once('/') {
-            self.assign_ids(&mut node, &mut Vec::new());
-            node["id"] = json!(rest.rsplit('/').next().unwrap());
-            let inst_node = self.find_mut(inst).ok_or_else(|| format!("node not found: {inst}"))?;
-            if inst_node["type"] != "ref" {
+            let inst_ip = self.index_path(inst).ok_or_else(|| format!("node not found: {inst}"))?;
+            if self.node_at_mut(&inst_ip)["type"] != "ref" {
                 return Err(format!("'{inst}' is not a component instance"));
             }
+            check_levels(override_levels(inst_ip.len()), &node)?;
+            self.assign_ids(&mut node, &mut Vec::new());
+            node["id"] = json!(rest.rsplit('/').next().unwrap());
+            let inst_node = self.node_at_mut(&inst_ip);
             ensure_obj(&mut inst_node["descendants"]).insert(rest.to_string(), node);
             return Ok(path.to_string());
         }
@@ -326,11 +331,6 @@ impl Doc {
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────
-
-    fn find_mut(&mut self, id: &str) -> Option<&mut Value> {
-        let ip = self.index_path(id)?;
-        Some(self.node_at_mut(&ip))
-    }
 
     fn container_path(&self, parent: &str) -> Result<Vec<usize>, String> {
         if parent == ROOT || parent.is_empty() {
@@ -432,21 +432,38 @@ pub fn walk<'a>(nodes: &'a [Value], f: &mut dyn FnMut(&'a Value)) {
     }
 }
 
-/// Deepest frame/group nesting we accept. serde_json refuses documents more than
-/// 128 JSON levels deep and each node costs two (object + `children` array), so
-/// deeper trees would save but never reopen. 60 leaves room for property nesting.
-const MAX_DEPTH: usize = 60;
+/// Deepest JSON nesting we accept in a document. serde_json refuses documents more
+/// than 128 levels deep, so anything deeper would save but never reopen. A node
+/// costs two levels (its object and the `children` array it sits in); 122 fits 60
+/// nested frames and leaves a few levels of headroom.
+const MAX_LEVELS: usize = 122;
 
-fn node_depth(node: &Value) -> usize {
-    1 + node["children"].as_array().map_or(0, |kids| kids.iter().map(node_depth).max().unwrap_or(0))
+/// Levels of JSON nesting in `v` (a scalar has none).
+fn json_depth(v: &Value) -> usize {
+    match v {
+        Value::Object(m) => 1 + m.values().map(json_depth).max().unwrap_or(0),
+        Value::Array(a) => 1 + a.iter().map(json_depth).max().unwrap_or(0),
+        _ => 0,
+    }
 }
 
-/// Refuse a subtree that would sit deeper than `MAX_DEPTH` under `parent_depth` ancestors.
-fn check_depth(parent_depth: usize, node: &Value) -> Result<(), String> {
-    if parent_depth + node_depth(node) > MAX_DEPTH {
-        return Err(format!("nesting too deep: frames and groups can be nested at most {MAX_DEPTH} levels"));
+/// Refuse a value that would sit `above` levels down and push the document past `MAX_LEVELS`.
+fn check_levels(above: usize, v: &Value) -> Result<(), String> {
+    if above + json_depth(v) > MAX_LEVELS {
+        return Err("nesting too deep: reduce how deeply frames, groups and property values are nested".into());
     }
     Ok(())
+}
+
+/// Refuse a node (with everything in it) that would sit under `parent_depth` ancestor nodes.
+fn check_depth(parent_depth: usize, node: &Value) -> Result<(), String> {
+    check_levels(2 + 2 * parent_depth, node)
+}
+
+/// Levels above an override of an instance that is `inst_depth` nodes deep: the
+/// instance's object and its `descendants` object.
+fn override_levels(inst_depth: usize) -> usize {
+    2 * inst_depth + 2
 }
 
 fn validate_node(node: &Value) -> Result<(), String> {
@@ -561,7 +578,7 @@ mod tests {
         let mut d = Doc::new();
         let mut parent = ROOT.to_string();
         let mut ids = Vec::new();
-        for _ in 0..MAX_DEPTH {
+        for _ in 0..60 {
             parent = d.insert(&parent, frame(), None).unwrap();
             ids.push(parent.clone());
         }
@@ -577,9 +594,27 @@ mod tests {
         assert!(d.find(&top).is_some() && d.find(&parent).is_some());
         // A whole subtree is measured, not just its root.
         let mut deep = frame();
-        for _ in 0..MAX_DEPTH {
+        for _ in 0..60 {
             deep = json!({"type":"frame","children":[deep]});
         }
         assert!(Doc::new().insert(ROOT, deep, None).is_err());
+        // Property values and instance overrides count too, however they get in.
+        let mut nest = json!(1);
+        for _ in 0..MAX_LEVELS {
+            nest = json!([nest]);
+        }
+        assert!(d.update(&parent, &json!({"effects": nest.clone()})).is_err());
+        assert!(d.update(&parent, &json!({"effects": [[1]]})).is_err());
+        let mut e = Doc::new();
+        let comp = e.insert(ROOT, json!({"type":"frame","reusable":true,"children":[]}), None).unwrap();
+        let inst = e.insert(ROOT, json!({"type":"ref","ref":comp}), None).unwrap();
+        assert!(e.update(&format!("{inst}/x"), &json!({"effects": nest.clone()})).is_err());
+        assert!(e.replace(&format!("{inst}/x"), json!({"type":"frame","children":[],"effects":nest})).is_err());
+        let mut over = frame();
+        for _ in 0..MAX_LEVELS / 2 {
+            over = json!({"type":"frame","children":[over]});
+        }
+        assert!(e.copy(&json!({"type":"ref","ref":comp}), ROOT, Some(&json!({"descendants":{"x":over}}))).is_err());
+        assert!(e.update(&format!("{inst}/x"), &json!({"opacity": 0.5})).is_ok());
     }
 }
