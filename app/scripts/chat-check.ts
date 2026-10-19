@@ -138,15 +138,18 @@ self.onmessage = async (e) => {
   postMessage(max)
 }`)
   const w = new Worker(worker)
-  const stall = new Promise<number>((r) => (w.onmessage = (e) => r(e.data)))
+  const stall = new Promise<number>((r, fail) => {
+    w.onmessage = (e) => r(e.data)
+    w.onerror = (e) => fail(new Error(`the stall worker failed: ${e.message}`))
+  })
+  stall.catch(() => {})
   w.postMessage('go')
   await sleep(300)
   call('agent_send', { text: 'Take many screenshots' })
   await until(() => call('state').agentRunning, 'the replayed agent starts')
   for (let i = 0; i < 600 && call('poll').state.agentRunning; i++) await sleep(100)
   w.postMessage('stop')
-  const max = await stall
-  w.terminate()
+  const max = await stall.finally(() => w.terminate())
   assert(!call('state').agentRunning, 'the replayed agent finishes')
   // Before the writer moved off the engine lock the stall grew with the chat (130+ ms at this size); the clone alone stays far below.
   assert(max < 60, `saving a ${calls * 0.7} MB chat stalled the engine for ${max.toFixed(0)} ms`)

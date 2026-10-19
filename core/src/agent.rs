@@ -231,6 +231,8 @@ fn chat_title(shown: &str) -> String {
 /// Send `prompt` to the main agent (same conversation), showing `shown` as the user's message.
 /// A `resume` turn continues a finished run: it is dropped when Stop came in since that run ended.
 fn start_turn(shown: &str, prompt: String, resume: bool) {
+    // Held until the run is marked running: a clear that sweeps the chat files must not interleave with a new chat's first save.
+    let ops = chat_ops();
     let main = {
         let mut e = engine();
         if resume && e.agent.cancel.load(Ordering::SeqCst) {
@@ -243,6 +245,7 @@ fn start_turn(shown: &str, prompt: String, resume: bool) {
             }
             let (n, mode) = e.agent.parallel.clone();
             drop(e);
+            drop(ops);
             begin(queued.join("\n\n"), n, &mode, 1, "", false);
             return;
         }
@@ -512,10 +515,11 @@ fn snapshot_chat(data_dir: &Path, a: &AgentState) -> Result<Option<ChatSave>, St
     Ok(Some(ChatSave { data_dir: data_dir.to_path_buf(), path, doc }))
 }
 
-/// The chat writer: the newest snapshot waits in `pending` (older ones are superseded), `busy` while one is written.
+/// The chat writer: the newest snapshot waits in `pending` (older ones are superseded), `busy` while one is written;
+/// `failed` holds the error of the last write, cleared by the next one that succeeds.
 #[derive(Default)]
 struct ChatWriter {
-    state: Mutex<(Option<ChatSave>, bool)>,
+    state: Mutex<(Option<ChatSave>, bool, Option<String>)>,
     changed: Condvar,
 }
 
@@ -533,7 +537,11 @@ fn chat_writer() -> &'static ChatWriter {
                 s.0.take()
             };
             let result = job.map_or(Ok(()), |j| j.write());
-            w.state.lock().unwrap_or_else(|e| e.into_inner()).1 = false;
+            {
+                let mut s = w.state.lock().unwrap_or_else(|e| e.into_inner());
+                s.1 = false;
+                s.2 = result.clone().err();
+            }
             w.changed.notify_all();
             if let Err(err) = result {
                 engine().emit(json!({"type": "toast", "text": format!("Could not save the chat: {err}")}));
@@ -552,13 +560,20 @@ pub fn save_chat(data_dir: &Path, a: &AgentState) -> Result<(), String> {
     Ok(())
 }
 
-/// Wait until every queued chat save is on disk. Safe with the engine locked: the writer is idle again before it toasts a failure.
-fn flush_chat_saves() {
+/// Wait until every queued chat save is on disk, and return the error of the last write if it failed.
+/// Safe with the engine locked: the writer is idle again before it toasts a failure.
+fn flush_chat_saves() -> Option<String> {
     let w = chat_writer();
     let mut s = w.state.lock().unwrap_or_else(|e| e.into_inner());
     while s.0.is_some() || s.1 {
         s = w.changed.wait(s).unwrap_or_else(|e| e.into_inner());
     }
+    s.2.clone()
+}
+
+/// `chat_flush`: called as the app exits, since the writer is a detached thread the process does not wait for.
+pub fn shutdown() -> Result<(), String> {
+    flush_chat_saves().map_or(Ok(()), Err)
 }
 
 fn read_chat(data_dir: &Path, id: &str) -> Result<Value, String> {

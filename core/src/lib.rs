@@ -399,6 +399,7 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
         "chat_list" => Ok(agent::chats()),
         "chat_load" => agent::load_chat(req["id"].as_str().ok_or("id required")?),
         "chat_delete" => agent::delete_chat(req["id"].as_str().ok_or("id required")?).map(|_| json!(true)),
+        "chat_flush" => agent::shutdown().map(|_| json!(true)),
         "chat_clear" => agent::clear_chats().map(|cleared| json!(cleared)),
         "mcp_install" => {
             let port = engine().mcp_port;
