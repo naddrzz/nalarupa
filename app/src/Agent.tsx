@@ -7,7 +7,7 @@ import { barAgents, imageSrc, lastContentId, profileOf, resetChat, restoreChat, 
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import * as SelectPrimitive from '@gpuix/react/select'
 import { C, FONT, INDICATOR_TICK_MS, MONO, REDUCED_MOTION, ellipsisAt, ellipsisPadAt, pulseAt } from './theme'
-import { Button, Field, FocusRing, Icon, IconButton, Pressable, Row, Segmented, setKeyboardFocus, T, Toggle, useKeyboardFocusId, useRing, useTrigger, type Toast } from './ui'
+import { Button, Field, FocusRing, Icon, IconButton, Pressable, Row, Segmented, setKeyboardFocus, T, Toggle, useFieldRing, useKeyboardFocusId, useRing, useTrigger, type Toast } from './ui'
 
 // Suggestion set; the empty chat shows 6 random picks of these 12.
 const SUGGESTIONS = [
@@ -103,6 +103,7 @@ function useKept<T>(key: string, init: () => T) {
 
 export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: number; running: boolean; mcpUrl: string; toast: Toast; onSent?: () => void }) {
   const [draft, setDraft] = useKept('draft', () => '')
+  const input = useFieldRing()
   const [settings, setSettings] = useKept('settings', () => false)
   const [parallel, setParallel] = useKept('parallel', () => '1')
   const [mode, setMode] = useKept<'split' | 'side'>('mode', () => 'split')
@@ -234,19 +235,25 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
       ) : null}
 
       <div style={{ padding: 10, borderTopWidth: 1, borderColor: C.border, display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <div style={{ borderRadius: 10, borderWidth: 1, borderColor: C.border, backgroundColor: C.panel2, padding: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <textarea
-            testId="agent-input"
-            aria-label="Message the design agent"
-            value={draft}
-            placeholder={running ? 'Queue a follow-up…' : 'Design anything…'}
-            minRows={2}
-            maxRows={8}
-            onChange={(e) => setDraft(e.value ?? '')}
-            onSubmit={(e) => send(e.value ?? draft)}
-            theme={{ caret: C.accent }}
-            style={{ fontSize: 13, color: C.text, fontFamily: FONT, width: '100%' }}
-          />
+        <div style={{ position: 'relative', borderRadius: 10, borderWidth: 1, borderColor: C.border, backgroundColor: C.panel2, padding: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {input.ring ? <FocusRing radius={10} /> : null}
+          <div onMouseDown={input.onMouseDown}>
+            <textarea
+              ref={input.ref}
+              onFocus={input.onFocus}
+              onBlur={input.onBlur}
+              testId="agent-input"
+              aria-label="Message the design agent"
+              value={draft}
+              placeholder={running ? 'Queue a follow-up…' : 'Design anything…'}
+              minRows={2}
+              maxRows={8}
+              onChange={(e) => setDraft(e.value ?? '')}
+              onSubmit={(e) => send(e.value ?? draft)}
+              theme={{ caret: C.accent }}
+              style={{ fontSize: 13, color: C.text, fontFamily: FONT, width: '100%' }}
+            />
+          </div>
           <Row gap={6}>
             <T size={11} color={C.muted}>Agents</T>
             <Segmented label="Agents working in parallel" value={parallel} onChange={setParallel} options={['1', '2', '3', '4'].map((v) => ({ value: v, label: `${v}×`, name: v === '1' ? '1 agent' : `${v} agents` }))} />
