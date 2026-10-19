@@ -94,7 +94,7 @@ function handlePoints(b: { x: number; y: number; w: number; h: number }): Record
   return { nw: [x, y], n: [x + w / 2, y], ne: [x + w, y], e: [x + w, y + h / 2], se: [x + w, y + h], s: [x + w / 2, y + h], sw: [x, y + h], w: [x, y + h / 2] }
 }
 
-const isMovable = (n: any) => n && (n.parentLayout === 'none' || n.node?.layoutPosition === 'absolute')
+export const isMovable = (n: any) => n && (n.parentLayout === 'none' || n.node?.layoutPosition === 'absolute')
 const inFlow = (n: any) => !!n && n.parentLayout !== 'none' && n.node?.layoutPosition !== 'absolute'
 /** cornerRadius as [tl, tr, br, bl]; variable references count as 0. */
 function radiiOf(n: any): number[] {

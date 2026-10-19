@@ -83,6 +83,8 @@ pub struct Flat {
     /// Painted transform `[a, b, c, d, e, f]` (x' = a·x + c·y + e, y' = b·x + d·y + f) from this box's
     /// coordinates to the canvas: own and ancestors' rotations/flips. `None` = identity.
     pub m: Option<[f64; 6]>,
+    /// Local bounds' offset from the origin (non-zero for groups) and the node's own effective rotation and flips.
+    pub local: ([f64; 2], f64, bool, bool),
     /// Own props, box, parent and sibling index: a change means this node must repaint.
     sig: u64,
     /// How far shadows, blurs and strokes paint outside the box; infinite when the node or an
@@ -864,6 +866,7 @@ fn prepare_layer(cx: &mut Ctx, index: usize, hash: u64, hidden: &HashSet<String>
             placeholder: n.ty == "frame" && n.b("placeholder"),
             pending: crate::svg::fills(n.p.get("fill")).iter().any(|f| f["url"].as_str().is_some_and(is_pending_url)),
             m: mats[depth],
+            local: ([n.bx, n.by], n.f("rotation").unwrap_or(0.0), n.b("flipX"), n.b("flipY")),
             sig: fxhash(&sig),
             reach: if turned[depth] { f64::INFINITY } else { reach(&n.p) },
         });
