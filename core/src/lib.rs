@@ -318,12 +318,14 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
         "drag_begin" => {
             let mut e = engine();
             e.drag_before = Some(e.doc.root.clone());
+            e.drag_clean = !e.dirty();
             Ok(json!(true))
         }
         "drag_end" => {
             let mut e = engine();
             if let Some(before) = e.drag_before.take() {
-                e.commit(before);
+                let was_clean = e.drag_clean;
+                e.end_drag(before, was_clean);
             }
             Ok(state(&e))
         }

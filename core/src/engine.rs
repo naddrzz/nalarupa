@@ -4,7 +4,7 @@ use crate::doc::{Doc, ROOT};
 use crate::render::{Ctx, Renderer};
 use crate::svg::Assets;
 use crate::text::Fonts;
-use serde_json::{json, Map, Value};
+use serde_json::{json, Map, Number, Value};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
@@ -57,6 +57,8 @@ pub struct Engine {
     pub agent: crate::agent::AgentState,
     /// Document snapshot taken when a drag starts; committed as one undo step on release.
     pub drag_before: Option<Value>,
+    /// Whether the document was unchanged since its last save when the drag started.
+    pub drag_clean: bool,
     /// `execute` calls the model is still writing (key = tool call id).
     pub streams: Vec<Stream>,
     /// Document as displayed while streams are active: real doc + every stream's complete statements.
@@ -176,6 +178,7 @@ impl Engine {
             mcp_port: 0,
             agent: Default::default(),
             drag_before: None,
+            drag_clean: false,
             streams: Vec::new(),
             preview: None,
             executing: false,
@@ -352,6 +355,16 @@ impl Engine {
         self.touch();
     }
 
+    /// Commit a drag (or batch) that started from `before`. If it ended where it started, no undo
+    /// step is added and a document that was clean when it began stays clean.
+    pub fn end_drag(&mut self, before: Value, was_clean: bool) {
+        if same(&before, &self.doc.root) {
+            self.keep_clean(was_clean);
+        } else {
+            self.commit(before);
+        }
+    }
+
     /// The preview changed, not the document: render again, and a document that was `clean` before
     /// the preview ran (its host functions bump the version too) stays clean.
     fn redraw(&mut self, clean: bool) {
@@ -402,7 +415,7 @@ impl Engine {
         let merge = self.coalesce.as_deref() == Some(key) && !self.undo.is_empty();
         let before = self.doc.root.clone();
         let r = f(&mut self.doc).inspect_err(|_| self.doc.root = before.clone())?;
-        if before != self.doc.root {
+        if !same(&before, &self.doc.root) {
             if merge {
                 self.redo.clear();
                 self.touch();
@@ -425,7 +438,7 @@ impl Engine {
         let r = f(self);
         self.drag_before = None;
         match r {
-            Ok(_) => self.commit(before),
+            Ok(_) => self.end_drag(before, was_clean),
             Err(_) => {
                 self.doc.root = before;
                 self.touch();
@@ -809,10 +822,24 @@ pub fn tool_specs() -> Value {
     ])
 }
 
+/// Numbers equal by value: integers exactly (not through `f64`, which merges values above 2^53),
+/// an integer and a float only when the float holds that very integer.
+fn same_number(x: &Number, y: &Number) -> bool {
+    let int = |n: &Number| n.as_i64().map(i128::from).or_else(|| n.as_u64().map(i128::from));
+    match (int(x), int(y)) {
+        (Some(i), Some(j)) => i == j,
+        (Some(i), None) | (None, Some(i)) => {
+            let f = if x.is_f64() { x.as_f64() } else { y.as_f64() }.unwrap_or(f64::NAN);
+            f.fract() == 0.0 && f as i128 == i
+        }
+        (None, None) => x.as_f64() == y.as_f64(),
+    }
+}
+
 /// Equal as documents: a whole number written back as a float (`10` vs `10.0`) is not a change.
 fn same(a: &Value, b: &Value) -> bool {
     match (a, b) {
-        (Value::Number(x), Value::Number(y)) => x == y || x.as_f64() == y.as_f64(),
+        (Value::Number(x), Value::Number(y)) => same_number(x, y),
         (Value::Array(x), Value::Array(y)) => x.len() == y.len() && x.iter().zip(y).all(|(x, y)| same(x, y)),
         (Value::Object(x), Value::Object(y)) => x.len() == y.len() && x.iter().all(|(k, v)| y.get(k).is_some_and(|w| same(v, w))),
         _ => a == b,
@@ -836,6 +863,41 @@ mod tests {
         e.doc.root["children"][0]["x"] = json!(10.5);
         e.commit(json!({"children": [{"id": "a", "type": "rectangle", "x": 10, "y": 10}]}));
         assert_eq!(e.undo.len(), 1);
+    }
+
+    #[test]
+    fn unchanged_drag_keeps_a_clean_document_clean() {
+        let mut e = Engine::new(std::env::temp_dir().join(format!("nalarupa-test-drag-clean-{}", std::process::id())));
+        e.doc.root = json!({"children": [{"id": "a", "type": "rectangle", "x": 10}]});
+        e.saved = e.version;
+        let before = e.doc.root.clone();
+        e.doc.root["children"][0]["x"] = json!(10.0);
+        e.touch();
+        assert!(e.dirty());
+        e.end_drag(before, true);
+        assert!(!e.dirty() && e.undo.is_empty());
+    }
+
+    #[test]
+    fn same_number_compares_integers_exactly() {
+        assert!(same(&json!(10), &json!(10.0)));
+        assert!(!same(&json!(10), &json!(10.5)));
+        assert!(!same(&json!(9007199254740992_i64), &json!(9007199254740993_i64)));
+        assert!(!same(&json!(9007199254740993_i64), &json!(9007199254740992.0)));
+        assert!(same(&json!(9007199254740992_i64), &json!(9007199254740992.0)));
+        assert!(same(&json!(u64::MAX), &json!(u64::MAX)));
+        assert!(!same(&json!(u64::MAX), &json!(-1)));
+    }
+
+    #[test]
+    fn rewritten_number_does_not_start_a_coalescing_group() {
+        let mut e = Engine::new(std::env::temp_dir().join(format!("nalarupa-test-coalesce-noop-{}", std::process::id())));
+        e.doc.root = json!({"children": [{"id": "a", "x": 10, "y": 0}]});
+        e.edit(|d| { d.root["children"][0]["y"] = json!(1); Ok(()) }).unwrap();
+        e.edit_coalesced("x", |d| { d.root["children"][0]["x"] = json!(10.0); Ok(()) }).unwrap();
+        assert!(e.coalesce.is_none());
+        e.edit_coalesced("x", |d| { d.root["children"][0]["x"] = json!(20); Ok(()) }).unwrap();
+        assert_eq!(e.undo.len(), 2, "the real edit is its own undo step");
     }
 
     #[test]
