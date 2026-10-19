@@ -280,6 +280,18 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
   const [s5, s6] = [await label('slide-5', 'Short'), await label('slide-6', LONG)]
   if (Math.abs(s5.x - s6.x) > 0.5 || s6.x + s6.width > PANEL_W) throw new Error(`slide labels start at x=${s5.x} and x=${s6.x} (should match) and the long one ends at ${s6.x + s6.width} (panel is ${PANEL_W} wide)`)
   if (s5.x < 12 + 14) throw new Error(`the slide number column hugs the panel edge (label at x=${s5.x})`)
+  // Every slide gets a thumbnail, not just the first 60 (a row without one shows the renderer's "img: no
+  // src" debug text). Scroll the list to the last of 66 slides: its thumbnail must arrive, no row waits.
+  await mcp('execute', { input: `for (let i = 1; i <= 60; i++) Insert(document, {type:"frame", name:"Bulk " + i, x: 24000 + i * 2000, y: 0, width:1920, height:1080, fill: i % 2 ? "#223344" : "#442233"})` })
+  await app.getByTestId('slide-66').waitFor({ timeoutMs: 20000 })
+  await until(async () => {
+    await app!.mouse.wheel({ x: 120, y: 500 }, 0, -20000)
+    return (await app!.getByTestId('slide-thumb-66').count()) > 0
+  }, 'the thumbnail of slide 66', 20000)
+  await sleep(500)
+  const waiting = await app.getByTestId('slide-thumb-pending-66').count()
+  if (waiting) throw new Error('slide 66 still shows a placeholder instead of its thumbnail')
+  await mcp('execute', { input: `Get(n => n.name.startsWith("Bulk ") ? n.id : undefined).filter(Boolean).forEach(id => Delete(id))` })
   await app.getByText('Layers').click()
   await app.getByTestId('layers').getByText(LONG).waitFor({ timeoutMs: 10000 })
   const [l1, l2] = [await label('layers', 'Short'), await label('layers', LONG)]
