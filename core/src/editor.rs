@@ -269,7 +269,8 @@ pub fn nodes_in_rect(e: &Engine, r: Rect, deep: bool) -> Vec<String> {
 /// Where a drag of a `w`×`h` selection would land with the pointer at (x, y): the topmost,
 /// deepest frame under the pointer (not one being dragged) that is big enough for it (`any`
 /// skips the size rule), else the document. Auto-layout targets also get the insertion
-/// `index` (children minus the dragged ones) and the indicator `line` [x1, y1, x2, y2].
+/// `index` (children minus the dragged ones) and the indicator `line` [x1, y1, x2, y2] on the
+/// canvas. The returned `x`/`y`/`w`/`h` is the frame's box before its turn `m` (null when upright).
 #[allow(clippy::too_many_arguments)]
 pub fn drop_target(e: &Engine, x: f64, y: f64, w: f64, h: f64, ignore: &[String], any: bool, parent: Option<&str>) -> Value {
     let v = View::new(e);
@@ -282,7 +283,12 @@ pub fn drop_target(e: &Engine, x: f64, y: f64, w: f64, h: f64, ignore: &[String]
         }
     }
     let frame_ok = |f: &Flat| !f.id.contains('/') && !ign.contains(f.id.as_str()) && v.ty(&f.id) == "frame";
-    let inside = |f: &Flat| x >= f.x && y >= f.y && x <= f.x + f.w && y <= f.y + f.h;
+    // The pointer in the frame's own layout space (undoing its rotation/flip), where its box and its children's boxes live.
+    let local = |f: &Flat| f.m.map_or((x, y), |m| unapply(m, x, y));
+    let inside = |f: &Flat| {
+        let (px, py) = local(f);
+        px >= f.x && py >= f.y && px <= f.x + f.w && py <= f.y + f.h
+    };
     let target = match parent {
         Some(p) => v.flat(p),
         None => {
@@ -301,11 +307,12 @@ pub fn drop_target(e: &Engine, x: f64, y: f64, w: f64, h: f64, ignore: &[String]
     let Some(t) = target else { return json!({"id": ROOT, "layout": "none"}) };
     let dir = v.layout(&t.id);
     let mut out = json!({"id": t.id, "x": t.x, "y": t.y, "w": t.w, "h": t.h,
-                         "layout": match dir { Some(0) => "horizontal", Some(_) => "vertical", None => "none" }});
+                         "m": t.m, "layout": match dir { Some(0) => "horizontal", Some(_) => "vertical", None => "none" }});
     if let Some(a) = dir {
         let lo = |f: &Flat| if a == 0 { f.x } else { f.y };
         let hi = |f: &Flat| if a == 0 { f.x + f.w } else { f.y + f.h };
-        let p = if a == 0 { x } else { y };
+        let (px, py) = local(t);
+        let p = if a == 0 { px } else { py };
         let siblings: Vec<&Value> = kids(&e.doc, &t.id).iter().filter(|k| !ign.contains(k["id"].as_str().unwrap_or_default())).collect();
         let (mut index, mut prev, mut next) = (siblings.len(), None, None);
         for (i, k) in siblings.iter().enumerate() {
@@ -323,7 +330,9 @@ pub fn drop_target(e: &Engine, x: f64, y: f64, w: f64, h: f64, ignore: &[String]
             (Some(p), Some(n)) => (hi(p) + lo(n)) / 2.0,
         };
         out["index"] = json!(index);
-        out["line"] = json!(if a == 0 { [pos, t.y, pos, t.y + t.h] } else { [t.x, pos, t.x + t.w, pos] });
+        let ends = if a == 0 { [(pos, t.y), (pos, t.y + t.h)] } else { [(t.x, pos), (t.x + t.w, pos)] };
+        let [from, to] = ends.map(|p| t.m.map_or(p, |m| map(&m, p)));
+        out["line"] = json!([from.0, from.1, to.0, to.1]);
     }
     out
 }
