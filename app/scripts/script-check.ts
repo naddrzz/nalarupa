@@ -118,9 +118,11 @@ const failing = fetch(`http://127.0.0.1:${call('state').mcpPort}/mcp`, {
     params: { name: 'execute', arguments: { input: 'Insert(document, {type:"frame", name:"AgentF", x:300, y:0, width:100, height:100})\nlet t = Date.now(); while (Date.now() - t < 2000) {}\nthrow new Error("boom")' } },
   }),
 })
-await new Promise((r) => setTimeout(r, 700))
+for (const until = Date.now() + 5000; !names().includes('AgentF') && Date.now() < until; await new Promise((r) => setTimeout(r, 10))) {}
+assert(names().includes('AgentF'), 'the failing execute started before the user edit')
 call('update', { ids: [u2], props: { x: 500 } })
-await (await failing).json()
+const res = await (await failing).json()
+assert(res.result?.isError && /boom/.test(JSON.stringify(res.result.content)), `the script must fail with boom: ${JSON.stringify(res)}`)
 assert(names() === 'U@500', `a failed script keeps the user's edit: ${names()}`)
 call('undo')
 assert(names() === 'U@0', `undo never brings back the rolled-back call: ${names()}`)

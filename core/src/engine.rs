@@ -199,6 +199,16 @@ fn merge3(base: &Value, theirs: &Value, ours: &Value) -> Value {
                     out.insert(at, n.clone());
                 }
             }
+            // A reorder by `theirs` re-sequences the shared nodes in the slots they already fill.
+            let shared = |a: &[Value], other: &[Value]| a.iter().filter(|n| find(other, &n["id"]).is_some()).map(|n| n["id"].clone()).collect::<Vec<_>>();
+            if shared(b, t) != shared(t, b) {
+                let slots: Vec<usize> = (0..out.len()).filter(|&i| find(t, &out[i]["id"]).is_some()).collect();
+                let mut moved: Vec<Value> = slots.iter().map(|&i| out[i].clone()).collect();
+                moved.sort_by_key(|n| t.iter().position(|x| x["id"] == n["id"]));
+                for (&i, n) in slots.iter().zip(moved) {
+                    out[i] = n;
+                }
+            }
             Value::Array(out)
         }
         _ => theirs.clone(),
@@ -890,6 +900,18 @@ mod tests {
         assert_eq!(nonblank(Some(String::new())), None);
         assert_eq!(nonblank(Some("  \t".into())), None);
         assert_eq!(nonblank(Some(" sk-ant-x\n".into())), Some("sk-ant-x".into()));
+    }
+
+    #[test]
+    fn merge3_keeps_a_reorder_by_theirs() {
+        let n = |id: &str, x: i64| json!({"id": id, "x": x});
+        let base = json!({"children": [n("a", 0), n("b", 0), n("c", 0)]});
+        let theirs = json!({"children": [n("c", 0), n("a", 0), n("b", 0)]});
+        let ours = json!({"children": [n("a", 5), n("b", 0), n("c", 0), n("d", 0)]});
+        let m = merge3(&base, &theirs, &ours);
+        let ids: Vec<_> = m["children"].as_array().unwrap().iter().map(|n| n["id"].as_str().unwrap()).collect();
+        assert_eq!(ids, ["c", "a", "b", "d"]);
+        assert_eq!(m["children"][1]["x"], 5);
     }
 
     #[test]
