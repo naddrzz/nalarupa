@@ -435,7 +435,7 @@ pub fn answer_permission(id: &str, answer: &str) -> Result<(), String> {
     let mut e = engine();
     if answer == "auto" {
         e.settings.insert("agent_auto_permissions".into(), json!(true));
-        e.save_settings();
+        let _ = e.save_settings(); // still auto for this run when it did not save; never block the answer
     }
     let (_, waiting) = e.agent.permissions.remove(id).ok_or("This permission request is no longer waiting.")?;
     let _ = waiting.send(answer != "deny");

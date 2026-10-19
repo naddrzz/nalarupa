@@ -770,9 +770,10 @@ function AgentSettings({ mcpUrl, toast }: { mcpUrl: string; toast: Toast }) {
   const [keyBox, setKeyBox] = useState(0)
   const [perms, setPerms] = useState<'ask' | 'auto'>((s as Record<string, unknown>).agent_auto_permissions === true ? 'auto' : 'ask')
   const set = (key: string, value: unknown) => {
-    tryCall('settings_set', { key, value })
     cachedModel = null
+    return tryCall('settings_set', { key, value }) !== null // false: not saved, the setting kept its old value
   }
+  const keyNotSaved = () => toast('Unable to save the API key setting. Check that the app data folder is writable, then try again.', true)
   const install = (client: string) => {
     const r = tryCall<string>('mcp_install', { client })
     if (r) toast(r)
@@ -794,12 +795,15 @@ function AgentSettings({ mcpUrl, toast }: { mcpUrl: string; toast: Toast }) {
             <Field key={keyBox} name="Anthropic API key" value="" placeholder={hasKey ? 'Key saved. Paste a new key to replace it' : 'sk-ant-…'} onCommit={(v) => {
               const key = v.trim() // a blank key is no key (Engine::api_key), so it must not replace a saved one
               if (!key) return false // Field reverts the box to empty, so the saved-key placeholder shows again
-              set('anthropic_api_key', key)
+              if (!set('anthropic_api_key', key)) {
+                keyNotSaved()
+                return false
+              }
               setHasKey(true)
               setKeyBox((n) => n + 1) // remount: the new key must not stay readable in the box
               toast('API key saved locally')
             }} testId="api-key" />
-            {hasKey ? <Button testId="api-key-remove" onClick={() => { set('anthropic_api_key', null); setHasKey(false); toast('API key removed') }}>Remove</Button> : null}
+            {hasKey ? <Button testId="api-key-remove" onClick={() => { if (!set('anthropic_api_key', null)) return keyNotSaved(); setHasKey(false); toast('API key removed') }}>Remove</Button> : null}
           </Row>
           <T size={11} color={C.ghost}>Or set ANTHROPIC_API_KEY. Pick the model below the chat box.</T>
           <Row>
