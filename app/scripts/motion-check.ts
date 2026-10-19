@@ -25,13 +25,19 @@ async function glide(reduced: boolean) {
     const frame = `Get(n => n.type === "frame" ? n.id : undefined)[0]`
     await exec(`Insert(${frame}, {type:"rectangle", name:"A", x:40, y:40, width:60, height:60, fill:"#22AA55"})`)
     await sleep(1500)
-    await exec(`Insert(${frame}, {type:"rectangle", name:"B", x:1300, y:780, width:60, height:60, fill:"#22AA55"})`)
-    await sleep(60)
     const cursor = app.getByTestId('agent-cursor-external')
-    const early = await cursor.bounds()
+    const spotA = await cursor.bounds()
+    const dist = (a: typeof spotA, b: typeof spotA) => Math.hypot(a.x - b.x, a.y - b.y)
+    await exec(`Insert(${frame}, {type:"rectangle", name:"B", x:1300, y:780, width:60, height:60, fill:"#22AA55"})`)
+    // The window sees the edit on its next 120 ms poll, so wait for the cursor to leave spot A (by more than
+    // its 4 px idle wobble) before the first reading; a fixed delay can read it at A and take the jump for a glide.
+    let early = spotA
+    for (const end = Date.now() + 5000; dist(early, spotA) < 20; early = await cursor.bounds()) {
+      if (Date.now() > end) throw new Error('motion-check: the cursor never left the first spot')
+      await sleep(10)
+    }
     await sleep(1500)
-    const late = await cursor.bounds()
-    return Math.hypot(late.x - early.x, late.y - early.y)
+    return dist(await cursor.bounds(), early)
   } finally {
     await app.close()
   }
@@ -40,7 +46,7 @@ async function glide(reduced: boolean) {
 const normal = await glide(false)
 await sleep(1500)
 const reduced = await glide(true)
-console.log(`cursor still moving 60 ms after the edit: normal ${normal.toFixed(0)} px, reduced motion ${reduced.toFixed(0)} px`)
+console.log(`cursor travel in the 1.5 s after it leaves the first spot: normal ${normal.toFixed(0)} px, reduced motion ${reduced.toFixed(0)} px`)
 if (normal < 20) throw new Error('motion-check: the cursor did not glide with motion on (check the setup)')
 if (reduced > 2) throw new Error('motion-check: the cursor still glides under reduced motion')
 console.log('motion-check ok')
