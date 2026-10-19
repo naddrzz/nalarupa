@@ -189,5 +189,26 @@ call('update', { ids: [bar], props: { height: 0 } })
 assert(marquee(1200, 190, 20, 20), 'marquee on a zero-height 45° line selects it')
 assert(!marquee(1110, 90, 30, 30), "marquee in the empty corner of a zero-height 45° line's bounds misses it")
 
+// Drop targets follow the frame's painted box: a rotated row is entered where it is painted (its
+// insertion line runs along the turned axis), the empty spot of the unrotated box is the document.
+const R = call('insert', { parent: 'document', node: { type: 'frame', name: 'R', x: 2000, y: 2000, width: 300, height: 100, fill: '#fff', layout: 'horizontal', gap: 10, padding: 10, rotation: 90 } }).id
+const rk = [0, 1, 2].map(() => call('insert', { parent: R, node: { type: 'rectangle', width: 50, height: 50 } }).id)
+const centre = (id: string) => {
+  const b = call('bounds', { ids: [id] })
+  return [b.x + b.w / 2, b.y + b.h / 2]
+}
+const [c0, c1] = [centre(rk[0]), centre(rk[1])]
+const [gx, gy] = [(c0[0] + c1[0]) / 2, (c0[1] + c1[1]) / 2]
+const rd = call('drop_target', { x: gx, y: gy, w: 10, h: 10, ignore: [] })
+assert(rd.id === R && rd.layout === 'horizontal' && rd.index === 1, `drop over a rotated row ${JSON.stringify(rd)}`)
+const [lx1, ly1, lx2, ly2] = rd.line
+assert(Math.abs((lx2 - lx1) * (gy - ly1) - (ly2 - ly1) * (gx - lx1)) < 0.01 && Math.abs(Math.hypot(lx2 - lx1, ly2 - ly1) - 100) < 0.01, `the line crosses the turned row at the gap ${JSON.stringify(rd.line)}`)
+const [e0, e1] = [centre(rk[0]), centre(rk[2])]
+assert(call('drop_target', { x: e0[0] + (e0[0] - e1[0]) / 4, y: e0[1] + (e0[1] - e1[1]) / 4, w: 10, h: 10, ignore: [] }).index === 0, 'before the first child of a rotated row')
+assert(call('drop_target', { x: 2250, y: 2050, w: 10, h: 10, ignore: [] }).id === 'document', 'the empty spot of the unrotated row is the document')
+const free = call('insert', { parent: 'document', node: { type: 'frame', name: 'Free', x: 3000, y: 2000, width: 300, height: 200, fill: '#fff', layout: 'none', rotation: 30 } }).id
+assert(call('drop_target', { x: 3150, y: 2100, w: 10, h: 10, ignore: [] }).id === free, 'drop into a rotated free frame at its centre')
+assert(call('drop_target', { x: 3001, y: 2199, w: 10, h: 10, ignore: [] }).id === 'document', 'the unrotated corner of a rotated free frame is the document')
+
 console.log('editor-check ok')
 process.exit(0)
