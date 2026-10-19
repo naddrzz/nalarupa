@@ -42,7 +42,7 @@ fn kids<'a>(doc: &'a Doc, id: &str) -> &'a [Value] {
 }
 
 /// Drop ids whose ancestor is also listed (moving a parent moves its subtree).
-fn top_only(doc: &Doc, ids: &[String]) -> Vec<String> {
+pub fn top_only(doc: &Doc, ids: &[String]) -> Vec<String> {
     let set: HashSet<&str> = ids.iter().map(String::as_str).collect();
     let mut out: Vec<String> = Vec::new();
     for id in ids {

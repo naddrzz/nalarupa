@@ -125,6 +125,18 @@ call('delete', { ids: ['sld03'] })
 assert(ids() === 'sld01,sld02', 'delete removes the slide')
 call('undo')
 assert(ids() === 'sld01,sld02,sld03', 'undo brings it back')
+// A layer selected together with its own descendant (either order) is deleted whole, in one undo step.
+const nest = call('insert', { parent: 'document', node: { type: 'frame', name: 'Nest', x: 0, y: 0, width: 400, height: 300, layout: 'none' } }).id
+const nestKid = call('insert', { parent: nest, node: { type: 'rectangle', name: 'Kid', x: 10, y: 10, width: 50, height: 50 } }).id
+for (const order of [[nest, nestKid], [nestKid, nest]]) {
+  call('delete', { ids: order })
+  assert(!call('boxes', { ids: [nest, nestKid] }).length, 'delete removes a layer selected with its descendant')
+  call('undo')
+  assert(call('boxes', { ids: [nest, nestKid] }).length === 2, 'one undo restores the layer and its child')
+}
+throws(() => call('delete', { ids: [nest, 'nope01'] }), /node not found: nope01/, 'delete still rejects an unknown id')
+assert(call('boxes', { ids: [nest] }).length === 1, 'a rejected delete leaves the layers in place')
+call('delete', { ids: [nest] })
 throws(() => call('png'), /id required/, 'png without an id')
 throws(() => call('no_such_command'), /unknown command/, 'unknown command')
 
