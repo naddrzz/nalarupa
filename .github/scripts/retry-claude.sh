@@ -8,9 +8,11 @@
 set -u
 R=${GITHUB_REPOSITORY:?}
 since=$(date -u -d '-24 hours' +%Y-%m-%dT%H:%M:%SZ) cutoff=$(date -u -d '-60 minutes' +%Y-%m-%dT%H:%M:%SZ)
+# Select by workflow file: a run's `name` is its run-name (claude runs are "#N <title>").
 runs=$(gh api "repos/$R/actions/runs?status=failure&created=>$since&per_page=100" --paginate --jq '.workflow_runs[]
-  | select(.name=="claude" or .name=="claude-qa" or .name=="claude-ci-fix")
-  | [.id, .name, .run_attempt, .updated_at, .display_title] | @tsv') || { echo "cannot list failed runs"; exit 1; }
+  | (.path | ltrimstr(".github/workflows/") | rtrimstr(".yml")) as $wf
+  | select($wf=="claude" or $wf=="claude-qa" or $wf=="claude-ci-fix")
+  | [.id, $wf, .run_attempt, .updated_at, .display_title] | @tsv') || { echo "cannot list failed runs"; exit 1; }
 # why ID: prints why run ID should not be retried; prints nothing when all its failed jobs ended on an API error.
 why() {
   local jobs j log
