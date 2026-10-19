@@ -388,9 +388,11 @@ pub fn wrap(e: &mut Engine, ids: &[String], kind: &str) -> Result<String, String
         // Each member's origin in the parent's space (the members may sit in differently turned frames).
         let placed: Vec<_> = ids.iter().filter_map(|id| {
             let (o, turn) = v.placed(id, &parent)?;
-            Some((id, (po.0 + o.0, po.1 + o.1), turn, v.flat(id)?))
+            Some((id, (po.0 + o.0, po.1 + o.1), turn))
         }).collect();
-        let u = union(placed.iter().map(|(_, o, _, f)| (o.0 + f.local.0[0], o.1 + f.local.0[1], f.w, f.h))).ok_or("nothing visible to wrap")?;
+        // The bounds of what the members paint, in the parent's own (possibly turned) space.
+        let pm = v.flat(&parent).and_then(|p| p.m);
+        let u = union(placed.iter().filter_map(|(id, ..)| v.painted(id, pm))).ok_or("nothing visible to wrap")?;
         let mut node = if kind == "frame" {
             json!({"type": "frame", "name": "Frame", "width": num(u.2), "height": num(u.3), "layout": "none"})
         } else {
@@ -398,7 +400,7 @@ pub fn wrap(e: &mut Engine, ids: &[String], kind: &str) -> Result<String, String
         };
         node["x"] = num(u.0 - po.0);
         node["y"] = num(u.1 - po.1);
-        let moves: Vec<(String, Map<String, Value>)> = placed.iter().map(|(id, o, turn, _)| {
+        let moves: Vec<(String, Map<String, Value>)> = placed.iter().map(|(id, o, turn)| {
             let mut props = v.freeze_fill(id);
             props.insert("x".into(), num(o.0 - u.0));
             props.insert("y".into(), num(o.1 - u.1));
@@ -1304,25 +1306,44 @@ mod tests {
     fn wrap_keeps_layers_from_different_turned_frames() {
         for turn in [json!({"rotation": 90}), json!({"rotation": 30}), json!({"flipX": true}), json!({"flipY": true, "rotation": -50})] {
             for kind in ["group", "frame"] {
-                let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
-                e.offline();
-                e.load_template("empty");
-                let frame = |x: i32, y: i32, turn: Value| {
-                    let mut f = json!({"type": "frame", "x": x, "y": y, "width": 300, "height": 300, "layout": "none"});
-                    f.as_object_mut().unwrap().extend(turn.as_object().unwrap().clone());
-                    f
-                };
-                let f = e.edit(|d| d.insert(ROOT, frame(0, 0, json!({})), None)).unwrap();
-                let g = e.edit(|d| d.insert(ROOT, frame(500, 100, turn.clone()), None)).unwrap();
-                let a = e.edit(|d| d.insert(&f, json!({"type": "rectangle", "x": 20, "y": 20, "width": 60, "height": 50}), None)).unwrap();
-                let b = e.edit(|d| d.insert(&g, json!({"type": "rectangle", "x": 20, "y": 120, "width": 60, "height": 50, "rotation": 15}), None)).unwrap();
-                let ids = [a.clone(), b.clone()];
                 // Each parent in turn takes the wrapper (the topmost member decides).
-                for ids in [ids.to_vec(), ids.iter().rev().cloned().collect()] {
+                for plain_on_top in [false, true] {
+                    let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+                    e.offline();
+                    e.load_template("empty");
+                    let frame = |x: i32, y: i32, turn: Value| {
+                        let mut f = json!({"type": "frame", "x": x, "y": y, "width": 300, "height": 300, "layout": "none"});
+                        f.as_object_mut().unwrap().extend(turn.as_object().unwrap().clone());
+                        f
+                    };
+                    let (f, g) = if plain_on_top {
+                        let g = e.edit(|d| d.insert(ROOT, frame(500, 100, turn.clone()), None)).unwrap();
+                        (e.edit(|d| d.insert(ROOT, frame(0, 0, json!({})), None)).unwrap(), g)
+                    } else {
+                        (e.edit(|d| d.insert(ROOT, frame(0, 0, json!({})), None)).unwrap(), e.edit(|d| d.insert(ROOT, frame(500, 100, turn.clone()), None)).unwrap())
+                    };
+                    let a = e.edit(|d| d.insert(&f, json!({"type": "rectangle", "x": 20, "y": 20, "width": 60, "height": 50}), None)).unwrap();
+                    let b = e.edit(|d| d.insert(&g, json!({"type": "rectangle", "x": 20, "y": 120, "width": 60, "height": 50, "rotation": 15}), None)).unwrap();
+                    let ids = [a, b];
                     let before: Vec<[f64; 4]> = ids.iter().map(|i| footprint(&mut e, i)).collect();
                     let w = wrap(&mut e, &ids, kind).unwrap();
+                    let what = format!("{kind} in {turn}, plain frame on top: {plain_on_top}");
+                    assert_eq!(e.doc.parent_of(&w).unwrap().0, if plain_on_top { f } else { g }, "{what}");
                     for (i, b) in ids.iter().zip(before) {
-                        assert_same(b, footprint(&mut e, i), &format!("{kind} in {turn}"));
+                        assert_same(b, footprint(&mut e, i), &what);
+                    }
+                    if kind == "frame" {
+                        // The new frame holds everything its members paint.
+                        e.sync();
+                        let v = View::new(&e);
+                        let wf = v.flat(&w).unwrap();
+                        let inside = ids.iter().all(|i| {
+                            let p = v.painted(i, wf.m).unwrap();
+                            // The frame's size is stored rounded to hundredths.
+                            let tol = 0.01;
+                            p.0 >= wf.x - tol && p.1 >= wf.y - tol && p.0 + p.2 <= wf.x + wf.w + tol && p.1 + p.3 <= wf.y + wf.h + tol
+                        });
+                        assert!(inside, "{what}: members stick out of the new frame");
                     }
                     unwrap(&mut e, &[w]).unwrap();
                 }
