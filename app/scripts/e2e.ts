@@ -79,6 +79,39 @@ try {
   await sleep(250)
   if ((await rows()) !== rows0 || (await app.getByTestId('layer-rename').count())) throw new Error('a quick second chevron click did not collapse (or opened rename)')
 
+  // The eye icon hides and shows its layer (the row's press capture used to swallow the click). A hidden
+  // layer keeps its eye while the pointer is away; the click does not select the row.
+  // (`until` is shadowed further down in this function, so poll with a plain loop.)
+  const eyeShown = async (want: boolean) => {
+    for (let i = 0; i < 40; i++) {
+      if (((await app!.getByTestId('layer-eye-sld02').count()) > 0) === want) return
+      await sleep(200)
+    }
+    throw new Error(`the eye of slide 2 did not ${want ? 'show' : 'go away'}`)
+  }
+  const eyeBox = async () => { const b = await app!.getByTestId('layer-eye-sld02').bounds(); return { x: b.x + b.width / 2, y: b.y + b.height / 2 } }
+  const rowBox = await app.getByTestId('layer-sld02').bounds()
+  await app.mouse.move({ x: rowBox.x + 100, y: rowBox.y + 10 })
+  await eyeShown(true)
+  const clickEye = async () => {
+    const p = await eyeBox()
+    await app!.mouse.move(p)
+    await sleep(300)
+    await app!.mouse.down(p)
+    await sleep(100)
+    await app!.mouse.up(p)
+    await sleep(400)
+  }
+  await clickEye()
+  await app.mouse.move({ x: 700, y: 900 })
+  await eyeShown(true)
+  if (await app.getByTestId('selection-box').count()) throw new Error('the eye click selected the layer')
+  await app.mouse.move({ x: rowBox.x + 100, y: rowBox.y + 10 })
+  await sleep(300)
+  await clickEye()
+  await app.mouse.move({ x: 700, y: 900 })
+  await eyeShown(false)
+
   // Present starts at the slide holding the selection, also when a layer inside it is selected.
   await app.getByTestId('layer-toggle-sld03').click()
   await app.getByTestId('layers').getByText('Thanks').click()
