@@ -224,6 +224,11 @@ impl Doc {
             let desc = top.remove("descendants");
             merge_props(&mut node, &top, false);
             if let Some(Value::Object(desc)) = desc {
+                for (key, over) in &desc {
+                    if over.get("type").is_some() {
+                        validate_node(over).map_err(|e| format!("descendant '{key}': {e}"))?;
+                    }
+                }
                 if node["type"] == "ref" {
                     node["descendants"] = Value::Object(desc);
                 } else {
@@ -234,7 +239,6 @@ impl Doc {
                         let slot = find_mut_in_node(&mut node, &target).unwrap();
                         if over.get("type").is_some() {
                             let mut repl = over.clone();
-                            validate_node(&repl).map_err(|e| format!("descendant '{key}': {e}"))?;
                             self.assign_ids(&mut repl, &mut Vec::new());
                             *slot = repl;
                         } else {
@@ -647,5 +651,18 @@ mod tests {
         }
         assert!(e.copy(&json!({"type":"ref","ref":comp}), ROOT, Some(&json!({"descendants":{"x":over}}))).is_err());
         assert!(e.update(&format!("{inst}/x"), &json!({"opacity": 0.5})).is_ok());
+    }
+
+    /// A copy's typed descendant overrides are checked like any node, whether it copies a ref or a frame.
+    #[test]
+    fn copy_validates_descendant_replacements() {
+        let mut e = Doc::new();
+        let comp = e.insert(ROOT, json!({"type":"frame","reusable":true,"children":[{"type":"text","name":"t"}]}), None).unwrap();
+        let bad = json!({"descendants":{"t":{"type":"frame","children":["str"]}}});
+        let err = e.copy(&json!({"type":"ref","ref":comp}), ROOT, Some(&bad)).unwrap_err();
+        assert!(err.contains("descendant 't'") && err.contains("children[0]"), "{err}");
+        let err = e.copy(&json!({"type":"frame","children":[{"type":"text","name":"t"}]}), ROOT, Some(&bad)).unwrap_err();
+        assert!(err.contains("descendant 't'"), "{err}");
+        assert_eq!(e.children().len(), 1);
     }
 }

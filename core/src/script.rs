@@ -533,6 +533,8 @@ fn install<'js>(ctx: &Ctx<'js>) -> rquickjs::Result<()> {
         })?;
         ctx.globals().set(name, func)?;
     }
+    #[cfg(test)]
+    ctx.globals().set("__PANIC", Function::new(ctx.clone(), || -> rquickjs::Result<()> { panic!("host function panic") })?)?;
     Ok(())
 }
 
@@ -720,22 +722,18 @@ pub fn stream_step(e: &mut Engine, key: &str, agent: &str, source: &str, seed: u
     if !chunk.trim().is_empty() {
         resume_ids(seed, live.draws);
         // A panic in a host function breaks this stream (the caller rebuilds the preview) instead of
-        // unwinding past the caller's document swap.
-        let stepped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            bind(e, true, PREVIEW_TIMEOUT, || live.js.with(|ctx| eval::<()>(&ctx, chunk, Some("input"))).and_then(|_| settle(&live.js)))
-        }));
+        // unwinding past the caller's document swap; what it wrote before panicking still counts.
+        let (r, ex) = bind(e, true, PREVIEW_TIMEOUT, || {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| live.js.with(|ctx| eval::<()>(&ctx, chunk, Some("input"))).and_then(|_| settle(&live.js))))
+                .unwrap_or_else(|_| Err("internal error (panic) while running the script".into()))
+        });
         match ids_drawn(seed, live.draws) {
             Some(n) => live.draws = n,
             None => live.broken = true,
         }
-        match stepped {
-            Ok((r, ex)) => {
-                live.touched.extend(ex.touched);
-                live.stalled = ex.limit;
-                live.broken |= r.is_err();
-            }
-            Err(_) => live.broken = true,
-        }
+        live.touched.extend(ex.touched);
+        live.stalled = ex.limit;
+        live.broken |= r.is_err();
         live.ran = source.to_string();
     }
     let touched = live.touched.clone();
@@ -1790,6 +1788,25 @@ Insert(document, {type:'frame', name:'C', width:10, height:10})
         let out = e.tool("execute", &json!({"input": src, "__stream": "k", "__agent": "ag0"}));
         assert!(out.error && out.text.contains("node not found: nope (line 4)") && out.text.contains("editId"), "{}", out.text);
         assert!(e.doc.children().is_empty() && e.preview.is_none() && e.streams.is_empty());
+    }
+
+    #[test]
+    fn panic_in_streamed_host_call_breaks_the_stream_and_recovers() {
+        let mut e = engine();
+        let a = "Insert(document, {type:'frame', name:'A', width:10, height:10})\n";
+        // A statement counts as complete once the next one has started.
+        e.stream_update("k", "ag0", &format!("{a}next = 1"));
+        assert_eq!(e.script.live["k"].touched.len(), 1);
+        // The write before the panic stays in the preview and in the stream's touched ids.
+        e.stream_update("k", "ag0", &format!("{a}Insert(document, {{type:'frame', name:'B', width:10, height:10}}); __PANIC()\nnext = 2"));
+        assert!(e.script.live["k"].broken && e.script.live["k"].touched.len() == 2);
+        assert!(!e.executing && EXEC.with(|c| c.borrow().is_none()));
+        assert!(e.preview.is_some() && e.streams[0].touched == 2);
+        // The next execute still commits.
+        let out = e.tool("execute", &json!({"input": a, "__stream": "k", "__agent": "ag0"}));
+        assert!(!out.error, "{}", out.text);
+        assert_eq!(e.doc.children().len(), 1);
+        assert!(e.preview.is_none() && e.streams.is_empty() && !e.executing);
     }
 
     fn script_dir(name: &str, files: &[(&str, &str)]) -> std::path::PathBuf {
