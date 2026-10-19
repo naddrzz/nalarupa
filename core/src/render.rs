@@ -971,8 +971,8 @@ pub fn unapply(m: [f64; 6], x: f64, y: f64) -> (f64, f64) {
 
 /// Topmost-first chain of nodes under a document point: [top-level, child, ..., deepest].
 /// The deepest node is the last-painted one whose box holds the point; a child can be hit outside
-/// its parent's box unless an ancestor clips it. A group paints nothing itself, so only its children
-/// can be hit: a point inside its box but on none of them falls through to the layers below.
+/// its parent's box unless an ancestor clips it. A group's union box is not a hit surface, so only its
+/// children can be hit: a point inside its box but on none of them falls through to the layers below.
 pub fn hit_chain(r: &Renderer, x: f64, y: f64) -> Vec<String> {
     for id in r.order.iter().rev() {
         let Some(layer) = r.layers.get(id) else { continue };
