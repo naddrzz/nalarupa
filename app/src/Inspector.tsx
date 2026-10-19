@@ -87,7 +87,7 @@ function strokeWidthOf(v: string, vars: Record<string, any>): unknown {
   const p = lengthOf(v, vars)
   if (p !== undefined) return p
   const o = parse(v)
-  return o && typeof o === 'object' && !Array.isArray(o) && Object.keys(o).every((k) => ['top', 'right', 'bottom', 'left'].includes(k)) && Object.values(o).every(lengthVar(vars)) ? o : undefined
+  return o && typeof o === 'object' && !Array.isArray(o) && Object.keys(o).length > 0 && Object.keys(o).every((k) => ['top', 'right', 'bottom', 'left'].includes(k)) && Object.values(o).every(lengthVar(vars)) ? o : undefined
 }
 
 /** Font weight: normal, bold, a number from 1 to 1000, a $variable that exists, or empty for the default. */
