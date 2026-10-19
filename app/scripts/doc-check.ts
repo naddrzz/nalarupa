@@ -24,9 +24,20 @@ if (!process.env.NALARUPA_CHECK_CHILD) {
   mkdirSync(bin)
   writeFileSync(join(bin, 'claude'), '#!/bin/sh\nexec sleep 60\n', { mode: 0o755 })
   const PATH = `${bin}${delimiter}${process.env.PATH ?? ''}`
-  const run = Bun.spawnSync([process.execPath, import.meta.path], { env: { ...process.env, PATH, NALARUPA_DATA: data, NALARUPA_CHECK_CHILD: '1' }, stdio: ['inherit', 'inherit', 'inherit'] })
+  // A blank ANTHROPIC_API_KEY (common in CI) must count as no key; a real one selects the API backend.
+  const spawn = (child: string, key: string) => Bun.spawnSync([process.execPath, import.meta.path], { env: { ...process.env, PATH, NALARUPA_DATA: data, NALARUPA_CHECK_CHILD: child, ANTHROPIC_API_KEY: key }, stdio: ['inherit', 'inherit', 'inherit'] })
+  const run = spawn('1', ' ')
+  const keyed = spawn('keyed', 'sk-ant-env')
   rmSync(data, { recursive: true, force: true })
-  process.exit(run.exitCode ?? 1)
+  process.exit(run.exitCode || keyed.exitCode || 0)
+}
+if (process.env.NALARUPA_CHECK_CHILD === 'keyed') {
+  const s = call<Record<string, unknown>>('settings_get')
+  assert(call<{ hasApiKey: boolean }>('init').hasApiKey && s.backend === 'api', 'an ANTHROPIC_API_KEY in the environment selects the API backend')
+  call('settings_set', { key: 'agent_backend', value: 'claude-code' })
+  assert(call<Record<string, unknown>>('settings_get').backend === 'claude-code', 'the agent_backend setting overrides the environment key')
+  console.log('doc-check ok (env key)')
+  process.exit(0)
 }
 const data = process.env.NALARUPA_DATA
 assert(call('init').dataDir === data, "core uses this run's NALARUPA_DATA")
@@ -145,6 +156,9 @@ assert(s.agent_backend === 'claude-code' && s.anthropic_api_key === '•••�
 assert(JSON.parse(readFileSync(join(data, 'settings.json'), 'utf8')).agent_backend === 'claude-code', 'settings are saved to settings.json')
 call('settings_set', { key: 'anthropic_api_key', value: null })
 assert(!('anthropic_api_key' in call('settings_get')), 'a null value removes the setting')
+// A blank ANTHROPIC_API_KEY is no key: the core and the settings panel both fall back to Claude Code.
+call('settings_set', { key: 'agent_backend', value: null })
+assert(call<{ hasApiKey: boolean }>('init').hasApiKey === false && call<Record<string, unknown>>('settings_get').backend === 'claude-code', 'a blank ANTHROPIC_API_KEY does not select the API backend')
 throws(() => call('settings_set', { value: 1 }), /key required/, 'settings_set without a key')
 
 // While an agent runs, a new conversation and a document switch are both refused: the run keeps its chat and

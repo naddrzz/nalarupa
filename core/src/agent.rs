@@ -158,8 +158,7 @@ fn emit(p: &Profile, kind: &str, extra: Value) {
 }
 
 pub(crate) fn backend() -> String {
-    let e = engine();
-    e.setting("agent_backend").unwrap_or_else(|| if e.setting("anthropic_api_key").is_some() || std::env::var("ANTHROPIC_API_KEY").is_ok() { "api".into() } else { "claude-code".into() })
+    engine().backend()
 }
 
 const SYSTEM_INTRO: &str = "You are a design agent inside Nalarupa, an infinite-canvas design editor. You design directly on the user's canvas \
@@ -645,7 +644,7 @@ pub fn spawn_spec() -> Value {
 fn run_api(p: &Profile, prompt: &str, child: bool) -> Result<Value, String> {
     let (key, model, effort, cancel, state, fast) = {
         let mut e = engine();
-        let key = e.setting("anthropic_api_key").or_else(|| std::env::var("ANTHROPIC_API_KEY").ok())
+        let key = e.api_key()
             .ok_or("No Anthropic API key. Add one in Settings, set ANTHROPIC_API_KEY, or switch the backend to Claude Code.")?;
         let model = e.setting("agent_model").unwrap_or_else(|| DEFAULT_MODEL.into());
         let effort = e.setting("agent_effort").unwrap_or_else(|| "high".into());
