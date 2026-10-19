@@ -718,7 +718,7 @@ impl Engine {
             }
         }
         let mut hit = walk(&mut self.doc.root, pending, url);
-        for v in self.undo.iter_mut().chain(self.redo.iter_mut()) {
+        for v in self.undo.iter_mut().chain(self.redo.iter_mut()).chain(self.libs.iter_mut().map(|(_, v)| v)) {
             hit |= walk(v, pending, url);
         }
         if hit {
@@ -825,6 +825,16 @@ mod tests {
         assert_eq!(v["children"][0]["fill"]["url"], "nalarupa:pending-image-1-a");
         assert_eq!(v["children"][1]["fill"]["url"], "");
         assert_eq!(v["children"][2]["fill"]["url"], "./images/x.jpg");
+    }
+
+    #[test]
+    fn resolve_pending_reaches_libraries() {
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test-resolve-libs"));
+        e.libs.push(("lib".into(), json!({"children": [{"fill": {"type": "image", "url": "nalarupa:pending-image-1-a"}}]})));
+        e.inflight.insert("nalarupa:pending-image-1-a".into());
+        e.resolve_pending("nalarupa:pending-image-1-a", "./images/x.jpg");
+        assert_eq!(e.libs[0].1["children"][0]["fill"]["url"], "./images/x.jpg");
+        assert!(e.inflight.is_empty());
     }
 
     #[test]
