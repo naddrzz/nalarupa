@@ -872,6 +872,8 @@ fn run_api(p: &Profile, prompt: &str, child: bool, model: Option<String>) -> Res
             for b in &calls {
                 engine().stream_end(b["id"].as_str().unwrap_or(""));
             }
+            // The API rejects every later request while a tool_use has no tool_result after it.
+            messages.push(truncated_results(&calls));
             emit(p, "note", json!({"text": "The reply hit the output limit mid-tool-call; ask the agent to continue."}));
             break;
         }
@@ -910,6 +912,13 @@ fn run_api(p: &Profile, prompt: &str, child: bool, model: Option<String>) -> Res
         engine().agent.messages = messages;
     }
     Ok(usage)
+}
+
+/// The user message answering tool calls that were cut off by the output limit, so the history stays valid.
+fn truncated_results(calls: &[&Value]) -> Value {
+    let results: Vec<Value> = calls.iter().map(|b| json!({"type": "tool_result", "tool_use_id": b["id"], "is_error": true,
+        "content": [{"type": "text", "text": "The reply was cut off by the output limit; this call did not run. Continue in smaller steps."}]})).collect();
+    json!({"role": "user", "content": results})
 }
 
 fn truncate(s: &str, n: usize) -> String {
@@ -1168,6 +1177,17 @@ mod tests {
         // Byte 4 is inside the second 3-byte char; a plain `String::truncate(4)` would panic.
         assert_eq!(truncate("日本語", 4), "日…");
         assert_eq!(truncate("日本語", 9), "日本語");
+    }
+
+    #[test]
+    fn a_reply_cut_off_inside_tool_calls_leaves_none_unanswered() {
+        let calls = [json!({"type": "tool_use", "id": "toolu_a", "name": "execute", "input": {}}), json!({"type": "tool_use", "id": "toolu_b", "name": "execute", "input": {}})];
+        let msg = truncated_results(&[&calls[0], &calls[1]]);
+        assert_eq!(msg["role"], "user");
+        let results = msg["content"].as_array().unwrap();
+        let ids: Vec<&str> = results.iter().map(|r| r["tool_use_id"].as_str().unwrap()).collect();
+        assert_eq!(ids, ["toolu_a", "toolu_b"], "every truncated tool_use gets a tool_result");
+        assert!(results.iter().all(|r| r["type"] == "tool_result" && r["is_error"] == true));
     }
 
     #[test]
