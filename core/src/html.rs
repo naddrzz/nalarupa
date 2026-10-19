@@ -319,7 +319,9 @@ impl Html<'_> {
                         css += "overflow:hidden;";
                     }
                 } else if n.ty == "group" {
-                    let _ = write!(css, "position:relative;width:{}px;height:{}px;", n.w, n.h);
+                    css += "position:relative;";
+                    css += &size_css(Some(&Value::from(n.w)), "width", parent_dir, true, n.w);
+                    css += &size_css(Some(&Value::from(n.h)), "height", parent_dir, false, n.h);
                 } else if n.ty == "ellipse" {
                     css += "border-radius:50%;";
                 }
@@ -582,6 +584,10 @@ mod tests {
         let v = html(&mut e, "vertical");
         assert_eq!(v.matches("height:20px;flex-shrink:0;").count(), 3, "{v}");
         assert!(!v.contains("width:60px;flex-shrink:0;"), "{v}");
+        // Groups take their size from their children and must not shrink either.
+        let id = e.insert_root(json!({"type": "frame", "width": 100, "height": 60, "layout": "horizontal", "children": [{"type": "group", "children": [{"type": "rectangle", "width": 80, "height": 20, "fill": "#ff0000"}]}]})).unwrap();
+        let g = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
+        assert!(g.contains("width:80px;flex-shrink:0;"), "{g}");
     }
 
     #[test]
