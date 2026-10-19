@@ -19,10 +19,10 @@ const throws = (fn: () => unknown, re: RegExp, msg: string) => {
 // with a fresh data folder so settings and documents written here never touch the real ones.
 if (!process.env.NALARUPA_CHECK_CHILD) {
   const data = mkdtempSync(join(tmpdir(), 'nalarupa-doc-'))
-  // A stand-in `claude` that runs long and prints nothing: a running agent without a login.
+  // A stand-in `claude` that records its stdin and arguments, then runs long and prints nothing: a running agent without a login.
   const bin = join(data, 'bin')
   mkdirSync(bin)
-  writeFileSync(join(bin, 'claude'), '#!/bin/sh\nexec sleep 60\n', { mode: 0o755 })
+  writeFileSync(join(bin, 'claude'), '#!/bin/sh\ncat > "$(dirname "$0")/stdin.txt"\nprintf \'%s\\n\' "$@" > "$(dirname "$0")/args.txt"\nexec sleep 60\n', { mode: 0o755 })
   const PATH = `${bin}${delimiter}${process.env.PATH ?? ''}`
   const run = Bun.spawnSync([process.execPath, import.meta.path], { env: { ...process.env, PATH, NALARUPA_DATA: data, NALARUPA_CHECK_CHILD: '1' }, stdio: ['inherit', 'inherit', 'inherit'] })
   rmSync(data, { recursive: true, force: true })
@@ -206,6 +206,31 @@ if (process.platform !== 'win32') {
   assert(call('agent_reset') === true && call('chat_list').current === null, 'new conversation once the agent has stopped')
   call('new', { template: 'slides' })
   assert(ids() === 'sld01,sld02,sld03', 'switching works again once the agent stopped')
+
+  // A long message and a big selection reach the CLI on stdin, not as arguments (the OS caps the argument list), and
+  // the editor state lists at most 40 selected nodes.
+  call('new', { template: 'empty' })
+  const made = exec('f = Insert(document, {type:"frame", name:"Big", width:800, height:800}); for (let i = 0; i < 2000; i++) Insert(f, {type:"rectangle", name:"Product card background rectangle number " + i, width:10, height:10})')
+  const rects = [...made.matchAll(/^"Product card[^"]*": "([^"]+)"/gm)].map((m) => m[1])
+  assert(rects.length === 2000, `built 2000 rectangles (${rects.length})`)
+  call('select', { ids: rects })
+  const sel = call('tool', { name: 'get_editor_state', args: {} }).text as string
+  assert(sel.length < 20000 && /\.\.\. \+1960 others/.test(sel), `the selection list is capped (${sel.length} bytes)`)
+  const brief = 'lorem ipsum '.repeat(12000)
+  const bin = join(data, 'bin')
+  rmSync(join(bin, 'stdin.txt'), { force: true })
+  rmSync(join(bin, 'args.txt'), { force: true })
+  try {
+    call('agent_send', { text: `Summarize this brief: ${brief}` })
+    const sent = join(bin, 'stdin.txt')
+    await until(() => existsSync(sent) && readFileSync(sent, 'utf8').includes(brief), 'the whole prompt reaches the CLI on stdin')
+    await until(() => existsSync(join(bin, 'args.txt')), 'the CLI started')
+    assert(!readFileSync(join(bin, 'args.txt'), 'utf8').includes('lorem'), 'the prompt is not an argument')
+    assert(call('state').agentRunning, 'a long prompt starts the run')
+  } finally {
+    call('agent_stop')
+  }
+  await until(() => !call('state').agentRunning, 'the long-prompt run stops')
 }
 
 console.log('doc-check ok')
