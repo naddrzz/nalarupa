@@ -86,15 +86,30 @@ function visibleText(it: Extract<ChatItem, { kind: 'assistant' }>, isLast: boole
   return { text: words.slice(0, isLast ? shown : words.length).join(''), done: !isLast || shown >= words.length }
 }
 
+// The panel unmounts while the Design tab is open; what the user set up in it (draft, agent options, open cards) lives here.
+const kept = new Map<string, unknown>()
+function useKept<T>(key: string, init: () => T) {
+  const [v, set] = useState<T>(() => {
+    if (!kept.has(key)) kept.set(key, init())
+    return kept.get(key) as T
+  })
+  const setKept = (n: T | ((p: T) => T)) => set((p) => {
+    const x = typeof n === 'function' ? (n as (p: T) => T)(p) : n
+    kept.set(key, x)
+    return x
+  })
+  return [v, setKept] as const
+}
+
 export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: number; running: boolean; mcpUrl: string; toast: Toast; onSent?: () => void }) {
-  const [draft, setDraft] = useState('')
-  const [settings, setSettings] = useState(false)
-  const [parallel, setParallel] = useState('1')
-  const [mode, setMode] = useState<'split' | 'side'>('split')
-  const [open, setOpen] = useState<Set<number>>(new Set())
-  const [planOpen, setPlanOpen] = useState(true)
+  const [draft, setDraft] = useKept('draft', () => '')
+  const [settings, setSettings] = useKept('settings', () => false)
+  const [parallel, setParallel] = useKept('parallel', () => '1')
+  const [mode, setMode] = useKept<'split' | 'side'>('mode', () => 'split')
+  const [open, setOpen] = useKept<Set<number>>('open', () => new Set())
+  const [planOpen, setPlanOpen] = useKept('planOpen', () => true)
   const [, setChatVersion] = useState(0)
-  const picks = useRef(SUGGESTIONS.slice().sort(() => Math.random() - 0.5).slice(0, 6))
+  const [picks] = useKept('picks', () => SUGGESTIONS.slice().sort(() => Math.random() - 0.5).slice(0, 6))
   // "Let it cook" settings (design count, iterate mode) persist in the app settings.
   const saved = useMemo(() => tryCall<Record<string, unknown>>('settings_get') ?? {}, [])
   const [designs, setDesigns] = useState(Math.min(MAX_DESIGNS, Math.max(1, Number(saved.agent_designs) || 1)))
@@ -176,7 +191,7 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
       {items.length === 0 ? (
         <div style={{ flexGrow: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 8, padding: 14 }}>
           <T size={15} weight="600" color={C.text}>Ask me to design anything</T>
-          {picks.current.map((s) => (
+          {picks.map((s) => (
             <Pressable key={s} testId={`suggestion-${s.slice(0, 12)}`} label={`Design ${s}`} onClick={() => send(`Design ${s}`)} style={{ padding: 10, borderRadius: 8, borderWidth: 1, borderColor: C.border, hover: { backgroundColor: C.panel2 } }}>
               <T size={12} color={C.muted}>{s}</T>
             </Pressable>
