@@ -238,6 +238,7 @@ impl Engine {
                 self.streams.len() - 1
             }
         };
+        let clean = !self.dirty();
         if let Some(mut preview) = self.preview.take() {
             let seed = self.streams[i].seed;
             std::mem::swap(&mut self.doc, &mut preview);
@@ -245,7 +246,7 @@ impl Engine {
             std::mem::swap(&mut self.doc, &mut preview);
             self.preview = Some(preview);
             if let Some(touched) = touched {
-                self.version += 1;
+                self.redraw(clean);
                 let s = &mut self.streams[i];
                 let seen = std::mem::replace(&mut s.touched, touched.len());
                 if touched.len() > seen {
@@ -286,9 +287,10 @@ impl Engine {
     /// in a fresh JS context.
     fn rebuild_preview(&mut self) {
         crate::script::reset_streams(self);
+        let clean = !self.dirty();
         if self.streams.is_empty() {
             if self.preview.take().is_some() {
-                self.version += 1;
+                self.redraw(clean);
             }
             return;
         }
@@ -305,7 +307,7 @@ impl Engine {
         }
         std::mem::swap(&mut self.doc, &mut scratch);
         self.preview = Some(scratch);
-        self.version += 1;
+        self.redraw(clean);
         for a in activity {
             self.emit(a);
         }
@@ -327,6 +329,13 @@ impl Engine {
         }
         self.redo.clear();
         self.touch();
+    }
+
+    /// The preview changed, not the document: render again, and a document that was `clean` before
+    /// the preview ran (its host functions bump the version too) stays clean.
+    fn redraw(&mut self, clean: bool) {
+        self.version += 1;
+        self.keep_clean(clean);
     }
 
     pub fn touch(&mut self) {

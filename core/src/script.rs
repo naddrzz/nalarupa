@@ -1582,6 +1582,28 @@ Insert(card, {type:\"text\", name:\"Title\", content:\"Hi\", fill:\"#111111\"})
     }
 
     #[test]
+    fn rolled_back_agent_edits_leave_a_clean_document_clean() {
+        let mut e = engine();
+        assert!(!e.dirty());
+        let out = e.tool("execute", &json!({"input": "Insert(document, {type:\"frame\", name:\"A\", width:10, height:10})\nUpdate(\"no-such-node\", {x:1})"}));
+        assert!(out.error && out.text.contains("rolled back"), "{}", out.text);
+        assert!(e.doc.children().is_empty() && !e.dirty(), "a failed execute is not an edit");
+        // Stop in the middle of a streamed call: the preview goes away, the document never changed.
+        let src = "Insert(document, {type:\"frame\", name:\"B\", width:10, height:10})\nInsert(";
+        e.stream_update("toolu_stop", "ag0", src);
+        assert_eq!(e.preview.as_ref().expect("preview exists").children().len(), 1);
+        assert!(!e.dirty(), "a streaming preview is not an edit");
+        e.stream_end("toolu_stop");
+        assert!(e.preview.is_none() && e.doc.children().is_empty() && !e.dirty(), "a stopped stream is not an edit");
+        // A document that really has unsaved changes stays dirty through the same paths.
+        e.tool("execute", &json!({"input": "Insert(document, {type:\"frame\", name:\"C\", width:10, height:10})"}));
+        assert!(e.dirty());
+        e.stream_update("toolu_stop", "ag0", src);
+        e.stream_end("toolu_stop");
+        assert!(e.dirty());
+    }
+
+    #[test]
     fn globals_are_per_agent() {
         let mut e = engine();
         let run = |e: &mut Engine, agent: &str, input: &str| {
