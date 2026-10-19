@@ -110,6 +110,11 @@ function endStreaming(agent: string, now: number) {
   }
 }
 
+/** Whether the agent's cursor has faded off the canvas; a running agent's cursor never does. */
+export function cursorFaded(agent: string, c: CursorState | undefined, now: number): boolean {
+  return !c || (!store.running.has(agent) && now - c.lastActivity > GONE)
+}
+
 /** Wake (or spawn) the agent's cursor without moving it. */
 export function poke(p: Profile, now: number) {
   const c = store.cursors.get(p.id)
@@ -119,7 +124,7 @@ export function poke(p: Profile, now: number) {
     store.cursors.set(p.id, { profile: p, x, y, tx: x, ty: y, appearAt: now, lastActivity: now, wobble: 0, phase: Math.random() * Math.PI * 2 })
     return
   }
-  if (now - c.lastActivity > 6500) c.appearAt = now
+  if (cursorFaded(p.id, c, now)) c.appearAt = now
   c.lastActivity = now
 }
 
