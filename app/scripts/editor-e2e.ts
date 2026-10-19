@@ -374,6 +374,27 @@ try {
   await sleep(400)
   assert(await until(async () => (await width()) === w0), 'arrow steps in one focus session undo together')
 
+  // Free-text fields: Padding takes CSS-style "v h" and is stored as an array; text it cannot use reverts with an error toast.
+  // Click the field's right end, then send each key batch in its own call.
+  const typeInto = async (testId: string, keys: string) => {
+    const b = (await app.getByTestId(testId).bounds())!
+    await app.mouse.click({ x: b.x + b.width - 10, y: b.y + b.height / 2 })
+    await sleep(700)
+    await app.call('keystrokes', { keys })
+    await sleep(1000)
+    await app.call('keystrokes', { keys: 'enter' })
+    await sleep(1500)
+  }
+  await typeInto('inspector-padding', 'ctrl-a 4 0 space 8 0')
+  assert(await until(async () => (await app.getByText('[40,80]').count()) > 0), 'CSS-style padding "40 80" is stored as [40, 80]')
+  assert(!(await count('toast')), 'a valid padding raises no error')
+  await canvas.press('ctrl-z')
+  assert(await until(async () => !(await app.getByText('[40,80]').count())), 'one undo step reverts the padding')
+  await typeInto('inspector-padding', 'ctrl-a a b c')
+  assert(await until(async () => (await count('toast')) > 0), 'padding text that is not lengths raises an error toast')
+  assert(!(await app.getByText('abc').count()), 'the padding field reverts instead of showing the rejected text')
+  await app.getByTestId('toast-dismiss').click()
+
   // Copy / paste: the pasted frame gets selected; undo removes it in one step.
   await canvas.press('ctrl-c')
   await canvas.press('ctrl-v')
@@ -389,15 +410,6 @@ try {
 
   // Inspector: an empty or unparsable value is rejected (the field reverts) instead of committing 0, an empty
   // name or an unpaintable color. Click the field's right end, then send each key batch in its own call.
-  const typeInto = async (testId: string, keys: string) => {
-    const b = (await app.getByTestId(testId).bounds())!
-    await app.mouse.click({ x: b.x + b.width - 10, y: b.y + b.height / 2 })
-    await sleep(700)
-    await app.call('keystrokes', { keys })
-    await sleep(1000)
-    await app.call('keystrokes', { keys: 'enter' })
-    await sleep(1500)
-  }
   if (await count('toast-dismiss')) await app.getByTestId('toast-dismiss').click()
   const sized0 = (await app.getByTestId('size-label').textContent()).trim()
   const rows0 = await rectRows()
@@ -407,7 +419,13 @@ try {
   assert((await app.getByTestId('size-label').textContent()).trim() === sized0, 'a non-numeric width is ignored')
   await typeInto('inspector-name', 'ctrl-a backspace')
   assert((await rectRows()) === rows0, 'an empty layer name is rejected')
-  assert(!(await count('toast')), 'no error toast before a bad color')
+  assert(!(await count('toast')), 'no error toast before bad values')
+  await typeInto('inspector-stroke-width', 'ctrl-a x')
+  assert(await until(async () => (await count('toast')) > 0), 'a stroke width that is not a number raises an error toast')
+  await app.getByTestId('toast-dismiss').click()
+  await typeInto('inspector-effect', 'ctrl-a a b c')
+  assert(await until(async () => (await count('toast')) > 0), 'an effect that is not JSON raises an error toast')
+  await app.getByTestId('toast-dismiss').click()
   await typeInto('inspector-fill', 'ctrl-a r e d')
   assert(await until(async () => (await count('toast')) > 0), 'a color the renderer cannot read raises an error toast')
   await app.getByTestId('toast-dismiss').click()

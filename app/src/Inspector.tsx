@@ -58,10 +58,63 @@ function validPaint(v: string, vars: Record<string, any>): boolean {
   return Array.isArray(p) ? p.every(one) : typeof p === 'object' && one(p)
 }
 
+const BAD_VALUE = 'Unable to apply that value. Check its format, for example #FF6A3D or 24, and try again.'
+const EFFECT_TYPES = ['shadow', 'blur', 'background_blur']
+const isVar = (t: string, vars: Record<string, any>) => t.startsWith('$') && Object.prototype.hasOwnProperty.call(vars, t.slice(1))
+const length = (v: unknown) => typeof v === 'number' && Number.isFinite(v) && v >= 0
+
+/** Per-side lengths as a number, [v, h] or [t, r, b, l]: typed CSS-style ("10 20", "1,2,3,4") or as a JSON array. `null` clears it, `undefined` rejects it. */
+function sides(v: string, vars: Record<string, any>, counts: number[]): unknown {
+  const t = v.trim()
+  if (t === '') return null
+  if (isVar(t, vars)) return t
+  let p: unknown = t.startsWith('[') ? parse(t) : t.split(/[\s,]+/).filter(Boolean).map((x) => (/^\d+(\.\d+)?$/.test(x) ? Number(x) : NaN))
+  if (!Array.isArray(p) || !p.every(length) || !counts.includes(p.length)) return undefined
+  return p.length === 1 ? p[0] : p
+}
+
+/** A non-negative number, a $variable that exists, or empty to clear. */
+function lengthOf(v: string, vars: Record<string, any>): unknown {
+  const t = v.trim()
+  return t === '' ? null : isVar(t, vars) ? t : /^\d+(\.\d+)?$/.test(t) ? Number(t) : undefined
+}
+
+/** Stroke width: a length, or JSON per-side widths {top, right, bottom, left}. */
+function strokeWidthOf(v: string, vars: Record<string, any>): unknown {
+  const p = lengthOf(v, vars)
+  if (p !== undefined) return p
+  const o = parse(v)
+  return o && typeof o === 'object' && !Array.isArray(o) && Object.keys(o).every((k) => ['top', 'right', 'bottom', 'left'].includes(k)) && Object.values(o).every(length) ? o : undefined
+}
+
+/** Font weight: normal, bold, a number from 1 to 1000, a $variable that exists, or empty for the default. */
+function fontWeightOf(v: string, vars: Record<string, any>): unknown {
+  const t = v.trim()
+  return t === '' ? null : isVar(t, vars) || t === 'normal' || t === 'bold' || (/^\d+$/.test(t) && Number(t) >= 1 && Number(t) <= 1000) ? t : undefined
+}
+
+/** An effect object (or list of them) of a type the renderer knows. */
+function effectOf(v: string): unknown {
+  const t = v.trim()
+  if (t === '') return null
+  const p = parse(t)
+  const one = (e: any) => !!e && typeof e === 'object' && !Array.isArray(e) && EFFECT_TYPES.includes(e.type)
+  return Array.isArray(p) ? (p.length && p.every(one) ? p : undefined) : one(p) ? p : undefined
+}
+
 export function Inspector({ version, selection, select, toast }: Props) {
   const infos = useMemo(() => selection.map((id) => ({ id, ...tryCall('node', { id }) }) as Info).filter((i) => i.node), [selection, version])
   const update = (props: Record<string, unknown>, coalesce?: string) => {
-    if (tryCall('update', { ids: selection, props, coalesce }) === null) toast('Unable to apply that value. Check its format, for example #FF6A3D or 24, and try again.', true)
+    const ok = tryCall('update', { ids: selection, props, coalesce }) !== null
+    if (!ok) toast(BAD_VALUE, true)
+    return ok
+  }
+  /** Free-text commit: a value the renderer cannot use reverts the field instead of being stored. */
+  const setChecked = (prop: string, check: (v: string) => unknown) => (v: string) => {
+    const value = check(v)
+    if (value !== undefined) return update({ [prop]: value })
+    toast(BAD_VALUE, true)
+    return false
   }
   /** Fill / stroke commit: a color the renderer cannot read would leave the layer unpainted, so reject it. */
   const setPaint = (prop: 'fill' | 'stroke', vars: Record<string, any>) => (v: string) => {
@@ -216,7 +269,7 @@ export function Inspector({ version, selection, select, toast }: Props) {
             <>
               <Row>
                 <NumField label="G" name="Gap" value={Number(n.gap ?? 0) || 0} onCommit={(v, k) => update({ gap: v }, k)} testId="inspector-gap" />
-                <Field label="P" name="Padding" value={str(n.padding ?? 0)} onCommit={(v) => update({ padding: parse(v) })} />
+                <Field label="P" name="Padding" value={str(n.padding ?? 0)} onCommit={setChecked('padding', (v) => sides(v, vars, [1, 2, 4]))} testId="inspector-padding" />
               </Row>
               <Segmented
                 label="Distribute"
@@ -256,10 +309,10 @@ export function Inspector({ version, selection, select, toast }: Props) {
           <Field name="Font family" value={str(n.fontFamily ?? 'Inter')} onCommit={(v) => update({ fontFamily: v })} />
           <Row>
             <NumField label="S" name="Font size" value={Number(n.fontSize ?? 14) || 14} onCommit={(v, k) => update({ fontSize: Math.max(1, v) }, k)} testId="inspector-font-size" />
-            <Field label="W" name="Font weight" value={str(n.fontWeight ?? '400')} onCommit={(v) => update({ fontWeight: v })} />
+            <Field label="W" name="Font weight" value={str(n.fontWeight ?? '400')} onCommit={setChecked('fontWeight', (v) => fontWeightOf(v, vars))} testId="inspector-font-weight" />
           </Row>
           <Row>
-            <Field label="L" name="Line height" value={str(n.lineHeight ?? '')} onCommit={(v) => update({ lineHeight: parse(v) })} />
+            <Field label="L" name="Line height" value={str(n.lineHeight ?? '')} onCommit={setChecked('lineHeight', (v) => lengthOf(v, vars))} testId="inspector-line-height" />
             <NumField label="K" name="Letter spacing" value={Number(n.letterSpacing ?? 0) || 0} step={0.1} onCommit={(v, k) => update({ letterSpacing: v || null }, k)} />
           </Row>
           <Segmented
@@ -298,19 +351,19 @@ export function Inspector({ version, selection, select, toast }: Props) {
           <Row>
             {stroke ? <Swatch color={stroke} /> : null}
             <Field name="Stroke color" value={str(n.stroke)} mono onCommit={setPaint('stroke', vars)} placeholder="#000000" />
-            <Field name="Stroke width" value={str(n.strokeWidth ?? '')} width={58} onCommit={(v) => update({ strokeWidth: parse(v) })} placeholder="1" />
+            <Field name="Stroke width" value={str(n.strokeWidth ?? '')} width={58} onCommit={setChecked('strokeWidth', (v) => strokeWidthOf(v, vars))} placeholder="1" testId="inspector-stroke-width" />
           </Row>
           {n.type !== 'ellipse' && n.type !== 'path' ? (
             typeof (n.cornerRadius ?? 0) === 'number'
               ? <NumField label="R" name="Corner radius" value={n.cornerRadius ?? 0} onCommit={(v, k) => update({ cornerRadius: Math.max(0, v) || null }, k)} testId="inspector-radius" />
-              : <Field label="R" name="Corner radius" value={str(n.cornerRadius)} onCommit={(v) => update({ cornerRadius: parse(v) })} testId="inspector-radii" />
+              : <Field label="R" name="Corner radius" value={str(n.cornerRadius)} onCommit={setChecked('cornerRadius', (v) => sides(v, vars, [1, 4]))} testId="inspector-radii" />
           ) : null}
         </Section>
       ) : null}
 
       {!multi ? (
         <Section title="Effect">
-          <Field name="Effect" value={str(n.effect)} mono onCommit={(v) => update({ effect: parse(v) })} placeholder='{"type":"shadow","blur":12,"offset":{"x":0,"y":4},"color":"#00000033"}' />
+          <Field name="Effect" value={str(n.effect)} mono onCommit={setChecked('effect', effectOf)} testId="inspector-effect" placeholder='{"type":"shadow","blur":12,"offset":{"x":0,"y":4},"color":"#00000033"}' />
         </Section>
       ) : null}
 
