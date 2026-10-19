@@ -1460,4 +1460,30 @@ pub(crate) mod tests {
         let red = |x: usize, y: usize| px[(y * 400 + x) * 4] > 200 && px[(y * 400 + x) * 4 + 2] < 100;
         assert!(red(50, 240) && !red(50, 120), "the sibling starts at its old position");
     }
+
+    /// A sliding node with a drop or inner shadow is drawn by resvg; its filter layers stay
+    /// within the frame (plus a margin), however big the node is (it once allocated the node's area).
+    #[test]
+    fn sliding_huge_shadowed_node_renders_quickly() {
+        for shadow in ["outer", "inner"] {
+            let json = format!(
+                r##"{{"version":"2.19","children":[{{"type":"frame","id":"f","x":0,"y":0,"width":400,"height":400,"layout":"none","children":[
+                {{"type":"frame","id":"n","x":0,"y":0,"width":100000,"height":100000,"fill":"#ff0000","effect":{{"type":"shadow","shadowType":"{shadow}","blur":10}}}}]}}]}}"##
+            );
+            let doc = Doc::from_json(&json).unwrap();
+            let (mut fonts, mut assets) = offline();
+            let mut r = Renderer::default();
+            r.slides.push(Slide::new("n"));
+            let mut cx = Ctx { doc: &doc, libs: &[], fonts: &mut fonts, assets: &mut assets };
+            let roots = r.shift_siblings(&mut cx);
+            let rebuilt = r.sync(&mut cx);
+            r.refresh_slides(&mut cx, &rebuilt, roots);
+            r.slides[0].start = Some(Instant::now() - Duration::from_millis(300));
+            let t = Instant::now();
+            let px = r.render(400, 400, 0.0, 0.0, 1.0, [30, 30, 30], None, true).to_vec();
+            assert!(t.elapsed() < Duration::from_secs(5), "{shadow} shadow: took {:?}", t.elapsed());
+            let at = (200 * 400 + 200) * 4;
+            assert!(px[at] > 100 && px[at + 1] < 100, "{shadow} shadow: the node still paints, got {:?}", &px[at..at + 3]);
+        }
+    }
 }

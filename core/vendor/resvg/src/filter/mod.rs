@@ -359,10 +359,15 @@ fn apply_inner(
     ts: usvg::Transform,
     source: &mut tiny_skia::Pixmap,
 ) -> Result<Image, Error> {
+    // Nalarupa: the region never reaches past `source` (the layer, clamped to its target):
+    // flood and composite results are region-sized, so a huge node allocated gigabytes.
     let region = filter
         .rect()
         .transform(ts)
         .map(|r| r.to_int_rect())
+        .and_then(|r| {
+            crate::geom::fit_to_rect(r, IntRect::from_xywh(0, 0, source.width(), source.height())?)
+        })
         .ok_or(Error::InvalidRegion)?;
 
     let mut results: Vec<FilterResult> = Vec::new();
