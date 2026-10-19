@@ -76,6 +76,7 @@ const dotsPad = (now: number) => (REDUCED_MOTION ? '' : ellipsisPadAt(now))
 // Typewriter: ~5 words per 16 ms frame, instant once a later message exists.
 const revealed = new Map<number, number>()
 function revealAll(items: ChatItem[]) {
+  revealed.clear() // the chat being replaced is gone, its ids are never reused
   for (const it of items) if (it.kind === 'assistant') revealed.set(it.id, it.text.split(/(\s+)/).length)
 }
 function visibleText(it: Extract<ChatItem, { kind: 'assistant' }>, isLast: boolean) {
