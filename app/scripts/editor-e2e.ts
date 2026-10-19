@@ -569,6 +569,12 @@ try {
   assert(await until(async () => !(await count('text-editor')) && (await app.getByTestId('layers').getByText('Text').count()) > 0), 'the text tool creates a text layer')
   await app.getByTestId('layers').getByText('Text').click()
   await sleep(300)
+  // Text resizing > Fixed freezes the current size: the layer keeps its height instead of collapsing to 0.
+  const [tw0, th0] = await size()
+  assert(th0 > 0, `an auto text layer has a height (${tw0} × ${th0})`)
+  await app.getByText('Fixed').click()
+  await sleep(600)
+  assert(await until(async () => (await size()).join() === [tw0, th0].join()), `Text resizing > Fixed keeps the ${tw0} × ${th0} size (got ${(await size()).join(' × ')})`)
   const trot = await app.getByTestId('inspector-rotation').bounds()
   await app.mouse.click({ x: trot.x + trot.width - 10, y: trot.y + trot.height / 2 })
   await sleep(500)
