@@ -536,7 +536,7 @@ fn chat_writer() -> &'static ChatWriter {
             w.state.lock().unwrap_or_else(|e| e.into_inner()).1 = false;
             w.changed.notify_all();
             if let Err(err) = result {
-                engine().events.push(json!({"type": "toast", "text": format!("Could not save the chat: {err}")}));
+                engine().emit(json!({"type": "toast", "text": format!("Could not save the chat: {err}")}));
             }
         });
         w
@@ -552,7 +552,7 @@ pub fn save_chat(data_dir: &Path, a: &AgentState) -> Result<(), String> {
     Ok(())
 }
 
-/// Wait until every queued chat save is on disk. Never call it with the engine locked: a failed save toasts through it.
+/// Wait until every queued chat save is on disk. Safe with the engine locked: the writer is idle again before it toasts a failure.
 fn flush_chat_saves() {
     let w = chat_writer();
     let mut s = w.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -611,8 +611,9 @@ pub fn load_chat(id: &str) -> Result<Value, String> {
 
 /// `chat_delete`: remove a saved chat. Removing the current one starts a new conversation.
 pub fn delete_chat(id: &str) -> Result<(), String> {
-    flush_chat_saves();
     let mut e = engine();
+    // Flushed under the lock: no later snapshot can be queued to bring the file back.
+    flush_chat_saves();
     let path = chat_path(&e.data_dir, id)?;
     if e.agent.chat.as_ref().is_some_and(|c| c.id == id) {
         if e.agent.running {
@@ -628,8 +629,8 @@ pub fn delete_chat(id: &str) -> Result<(), String> {
 
 /// `chat_clear`: delete every saved chat but a running one. True when the current chat went too.
 pub fn clear_chats() -> Result<bool, String> {
-    flush_chat_saves();
     let mut e = engine();
+    flush_chat_saves();
     let running = e.agent.running;
     let keep = running.then(|| e.agent.chat.as_ref().map(|c| format!("{}.json", c.id))).flatten();
     if !running {
