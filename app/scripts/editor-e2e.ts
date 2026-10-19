@@ -148,6 +148,7 @@ try {
   await canvas.press('escape')
   await sleep(200)
   assert(!(await count('size-label')), 'escape clears the selection')
+  assert(await app.getByText('P pen').count(), 'the nothing-selected help lists the Pen tool')
   await app.mouse.click(at(125, 300))
   await sleep(300)
   assert((await size()).join() === [wf, hf].join(), 'clicking where the flipped rectangle paints selects it')

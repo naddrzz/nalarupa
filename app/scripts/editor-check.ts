@@ -1,5 +1,6 @@
 // Core checks for the canvas editing commands (no window): `bun scripts/editor-check.ts`
 import { call } from '../src/core'
+import { nodeIcon } from '../src/icons'
 
 const assert = (ok: unknown, msg: string) => {
   if (!ok) throw new Error(`editor-check failed: ${msg}`)
@@ -188,6 +189,11 @@ assert(!marquee(1110, 90, 30, 30), "marquee in the empty corner of a 45° bar's 
 call('update', { ids: [bar], props: { height: 0 } })
 assert(marquee(1200, 190, 20, 20), 'marquee on a zero-height 45° line selects it')
 assert(!marquee(1110, 90, 30, 30), "marquee in the empty corner of a zero-height 45° line's bounds misses it")
+
+// Every layer type that has its own look gets its own Layers/Inspector icon (only rectangle uses the square).
+const icons = Object.fromEntries(['frame', 'group', 'rectangle', 'ellipse', 'text', 'icon', 'line', 'note', 'prompt'].map((t) => [t, nodeIcon(t)]))
+assert(new Set(Object.values(icons)).size === Object.keys(icons).length, `layer types share an icon ${JSON.stringify(icons)}`)
+assert(nodeIcon('path') === nodeIcon('polygon') && nodeIcon('frame', true) === 'component', 'path/polygon and reusable icons')
 
 console.log('editor-check ok')
 process.exit(0)
