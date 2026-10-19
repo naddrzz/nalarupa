@@ -262,6 +262,11 @@ export function resetChat() {
   store.cursors.clear()
 }
 
+/** The newest item that is real chat content: a usage row or a note is not a "later message" for the typewriter. */
+export function lastContentId(items: ChatItem[]): number | undefined {
+  for (let i = items.length - 1; i >= 0; i--) if (items[i].kind !== 'usage' && items[i].kind !== 'note') return items[i].id
+}
+
 /** Agent bar pills: the running agents first, then the finished ones, at most `max`; `more` counts the rest. */
 export function barAgents(max = 8) {
   const all = [...store.profiles.values()]

@@ -3,7 +3,7 @@
 // usage rows, queued prompts, parallel agents.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { call, tryCall } from './core'
-import { barAgents, imageSrc, profileOf, resetChat, restoreChat, store, type ChatItem } from './agents'
+import { barAgents, imageSrc, lastContentId, profileOf, resetChat, restoreChat, store, type ChatItem } from './agents'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import * as SelectPrimitive from '@gpuix/react/select'
 import { C, FONT, INDICATOR_TICK_MS, MONO, REDUCED_MOTION, ellipsisAt, ellipsisPadAt, pulseAt } from './theme'
@@ -75,6 +75,10 @@ const dotsPad = (now: number) => (REDUCED_MOTION ? '' : ellipsisPadAt(now))
 
 // Typewriter: ~5 words per 16 ms frame, instant once a later message exists.
 const revealed = new Map<number, number>()
+function revealAll(items: ChatItem[]) {
+  revealed.clear() // the chat being replaced is gone, its ids are never reused
+  for (const it of items) if (it.kind === 'assistant') revealed.set(it.id, it.text.split(/(\s+)/).length)
+}
 function visibleText(it: Extract<ChatItem, { kind: 'assistant' }>, isLast: boolean) {
   const words = it.text.split(/(\s+)/)
   const shown = REDUCED_MOTION ? words.length : Math.min(words.length, (revealed.get(it.id) ?? 0) + 10)
@@ -102,7 +106,7 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
     tryCall('settings_set', { key: 'agent_iterate', value: m })
   }
   const items = store.items
-  const lastId = items[items.length - 1]?.id
+  const lastId = lastContentId(items)
   const typing = items.some((i) => i.kind === 'assistant' && i.id === lastId && (revealed.get(i.id) ?? 0) < i.text.split(/(\s+)/).length)
   useTick(16, typing)
   useTick(REDUCED_MOTION ? 400 : INDICATOR_TICK_MS, running)
@@ -395,6 +399,7 @@ function ChatHistory({ running, toast, changed }: { running: boolean; toast: Toa
     // A chat whose file vanished stays listed until the list is read again: drop it now.
     if (!r) return refresh()
     restoreChat(r.events ?? [])
+    revealAll(store.items) // a saved reply shows whole, the typewriter is for live ones
     close()
     changed()
   }

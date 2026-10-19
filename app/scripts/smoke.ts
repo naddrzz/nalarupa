@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { call, renderPixels } from '../src/core'
-import { applyEvents, barAgents, cursorFaded, imageSrc, needsFrame, poke, resetChat, store } from '../src/agents'
+import { applyEvents, barAgents, cursorFaded, imageSrc, lastContentId, needsFrame, poke, resetChat, store } from '../src/agents'
 import { INDICATOR_TICK_MS, ellipsisAt, ellipsisPadAt, pulseAt } from '../src/theme'
 
 const assert = (ok: unknown, msg: string) => {
@@ -97,6 +97,16 @@ assert(store.items.some((i) => i.kind === 'queued'), 'queued prompt shows a bubb
 applyEvents([{ type: 'agent', kind: 'dequeued' }], 0)
 assert(!store.items.some((i) => i.kind === 'queued'), 'dequeued drops the queued bubble')
 assert(store.items.some((i) => i.kind === 'note' && /discarded/.test(i.text)), 'dequeued says the prompt was discarded')
+// The typewriter keeps typing the final reply when `done` adds a usage row below it (and a note is no later message either).
+resetChat()
+applyEvents([{ type: 'agent', kind: 'text_delta', text: 'All done.', agent: { id: 'a0', name: 'Agent 0', color: '#ffffff' } }], 0)
+const reply = store.items.find((i) => i.kind === 'assistant')!
+applyEvents([{ type: 'agent', kind: 'done', agent: { id: 'a0', name: 'Agent 0', color: '#ffffff' } }], 0)
+applyEvents([{ type: 'agent', kind: 'note', text: 'A note.' }], 0)
+assert(store.items.some((i) => i.kind === 'usage') && store.items.some((i) => i.kind === 'note'), 'done adds a usage row, a note adds a note row')
+assert(lastContentId(store.items) === reply.id, 'a usage row or a note after the reply does not end its typewriter')
+applyEvents([{ type: 'agent', kind: 'message_end', agent: { id: 'a0', name: 'Agent 0', color: '#ffffff' } }, { type: 'agent', kind: 'text_delta', text: 'Next.', agent: { id: 'a0', name: 'Agent 0', color: '#ffffff' } }], 0)
+assert(lastContentId(store.items) !== reply.id, 'a later reply does')
 // Agent bar: running agents come first and survive the cap; a new conversation forgets every agent.
 resetChat()
 for (let i = 0; i < 10; i++) applyEvents([{ type: 'agent', kind: i < 7 ? 'done' : 'start', agent: { id: `a${i}`, name: `Agent ${i}`, color: '#ffffff' } }], 0)
