@@ -938,6 +938,9 @@ fn claude_mcp_config(agent: &str) -> Result<std::path::PathBuf, String> {
     Ok(path)
 }
 
+/// What the CLI reports for a `--resume` id it has no session for.
+const NO_SESSION: &str = "No conversation found with session ID";
+
 fn run_claude_code(p: &Profile, prompt: &str, child: bool, model: Option<String>) -> Result<Value, String> {
     let cfg = claude_mcp_config(&p.id)?;
     let (session, cancel, state) = {
@@ -1019,6 +1022,7 @@ fn run_claude_code(p: &Profile, prompt: &str, child: bool, model: Option<String>
     let mut usage = json!({});
     let mut reported = false;
     let mut textless_error = false;
+    let mut stale = false;
     for line in BufReader::new(stdout).lines() {
         let Ok(line) = line else { break };
         let Ok(ev) = serde_json::from_str::<Value>(&line) else { continue };
@@ -1092,6 +1096,7 @@ fn run_claude_code(p: &Profile, prompt: &str, child: bool, model: Option<String>
                 if ev["is_error"] == true {
                     // Without text the card would hide the real cause; leave that to the exit error (stderr).
                     match error_cause(&ev) {
+                        Some(text) if session.is_some() && text.contains(NO_SESSION) => stale = true,
                         Some(text) => {
                             emit(p, "error", json!({"text": text}));
                             reported = true;
@@ -1107,6 +1112,13 @@ fn run_claude_code(p: &Profile, prompt: &str, child: bool, model: Option<String>
     let _ = watcher.join();
     let status = proc.lock().unwrap_or_else(|e| e.into_inner()).wait().map_err(|e| e.to_string())?;
     let err = err_reader.join().unwrap_or_default();
+    // The CLI no longer knows the saved session (another working directory, a cleaned `~/.claude`): the
+    // id would fail every later message too, so forget it and run this prompt again as a fresh session.
+    if session.is_some() && (stale || err.contains(NO_SESSION)) && !cancel.load(Ordering::SeqCst) {
+        engine().agent.session = None;
+        emit(p, "note", json!({"text": "Claude Code could no longer find this chat's earlier session, so the earlier context is gone. Continuing in a new session."}));
+        return run_claude_code(p, prompt, child, model);
+    }
     let sent = stdin_writer.map_or(Ok(()), |w| w.join().unwrap_or_else(|_| Err(std::io::Error::other("writer thread panicked"))));
     if !cancel.load(Ordering::SeqCst) && !status.success() {
         return Err(exit_error(&status.to_string(), &err, reported));
