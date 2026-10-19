@@ -1599,4 +1599,34 @@ mod tests {
         assert!(resvg.1 > 200, "the reference draws the whole text: {resvg:?}");
         assert!(vello.0.abs_diff(resvg.0) <= 2 && vello.1.abs_diff(resvg.1) <= 2, "vello {vello:?} vs resvg {resvg:?}");
     }
+
+    /// A blended child of a clipping frame blends against the frame's fill, as without `clip`
+    /// (nested one level down too, and with the frame stroke still above the child).
+    #[test]
+    fn blend_inside_clip_frame() {
+        let frame = |x: u32, clip: bool, child: &str| {
+            format!(r##"{{"type":"frame","id":"f{x}","x":{x},"y":0,"width":100,"height":60,"layout":"none","fill":"#ffff00","clip":{clip},"stroke":"#ff0000","strokeWidth":4,"strokeAlignment":"inner","children":[{child}]}}"##)
+        };
+        let rect = r##"{"type":"rectangle","x":20,"y":10,"width":60,"height":40,"fill":{"type":"color","color":"#00ffff","blendMode":"multiply"}}"##;
+        let nested = format!(r##"{{"type":"group","x":0,"y":0,"children":[{rect}]}}"##);
+        let json = format!(
+            r#"{{"version":"2.19","children":[{},{},{}]}}"#,
+            frame(0, false, rect),
+            frame(200, true, rect),
+            frame(400, true, &nested)
+        );
+        let doc = Doc::from_json(&json).unwrap();
+        let (w, h) = (500u32, 60u32);
+        for (raster, px) in [Raster::Vello, Raster::Resvg].into_iter().zip(both(&doc, w, h, (0.0, 0.0), 1.0)) {
+            let at = |x: u32, y: u32| {
+                let i = (y * w + x) as usize * 4;
+                [px[i], px[i + 1], px[i + 2]]
+            };
+            for x in [50, 250, 450] {
+                let c = at(x, 30);
+                assert!(c[0] < 8 && c[1] > 247 && c[2] < 8, "{raster:?} multiply at x={x}: {c:?}");
+            }
+            assert!(at(202, 30)[0] > 247 && at(202, 30)[1] < 8, "{raster:?} the clipped frame's stroke stays above");
+        }
+    }
 }
