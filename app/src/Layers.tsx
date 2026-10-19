@@ -331,6 +331,7 @@ function Slides({ version, selection, select, focus, present, toast, onShortcut 
     let stop = false
     let timer: ReturnType<typeof setTimeout> | undefined
     const next = new Map<string, string>()
+    const live = new Set(frames.map((f) => f.id))
     const step = (from: number) => {
       if (stop) return
       for (const f of frames.slice(from, from + 8)) {
@@ -338,8 +339,9 @@ function Slides({ version, selection, select, focus, present, toast, onShortcut 
         const b64 = tryCall<string>('png', { id: f.id, scale })
         if (b64) next.set(f.id, `data:image/png;base64,${b64}`)
       }
-      // Rows keep their old thumbnail until the new one replaces it, so an edit does not flash them blank.
-      setThumbs((old) => new Map([...old, ...next]))
+      // Rows keep their old thumbnail until the new one replaces it, so an edit does not flash them blank;
+      // thumbnails of deleted slides are dropped so create/delete cycles do not grow the map.
+      setThumbs((old) => new Map([...old].filter(([id]) => live.has(id)).concat([...next])))
       if (from + 8 < frames.length) timer = setTimeout(() => step(from + 8), 0)
     }
     step(0)
