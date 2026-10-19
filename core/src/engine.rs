@@ -90,6 +90,34 @@ pub fn engine() -> MutexGuard<'static, Engine> {
     ENGINE.get_or_init(|| Mutex::new(Engine::new(crate::render::data_dir()))).lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// One `execute` call between `begin_execute` and `end_execute`.
+struct ExecuteCall {
+    args: Value,
+    seen: usize,
+    agent: String,
+}
+
+/// Two `execute` calls must not interleave: each edits the document in place and rolls back by
+/// restoring a snapshot.
+static EXECUTE_GATE: Mutex<()> = Mutex::new(());
+
+/// Dispatch one agent tool call without holding the engine across it. `execute` runs its JavaScript
+/// with the engine free (each host function locks it for its own work), so polls, renders and
+/// Stop keep answering while a long script runs; the other tools run under the lock.
+pub fn call_tool(name: &str, args: &Value) -> ToolOut {
+    if name != "execute" {
+        return engine().tool(name, args);
+    }
+    let _gate = EXECUTE_GATE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut e = engine();
+    let call = e.begin_execute(args);
+    // Stop reaches a running built-in agent only; anyone else would see a stale flag.
+    let cancel = (e.agent.running && e.agent.profile(&call.agent).is_some()).then(|| e.agent.cancel.clone());
+    let (out, mut e) = crate::script::execute_shared(e, &call.args, cancel);
+    e.end_execute(&call);
+    out
+}
+
 /// A key as typed or set: surrounding whitespace is dropped and a blank key is none.
 fn nonblank(v: Option<String>) -> Option<String> {
     v.map(|k| k.trim().to_string()).filter(|k| !k.is_empty())
@@ -577,36 +605,49 @@ impl Engine {
         s
     }
 
+    /// Retire the stream an `execute` call belongs to; the call runs with its id seed.
+    fn begin_execute(&mut self, args: &Value) -> ExecuteCall {
+        let stream = self.take_stream(args["__stream"].as_str(), args["input"].as_str().unwrap_or(""));
+        let mut args = args.clone();
+        if let Some(s) = &stream {
+            args["__seed"] = json!(s.seed);
+        }
+        let seen = stream.as_ref().map_or(0, |s| s.touched);
+        let agent = stream.map(|s| s.agent).or_else(|| args["__agent"].as_str().map(str::to_string)).unwrap_or_else(|| "agent".into());
+        self.script.edit = None;
+        ExecuteCall { args, seen, agent }
+    }
+
+    /// Report what a finished `execute` call wrote and read.
+    fn end_execute(&mut self, call: &ExecuteCall) {
+        let ExecuteCall { seen, agent, .. } = call;
+        // Not found in `events`: a poll may have drained them while the script ran.
+        if let Some(ev) = self.script.edit.take() {
+            let writes: Vec<Value> = ev["ids"].as_array().map(|a| a.iter().skip(*seen).cloned().collect()).unwrap_or_default();
+            if !writes.is_empty() {
+                self.emit(json!({"type": "agent_activity", "agent": agent, "op": "write", "ids": writes, "streaming": false}));
+            }
+            if ev["read"].as_array().is_some_and(|r| !r.is_empty()) {
+                self.emit(json!({"type": "agent_activity", "agent": agent, "op": "read", "ids": ev["read"], "streaming": false}));
+            }
+        }
+    }
+
     /// Dispatch one agent tool call (shared by MCP and the built-in agent).
     pub fn tool(&mut self, name: &str, args: &Value) -> ToolOut {
         match name {
             "get_editor_state" => ToolOut::ok(self.editor_state()),
             "read_guide" => crate::guide::read(args["topic"].as_str().unwrap_or("")),
             "get_style" => crate::guide::style(args["name"].as_str().unwrap_or("")),
+            "execute" if self.executing => ToolOut::err("Another execute call is still running."),
             "execute" => {
-                let source = args["input"].as_str().unwrap_or("");
-                let stream = self.take_stream(args["__stream"].as_str(), source);
-                let mut args = args.clone();
-                if let Some(s) = &stream {
-                    args["__seed"] = json!(s.seed);
-                }
-                let seen = stream.as_ref().map_or(0, |s| s.touched);
-                let agent = stream.map(|s| s.agent).or_else(|| args["__agent"].as_str().map(str::to_string)).unwrap_or_else(|| "agent".into());
-                let marker = self.events.len();
-                let out = crate::script::execute(self, &args);
-                if let Some(ev) = self.events[marker.min(self.events.len())..].iter().rev().find(|e| e["type"] == "agent_edit").cloned() {
-                    let writes: Vec<Value> = ev["ids"].as_array().map(|a| a.iter().skip(seen).cloned().collect()).unwrap_or_default();
-                    if !writes.is_empty() {
-                        self.emit(json!({"type": "agent_activity", "agent": agent, "op": "write", "ids": writes, "streaming": false}));
-                    }
-                    if ev["read"].as_array().is_some_and(|r| !r.is_empty()) {
-                        self.emit(json!({"type": "agent_activity", "agent": agent, "op": "read", "ids": ev["read"], "streaming": false}));
-                    }
-                }
+                let call = self.begin_execute(args);
+                let out = crate::script::execute(self, &call.args);
+                self.end_execute(&call);
                 out
             }
             "open_document" => {
-                if self.agent.running {
+                if self.agent.running || self.executing {
                     return ToolOut::err(SWITCH_BUSY);
                 }
                 if self.dirty() {

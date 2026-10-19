@@ -124,16 +124,15 @@ fn rpc(msg: &Value, agent: Option<&str>) -> Option<Value> {
                 // Blocks this request's thread (not the engine) until the user answers.
                 crate::agent::ask_permission(a, &args)
             } else {
-                let mut e = engine();
                 match agent {
                     Some(a) => args["__agent"] = json!(a),
                     // External agents (Claude Code / Cursor / Codex configured by the user).
                     None => {
                         args["__agent"] = json!("external");
-                        e.emit(json!({"type": "agent", "kind": "external", "text": name}));
+                        engine().emit(json!({"type": "agent", "kind": "external", "text": name}));
                     }
                 }
-                e.tool(name, &args)
+                crate::engine::call_tool(name, &args)
             };
             // The engine guard is gone here: rasterize screenshots without blocking the canvas.
             let out = out.finish();
