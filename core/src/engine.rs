@@ -90,6 +90,34 @@ pub fn engine() -> MutexGuard<'static, Engine> {
     ENGINE.get_or_init(|| Mutex::new(Engine::new(crate::render::data_dir()))).lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// One `execute` call between `begin_execute` and `end_execute`.
+struct ExecuteCall {
+    args: Value,
+    seen: usize,
+    agent: String,
+}
+
+/// Two `execute` calls must not interleave: each edits the document in place and rolls back by
+/// restoring a snapshot.
+static EXECUTE_GATE: Mutex<()> = Mutex::new(());
+
+/// Dispatch one agent tool call without holding the engine across it. `execute` runs its JavaScript
+/// with the engine free (each host function locks it for its own work), so polls, renders and
+/// Stop keep answering while a long script runs; the other tools run under the lock.
+pub fn call_tool(name: &str, args: &Value) -> ToolOut {
+    if name != "execute" {
+        return engine().tool(name, args);
+    }
+    let _gate = EXECUTE_GATE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut e = engine();
+    let call = e.begin_execute(args);
+    // Stop reaches a running built-in agent only; anyone else would see a stale flag.
+    let cancel = (e.agent.running && e.agent.profile(&call.agent).is_some()).then(|| e.agent.cancel.clone());
+    let (out, mut e) = crate::script::execute_shared(e, &call.args, cancel);
+    e.end_execute(&call);
+    out
+}
+
 /// A key as typed or set: surrounding whitespace is dropped and a blank key is none.
 fn nonblank(v: Option<String>) -> Option<String> {
     v.map(|k| k.trim().to_string()).filter(|k| !k.is_empty())
@@ -356,6 +384,7 @@ impl Engine {
             return f(self);
         }
         let before = self.doc.root.clone();
+        let was_clean = !self.dirty();
         self.drag_before = Some(before.clone());
         let r = f(self);
         self.drag_before = None;
@@ -364,9 +393,18 @@ impl Engine {
             Err(_) => {
                 self.doc.root = before;
                 self.touch();
+                self.keep_clean(was_clean);
             }
         }
         r
+    }
+
+    /// After a rolled-back edit the document is as it was: if it was clean before the edit, it stays
+    /// clean (a document switch is refused while it is dirty), however far the version moved.
+    pub fn keep_clean(&mut self, was_clean: bool) {
+        if was_clean {
+            self.saved = self.version;
+        }
     }
 
     /// Apply a document mutation as one undoable step.
@@ -473,13 +511,34 @@ impl Engine {
         recent.insert(0, json!(p));
         recent.truncate(20);
         self.settings.insert("recent".into(), Value::Array(recent));
-        self.save_settings();
+        let _ = self.save_settings(); // the document is saved; a recents list that did not save must not fail it
     }
 
-    pub fn save_settings(&self) {
-        if let Ok(text) = serde_json::to_string_pretty(&self.settings) {
-            let _ = std::fs::write(self.data_dir.join("settings.json"), text);
+    /// Set one setting (`null` removes it) and save. If the save fails the setting keeps its old value,
+    /// so an error means nothing changed, in memory or on disk.
+    pub fn set_setting(&mut self, key: &str, value: Value) -> Result<(), String> {
+        let old = if value.is_null() { self.settings.remove(key) } else { self.settings.insert(key.to_string(), value) };
+        let saved = self.save_settings();
+        if saved.is_err() {
+            match old {
+                Some(v) => self.settings.insert(key.to_string(), v),
+                None => self.settings.remove(key),
+            };
         }
+        saved
+    }
+
+    /// Atomic like `Doc::save`: a crash or a reader mid-save never sees a truncated file (which would drop
+    /// every setting, the API key included, at the next start).
+    pub fn save_settings(&self) -> Result<(), String> {
+        let text = serde_json::to_string_pretty(&self.settings).map_err(|e| e.to_string())?;
+        let path = self.data_dir.join("settings.json");
+        let tmp = path.with_extension("json.tmp");
+        let saved = std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, &path));
+        if saved.is_err() {
+            let _ = std::fs::remove_file(&tmp); // a failed save leaves no copy of the new settings (an API key) behind
+        }
+        saved.map_err(|e| format!("cannot save {}: {e}", path.display()))
     }
 
     pub fn setting(&self, key: &str) -> Option<String> {
@@ -546,36 +605,49 @@ impl Engine {
         s
     }
 
+    /// Retire the stream an `execute` call belongs to; the call runs with its id seed.
+    fn begin_execute(&mut self, args: &Value) -> ExecuteCall {
+        let stream = self.take_stream(args["__stream"].as_str(), args["input"].as_str().unwrap_or(""));
+        let mut args = args.clone();
+        if let Some(s) = &stream {
+            args["__seed"] = json!(s.seed);
+        }
+        let seen = stream.as_ref().map_or(0, |s| s.touched);
+        let agent = stream.map(|s| s.agent).or_else(|| args["__agent"].as_str().map(str::to_string)).unwrap_or_else(|| "agent".into());
+        self.script.edit = None;
+        ExecuteCall { args, seen, agent }
+    }
+
+    /// Report what a finished `execute` call wrote and read.
+    fn end_execute(&mut self, call: &ExecuteCall) {
+        let ExecuteCall { seen, agent, .. } = call;
+        // Not found in `events`: a poll may have drained them while the script ran.
+        if let Some(ev) = self.script.edit.take() {
+            let writes: Vec<Value> = ev["ids"].as_array().map(|a| a.iter().skip(*seen).cloned().collect()).unwrap_or_default();
+            if !writes.is_empty() {
+                self.emit(json!({"type": "agent_activity", "agent": agent, "op": "write", "ids": writes, "streaming": false}));
+            }
+            if ev["read"].as_array().is_some_and(|r| !r.is_empty()) {
+                self.emit(json!({"type": "agent_activity", "agent": agent, "op": "read", "ids": ev["read"], "streaming": false}));
+            }
+        }
+    }
+
     /// Dispatch one agent tool call (shared by MCP and the built-in agent).
     pub fn tool(&mut self, name: &str, args: &Value) -> ToolOut {
         match name {
             "get_editor_state" => ToolOut::ok(self.editor_state()),
             "read_guide" => crate::guide::read(args["topic"].as_str().unwrap_or("")),
             "get_style" => crate::guide::style(args["name"].as_str().unwrap_or("")),
+            "execute" if self.executing => ToolOut::err("Another execute call is still running."),
             "execute" => {
-                let source = args["input"].as_str().unwrap_or("");
-                let stream = self.take_stream(args["__stream"].as_str(), source);
-                let mut args = args.clone();
-                if let Some(s) = &stream {
-                    args["__seed"] = json!(s.seed);
-                }
-                let seen = stream.as_ref().map_or(0, |s| s.touched);
-                let agent = stream.map(|s| s.agent).or_else(|| args["__agent"].as_str().map(str::to_string)).unwrap_or_else(|| "agent".into());
-                let marker = self.events.len();
-                let out = crate::script::execute(self, &args);
-                if let Some(ev) = self.events[marker.min(self.events.len())..].iter().rev().find(|e| e["type"] == "agent_edit").cloned() {
-                    let writes: Vec<Value> = ev["ids"].as_array().map(|a| a.iter().skip(seen).cloned().collect()).unwrap_or_default();
-                    if !writes.is_empty() {
-                        self.emit(json!({"type": "agent_activity", "agent": agent, "op": "write", "ids": writes, "streaming": false}));
-                    }
-                    if ev["read"].as_array().is_some_and(|r| !r.is_empty()) {
-                        self.emit(json!({"type": "agent_activity", "agent": agent, "op": "read", "ids": ev["read"], "streaming": false}));
-                    }
-                }
+                let call = self.begin_execute(args);
+                let out = crate::script::execute(self, &call.args);
+                self.end_execute(&call);
                 out
             }
             "open_document" => {
-                if self.agent.running {
+                if self.agent.running || self.executing {
                     return ToolOut::err(SWITCH_BUSY);
                 }
                 if self.dirty() {
@@ -699,5 +771,30 @@ mod tests {
         assert_eq!(nonblank(Some(String::new())), None);
         assert_eq!(nonblank(Some("  \t".into())), None);
         assert_eq!(nonblank(Some(" sk-ant-x\n".into())), Some("sk-ant-x".into()));
+    }
+
+    #[test]
+    fn failed_settings_save_keeps_old_values() {
+        let dir = std::env::temp_dir().join("nalarupa-test-settings-save");
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut e = Engine::new(dir.clone());
+        e.set_setting("k", json!("old")).unwrap();
+        let blocker = dir.join("settings.json.tmp");
+        std::fs::create_dir_all(&blocker).unwrap(); // a folder where the temp file goes: every save fails
+        assert!(e.set_setting("k", json!("new")).is_err());
+        assert!(e.set_setting("k", Value::Null).is_err());
+        assert!(e.set_setting("other", json!("x")).is_err());
+        assert_eq!(e.setting("k").as_deref(), Some("old"));
+        assert_eq!(e.setting("other"), None);
+        std::fs::remove_dir(&blocker).unwrap();
+        e.set_setting("k", Value::Null).unwrap();
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("settings.json")).unwrap()).unwrap();
+        assert!(saved.get("k").is_none() && !blocker.exists());
+        std::fs::remove_file(dir.join("settings.json")).unwrap();
+        std::fs::create_dir(dir.join("settings.json")).unwrap(); // the temp file writes, the rename fails
+        assert!(e.set_setting("k", json!("new")).is_err());
+        assert!(!blocker.exists(), "a failed rename must not leave the new settings in the temp file");
+        assert_eq!(e.setting("k"), None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

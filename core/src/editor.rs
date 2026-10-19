@@ -87,13 +87,35 @@ impl<'a> View<'a> {
     /// Bounds of what the node paints (its box through its rotation/flip matrix), on the canvas
     /// or, with `frame` (a container's matrix), in that container's own coordinates.
     fn painted(&self, id: &str, frame: Option<[f64; 6]>) -> Option<Rect> {
+        let pts = self.corners(id, frame)?;
+        union(pts.into_iter().map(|p| (p.0, p.1, 0.0, 0.0)))
+    }
+
+    /// Corners of the painted box (top-left, top-right, bottom-left, bottom-right), see `painted`.
+    fn corners(&self, id: &str, frame: Option<[f64; 6]>) -> Option<[(f64, f64); 4]> {
         let f = self.flat(id)?;
-        let pts = [(0.0, 0.0), (f.w, 0.0), (0.0, f.h), (f.w, f.h)].map(|(dx, dy)| {
+        Some([(0.0, 0.0), (f.w, 0.0), (0.0, f.h), (f.w, f.h)].map(|(dx, dy)| {
             let (x, y) = (f.x + dx, f.y + dy);
             let (x, y) = f.m.map_or((x, y), |m| (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]));
             frame.map_or((x, y), |m| unapply(m, x, y))
-        });
-        union(pts.into_iter().map(|p| (p.0, p.1, 0.0, 0.0)))
+        }))
+    }
+
+    /// Whether the painted box touches `r` (separating-axis test, so a turned box does not
+    /// count through the corners of its bounds).
+    fn touches(&self, id: &str, r: Rect) -> bool {
+        let Some(c) = self.corners(id, None) else { return false };
+        let rc = [(r.0, r.1), (r.0 + r.2, r.1), (r.0, r.1 + r.3), (r.0 + r.2, r.1 + r.3)];
+        let b = union(c.into_iter().map(|p| (p.0, p.1, 0.0, 0.0))).unwrap();
+        if !overlaps(b, r) {
+            return false;
+        }
+        [(c[1].0 - c[0].0, c[1].1 - c[0].1), (c[2].0 - c[0].0, c[2].1 - c[0].1)].into_iter().flat_map(|a| [a, (-a.1, a.0)]).filter(|a| a.0 != 0.0 || a.1 != 0.0).all(|a| {
+            let span = |pts: &[(f64, f64); 4]| pts.iter().map(|p| p.0 * a.0 + p.1 * a.1).fold((f64::MAX, f64::MIN), |s, d| (s.0.min(d), s.1.max(d)));
+            let (q, w) = (span(&c), span(&rc));
+            // Tolerance for rounding in the rotation matrix (an exact touch counts).
+            q.0 <= w.1 + 1e-9 && w.0 <= q.1 + 1e-9
+        })
     }
 
     fn ty(&self, id: &str) -> &'a str {
@@ -124,22 +146,14 @@ impl<'a> View<'a> {
     }
 
     /// World position of the node's own origin (what its children's x/y are relative to).
-    /// Groups are the union of their children, so their origin sits before the box.
+    /// Groups are the union of their (turned) children, so their origin sits before the box, where layout put it.
     fn origin(&self, id: &str) -> Option<(f64, f64)> {
         if id == ROOT {
             return Some((0.0, 0.0));
         }
+        self.doc.find(id)?;
         let f = self.flat(id)?;
-        let n = self.doc.find(id)?;
-        if n["type"] != "group" {
-            return Some((f.x, f.y));
-        }
-        let shown: Vec<&Value> = n["children"].as_array().map(|k| k.iter().filter(|k| k["enabled"] != false).collect()).unwrap_or_default();
-        if shown.is_empty() {
-            return Some((f.x, f.y));
-        }
-        let min = |k: &str| shown.iter().map(|c| c[k].as_f64().unwrap_or(0.0)).fold(f64::MAX, f64::min);
-        Some((f.x - min("x"), f.y - min("y")))
+        Some((f.x - f.local.0[0], f.y - f.local.0[1]))
     }
 
     fn paint_order(&self, ids: &[String]) -> Vec<String> {
@@ -196,14 +210,20 @@ pub fn snap_targets(e: &Engine, ids: &[String], view: Option<Rect>) -> Vec<Value
         .collect()
 }
 
+/// Union of what `ids` paint on the canvas (their boxes through rotation/flip).
+pub fn painted_bounds(e: &Engine, ids: &[String]) -> Option<Rect> {
+    let v = View::new(e);
+    union(ids.iter().filter_map(|id| v.painted(id, None)))
+}
+
 /// Marquee hits (touching counts). Containers fully inside the rectangle are picked whole;
 /// top-level frames are entered (artboards); `deep` (Ctrl) picks leaves everywhere.
 pub fn nodes_in_rect(e: &Engine, r: Rect, deep: bool) -> Vec<String> {
     fn rec(v: &View, nodes: &[Value], top: bool, r: Rect, deep: bool, out: &mut Vec<String>) {
         for n in nodes {
             let Some(id) = n["id"].as_str() else { continue };
-            let Some(b) = v.rect(id) else { continue };
-            if !overlaps(b, r) {
+            let Some(b) = v.painted(id, None) else { continue };
+            if !v.touches(id, r) {
                 continue;
             }
             let ty = n["type"].as_str().unwrap_or("");
@@ -1131,6 +1151,27 @@ mod tests {
         // Positions are stored to 0.01, so a parent-space step lands within that of the canvas edge.
         assert!(after.iter().all(|r| (r.0 - left).abs() < 0.01), "canvas-space left edges: {after:?}");
         assert!(before.iter().any(|r| (r.0 - left).abs() > 1e-6), "the layers started unaligned");
+    }
+
+    #[test]
+    fn reparent_keeps_a_group_with_a_turned_child_in_place() {
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        e.load_template("empty");
+        let frame = e.edit(|d| d.insert(ROOT, json!({"type": "frame", "x": 300, "y": 300, "width": 400, "height": 400, "layout": "none"}), None)).unwrap();
+        // Turned 180°, the second child paints up-left of its origin (0..40, 0..20): the group's box starts there,
+        // not at the lowest child x/y (40, 20).
+        let group = e.edit(|d| d.insert(ROOT, json!({"type": "group", "x": 100, "y": 100, "children": [
+            {"type": "rectangle", "x": 100, "y": 100, "width": 40, "height": 20},
+            {"type": "rectangle", "x": 40, "y": 20, "width": 40, "height": 20, "rotation": 180}]}), None)).unwrap();
+        let painted = |e: &mut Engine| {
+            e.sync();
+            View::new(e).painted(&group, None).unwrap()
+        };
+        let before = painted(&mut e);
+        reparent(&mut e, std::slice::from_ref(&group), &frame, None).unwrap();
+        let after = painted(&mut e);
+        assert!((after.0 - before.0).abs() < 1e-6 && (after.1 - before.1).abs() < 1e-6, "{before:?} → {after:?}");
     }
 
     #[test]

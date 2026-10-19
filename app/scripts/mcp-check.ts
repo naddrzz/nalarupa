@@ -64,6 +64,8 @@ const text = (r: any) => r.content.map((c: any) => c.text ?? '').join('')
   assert((await tool('read_guide', { topic: 'no-such-topic' })).isError, 'unknown guide topic is an error')
   assert(!(await tool('get_style')).isError, 'get_style without a name lists styles')
   assert((await tool('get_style', { name: 'no-such-style' })).isError, 'unknown style is an error')
+  assert(!call<any>('state').dirty, 'a fresh document is clean')
+  assert((await tool('execute', { input: 'Insert("missing-parent", {type:"rectangle"})' })).isError && !call<any>('state').dirty, 'a rolled-back execute leaves a clean document clean')
   const ok = await tool('execute', { input: 'Insert("sld01", {type:"rectangle", name:"McpRect", width:10, height:10})' })
   assert(!ok.isError && text(ok).includes('McpRect'), `execute inserts: ${text(ok)}`)
   // The first insert succeeds before the second throws: the whole call must roll back. The layer list
@@ -81,8 +83,6 @@ const text = (r: any) => r.content.map((c: any) => c.text ?? '').join('')
   assert(unsaved.isError && /unsaved changes/.test(text(unsaved)) && !existsSync(doc), `open_document refuses a dirty document: ${text(unsaved)}`)
   assert(call<any>('state').dirty && JSON.stringify(call('layers')) === before, 'a refused open_document keeps the unsaved edits')
   call('save', { path: join(data, 'saved.pen') })
-  assert(!call<any>('state').dirty, 'saving clears the dirty marker')
-  assert((await tool('execute', { input: 'Insert("missing-parent", {type:"rectangle"})' })).isError && !call<any>('state').dirty, 'a failed execute leaves a saved document clean')
   assert(!(await tool('open_document', { path: doc })).isError && existsSync(doc), 'open_document creates a missing file')
   assert(!(await tool('open_document', { path: doc })).isError, 'open_document reopens it')
   assert((await tool('spawn_agents', { agents: [] })).isError, 'external agents cannot spawn agents')
@@ -99,6 +99,16 @@ const text = (r: any) => r.content.map((c: any) => c.text ?? '').join('')
   const layers = (call('layers') as any[]).map((x) => '  '.repeat(x.depth) + x.name).join('\n')
   assert(/A page\n {2}A text/.test(layers) && !/B page\n {2}A text/.test(layers), `A's text lands in A's frame:\n${layers}`)
   assert((await as('agC', 'Print(typeof page)')).includes('undefined'), 'another agent does not inherit A/B globals')
+
+  // A script that runs for seconds must not freeze the window: `call` is synchronous on this one thread,
+  // so a core call that waits for the script (it ran under the engine lock) blocks for its whole run.
+  const slow = tool('execute', { input: 'const until = Date.now() + 2000; while (Date.now() < until) {} Print("done")' })
+  await new Promise((r) => setTimeout(r, 400))
+  const asked = performance.now()
+  call('state')
+  const waited = performance.now() - asked
+  assert(waited < 1000, `state() answers while a script runs (waited ${waited.toFixed(0)} ms)`)
+  assert(text(await slow).includes('done'), 'the long script still finishes and prints')
 
   console.log('mcp-check ok — MCP at', mcpUrl)
 }

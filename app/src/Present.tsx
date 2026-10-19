@@ -8,7 +8,12 @@ import { T } from './ui'
 /** Presentation mode: each top-level frame is a slide, shown alone and fitted to the window. */
 export function Present({ w, h, start, version, animating, exit }: { w: number; h: number; start?: string; version: number; animating?: boolean; exit: () => void }) {
   const slides = useMemo(() => (tryCall<Box[]>('frames') ?? []).filter((f) => f.type === 'frame'), [version])
-  const [i, setI] = useState(() => Math.max(0, slides.findIndex((s) => s.id === start)))
+  // A selected layer inside a slide starts that slide: climb to its top-level ancestor.
+  const [i, setI] = useState(() => {
+    let id = start
+    for (let p = id; p && p !== 'document'; p = tryCall<Box[]>('boxes', { ids: [p] })?.[0]?.parent ?? 'document') id = p
+    return Math.max(0, slides.findIndex((s) => s.id === id))
+  })
   const img = useRef<ImgInstance>(null)
   // Clamped both ways: a slide removed while presenting must not leave `i` past the end, and an empty
   // deck must not leave it below 0 once a slide is added.

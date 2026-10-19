@@ -6,7 +6,7 @@ import { call, tryCall } from './core'
 import { barAgents, imageSrc, profileOf, resetChat, restoreChat, store, type ChatItem } from './agents'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import * as SelectPrimitive from '@gpuix/react/select'
-import { C, FONT, INDICATOR_TICK_MS, MONO, REDUCED_MOTION, ellipsisAt, pulseAt } from './theme'
+import { C, FONT, INDICATOR_TICK_MS, MONO, REDUCED_MOTION, ellipsisAt, ellipsisPadAt, pulseAt } from './theme'
 import { Button, Field, FocusRing, Icon, IconButton, Pressable, Row, Segmented, setKeyboardFocus, T, Toggle, useKeyboardFocusId, useRing, useTrigger, type Toast } from './ui'
 
 // Suggestion set; the empty chat shows 6 random picks of these 12.
@@ -36,6 +36,17 @@ const LABELS: Record<string, [string, string]> = {
   TodoWrite: ['Updating plan', 'Updated plan'],
 }
 
+// Monospace lines that wrap at the card edge: <code> never wraps and scrolls only sideways, which hid most of a long script or error.
+function Mono({ text, color }: { text: string; color: string }) {
+  return (
+    <>
+      {text.split('\n').map((line, i) => (
+        <text key={i} style={{ fontSize: 11, color, fontFamily: MONO, minWidth: 0 }}>{line || ' '}</text>
+      ))}
+    </>
+  )
+}
+
 function toolLabel(name: string, running: boolean) {
   const l = LABELS[name]
   if (l) return running ? l[0] : l[1]
@@ -59,7 +70,8 @@ function useTick(ms: number, active: boolean) {
 }
 
 // Under reduced motion the ellipsis stays still and replies appear whole (no typewriter).
-const dots = () => (REDUCED_MOTION ? '…' : ellipsisAt(performance.now()))
+const dots = (now = performance.now()) => (REDUCED_MOTION ? '…' : ellipsisAt(now))
+const dotsPad = (now: number) => (REDUCED_MOTION ? '' : ellipsisPadAt(now))
 
 // Typewriter: ~5 words per 16 ms frame, instant once a later message exists.
 const revealed = new Map<number, number>()
@@ -222,7 +234,7 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
           </Row>
           {parallel !== '1' ? <Segmented label="How agents share the work" value={mode} onChange={setMode} options={[{ value: 'split', label: 'Split' }, { value: 'side', label: 'Side by side' }]} /> : null}
           <Row gap={6}>
-            <ModelPicker settingsOpen={settings} />
+            <ModelPicker settingsOpen={settings} toast={toast} />
             <div style={{ flexGrow: 1 }} />
             <CookMenu designs={designs} mode={cookMode} set={setCook} />
             {running ? (
@@ -523,6 +535,15 @@ function tryModel() {
   return cachedModel
 }
 
+/** Save one setting. A failed save leaves the core on the old value: say so and return false, so the
+ *  control stays as it was. */
+function saveSetting(toast: Toast, key: string, value: unknown) {
+  cachedModel = null
+  if (tryCall('settings_set', { key, value }) !== null) return true
+  toast('Unable to save that setting. Check that the app data folder is writable, then try again.', true)
+  return false
+}
+
 const MODELS = [
   { value: 'claude-opus-5-5', label: 'Opus 5.5' },
   { value: 'claude-sonnet-5-5', label: 'Sonnet 5.5' },
@@ -534,7 +555,7 @@ const FAST_MODELS = ['claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8']
 
 /** Model picker plus the Fast toggle, which shows only where the model has a fast mode. Claude Code
  *  also offers "Default", which leaves the CLI on its own configured model. */
-function ModelPicker({ settingsOpen }: { settingsOpen: boolean }) {
+function ModelPicker({ settingsOpen, toast }: { settingsOpen: boolean; toast: Toast }) {
   // Re-read when the settings panel closes: the backend may have changed.
   const s = useMemo(() => tryCall<Record<string, unknown>>('settings_get') ?? {}, [settingsOpen])
   const cli = s.backend === 'claude-code'
@@ -549,9 +570,7 @@ function ModelPicker({ settingsOpen }: { settingsOpen: boolean }) {
   // keyboard drives the menu, not while the mouse does.
   const [keys, setKeys] = useState(false)
   const pick = (v: string) => {
-    setModel(v)
-    cachedModel = null
-    tryCall('settings_set', { key: 'agent_model', value: v === 'default' ? null : v })
+    if (saveSetting(toast, 'agent_model', v === 'default' ? null : v)) setModel(v)
   }
   const label = items.find((m) => m.value === model)?.label ?? model
   return (
@@ -609,7 +628,7 @@ function ModelPicker({ settingsOpen }: { settingsOpen: boolean }) {
         </SelectPrimitive.Content>
       </SelectPrimitive.Root>
       {FAST_MODELS.includes(model) ? (
-        <Toggle label="Fast" on={fast} testId="agent-fast" onChange={(on) => { setFast(on); tryCall('settings_set', { key: 'agent_fast', value: on || null }) }} />
+        <Toggle label="Fast" on={fast} testId="agent-fast" onChange={(on) => { if (saveSetting(toast, 'agent_fast', on || null)) setFast(on) }} />
       ) : null}
     </>
   )
@@ -653,12 +672,18 @@ function Item({ m, isLast, expanded, toggle }: { m: ChatItem; isLast: boolean; e
     case 'tool': {
       if (m.name === 'TodoWrite') return <div style={{ height: 0 }} />
       const label = toolLabel(m.name, m.running)
+      const now = performance.now() // one sample, so the dots and their pad always add up to three
       const src = m.name === 'execute' && typeof m.input?.input === 'string' ? (m.input.input as string) : null
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 3, paddingBottom: 3 }}>
           <Pressable label={m.running ? `${label}, running` : `${label}, ${m.error ? 'failed' : 'done'}`} expanded={expanded} onClick={toggle} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 24, borderRadius: 4 }}>
-            <div style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: m.agent.color, opacity: m.running && !REDUCED_MOTION ? pulseAt(performance.now()) : 1 }} />
-            <T size={12} color={m.running ? C.text : C.muted}>{m.running ? `${label}${dots()}` : label}</T>
+            <div style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: m.agent.color, opacity: m.running && !REDUCED_MOTION ? pulseAt(now) : 1 }} />
+            {m.running ? (
+              <div style={{ display: 'flex', flexDirection: 'row' }}>
+                <T size={12} color={C.text}>{`${label}${dots(now)}`}</T>
+                <T size={12} color="#00000000">{dotsPad(now)}</T>
+              </div>
+            ) : <T size={12} color={C.muted}>{label}</T>}
             {m.running && m.lines ? <T size={11} color={C.ghost}>{`${m.lines} lines`}</T> : null}
             {!m.running ? <T size={12} color={m.error ? C.ghost : C.ok}>{m.error ? '✕' : '✓'}</T> : null}
             <div style={{ flexGrow: 1 }} />
@@ -668,21 +693,15 @@ function Item({ m, isLast, expanded, toggle }: { m: ChatItem; isLast: boolean; e
             <img key={i} src={imageSrc(img)} objectFit="contain" style={{ width: 252, height: 158, borderRadius: 6 }} />
           ))}
           {expanded ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: 8, borderRadius: 8, backgroundColor: C.panel2, borderWidth: 1, borderColor: C.border }}>
+            <div testId="tool-detail" style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: 8, borderRadius: 8, backgroundColor: C.panel2, borderWidth: 1, borderColor: C.border }}>
               {m.output ? (
                 <>
                   <T size={11} color={C.ghost} weight="600">OUTPUT</T>
-                  {m.output.split('\n').slice(0, 40).map((line, i) => (
-                    <text key={i} style={{ fontSize: 11, color: m.error ? C.danger : C.muted, fontFamily: MONO, whiteSpace: 'nowrap' }}>{line || ' '}</text>
-                  ))}
+                  <Mono text={m.output.split('\n').slice(0, 40).join('\n')} color={m.error ? C.danger : C.muted} />
                 </>
               ) : null}
               <T size={11} color={C.ghost} weight="600">{src !== null ? 'SCRIPT' : 'INPUT'}</T>
-              {src !== null ? (
-                <code code={src} language="javascript" style={{ fontSize: 11 }} />
-              ) : (
-                <code code={JSON.stringify(m.input ?? {}, null, 2)} language="json" style={{ fontSize: 11 }} />
-              )}
+              <Mono text={src ?? JSON.stringify(m.input ?? {}, null, 2)} color={C.text} />
             </div>
           ) : null}
         </div>
@@ -739,6 +758,9 @@ function PermissionCard({ m }: { m: Extract<ChatItem, { kind: 'permission' }> })
   const auto = useMemo(() => (tryCall<Record<string, unknown>>('settings_get') ?? {}).agent_auto_permissions === true, [])
   const target = m.input.file_path ?? m.input.command ?? m.input.url ?? m.input.path ?? m.input.pattern
   const desc = typeof m.input.description === 'string' ? m.input.description : null
+  // Allow runs the whole input, so the card shows all of it (Edit's new text, Write's content, ...), never a cut.
+  const fields = Object.entries(m.input).filter(([k, v]) => k !== 'description' && v !== undefined && v !== null)
+  const shown = fields.map(([k, v]) => { const s = typeof v === 'string' ? v : JSON.stringify(v); return fields.length > 1 ? `${k}: ${s}` : s }).join('\n')
   const answer = (a: 'auto' | 'allow' | 'deny') => {
     if (tryCall('agent_permission', { id: m.reqId, answer: a }) !== null) setAnswered(a)
   }
@@ -749,7 +771,11 @@ function PermissionCard({ m }: { m: Extract<ChatItem, { kind: 'permission' }> })
         <T size={12} weight="600" color={WARN}>Permission request</T>
       </Row>
       <T size={12} color={C.text}>{desc ?? `${m.agent.name} wants to use ${m.tool}${target ? ' on' : ''}`}</T>
-      {target ? <text style={{ fontSize: 11, color: C.muted, fontFamily: MONO }}>{String(target).slice(0, 400)}</text> : null}
+      {shown ? (
+        <div testId="permission-input" style={{ display: 'flex', flexDirection: 'column', flexShrink: 1, minHeight: 0, maxHeight: 240, overflowY: 'scroll' }}>
+          <text style={{ fontSize: 11, color: C.muted, fontFamily: MONO }}>{shown}</text>
+        </div>
+      ) : null}
       {answered ? (
         <T size={11} color={C.ghost}>{answered === 'deny' ? 'Denied' : answered === 'auto' ? 'Allowed · auto mode from the next message' : 'Allowed'}</T>
       ) : (
@@ -766,11 +792,10 @@ function PermissionCard({ m }: { m: Extract<ChatItem, { kind: 'permission' }> })
 function AgentSettings({ mcpUrl, toast }: { mcpUrl: string; toast: Toast }) {
   const s = useMemo(() => tryCall<Record<string, string>>('settings_get') ?? {}, [])
   const [backend, setBackend] = useState(s.backend ?? 'claude-code')
+  const [hasKey, setHasKey] = useState(!!s.anthropic_api_key)
+  const [keyBox, setKeyBox] = useState(0)
   const [perms, setPerms] = useState<'ask' | 'auto'>((s as Record<string, unknown>).agent_auto_permissions === true ? 'auto' : 'ask')
-  const set = (key: string, value: unknown) => {
-    tryCall('settings_set', { key, value })
-    cachedModel = null
-  }
+  const set = (key: string, value: unknown) => saveSetting(toast, key, value)
   const install = (client: string) => {
     const r = tryCall<string>('mcp_install', { client })
     if (r) toast(r)
@@ -782,12 +807,23 @@ function AgentSettings({ mcpUrl, toast }: { mcpUrl: string; toast: Toast }) {
       <Segmented
         label="Agent backend"
         value={backend}
-        onChange={(v) => { setBackend(v); set('agent_backend', v) }}
+        onChange={(v) => { if (set('agent_backend', v)) setBackend(v) }}
         options={[{ value: 'api', label: 'Claude API' }, { value: 'claude-code', label: 'Claude Code CLI' }]}
       />
       {backend === 'api' ? (
         <>
-          <Field name="Anthropic API key" value={s.anthropic_api_key ?? ''} placeholder="sk-ant-…" onCommit={(v) => { set('anthropic_api_key', v || null); toast('API key saved locally') }} testId="api-key" />
+          {/* settings_get only returns a mask for a saved key: never edit it, an empty box means keep the key. */}
+          <Row gap={6}>
+            <Field key={keyBox} name="Anthropic API key" value="" placeholder={hasKey ? 'Key saved. Paste a new key to replace it' : 'sk-ant-…'} onCommit={(v) => {
+              const key = v.trim() // a blank key is no key (Engine::api_key), so it must not replace a saved one
+              if (!key) return false // Field reverts the box to empty, so the saved-key placeholder shows again
+              if (!set('anthropic_api_key', key)) return false
+              setHasKey(true)
+              setKeyBox((n) => n + 1) // remount: the new key must not stay readable in the box
+              toast('API key saved locally')
+            }} testId="api-key" />
+            {hasKey ? <Button testId="api-key-remove" onClick={() => { if (!set('anthropic_api_key', null)) return; setHasKey(false); toast('API key removed') }}>Remove</Button> : null}
+          </Row>
           <T size={11} color={C.ghost}>Or set ANTHROPIC_API_KEY. Pick the model below the chat box.</T>
           <Row>
             <T size={11} color={C.muted}>Effort</T>
@@ -801,7 +837,7 @@ function AgentSettings({ mcpUrl, toast }: { mcpUrl: string; toast: Toast }) {
           <Segmented
             label="Permission for other tools"
             value={perms}
-            onChange={(v) => { setPerms(v); set('agent_auto_permissions', v === 'auto' ? true : null) }}
+            onChange={(v) => { if (set('agent_auto_permissions', v === 'auto' ? true : null)) setPerms(v) }}
             options={[{ value: 'ask', label: 'Ask me' }, { value: 'auto', label: 'Auto mode' }]}
           />
         </>

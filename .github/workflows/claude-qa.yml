@@ -1,6 +1,7 @@
 name: claude-qa
 # Nightly deep QA in nine areas plus new checks (tests job), one Claude session each. Every reproducible bug becomes an issue labeled
 # "bug" + "claude", which hands it to the claude workflow: it fixes the bug and opens a PR with "Fixes #N".
+# GitHub-hosted runners (free for this public repo): a clean machine per job, nothing runs on the VPS.
 on:
   schedule: [{ cron: "0 18 * * *" }] # 01:00 WIB
   workflow_dispatch:
@@ -10,19 +11,17 @@ on:
         required: false
 
 # Runs of one trigger type queue behind each other, and a pending run is only replaced by the same type, so a manual run
-# never drops the nightly scheduled QA. The single runner still runs one job at a time.
+# never drops the nightly scheduled QA.
 concurrency: { group: "claude-qa-${{ github.event_name }}", cancel-in-progress: false }
 
 env:
-  CARGO_TARGET_DIR: /home/nalarupa-ci/.cache/nalarupa-target
-  NALARUPA_CORE: /home/nalarupa-ci/.cache/nalarupa-target/release/libnalarupa_core.so
   # The in-app agent runs the `claude` CLI (Claude Code backend); this logs it in.
   CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
 jobs:
   # The same whole-name selection as the qa matrix (see its pick step), for the tests job's job-level `if`.
   select:
-    runs-on: [self-hosted, nalarupa]
+    runs-on: ubuntu-24.04
     outputs: { tests: "${{ steps.pick.outputs.run }}" }
     steps:
       - id: pick
@@ -34,7 +33,8 @@ jobs:
   qa:
     strategy:
       fail-fast: false
-      max-parallel: 1 # one runner, and every area opens windows
+      # Each area has its own machine; the limit is the Claude usage limit, which every area draws from.
+      max-parallel: 3
       matrix:
         include:
           - area: checks
@@ -117,7 +117,7 @@ jobs:
               accessibility (every control has a name in the automation tree, focus visible, contrast WCAG AA),
               and copy (unclear labels, typos). Only real defects; no taste-only opinions.
     name: qa (${{ matrix.area }})
-    runs-on: [self-hosted, nalarupa]
+    runs-on: ubuntu-24.04
     timeout-minutes: 150
     permissions: { contents: read, issues: write, id-token: write }
     steps:
@@ -131,11 +131,7 @@ jobs:
       - if: steps.pick.outputs.run == 'true'
         uses: actions/checkout@v4
       - if: steps.pick.outputs.run == 'true'
-        run: cargo build --release
-        working-directory: core
-      - if: steps.pick.outputs.run == 'true'
-        run: bun install --frozen-lockfile
-        working-directory: app
+        uses: ./.github/actions/claude-setup
       - if: steps.pick.outputs.run == 'true'
         uses: anthropics/claude-code-action@v1
         env: { GH_TOKEN: "${{ secrets.GH_PAT }}" }
@@ -149,7 +145,7 @@ jobs:
           claude_args: --model claude-sonnet-5-5 --effort high --max-turns 300 --allowedTools "Bash,Read,Glob,Grep,Write,Edit"
           prompt: |
             You are the nightly QA for Nalarupa (repo ${{ github.repository }}, branch ${{ github.ref_name }}), area: ${{ matrix.area }}.
-            Read AGENTS.md and README.md (Checks) first. The Rust core is built (NALARUPA_CORE points at it) and app deps are installed.
+            Read AGENTS.md and README.md (Checks) first. The Rust core is built (core/target/release, found by default) and app deps are installed.
 
             ## Your area
             ${{ matrix.focus }}
@@ -171,30 +167,32 @@ jobs:
             1. Search first: `gh issue list --state all --search "<keywords>"`; if an open issue covers it, comment new evidence there instead.
             2. Otherwise `gh issue create --label bug --label claude --title "[qa/${{ matrix.area }}] <short>" --body ...`
                with: steps to reproduce (a minimal script in a code block when possible), expected, actual, environment
-               (Linux VPS, headless sway, lavapipe), and how often it reproduces. The "claude" label makes the claude
+               (GitHub-hosted Ubuntu 24.04, headless sway, lavapipe), and how often it reproduces. The "claude" label makes the claude
                workflow fix it and open a PR, so the repro must be precise.
             At most 6 new issues per area per night, most severe first. Nothing for style opinions, Windows-only behavior,
             or things you could not reproduce. Do not commit, push or open PRs.
             End with a summary: what you covered, what you could not, and the issues you filed or updated.
+      # The scripts and screenshots behind the filed issues.
       - if: always() && steps.pick.outputs.run == 'true'
-        run: rm -rf app/.qa
+        uses: actions/upload-artifact@v4
+        with: { name: "qa-${{ matrix.area }}", path: app/.qa/, retention-days: 14, if-no-files-found: ignore, include-hidden-files: true }
 
   # New automated checks for features nothing covers yet, written with the bmad-qa-generate-e2e-tests skill
-  # (installed for the runner user; _bmad/custom/bmad-qa-generate-e2e-tests.toml holds this repo's conventions).
+  # (.github/claude-skills, from BMAD-METHOD; _bmad/custom/bmad-qa-generate-e2e-tests.toml holds this repo's conventions).
   # Passing checks go to one PR; a check that exposes a product bug becomes a "claude" issue instead.
   tests:
     if: always() && needs.select.outputs.tests == 'true'
     needs: [select, qa]
-    runs-on: [self-hosted, nalarupa]
+    runs-on: ubuntu-24.04
     timeout-minutes: 150
     permissions: { contents: write, pull-requests: write, issues: write, id-token: write }
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0, token: "${{ secrets.GH_PAT }}" }
-      - run: cargo build --release
-        working-directory: core
-      - run: bun install --frozen-lockfile
-        working-directory: app
+      - uses: ./.github/actions/claude-setup
+      # The skill runs its config scripts with uv and is looked up in the user's skills folder.
+      - uses: astral-sh/setup-uv@v6
+      - run: mkdir -p ~/.claude/skills && cp -r .github/claude-skills/* ~/.claude/skills/
       - uses: anthropics/claude-code-action@v1
         env: { GH_TOKEN: "${{ secrets.GH_PAT }}" }
         with:
@@ -208,7 +206,7 @@ jobs:
           claude_args: --model claude-sonnet-5-5 --effort high --max-turns 300 --allowedTools "Bash,Read,Glob,Grep,Write,Edit,Skill"
           prompt: |
             Run the bmad-qa-generate-e2e-tests skill for Nalarupa (repo ${{ github.repository }}, branch dev), unattended.
-            Read AGENTS.md first. The core is built (NALARUPA_CORE points at it) and app deps are installed.
+            Read AGENTS.md first. The core is built (core/target/release, found by default) and app deps are installed.
             - Nobody is there to answer the skill's questions. At "what to test", choose auto-discover. Pick at most 3
               features that no check in app/scripts/ exercises. Compare the commands in core/src/lib.rs `dispatch`, the
               MCP tools, and the UI flows in app/src against the existing checks, and prefer what breaks most often.
@@ -224,5 +222,3 @@ jobs:
               dev (`gh pr create --base dev`) titled "Add checks for <features>", with the summary as the body. Don't reference
               any issue, and don't add a "Generated with Claude Code" line.
             - Nothing new worth adding: open no PR, and say so.
-      - if: always()
-        run: rm -rf app/.qa

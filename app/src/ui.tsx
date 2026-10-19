@@ -164,6 +164,40 @@ export function Button({ children, onClick, primary, icon, testId, grow, danger 
   )
 }
 
+/**
+ * `<input>` that shows the start of a long value while unfocused. GPUIX leaves a value set from outside
+ * scrolled to its end (caret there) and has no API to scroll it back, so the input's own text is made
+ * transparent until it has focus and a clipped `<text>` paints the value beneath it. Mouse focus comes
+ * from `onFocus`; GPUIX sends none for Tab, which `useRing` covers. A mouse focus clears the keyboard
+ * focus id, or a field reached by Tab and then left by a click would keep showing its own text.
+ */
+function TextInput({ value, mono, onFocus, onBlur, ...rest }: {
+  value: string; mono?: boolean; testId?: string; placeholder?: string; onFocus?: Handler; onBlur?: Handler
+  'aria-label'?: string; onChange?: Handler; onSubmit?: Handler; onKeyDown?: Handler; theme?: Record<string, unknown>
+}) {
+  const [focus, setFocus] = useState(false)
+  const { ref, on, clear } = useRing()
+  const shown = !focus && !on && value !== ''
+  const fontFamily = mono ? MONO : FONT
+  return (
+    <div style={{ flexGrow: 1, minWidth: 0, alignSelf: 'stretch', position: 'relative', display: 'flex', alignItems: 'center' }}>
+      {shown ? (
+        <div style={{ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', overflow: 'hidden', pointerEvents: 'none' }}>
+          <T mono={mono} color={C.text} grow style={{ whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>{value}</T>
+        </div>
+      ) : null}
+      <input
+        {...rest}
+        ref={ref}
+        value={value}
+        onFocus={(e) => { setFocus(true); clear(); onFocus?.(e) }}
+        onBlur={(e) => { setFocus(false); onBlur?.(e) }}
+        style={{ flexGrow: 1, minWidth: 0, fontSize: 12, color: shown ? '#00000000' : C.text, fontFamily }}
+      />
+    </div>
+  )
+}
+
 /** Text field that commits on Enter or blur (not on every keystroke). `onCommit` returns false to reject: the field reverts. */
 export function Field({ label, value, onCommit, width, mono, testId, placeholder, name }: {
   label?: string; value: string; onCommit: (v: string) => void | boolean; width?: number; mono?: boolean; testId?: string; placeholder?: string
@@ -192,16 +226,16 @@ export function Field({ label, value, onCommit, width, mono, testId, placeholder
     <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, width, flexGrow: width ? undefined : 1, minWidth: 0 }}>
       {label ? <T size={11} color={C.ghost} style={{ width: 14 }}>{label}</T> : null}
       <div style={{ flexGrow: 1, minWidth: 0, height: 26, borderRadius: 6, backgroundColor: C.panel2, borderWidth: 1, borderColor: C.field, display: 'flex', alignItems: 'center', paddingLeft: 7, paddingRight: 4 }}>
-        <input
+        <TextInput
           testId={testId}
           aria-label={name ?? label}
           value={draft}
+          mono={mono}
           placeholder={placeholder}
           onChange={(e) => setDraft((typed.current = e.value ?? ''))}
           onSubmit={(e) => commit(e.value ?? typed.current)}
           onBlur={() => commit()}
           theme={{ caret: C.accent }}
-          style={{ flexGrow: 1, minWidth: 0, fontSize: 12, color: C.text, fontFamily: mono ? MONO : FONT }}
         />
       </div>
     </div>
@@ -273,7 +307,7 @@ export function NumField({ label, name = label, value, mixed, onCommit, step = 1
         <T size={11} color={C.ghost}>{label}</T>
       </div>
       <div style={{ flexGrow: 1, minWidth: 0, height: 26, borderRadius: 6, backgroundColor: C.panel2, borderWidth: 1, borderColor: C.field, display: 'flex', alignItems: 'center', paddingLeft: 7, paddingRight: 4 }}>
-        <input
+        <TextInput
           testId={testId}
           aria-label={name}
           value={draft}
@@ -291,7 +325,6 @@ export function NumField({ label, name = label, value, mixed, onCommit, step = 1
             commit(Math.round((base + (k === 'up' ? 1 : -1) * step * (e.modifiers?.shift ? 10 : 1)) * 100) / 100)
           }}
           theme={{ caret: C.accent }}
-          style={{ flexGrow: 1, minWidth: 0, fontSize: 12, color: C.text, fontFamily: FONT }}
         />
       </div>
     </div>

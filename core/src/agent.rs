@@ -72,6 +72,8 @@ pub struct AgentState {
     pub permissions: HashMap<String, (String, std::sync::mpsc::Sender<bool>)>,
     /// "Let it cook": designs left in this run (counting the current one) and "layout" | "style".
     pub cook: (usize, String),
+    /// Frames an AI Pen is still drawing into, one entry per running pen: its `placeholder` flag is the pen's to clear.
+    pub pens: Vec<String>,
 }
 
 pub struct Chat {
@@ -336,6 +338,7 @@ fn start_thread(p: Profile, prompt: String, child: Option<String>) {
             if e.agent.active > 0 {
                 None
             } else {
+                clear_generating(&mut e);
                 e.emit(json!({"type": "agent", "kind": "all_done"}));
                 // The next variation starts before the queue: queued prompts wait for the last variation.
                 let next = if e.agent.cook.0 > 1 && !stopped {
@@ -362,6 +365,21 @@ fn start_thread(p: Profile, prompt: String, child: Option<String>) {
             None => {}
         }
     });
+}
+
+/// The run is over: frames still flagged `placeholder` (Stop, an error or a dead process came before the
+/// call that clears it) stop showing as "Generating". Silent and out of the undo history, like the AI Pen's own finish.
+fn clear_generating(e: &mut Engine) {
+    let mut stale = Vec::new();
+    crate::doc::walk(e.doc.children(), &mut |n| {
+        if n["placeholder"] == true && n["id"].as_str().is_some_and(|id| !e.agent.pens.iter().any(|p| p == id)) {
+            stale.push(n["id"].as_str().unwrap_or_default().to_string());
+        }
+    });
+    let off = json!({"placeholder": false}).as_object().cloned().unwrap_or_default();
+    for id in stale {
+        e.apply_generated(&id, &off, true);
+    }
 }
 
 /// Drop the queued prompts and tell the UI, so their bubbles stop promising to send them.
@@ -435,7 +453,7 @@ pub fn answer_permission(id: &str, answer: &str) -> Result<(), String> {
     let mut e = engine();
     if answer == "auto" {
         e.settings.insert("agent_auto_permissions".into(), json!(true));
-        e.save_settings();
+        let _ = e.save_settings(); // still auto for this run when it did not save; never block the answer
     }
     let (_, waiting) = e.agent.permissions.remove(id).ok_or("This permission request is no longer waiting.")?;
     let _ = waiting.send(answer != "deny");
@@ -767,7 +785,7 @@ fn run_api(p: &Profile, prompt: &str, child: bool) -> Result<Value, String> {
                 let mut args = b["input"].clone();
                 args["__stream"] = json!(id);
                 args["__agent"] = json!(p.id);
-                engine().tool(name, &args)
+                crate::engine::call_tool(name, &args)
             };
             // Outside the engine lock (the guard above is a temporary): screenshots rasterize here.
             let out = out.finish();
@@ -1145,6 +1163,24 @@ mod tests {
         e.agent.chat = None;
         e.data_dir = data_dir;
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A run that ends before the call that clears `placeholder` must not leave frames "Generating", except
+    /// the one an AI Pen is still drawing into.
+    #[test]
+    fn run_end_clears_stale_placeholders() {
+        let mut e = engine();
+        let old = e.doc.root.clone();
+        let frame = |name: &str| json!({"type": "frame", "name": name, "x": 0, "y": 0, "width": 100, "height": 100, "placeholder": true});
+        let (a, drawing) = (e.doc.insert("document", frame("A"), None).unwrap(), e.doc.insert("document", frame("B"), None).unwrap());
+        let nested = e.doc.insert(&a, frame("Nested"), None).unwrap();
+        e.agent.pens.push(drawing.clone());
+        clear_generating(&mut e);
+        let flag = |e: &Engine, id: &str| e.doc.find(id).unwrap()["placeholder"] == true;
+        assert!(!flag(&e, &a) && !flag(&e, &nested), "stale flags are cleared, nested frames too");
+        assert!(flag(&e, &drawing), "a frame an AI Pen draws into keeps its flag");
+        e.agent.pens.clear();
+        e.doc.root = old;
     }
 
     /// Auto-allowed paths: the workspace for file tools, skills for Read; `..` cannot escape.

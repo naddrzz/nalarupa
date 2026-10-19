@@ -1,7 +1,10 @@
 // FFI smoke check: `bun scripts/smoke.ts` — exercises the core without opening a window.
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { call, renderPixels } from '../src/core'
-import { applyEvents, barAgents, imageSrc, needsFrame, resetChat, store } from '../src/agents'
-import { INDICATOR_TICK_MS, ellipsisAt, pulseAt } from '../src/theme'
+import { applyEvents, barAgents, cursorFaded, imageSrc, needsFrame, poke, resetChat, store } from '../src/agents'
+import { INDICATOR_TICK_MS, ellipsisAt, ellipsisPadAt, pulseAt } from '../src/theme'
 
 const assert = (ok: unknown, msg: string) => {
   if (!ok) throw new Error(`smoke failed: ${msg}`)
@@ -76,6 +79,7 @@ call('reduce_motion', { on: false })
   const steps: number[] = []
   let last = ellipsisAt(0), since = 0, maxJump = 0
   for (let t = 7; t < 8000; t += INDICATOR_TICK_MS) {
+    assert(ellipsisAt(t).length + ellipsisPadAt(t).length === 3, `ellipsis plus pad is not three dots at ${t}`)
     maxJump = Math.max(maxJump, Math.abs(pulseAt(t) - pulseAt(t - INDICATOR_TICK_MS)))
     if (ellipsisAt(t) !== last) {
       if (since) steps.push(t - since)
@@ -123,6 +127,27 @@ resetChat()
   store.pills.clear()
   store.cursors.clear()
 }
+// A running agent's cursor never fades off the canvas, so a long pause between edits must not respawn it.
+{
+  const profile = { id: 'a', name: 'A', color: '#f00' }
+  const cursor = { profile, x: 0, y: 0, tx: 0, ty: 0, appearAt: 0, lastActivity: 0, wobble: 0, phase: 0 }
+  store.cursors.set('a', cursor)
+  store.running.add('a')
+  assert(!cursorFaded('a', cursor, 9000), 'a running agent keeps its cursor after a long pause')
+  poke(profile, 9000)
+  assert(cursor.appearAt === 0 && cursor.lastActivity === 9000, 'poking a running agent after a long pause does not restart the fade-in')
+  store.running.clear()
+  assert(cursorFaded('a', cursor, 20000) && !cursorFaded('a', cursor, 10000), 'an idle agent fades off after GONE')
+  poke(profile, 20000)
+  assert(cursor.appearAt === 20000, 'poking a faded cursor fades it in again')
+  // A new run on a cursor that faded while idle fades it in again rather than reviving it at its old spot.
+  cursor.appearAt = 0
+  cursor.lastActivity = 0
+  applyEvents([{ type: 'agent', agent: profile, kind: 'start' }], 20000)
+  assert(store.running.has('a') && cursor.appearAt === 20000, 'starting an agent with a faded cursor restarts the fade-in')
+  store.running.clear()
+  store.cursors.clear()
+}
 const mcp = await fetch(`http://127.0.0.1:${init.mcpPort}/mcp`, {
   method: 'POST',
   headers: { 'content-type': 'application/json' },
@@ -140,5 +165,25 @@ const png = shot.result.content.find((c: { type: string }) => c.type === 'image'
 assert(png && Buffer.from(png.data, 'base64').subarray(0, 4).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47])), `MCP execute returns its screenshot as PNG: ${JSON.stringify(shot).slice(0, 300)}`)
 // Claude Code re-encodes big tool images as JPEG: chat <img>s must say so or GPUIX refuses them.
 assert(imageSrc('/9j/4AAQ').startsWith('data:image/jpeg;') && imageSrc('iVBORw0KGgo').startsWith('data:image/png;'), 'tool image MIME is sniffed')
+// Nesting stops where a saved document still reopens (serde_json's recursion limit is 128 JSON levels).
+call('new', { template: 'empty' })
+let nest = 'document'
+let levels = 0
+for (; levels < 100; levels++) {
+  try {
+    nest = call('insert', { parent: nest, node: { type: 'frame', width: 100, height: 100, layout: 'none', children: [] } }).id
+  } catch (e) {
+    assert(/nesting too deep/.test((e as Error).message), `deep insert refused with a clear error: ${(e as Error).message}`)
+    break
+  }
+}
+assert(levels >= 50 && levels < 100, `nesting is capped (got ${levels} levels)`)
+const deepDir = mkdtempSync(join(tmpdir(), 'nalarupa-deep-'))
+try {
+  call('save', { path: join(deepDir, 'deep.pen') })
+  call('open', { path: join(deepDir, 'deep.pen') })
+} finally {
+  rmSync(deepDir, { recursive: true, force: true })
+}
 console.log('smoke ok — MCP at', init.mcpUrl)
 process.exit(0)
