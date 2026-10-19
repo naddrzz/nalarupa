@@ -116,7 +116,7 @@ resetChat()
   const live = store.items.filter(changing)
   assert(live.length === 3 && live.map((i) => i.kind).join() === 'tool,thinking,assistant', `live chat rows ${live.map((i) => i.kind)}`)
   assert(store.items.filter(spinning).map((i) => i.kind).join() === 'tool,thinking', 'the ellipsis animates on the running tool and the live thinking only')
-  applyEvents([{ type: 'agent', kind: 'done', agent: ag }, { type: 'agent', kind: 'done', agent: { id: 'a1', name: 'Agent 1', color: '#ffffff' } }, { type: 'agent', kind: 'done', agent: { id: 'a2', name: 'Agent 2', color: '#ffffff' } }], 0)
+  applyEvents([{ type: 'agent', kind: 'done', agent: ag }, { type: 'agent', kind: 'done', agent: { id: 'a1', name: 'Agent 1', color: '#ffffff' } }, { type: 'agent', kind: 'done', agent: { id: 'a2', name: 'Agent 2', color: '#ffffff' } }], 1)
   assert(!store.items.some(changing), 'a finished chat has no live row')
 }
 // A long chat keeps every item, the first prompt included, live and when reopened from history.
