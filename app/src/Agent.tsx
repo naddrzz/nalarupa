@@ -510,7 +510,7 @@ let cachedModel: string | null = null
 function tryModel() {
   if (cachedModel === null) {
     const s = tryCall<Record<string, string>>('settings_get') ?? {}
-    const cli = s.agent_backend === 'claude-code' || !s.anthropic_api_key
+    const cli = s.backend === 'claude-code'
     const model = MODELS.find((m) => m.value === s.agent_model)?.label
     cachedModel = cli ? (model ? `Claude Code · ${model}` : 'Claude Code') : model ?? 'Opus 5.5'
   }
@@ -531,7 +531,7 @@ const FAST_MODELS = ['claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8']
 function ModelPicker({ settingsOpen }: { settingsOpen: boolean }) {
   // Re-read when the settings panel closes: the backend may have changed.
   const s = useMemo(() => tryCall<Record<string, unknown>>('settings_get') ?? {}, [settingsOpen])
-  const cli = (s.agent_backend ?? (s.anthropic_api_key ? 'api' : 'claude-code')) === 'claude-code'
+  const cli = s.backend === 'claude-code'
   const items = cli ? [{ value: 'default', label: 'Default' }, ...MODELS] : MODELS
   const stored = typeof s.agent_model === 'string' ? s.agent_model : null
   const current = stored ?? (cli ? 'default' : 'claude-opus-5-5')
@@ -759,7 +759,7 @@ function PermissionCard({ m }: { m: Extract<ChatItem, { kind: 'permission' }> })
 
 function AgentSettings({ mcpUrl, toast }: { mcpUrl: string; toast: Toast }) {
   const s = useMemo(() => tryCall<Record<string, string>>('settings_get') ?? {}, [])
-  const [backend, setBackend] = useState(s.agent_backend ?? (s.anthropic_api_key ? 'api' : 'claude-code'))
+  const [backend, setBackend] = useState(s.backend ?? 'claude-code')
   const [perms, setPerms] = useState<'ask' | 'auto'>((s as Record<string, unknown>).agent_auto_permissions === true ? 'auto' : 'ask')
   const set = (key: string, value: unknown) => {
     tryCall('settings_set', { key, value })

@@ -90,6 +90,11 @@ pub fn engine() -> MutexGuard<'static, Engine> {
     ENGINE.get_or_init(|| Mutex::new(Engine::new(crate::render::data_dir()))).lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// A key as typed or set: surrounding whitespace is dropped and a blank key is none.
+fn nonblank(v: Option<String>) -> Option<String> {
+    v.map(|k| k.trim().to_string()).filter(|k| !k.is_empty())
+}
+
 const UNDO_LIMIT: usize = 100;
 /// The agent edits whatever document is open, so a document switch waits for it to stop.
 pub const SWITCH_BUSY: &str = "Stop the agent before opening another document.";
@@ -479,6 +484,17 @@ impl Engine {
         self.settings.get(key).and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string)
     }
 
+    /// The Anthropic API key: the setting, else `ANTHROPIC_API_KEY`. A blank one of either is no key
+    /// (`ANTHROPIC_API_KEY=` is common in CI and devcontainers).
+    pub fn api_key(&self) -> Option<String> {
+        nonblank(self.setting("anthropic_api_key")).or_else(|| nonblank(std::env::var("ANTHROPIC_API_KEY").ok()))
+    }
+
+    /// The agent backend: the setting, else the API when a key is available, else the Claude Code CLI.
+    pub fn backend(&self) -> String {
+        self.setting("agent_backend").unwrap_or_else(|| if self.api_key().is_some() { "api".into() } else { "claude-code".into() })
+    }
+
     /// Markdown summary the agent reads before editing.
     pub fn editor_state(&mut self) -> String {
         self.sync();
@@ -666,4 +682,17 @@ pub fn tool_specs() -> Value {
         {"name": "open_document", "description": "Open a .pen/.nala file in the editor, or create it when it does not exist.",
          "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn blank_key_is_none() {
+        assert_eq!(nonblank(None), None);
+        assert_eq!(nonblank(Some(String::new())), None);
+        assert_eq!(nonblank(Some("  \t".into())), None);
+        assert_eq!(nonblank(Some(" sk-ant-x\n".into())), Some("sk-ant-x".into()));
+    }
 }

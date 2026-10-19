@@ -92,7 +92,7 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             let e = engine();
             Ok(json!({"mcpPort": e.mcp_port, "mcpUrl": mcp::url(e.mcp_port), "dataDir": e.data_dir, "state": state(&e),
                       "recent": e.settings.get("recent").cloned().unwrap_or(json!([])),
-                      "hasApiKey": e.setting("anthropic_api_key").is_some() || std::env::var("ANTHROPIC_API_KEY").is_ok()}))
+                      "hasApiKey": e.api_key().is_some()}))
         }
         "poll" => {
             let mut e = engine();
@@ -364,6 +364,8 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             if s.contains_key("anthropic_api_key") {
                 s.insert("anthropic_api_key".into(), json!("••••••••"));
             }
+            // The backend the agent will use, so the UI never re-derives it from settings alone.
+            s.insert("backend".into(), json!(e.backend()));
             Ok(Value::Object(s))
         }
         "settings_set" => {
