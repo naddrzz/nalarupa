@@ -1,4 +1,7 @@
 // FFI smoke check: `bun scripts/smoke.ts` — exercises the core without opening a window.
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { call, renderPixels } from '../src/core'
 import { applyEvents, barAgents, imageSrc, needsFrame, resetChat, store } from '../src/agents'
 import { INDICATOR_TICK_MS, ellipsisAt, ellipsisPadAt, pulseAt } from '../src/theme'
@@ -141,5 +144,25 @@ const png = shot.result.content.find((c: { type: string }) => c.type === 'image'
 assert(png && Buffer.from(png.data, 'base64').subarray(0, 4).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47])), `MCP execute returns its screenshot as PNG: ${JSON.stringify(shot).slice(0, 300)}`)
 // Claude Code re-encodes big tool images as JPEG: chat <img>s must say so or GPUIX refuses them.
 assert(imageSrc('/9j/4AAQ').startsWith('data:image/jpeg;') && imageSrc('iVBORw0KGgo').startsWith('data:image/png;'), 'tool image MIME is sniffed')
+// Nesting stops where a saved document still reopens (serde_json's recursion limit is 128 JSON levels).
+call('new', { template: 'empty' })
+let nest = 'document'
+let levels = 0
+for (; levels < 100; levels++) {
+  try {
+    nest = call('insert', { parent: nest, node: { type: 'frame', width: 100, height: 100, layout: 'none', children: [] } }).id
+  } catch (e) {
+    assert(/nesting too deep/.test((e as Error).message), `deep insert refused with a clear error: ${(e as Error).message}`)
+    break
+  }
+}
+assert(levels >= 50 && levels < 100, `nesting is capped (got ${levels} levels)`)
+const deepDir = mkdtempSync(join(tmpdir(), 'nalarupa-deep-'))
+try {
+  call('save', { path: join(deepDir, 'deep.pen') })
+  call('open', { path: join(deepDir, 'deep.pen') })
+} finally {
+  rmSync(deepDir, { recursive: true, force: true })
+}
 console.log('smoke ok — MCP at', init.mcpUrl)
 process.exit(0)
