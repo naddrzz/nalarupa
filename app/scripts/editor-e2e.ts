@@ -506,6 +506,15 @@ try {
   await canvas.press('enter')
   await sleep(300)
   assert((await anchors()) === 3, 'Enter on a path edits its points')
+  // With a Layers row focused the point-editing keys still apply: Delete with no point selected keeps the path, Escape leaves editing.
+  const pathsEditing = await app.getByTestId('layers').getByText('Path').count()
+  await app.getByTestId('layers').getByText('Path').click()
+  await sleep(300)
+  await app.call('keystrokes', { keys: 'delete' })
+  await sleep(300)
+  assert((await app.getByTestId('layers').getByText('Path').count()) === pathsEditing && (await anchors()) === 3, 'Delete from a Layers row does not remove the path being point-edited')
+  await app.call('keystrokes', { keys: 'escape' })
+  assert(await until(async () => !(await count('pen-overlay'))), 'Escape from a Layers row leaves point editing')
   await canvas.press('escape')
   await sleep(200)
 

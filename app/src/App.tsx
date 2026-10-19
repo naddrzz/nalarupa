@@ -287,7 +287,8 @@ export function App() {
   // wrapper keeps the memoized panel from re-rendering with every `onShortcut`.
   const shortcutRef = useRef(onShortcut)
   shortcutRef.current = onShortcut
-  const panelShortcut = useCallback((key: string, m: Mods) => shortcutRef.current(key, m), [])
+  const penKeyRef = useRef<((key: string, m: Mods) => boolean) | null>(null)
+  const panelShortcut = useCallback((key: string, m: Mods) => !!penKeyRef.current?.(key, m) || shortcutRef.current(key, m), [])
 
   const toastEl = toastMsg ? (
     <div
@@ -367,7 +368,7 @@ export function App() {
         <Left version={state.version} selection={selection} select={select} focus={focusLayer} present={present} toast={toast} hover={setHoverId} onShortcut={panelShortcut} />
         <Canvas
           w={cw} h={ch} cam={cam} setCam={setCam} version={state.version} selection={selection}
-          select={select} tool={tool} setTool={setTool} toast={toast} onShortcut={onShortcut} chatOpen={rightTab === 'agent'} hoverId={hoverId}
+          select={select} tool={tool} setTool={setTool} toast={toast} onShortcut={onShortcut} penKeyRef={penKeyRef} chatOpen={rightTab === 'agent'} hoverId={hoverId}
           animating={!!state.animating} rootRef={canvasEl}
         />
         <div style={{ width: RIGHT_W, flexShrink: 0, height: '100%', display: 'flex', flexDirection: 'column', backgroundColor: C.panel, borderLeftWidth: 1, borderColor: C.border }}>
