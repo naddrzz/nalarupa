@@ -611,16 +611,19 @@ pub fn load_chat(id: &str) -> Result<Value, String> {
 
 /// `chat_delete`: remove a saved chat. Removing the current one starts a new conversation.
 pub fn delete_chat(id: &str) -> Result<(), String> {
-    let mut e = engine();
-    // Flushed under the lock: no later snapshot can be queued to bring the file back.
-    flush_chat_saves();
-    let path = chat_path(&e.data_dir, id)?;
-    if e.agent.chat.as_ref().is_some_and(|c| c.id == id) {
-        if e.agent.running {
-            return Err("Stop the agent before removing the running chat.".into());
+    let path = {
+        let mut e = engine();
+        let path = chat_path(&e.data_dir, id)?;
+        if e.agent.chat.as_ref().is_some_and(|c| c.id == id) {
+            if e.agent.running {
+                return Err("Stop the agent before removing the running chat.".into());
+            }
+            e.agent.clear();
         }
-        e.agent.clear();
-    }
+        path
+    };
+    // Flushed after the lock drops: the chat is no longer current, so no later snapshot can bring the file back.
+    flush_chat_saves();
     match std::fs::remove_file(path) {
         Err(err) if err.kind() != std::io::ErrorKind::NotFound => Err(err.to_string()),
         _ => Ok(()),
@@ -629,14 +632,18 @@ pub fn delete_chat(id: &str) -> Result<(), String> {
 
 /// `chat_clear`: delete every saved chat but a running one. True when the current chat went too.
 pub fn clear_chats() -> Result<bool, String> {
-    let mut e = engine();
+    let (dir, running, keep) = {
+        let mut e = engine();
+        let running = e.agent.running;
+        let keep = running.then(|| e.agent.chat.as_ref().map(|c| format!("{}.json", c.id))).flatten();
+        if !running {
+            e.agent.clear();
+        }
+        (e.data_dir.clone(), running, keep)
+    };
+    // Flushed after the lock drops: only a running chat can still queue snapshots, and its file is kept.
     flush_chat_saves();
-    let running = e.agent.running;
-    let keep = running.then(|| e.agent.chat.as_ref().map(|c| format!("{}.json", c.id))).flatten();
-    if !running {
-        e.agent.clear();
-    }
-    for entry in std::fs::read_dir(e.data_dir.join("sessions")).into_iter().flatten().flatten() {
+    for entry in std::fs::read_dir(dir.join("sessions")).into_iter().flatten().flatten() {
         if keep.as_deref() != entry.file_name().to_str() {
             std::fs::remove_file(entry.path()).map_err(|err| err.to_string())?;
         }
