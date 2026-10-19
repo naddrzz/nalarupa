@@ -39,7 +39,11 @@ pub fn start(frame: String, prompt: String, size: (f64, f64), cancel: Arc<Atomic
             engine().emit(json!({"type": "toast", "text": format!("AI Pen: {err}")}));
         }
         pen.feed("", true);
-        engine().agent.pens.retain(|f| *f != pen.frame);
+        // One entry per pen: another pen drawing into the same frame keeps its own.
+        let mut e = engine();
+        if let Some(i) = e.agent.pens.iter().position(|f| *f == pen.frame) {
+            e.agent.pens.remove(i);
+        }
     });
 }
 

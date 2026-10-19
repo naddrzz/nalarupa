@@ -72,7 +72,7 @@ pub struct AgentState {
     pub permissions: HashMap<String, (String, std::sync::mpsc::Sender<bool>)>,
     /// "Let it cook": designs left in this run (counting the current one) and "layout" | "style".
     pub cook: (usize, String),
-    /// Frames an AI Pen is still drawing into: its `placeholder` flag is the pen's to clear.
+    /// Frames an AI Pen is still drawing into, one entry per running pen: its `placeholder` flag is the pen's to clear.
     pub pens: Vec<String>,
 }
 
