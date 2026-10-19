@@ -199,7 +199,21 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             let (dx, dy) = (req["dx"].as_f64().unwrap_or(0.0), req["dy"].as_f64().unwrap_or(0.0));
             let targets = ids(&req["ids"]);
             e.sync();
-            let pos: Vec<(String, f64, f64)> = targets.iter().filter_map(|id| {
+            // A moved layer carries its descendants: one that is also listed would move twice.
+            let inside = |id: &str, of: &str| {
+                if id.starts_with(&format!("{of}/")) {
+                    return true;
+                }
+                let mut cur = id.to_string();
+                while let Some((p, _)) = e.doc.parent_of(&cur) {
+                    if p == of {
+                        return true;
+                    }
+                    cur = p;
+                }
+                false
+            };
+            let pos: Vec<(String, f64, f64)> = targets.iter().filter(|id| !targets.iter().any(|o| o != *id && inside(id, o))).filter_map(|id| {
                 let n = e.doc.find(id)?;
                 let x = n["x"].as_f64().unwrap_or(0.0);
                 let y = n["y"].as_f64().unwrap_or(0.0);

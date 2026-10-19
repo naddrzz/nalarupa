@@ -26,6 +26,12 @@ call('redo')
 assert(node(A).x === 30 && node(B).x === 120, 'redo reapplies the whole drag at once')
 call('undo')
 
+// A selection holding a frame and its own child moves the child once, with its parent.
+call('move_by', { ids: [F, A], dx: 10, dy: 0 })
+assert(node(F).x === 10 && node(A).x === 10, 'a selected child is not moved again with its selected parent')
+call('move_by', { ids: [A, F], dx: -10, dy: 0 })
+assert(node(F).x === 0 && node(A).x === 10, 'the order of the ids does not matter')
+
 // Resize and rotate drags go through update (the nodes keep their ids): several updates, one step.
 call('drag_begin')
 for (const w of [60, 70, 80]) call('update', { ids: [A], props: { width: w } })
