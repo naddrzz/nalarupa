@@ -5,7 +5,14 @@
 
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader};
-use std::time::Duration;
+use std::sync::mpsc::{channel, RecvTimeoutError};
+use std::time::{Duration, Instant};
+
+const URL: &str = "https://api.anthropic.com/v1/messages";
+/// How often a silent stream re-checks `cancel`.
+const POLL: Duration = Duration::from_millis(200);
+/// A stream (or the wait for its headers) silent this long fails as stalled; the API pings every few seconds.
+const STALL: Duration = Duration::from_secs(120);
 
 pub enum Event<'a> {
     Text(&'a str),
@@ -19,6 +26,8 @@ pub enum Event<'a> {
 pub struct Client {
     http: ureq::Agent,
     key: String,
+    url: String,
+    stall: Duration,
 }
 
 impl Client {
@@ -28,38 +37,61 @@ impl Client {
             .http_status_as_error(false)
             .build()
             .into();
-        Client { http, key }
+        Client { http, key, url: URL.into(), stall: STALL }
     }
 
     /// POST /v1/messages with `stream: true`; returns `{content, stop_reason, usage}`.
     pub fn stream(&self, mut body: Value, beta: Option<&str>, cancel: &dyn Fn() -> bool, on: &mut dyn FnMut(Event)) -> Result<Value, String> {
         body["stream"] = json!(true);
-        let mut req = self.http.post("https://api.anthropic.com/v1/messages")
+        let mut req = self.http.post(&self.url)
             .header("x-api-key", &self.key)
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json");
         if let Some(b) = beta {
             req = req.header("anthropic-beta", b);
         }
-        let res = req.send_json(&body).map_err(|e| format!("network error: {e}"))?;
-        let status = res.status().as_u16();
-        let (_, body) = res.into_parts();
-        if status >= 400 {
-            let text = body.into_with_config().limit(1 << 20).read_to_string().unwrap_or_default();
-            let msg = serde_json::from_str::<Value>(&text).ok().and_then(|v| v["error"]["message"].as_str().map(str::to_string)).unwrap_or(text);
-            return Err(format!("Claude API error {status}: {msg}"));
-        }
+        // The blocking socket work (headers and body reads) lives on its own thread so a silent
+        // connection cannot hold this one: we poll `cancel` and the idle limit between lines. A
+        // thread abandoned on Stop ends at its next send or at the 900 s global timeout.
+        let (tx, rx) = channel::<Result<String, String>>();
+        std::thread::spawn(move || {
+            let res = match req.send_json(&body) {
+                Ok(res) => res,
+                Err(e) => return drop(tx.send(Err(format!("network error: {e}")))),
+            };
+            let status = res.status().as_u16();
+            let (_, body) = res.into_parts();
+            if status >= 400 {
+                let text = body.into_with_config().limit(1 << 20).read_to_string().unwrap_or_default();
+                let msg = serde_json::from_str::<Value>(&text).ok().and_then(|v| v["error"]["message"].as_str().map(str::to_string)).unwrap_or(text);
+                return drop(tx.send(Err(format!("Claude API error {status}: {msg}"))));
+            }
+            for line in BufReader::new(body.into_reader()).lines() {
+                let line = line.map_err(|e| format!("stream interrupted: {e}"));
+                let failed = line.is_err();
+                if tx.send(line).is_err() || failed {
+                    return;
+                }
+            }
+        });
 
         let mut blocks: Vec<Value> = Vec::new();
         let mut partial: Vec<String> = Vec::new();
         let mut stop_reason = Value::Null;
         let mut usage = json!({});
         let mut data = String::new();
-        for line in BufReader::new(body.into_reader()).lines() {
+        let mut last = Instant::now();
+        loop {
             if cancel() {
                 return Err("stopped".into());
             }
-            let line = line.map_err(|e| format!("stream interrupted: {e}"))?;
+            let line = match rx.recv_timeout(POLL) {
+                Ok(line) => line?,
+                Err(RecvTimeoutError::Timeout) if last.elapsed() < self.stall => continue,
+                Err(RecvTimeoutError::Timeout) => return Err(format!("connection stalled: no data from the Claude API for {} s", self.stall.as_secs())),
+                Err(RecvTimeoutError::Disconnected) => break,
+            };
+            last = Instant::now();
             if let Some(d) = line.strip_prefix("data:") {
                 data.push_str(d.trim_start());
                 continue;
@@ -131,5 +163,59 @@ impl Client {
         }
         blocks.retain(|b| !b.is_null());
         Ok(json!({"content": blocks, "stop_reason": stop_reason, "usage": usage}))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// A server that sends one text event (or nothing) and then goes silent without closing.
+    fn silent_server(first_event: bool) -> String {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/v1/messages", l.local_addr().unwrap());
+        std::thread::spawn(move || {
+            let (mut s, _) = l.accept().unwrap();
+            let mut buf = [0u8; 8192];
+            let _ = s.read(&mut buf);
+            if first_event {
+                let ev = r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#;
+                let _ = write!(s, "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\r\ndata: {ev}\n\n");
+            }
+            std::thread::sleep(Duration::from_secs(30));
+        });
+        url
+    }
+
+    fn client(url: String, stall: Duration) -> Client {
+        Client { url, stall, ..Client::new("k".into()) }
+    }
+
+    #[test]
+    fn stop_interrupts_a_silent_stream_and_a_silent_header_wait() {
+        for first_event in [true, false] {
+            let c = client(silent_server(first_event), STALL);
+            let stop = AtomicBool::new(false);
+            let t = Instant::now();
+            let r = std::thread::scope(|sc| {
+                sc.spawn(|| {
+                    std::thread::sleep(Duration::from_millis(500));
+                    stop.store(true, Ordering::SeqCst);
+                });
+                c.stream(json!({}), None, &|| stop.load(Ordering::SeqCst), &mut |_| {})
+            });
+            assert_eq!(r.unwrap_err(), "stopped");
+            assert!(t.elapsed() < Duration::from_secs(3), "stop took {:?}", t.elapsed());
+        }
+    }
+
+    #[test]
+    fn a_silent_stream_fails_as_stalled() {
+        let c = client(silent_server(true), Duration::from_millis(600));
+        let r = c.stream(json!({}), None, &|| false, &mut |_| {});
+        assert!(r.unwrap_err().starts_with("connection stalled"));
     }
 }
