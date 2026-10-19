@@ -1155,6 +1155,31 @@ pub(crate) mod tests {
         }
     }
 
+    /// Text paints like a shape: fill, then inner shadows, then the stroke, so the stroke covers an inner shadow.
+    #[test]
+    fn text_stroke_covers_inner_shadow() {
+        let text = |x: u32, extra: &str| {
+            format!(r##"{{"type":"text","x":{x},"y":10,"content":"Out","fontSize":50,"fontWeight":"700","fill":"#ffff00","stroke":"#000000","strokeWidth":4{extra}}}"##)
+        };
+        let json = format!(
+            r##"{{"version":"2.19","children":[{{"type":"frame","id":"f","x":0,"y":0,"width":300,"height":80,"layout":"none","fill":"#ffffff","children":[{},{}]}}]}}"##,
+            text(10, ""),
+            text(150, r##","effect":{"type":"shadow","shadowType":"inner","offset":{"x":8,"y":8},"color":"#ff0000"}"##),
+        );
+        let doc = Doc::from_json(&json).unwrap();
+        for raster in [Raster::Resvg, Raster::Vello] {
+            let mut r = Renderer { raster, ..Renderer::default() };
+            sync(&mut r, &doc);
+            let px = r.render(300, 80, 0.0, 0.0, 1.0, [255, 255, 255], None, true).to_vec();
+            let count = |x0: usize, keep: &dyn Fn(&[u8]) -> bool| (0..80).flat_map(|y| (x0..x0 + 140).map(move |x| (y * 300 + x) * 4)).filter(|&o| keep(&px[o..o + 3])).count();
+            // White, yellow and red all have full red, so only the stroke darkens the red channel.
+            let (plain, shadowed) = (count(0, &|p| p[0] < 80), count(140, &|p| p[0] < 80));
+            let red = count(140, &|p| p[0] > 200 && p[1] < 80);
+            assert!(red > 50, "{raster:?}: the inner shadow shows inside the fill, got {red} red pixels");
+            assert!(plain > 100 && shadowed + plain / 50 >= plain, "{raster:?}: stroke pixels without shadow {plain}, with inner shadow {shadowed}");
+        }
+    }
+
     /// An agent-inserted node is left out of the cached view, painted 50 units low and
     /// transparent at its first frame, part way there 100 ms later, and back in the
     /// cached view (at its real place) once it settles.

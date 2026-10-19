@@ -590,12 +590,12 @@ impl<'a> Svg<'a> {
         }
         let body = if text { self.text_markup(n, &fills) } else { self.icon_markup(n, None) };
         self.out.push_str(&body);
+        if let Some(m) = &mask {
+            self.inner_shadows(fx, m, b, None);
+        }
         if let Some(s) = &stroke {
             let body = self.text_stroke(n, s, &s.paints);
             self.out.push_str(&body);
-        }
-        if let Some(m) = &mask {
-            self.inner_shadows(fx, m, b, None);
         }
     }
 
