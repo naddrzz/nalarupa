@@ -1493,6 +1493,31 @@ mod tests {
         assert_eq!(e.doc.children().len(), 1);
     }
 
+    /// Every inserted node used to slide on its own, and each sync snapshotted all of them
+    /// against all the others: cubic in the node count. Few slides start, and none inside another.
+    #[test]
+    fn bulk_inserts_slide_only_a_few_top_nodes() {
+        let mut e = engine();
+        let out = execute(&mut e, &json!({"input": r##"
+            root = Insert(document, {type:"frame", name:"Root", width:300, height:300, layout:"none"});
+            for (let i = 0; i < 300; i++) Insert(root, {type:"rectangle", name:"r"+i, x:i, y:0, width:10, height:10});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        assert_eq!(crate::render::MAX_SLIDES, 32);
+        assert_eq!(e.renderer.slides.len(), 32);
+        e.sync();
+        assert_eq!(e.renderer.slides.len(), 32);
+
+        let mut e = engine();
+        let out = execute(&mut e, &json!({"input": r##"
+            root = Insert(document, {type:"frame", name:"Root", width:300, height:300, layout:"none"});
+            card = Insert(root, {type:"frame", name:"Card", width:100, height:100, layout:"none"});
+            for (let i = 0; i < 5; i++) Insert(card, {type:"rectangle", name:"r"+i, width:10, height:10});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        assert_eq!(e.renderer.slides.len(), 1, "the card carries its children along");
+    }
+
     #[test]
     fn a_running_script_leaves_the_engine_free_and_stops_with_the_agent() {
         // The script ran under the engine lock: the window froze and Stop was dead until it ended.
