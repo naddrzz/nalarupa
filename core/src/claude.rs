@@ -5,7 +5,7 @@
 
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader};
-use std::sync::mpsc::{channel, RecvTimeoutError};
+use std::sync::mpsc::{sync_channel, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
 const URL: &str = "https://api.anthropic.com/v1/messages";
@@ -55,7 +55,8 @@ impl Client {
         // header phases are bounded by the stall limit; once streaming, a thread abandoned on Stop
         // ends at its next line (the API pings every few seconds) or at the 900 s global timeout.
         // The worker sends `Ok(None)` when the stream ends, so a dropped sender without it is an error.
-        let (tx, rx) = channel::<Result<Option<String>, String>>();
+        // Bounded, so a slow `on` callback backpressures the socket instead of queueing every line.
+        let (tx, rx) = sync_channel::<Result<Option<String>, String>>(64);
         // Slightly past the stall limit, so the reader below reports the stall first.
         let hdr = Some(self.stall + POLL * 2);
         let req = req.config().timeout_connect(hdr).timeout_send_request(hdr).timeout_recv_response(hdr).build();
