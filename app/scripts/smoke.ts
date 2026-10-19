@@ -1,7 +1,7 @@
 // FFI smoke check: `bun scripts/smoke.ts` — exercises the core without opening a window.
 import { call, renderPixels } from '../src/core'
 import { applyEvents, barAgents, imageSrc, lastContentId, needsFrame, resetChat, store } from '../src/agents'
-import { INDICATOR_TICK_MS, ellipsisAt, pulseAt } from '../src/theme'
+import { INDICATOR_TICK_MS, ellipsisAt, ellipsisPadAt, pulseAt } from '../src/theme'
 
 const assert = (ok: unknown, msg: string) => {
   if (!ok) throw new Error(`smoke failed: ${msg}`)
@@ -76,6 +76,7 @@ call('reduce_motion', { on: false })
   const steps: number[] = []
   let last = ellipsisAt(0), since = 0, maxJump = 0
   for (let t = 7; t < 8000; t += INDICATOR_TICK_MS) {
+    assert(ellipsisAt(t).length + ellipsisPadAt(t).length === 3, `ellipsis plus pad is not three dots at ${t}`)
     maxJump = Math.max(maxJump, Math.abs(pulseAt(t) - pulseAt(t - INDICATOR_TICK_MS)))
     if (ellipsisAt(t) !== last) {
       if (since) steps.push(t - since)

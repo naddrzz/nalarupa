@@ -1,4 +1,6 @@
 name: claude
+# The issue or PR number leads the run name; retry-claude.sh reads it.
+run-name: "#${{ github.event.issue.number || github.event.pull_request.number }} ${{ github.event.issue.title || github.event.pull_request.title }}"
 # - An issue labeled "claude" (the nightly QA labels the bugs it files) → Claude fixes or builds it and opens a PR.
 # - A comment mentioning @claude by someone with write access → Claude iterates on that issue or PR.
 # - A cubic review on a PR → Claude fixes the valid findings, replies, resolves the threads and pushes.
