@@ -605,7 +605,7 @@ impl<'a> Svg<'a> {
             match &stroke {
                 Some(s) if !visible => body += &self.text_stroke(n, s, &black),
                 // Over the fill an unclipped stroke adds the same outline; an inner one adds nothing.
-                Some(s) if s.align != "inner" => body += &self.text_stroke_markup(n, s, &black),
+                Some(s) if s.align != "inner" => body += &self.text_stroke_markup(n, s, &black, ""),
                 _ => {}
             }
             let _ = write!(self.defs, r#"<g id="{m}">{body}</g>"#);
@@ -810,9 +810,9 @@ impl<'a> Svg<'a> {
     }
 
     /// Glyph outlines stroked with `paints`, unclipped: width k·w, so inner/outer strokes
-    /// are double width and `text_stroke` clips them.
-    fn text_stroke_markup(&mut self, n: &RNode, s: &Stroke, paints: &[Paint]) -> String {
-        let mut extra = format!(r#" fill="none" stroke-width="{}""#, s.widths[0] * s.k());
+    /// are double width and `text_stroke` clips them. `more` is added to every `<text>`.
+    fn text_stroke_markup(&mut self, n: &RNode, s: &Stroke, paints: &[Paint], more: &str) -> String {
+        let mut extra = format!(r#" fill="none" stroke-width="{}"{more}"#, s.widths[0] * s.k());
         for (prop, attr) in [("strokeLinecap", "stroke-linecap"), ("strokeLinejoin", "stroke-linejoin")] {
             if let Some(v) = n.s(prop) {
                 let _ = write!(extra, r#" {attr}="{}""#, esc(v));
@@ -824,9 +824,8 @@ impl<'a> Svg<'a> {
 
     /// Text stroke painted with `paints`; inner/outer keep the half of the double-width stroke inside/outside the glyphs.
     fn text_stroke(&mut self, n: &RNode, s: &Stroke, paints: &[Paint]) -> String {
-        let body = self.text_stroke_markup(n, s, paints);
         if s.align == "center" {
-            return body;
+            return self.text_stroke_markup(n, s, paints, "");
         }
         let id = self.id("k");
         let (x, y, w, h) = inflate((n.x, n.y, n.w, n.h), TextStyle::of(n).size / 2.0 + s.reach() + 2.0);
@@ -834,6 +833,11 @@ impl<'a> Svg<'a> {
         let glyphs = self.text_markup(n, &[Paint { value: if inner { "#fff" } else { "#000" }.into(), alpha: 1.0, blend: None }]);
         let rect = if inner { String::new() } else { format!(r##"<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="#fff"/>"##) };
         let _ = write!(self.defs, r#"<mask id="{id}" maskUnits="userSpaceOnUse" x="{x}" y="{y}" width="{w}" height="{h}">{rect}{glyphs}</mask>"#);
+        // A mask group is isolated, so a blended stroke would blend against transparent: mask each text instead.
+        if paints.iter().any(|p| p.blend.is_some()) {
+            return self.text_stroke_markup(n, s, paints, &format!(r#" mask="url(#{id})""#));
+        }
+        let body = self.text_stroke_markup(n, s, paints, "");
         format!(r#"<g mask="url(#{id})">{body}</g>"#)
     }
 
