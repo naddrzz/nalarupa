@@ -566,6 +566,35 @@ pub fn add_layout(e: &mut Engine, ids: &[String]) -> Result<String, String> {
     })
 }
 
+/// Switch an auto-layout frame between row and column. A child's `fill_container` on the old
+/// cross axis would now split the main axis (shrinking to a sliver), so it is frozen at its
+/// current size first.
+pub fn set_layout(e: &mut Engine, ids: &[String], layout: &str) -> Result<(), String> {
+    e.sync();
+    let main = if layout == "vertical" { "height" } else { "width" };
+    let plan: Vec<(String, Map<String, Value>)> = {
+        let v = View::new(e);
+        let mut plan = Vec::new();
+        for id in ids {
+            let mut fp = Map::new();
+            fp.insert("layout".into(), json!(layout));
+            plan.push((id.clone(), fp));
+            if v.layout(id).is_some_and(|d| d != usize::from(layout == "vertical")) {
+                for k in kids(&e.doc, id) {
+                    let kid = k["id"].as_str().unwrap_or_default();
+                    let mut p = v.freeze_fill(kid);
+                    p.retain(|key, _| key == main);
+                    if !p.is_empty() {
+                        plan.push((kid.to_string(), p));
+                    }
+                }
+            }
+        }
+        plan
+    };
+    e.edit_or_drag(|d| plan.iter().try_for_each(|(id, p)| d.update(id, &Value::Object(p.clone()))))
+}
+
 /// Shift+Alt+A: back to freeform, children staying where the layout put them.
 pub fn remove_layout(e: &mut Engine, ids: &[String]) -> Result<(), String> {
     e.sync();

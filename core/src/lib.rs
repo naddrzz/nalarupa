@@ -287,6 +287,11 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             let id = editor::add_layout(&mut e, &ids(&req["ids"]))?;
             Ok(json!({"id": id, "state": state(&e)}))
         }
+        "set_layout" => {
+            let mut e = engine();
+            editor::set_layout(&mut e, &ids(&req["ids"]), req["layout"].as_str().unwrap_or("horizontal"))?;
+            Ok(state(&e))
+        }
         "remove_layout" => {
             let mut e = engine();
             editor::remove_layout(&mut e, &ids(&req["ids"]))?;

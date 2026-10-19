@@ -209,7 +209,7 @@ export function Inspector({ version, selection, select, toast }: Props) {
           <Segmented
             label="Layout"
             value={(n.layout ?? 'horizontal') as string}
-            onChange={(v) => (v === 'none' ? tryCall('remove_layout', { ids: selection }) : update({ layout: v }))}
+            onChange={(v) => (v === 'none' ? tryCall('remove_layout', { ids: selection }) : n.layout === 'none' ? update({ layout: v }) : tryCall('set_layout', { ids: selection, layout: v }))}
             options={[{ value: 'none', label: 'Free' }, { value: 'horizontal', label: 'Row' }, { value: 'vertical', label: 'Column' }]}
           />
           {n.layout !== 'none' ? (
