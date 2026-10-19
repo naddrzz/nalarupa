@@ -62,6 +62,31 @@ export function imageSrc(b64: string): string {
   return `data:${mime};base64,${b64}`
 }
 
+// Canvas presence timings, ms.
+export const FADE_IN = 200
+export const FADE_DELAY = 5000
+export const FADE_DUR = 1500
+export const GONE = FADE_DELAY + FADE_DUR
+export const PILL_MS = 3000
+
+/**
+ * Whether the agent layer must repaint now. Normally any agent presence animates every frame. Under
+ * reduced motion only fades and the pill expiry change on their own; everything else moves on events,
+ * which already re-render the layer.
+ */
+export function needsFrame(now: number, reduced: boolean, liveCount: number): boolean {
+  const pills = [...store.pills.values()].some((p) => now - p.at < PILL_MS)
+  if (store.activity.length > 0 || store.flashes.length > 0 || pills) return true
+  if (!reduced) {
+    return liveCount > 0 || store.pens.size > 0 || [...store.cursors.values()].some((c) => store.running.has(c.profile.id) || now - c.lastActivity < GONE)
+  }
+  return [...store.pens.values()].some((p) => now - p.appearAt < FADE_IN)
+    || [...store.cursors.values()].some((c) => {
+      const idle = now - c.lastActivity
+      return now - c.appearAt < FADE_IN || (!store.running.has(c.profile.id) && idle > FADE_DELAY && idle < GONE)
+    })
+}
+
 export const FALLBACK: Profile = { id: 'agent', name: 'Agent', color: '#808080' }
 export const PRESENCE = '#607dff'
 
@@ -227,6 +252,17 @@ export function resetChat() {
   store.items = []
   store.todos = []
   store.pills.clear()
+  store.profiles.clear()
+  store.running.clear()
+  store.cursors.clear()
+}
+
+/** Agent bar pills: the running agents first, then the finished ones, at most `max`; `more` counts the rest. */
+export function barAgents(max = 8) {
+  const all = [...store.profiles.values()]
+  const running = all.filter((a) => store.running.has(a.id))
+  const shown = [...running, ...all.filter((a) => !store.running.has(a.id))]
+  return { all, running, shown: shown.slice(0, max), more: Math.max(0, shown.length - max) }
 }
 
 /** Rebuild a saved chat (core `chat_load`): replay its events at their recorded times. */

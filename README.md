@@ -166,6 +166,10 @@ cd app && bun run mcp-check && bun run doc-check && bun run file-e2e
 ```
 
 ```bash
+cd app && bun run script-check && bun run chat-check && bun run mcp-install-check
+```
+
+```bash
 cd app && bun run a11y-check && bun run motion-check && bun run window-check
 ```
 
@@ -176,6 +180,11 @@ cd app && bun run a11y-check && bun run motion-check && bun run window-check
   JSON-RPC errors, every tool); `doc-check` covers save/open round trips, exports, variables, settings and
   edit commands; both run without a window in a throwaway data folder. `file-e2e` saves and reopens through
   the window (toolbar Save → Home → Recent).
+- `script-check` covers the agent `execute` API (Copy, Update, Replace, Move, Delete, Get, variables,
+  FindEmptySpace, rollback and editId repair); `chat-check` covers the saved chat history (list, load, delete,
+  clear, the 20-day expiry and the running-agent guards); `mcp-install-check` covers "connect an agent" (Cursor,
+  Codex and Claude Code config) against a throwaway home. All three run without a window; `mcp-install-check`
+  is skipped on Windows.
 - `a11y-check` reads the Windows UI Automation tree and fails on any unnamed control; `motion-check` makes
   sure animations stop under *reduced motion*; `window-check` makes sure the window fits the screen and its
   frame carries the Nalarupa icon (`bun run window-check dist/nalarupa.exe` for the built exe).

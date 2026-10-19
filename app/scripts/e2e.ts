@@ -2,7 +2,7 @@
 // Screenshots land in app/screenshots/. The window opens in the background.
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { launch } from '@gpuix/react/automation'
 
 const out = join(import.meta.dir, '..', 'screenshots')
@@ -10,6 +10,10 @@ mkdirSync(out, { recursive: true })
 // GPUIX can't capture on Linux; there the window runs under a headless Wayland compositor, so grab it with grim.
 const shot = (name: string) => process.platform === 'linux' ? Bun.$`grim ${join(out, `${name}.png`)}`.quiet() : app!.screenshot({ path: join(out, `${name}.png`) })
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+const until = async (ok: () => Promise<boolean>, what: string, ms = 8000) => {
+  for (const end = Date.now() + ms; Date.now() < end; await sleep(100)) if (await ok()) return
+  throw new Error(`timed out waiting for ${what}`)
+}
 
 // The core takes the next free port of 47700–47719 when another Nalarupa already holds one; find this window's.
 const alive = (p: number) => fetch(`http://127.0.0.1:${p}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }) }).then(() => true, () => false)
@@ -32,11 +36,19 @@ async function mcp(name: string, args: Record<string, unknown>) {
 const data = mkdtempSync(join(tmpdir(), 'nalarupa-e2e-'))
 const local = process.platform === 'darwin' ? join(homedir(), 'Library', 'Application Support') : process.env.LOCALAPPDATA ?? process.env.XDG_DATA_HOME ?? join(homedir(), '.local', 'share')
 const own = process.env.NALARUPA_DATA || join(local, 'Nalarupa')
+// A stand-in `claude` (a shell script, so not on Windows) that streams one long reply, for the agent message pill.
+const standIn = process.platform !== 'win32'
+// With an API key set the core picks the API backend; the stand-in needs the Claude Code one.
+delete process.env.ANTHROPIC_API_KEY
+const bin = join(data, 'bin')
+mkdirSync(bin)
+const delta = (t: string) => JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: t } } })
+if (standIn) writeFileSync(join(bin, 'claude'), `#!/bin/sh\nfor i in 0 1 2 3 4 5 6 7; do\n  echo '${delta('chunk lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. ')}'\n  sleep 0.5\ndone\n`, { mode: 0o755 })
 let app: Awaited<ReturnType<typeof launch>> | undefined
 try {
   for (const dir of ['cache', 'fonts']) if (existsSync(join(own, dir))) cpSync(join(own, dir), join(data, dir), { recursive: true })
   const before = new Set(await ports())
-  app = await launch({ command: 'bun', args: ['app.tsx'], cwd: join(import.meta.dir, '..'), env: { ...process.env, GPUIX_BACKGROUND: '1', NALARUPA_DATA: data } })
+  app = await launch({ command: 'bun', args: ['app.tsx'], cwd: join(import.meta.dir, '..'), env: { ...process.env, GPUIX_BACKGROUND: '1', NALARUPA_DATA: data, PATH: `${bin}${delimiter}${process.env.PATH ?? ''}` } })
   await app.getByTestId('template-slides').waitFor({ timeoutMs: 30000 })
   // Exactly one new server: with a second Nalarupa started meanwhile, picking one would be a guess.
   const fresh = (await ports()).filter((p) => !before.has(p))
@@ -125,6 +137,42 @@ TakeScreenshot([s])`,
   await sleep(1200)
   await shot('05-after-mcp-agent')
 
+  // Agent overlays on rotated nodes (flash, shimmer on a pending image, "Generating" glow on a placeholder frame)
+  // are drawn where the node is painted: each one is centred like the selection frame of the same node
+  // (turning about its corner moves a node's centre by ~30 px at this zoom, so a box left at the layout position fails).
+  const centre = async (id: string) => {
+    const r = await app!.getByTestId(id).bounds()
+    return [r.x + r.width / 2, r.y + r.height / 2]
+  }
+  const poll = async (ok: () => Promise<boolean>, ms = 4000) => {
+    for (const end = Date.now() + ms; Date.now() < end; await sleep(50)) if (await ok()) return true
+    return false
+  }
+  const selectedCentre = async (name: string) => {
+    await app.getByTestId('layers').getByText(name).click()
+    if (!(await poll(async () => (await app!.getByTestId('rotated-overlay').count()) > 0))) throw new Error(`no rotated selection frame for ${name}`)
+    const c = await centre('rotated-overlay')
+    await app.getByTestId('canvas').press('escape')
+    await sleep(200)
+    return c
+  }
+  const sameSpot = (name: string, a: number[], b: number[]) => {
+    if (Math.hypot(a[0] - b[0], a[1] - b[1]) > 6) throw new Error(`the ${name} overlay is centred at ${a.map(Math.round)}, the rotated node at ${b.map(Math.round)}`)
+  }
+  await mcp('execute', { input: `Insert(document, {type:"rectangle", name:"SpinImg", x:300, y:600, width:1000, height:160, rotation:-30, fill:{type:"image", url:"nalarupa:pending-e2e", mode:"fill"}})` })
+  let flash: number[] | undefined
+  if (!(await poll(async () => ((await app!.getByTestId('agent-flash-turned').count()) > 0 && !!(flash = await centre('agent-flash-turned')))))) throw new Error('no flash on the rotated node')
+  if (!(await poll(async () => (await app!.getByTestId('agent-shimmer-turned').count()) > 0))) throw new Error('no shimmer on the rotated pending image')
+  const imgAt = await selectedCentre('SpinImg')
+  sameSpot('flash', flash!, imgAt)
+  sameSpot('shimmer', await centre('agent-shimmer-turned'), imgAt)
+  await mcp('execute', { input: `Insert(document, {type:"frame", name:"SpinGen", x:300, y:300, width:900, height:240, placeholder:true, rotation:30, fill:"#ffd0d0"})` })
+  if (!(await poll(async () => (await app!.getByTestId('agent-glow-turned').count()) > 0))) throw new Error('no generating glow on the rotated placeholder frame')
+  sameSpot('generating glow', await centre('agent-glow-turned'), await selectedCentre('SpinGen'))
+  await shot('05b-rotated-overlays')
+  await mcp('execute', { input: `Delete(Get(n => n.name === "SpinImg" ? n.id : undefined)[0]); Delete(Get(n => n.name === "SpinGen" ? n.id : undefined)[0])` })
+  await sleep(300)
+
   // Slides tab → Export deck to PDF: one page per top-level frame (3 template slides + the MCP one).
   await app.getByText('Slides').click()
   await sleep(800)
@@ -140,17 +188,37 @@ TakeScreenshot([s])`,
   }
   console.log('deck PDF:', pdfPath, `${pages} pages`)
 
+  // A long frame name must not move its row: layer names and slide labels start at the same x as the
+  // others, and a slide label ends inside the panel (ellipsized, not clipped by it).
+  const PANEL_W = 248 // LEFT_W in src/theme.ts
+  const LONG = 'A slide with an extremely long name that should be truncated in the slides panel'
+  await mcp('execute', { input: `Insert(document, {type:"frame", name:"Short", x: 20000, y: 0, width:1920, height:1080, fill:"#1A1D24"})
+Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, height:1080, fill:"#1A1D24"})` })
+  const label = (testId: string, text: string) => app!.getByTestId(testId).getByText(text).bounds()
+  await app.getByTestId('slide-5').getByText('Short').waitFor({ timeoutMs: 10000 })
+  await app.getByTestId('slide-6').getByText(LONG).waitFor({ timeoutMs: 10000 })
+  const [s5, s6] = [await label('slide-5', 'Short'), await label('slide-6', LONG)]
+  if (Math.abs(s5.x - s6.x) > 0.5 || s6.x + s6.width > PANEL_W) throw new Error(`slide labels start at x=${s5.x} and x=${s6.x} (should match) and the long one ends at ${s6.x + s6.width} (panel is ${PANEL_W} wide)`)
+  if (s5.x < 12 + 14) throw new Error(`the slide number column hugs the panel edge (label at x=${s5.x})`)
+  await app.getByText('Layers').click()
+  await app.getByTestId('layers').getByText(LONG).waitFor({ timeoutMs: 10000 })
+  const [l1, l2] = [await label('layers', 'Short'), await label('layers', LONG)]
+  if (Math.abs(l1.x - l2.x) > 0.5) throw new Error(`a long layer name moved its row: x=${l2.x}, other rows x=${l1.x}`)
+  await app.getByText('Slides').click()
+
   // Saved chats: a session file on disk is listed in the history dropdown, reopens, and can be removed.
   const sessions = join(data, 'sessions')
   const chatId = `e2e${Date.now().toString(36)}`
   const chatFile = join(sessions, `${chatId}.json`)
   const agent = { id: 'ag0e2e', name: 'Arunika', color: '#7C9CFF', parent: null }
+  const todos = Array.from({ length: 32 }, (_, i) => ({ content: `Step ${i + 1}: lay out the menu grid with product cards, prices and tasting notes for the roastery`, status: i < 3 ? 'completed' : 'pending' }))
   mkdirSync(sessions, { recursive: true })
   writeFileSync(chatFile, JSON.stringify({
     version: 1, id: chatId, title: 'E2E saved chat', updatedAt: Date.now(), agent, messages: [], session: null,
     events: [
       { type: 'agent', kind: 'user', agent, text: 'E2E saved chat', at: Date.now() - 3000 },
       { type: 'agent', kind: 'text_delta', agent, text: 'Restored from disk.', at: Date.now() - 2000 },
+      { type: 'agent', kind: 'todos', todos, at: Date.now() - 1500 },
       { type: 'agent', kind: 'done', agent, durationMs: 1000, usage: {}, stopped: false, at: Date.now() - 1000 },
     ],
   }))
@@ -158,12 +226,48 @@ TakeScreenshot([s])`,
   await app.getByTestId('agent-history').click()
   await app.getByTestId(`chat-${chatId}`).waitFor()
   await shot('07-chat-history')
+  // A chat saved from a multi-line prompt has line breaks in its title; its row still reads as one line.
+  const multiId = `e2emulti${Date.now().toString(36)}`
+  const multiFile = join(sessions, `${multiId}.json`)
+  writeFileSync(multiFile, JSON.stringify({ version: 1, id: multiId, title: 'Make it dark\nand add a footer', updatedAt: Date.now() - 5000, agent, messages: [], session: null, events: [] }))
+  await app.getByTestId('agent-history').click()
+  await sleep(200)
+  await app.getByTestId('agent-history').click()
+  await app.getByTestId(`chat-${multiId}`).waitFor()
+  const multiRow = (await app.getByTestId(`chat-${multiId}`).bounds())!
+  const multiText = (await app.getByText('Make it dark and add a footer').bounds())!
+  const oneText = (await app.getByText('E2E saved chat').bounds())!
+  if (multiText.height > oneText.height + 1) throw new Error(`a multi-line chat title is ${multiText.height}px tall, a one-line title ${oneText.height}px`)
+  if (multiText.y < multiRow.y || multiText.y + multiText.height > multiRow.y + multiRow.height) throw new Error('a multi-line chat title spills out of its row')
+  rmSync(multiFile)
   await app.getByTestId(`chat-${chatId}`).click()
   await sleep(500)
   // The prompt bubble and the agent's reply (a markdown block) are back.
   const reply = (await app.getByType('markdown').all()).filter((n) => (n.bounds?.height ?? 0) > 0)
   if (!(await app.getByText('E2E saved chat').count()) || reply.length !== 1) throw new Error('the saved chat did not reopen')
   await shot('08-restored-chat')
+
+  // The Plan block: a long todo wraps inside the panel (it used to run past the window edge) and 32 of
+  // them scroll in a capped block, so the composer stays on screen (it used to be pushed out of the window).
+  const until = async (ok: () => Promise<boolean>, ms = 5000) => {
+    for (const end = Date.now() + ms; Date.now() < end; await sleep(100)) if (await ok()) return true
+    return false
+  }
+  const laidOut = async () => !!((await app!.getByText('Step 1: lay out').bounds())?.height && (await app!.getByTestId('plan-todos').bounds())?.height && (await app!.getByTestId('agent-input').bounds())?.height)
+  if (!(await until(laidOut))) throw new Error('the Plan block did not lay out')
+  const planField = (await app.getByTestId('agent-input').bounds())!
+  const count = (await app.getByText('3/32').bounds())!
+  const step = (await app.getByText('Step 1: lay out').bounds())!
+  if (step.x + step.width > count.x + count.width) throw new Error(`a long todo ends at ${step.x + step.width}, past the Plan block's right edge ${count.x + count.width}`)
+  // The status glyph sits on the first line of its todo, not centered on the wrapped text.
+  const glyph = (await app.getByText('✓').all()).find((n) => (n.bounds?.height ?? 0) > 0)?.bounds
+  if (!glyph || Math.abs(glyph.y - step.y) > 1) throw new Error(`the status glyph is not aligned to the first todo line: ${glyph?.y} vs ${step.y}`)
+  // The list is capped at 240px and scrolls: all 32 todos are still there.
+  const list = (await app.getByTestId('plan-todos').bounds())!
+  if (list.height > 240) throw new Error(`the Plan list is ${list.height}px tall, over its 240px cap`)
+  if (!(await app.getByText('Step 32: lay out').count())) throw new Error('the Plan list lost todos')
+  const canvasBox = (await app.getByTestId('canvas').bounds())!
+  if (planField.y + planField.height > canvasBox.y + canvasBox.height) throw new Error(`32 todos pushed the composer to ${planField.y + planField.height}, below the window's bottom ${canvasBox.y + canvasBox.height}`)
 
   // Per-tool permission: Claude Code asks through the MCP permission tool (as the restored chat's
   // agent); the card in the chat answers it.
@@ -216,6 +320,14 @@ TakeScreenshot([s])`,
     await app.getByTestId(menu).press('escape')
     await sleep(150)
   }
+  // + (New agent) repaints the panel at once: the open chat gives way to the empty state, without another re-render.
+  await app.getByTestId('agent-new').click()
+  await until(async () => !!(await app.getByText('Ask me to design anything').count()), 'the empty state after + (New agent)')
+  if (await app.getByType('markdown').count()) throw new Error('+ (New agent) left the old conversation on screen')
+  await app.getByTestId('agent-history').click()
+  await app.getByTestId(`chat-${chatId}`).waitFor()
+  await app.getByTestId(`chat-${chatId}`).click()
+  await until(async () => (await app.getByType('markdown').count()) === 1, 'the saved chat to reopen')
   await app.getByTestId('agent-history').click()
   await app.getByTestId(`chat-${chatId}`).hover()
   // Removal cannot be undone, so the first press only arms it.
@@ -247,6 +359,24 @@ TakeScreenshot([s])`,
   await sleep(200)
   if (await app.getByTestId('toast').count()) throw new Error('dismissing the error toast left it on screen')
   if (await app.getByTestId('chat-history').count()) await app.getByTestId('chat-history').press('escape')
+
+  // The agent message pill: a reply long enough to fill the pill must not squash its status dot.
+  if (standIn) {
+    await app.getByTestId('tab-agent').click()
+    await app.getByTestId('agent-input').waitFor()
+    await app.getByTestId('agent-input').click()
+    await app.getByTestId('agent-input').fill('Say something long')
+    await sleep(200)
+    await app.getByTestId('agent-send').click()
+    await app.getByTestId('tab-design').click()
+    const dot = async () => (await app.getByType('div').all()).find((n) => n.testId?.startsWith('agent-pill-dot-') && (n.bounds?.width ?? 0) > 0)?.bounds
+    let size = await dot()
+    for (let i = 0; !size && i < 40; i++) { await sleep(250); size = await dot() }
+    if (!size) throw new Error('the agent message pill did not show')
+    await shot('12-agent-pill')
+    if (Math.abs(size.width - 8) > 0.5 || Math.abs(size.height - 8) > 0.5) throw new Error(`the pill's status dot is ${size.width}x${size.height}, expected 8x8`)
+    await sleep(4500) // the stand-in reply ends and the run finishes
+  }
 
   await app.getByTestId('present').click()
   await sleep(1500)

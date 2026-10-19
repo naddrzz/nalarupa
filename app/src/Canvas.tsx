@@ -4,10 +4,10 @@ import type { CursorValue } from '@gpuix/native/host'
 import type { ImgInstance, PublicInstance } from '@gpuix/react'
 import { call, renderPixels, tryCall, type Box } from './core'
 import { CANVAS_BG, C, DPR, FONT, LEFT_W, TOP_H } from './theme'
-import { FocusRing, setKeyboardFocus, T, useRing, type Toast } from './ui'
+import { FocusRing, setKeyboardFocus, SvgOverlay, T, useRing, type Toast } from './ui'
 import { AgentLayer } from './AgentLayer'
 import {
-  anchorPoints, apply, corners, dragPoints, lin, measure, own, painted, resizeBox, resizeCursor, snap, turned, unapply, unionRect,
+  anchorPoints, apply, corners, dragPoints, lin, measure, own, painted, resizeBox, resizeCursor, snap, turnAroundCenter, turned, unapply, unionRect,
   type Guide, type M, type Measure, type Pt, type Rect,
 } from './geometry'
 import {
@@ -94,10 +94,8 @@ function handlePoints(b: { x: number; y: number; w: number; h: number }): Record
   return { nw: [x, y], n: [x + w / 2, y], ne: [x + w, y], e: [x + w, y + h / 2], se: [x + w, y + h], s: [x + w / 2, y + h], sw: [x, y + h], w: [x, y + h / 2] }
 }
 
-const isMovable = (n: any) => n && (n.parentLayout === 'none' || n.node?.layoutPosition === 'absolute')
+export const isMovable = (n: any) => n && (n.parentLayout === 'none' || n.node?.layoutPosition === 'absolute')
 const inFlow = (n: any) => !!n && n.parentLayout !== 'none' && n.node?.layoutPosition !== 'absolute'
-/** Offset from a node's origin to its center in its parent's space (rotation and flips about the origin). */
-const centerOffset = (w: number, h: number, deg: number, flipX: boolean, flipY: boolean) => lin(own(deg, flipX, flipY), w / 2, h / 2)
 /** cornerRadius as [tl, tr, br, bl]; variable references count as 0. */
 function radiiOf(n: any): number[] {
   const r = n?.cornerRadius
@@ -159,14 +157,6 @@ function Quads({ quads, testId }: { quads: Quad[]; testId?: string }) {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(w * DPR)}" height="${Math.round(h * DPR)}" viewBox="0 0 ${w} ${h}">${shapes}</svg>`
   useLayoutEffect(() => img.current?.setImage(Buffer.from(svg)), [svg])
   return <img ref={img} testId={testId} objectFit="fill" style={{ position: 'absolute', left: x, top: y, width: w, height: h, pointerEvents: 'none' }} />
-}
-
-/** Screen-space SVG markup inside `box` (the vector-edit overlay), drawn like `Quads`. */
-function SvgOverlay({ body, box, testId }: { body: string; box: Rect; testId?: string }) {
-  const img = useRef<ImgInstance>(null)
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(box.w * DPR)}" height="${Math.round(box.h * DPR)}" viewBox="${box.x} ${box.y} ${box.w} ${box.h}">${body}</svg>`
-  useLayoutEffect(() => img.current?.setImage(Buffer.from(svg)), [svg])
-  return <img ref={img} testId={testId} objectFit="fill" style={{ position: 'absolute', left: box.x, top: box.y, width: box.w, height: box.h, pointerEvents: 'none' }} />
 }
 
 export function Canvas(props: {
@@ -256,8 +246,17 @@ export function Canvas(props: {
     settle.current = setTimeout(() => { settle.current = null; draw(true) }, 200)
   }
   useLayoutEffect(schedule, [w, h, cam, version])
+  const animated = useRef(false)
   useEffect(() => {
-    if (!props.animating) return
+    if (!props.animating) {
+      // The poll can end the slide between two redraws: paint the settled view once more, or the
+      // bitmap keeps the last slide frame (neither the camera nor `version` changed to repaint it).
+      // Only when the slide ends, not on mount or unmount (that frame would be thrown away).
+      if (animated.current) draw(false)
+      animated.current = false
+      return
+    }
+    animated.current = true
     const t = setInterval(() => draw(false), 16)
     return () => clearInterval(t)
   }, [props.animating])
@@ -593,10 +592,7 @@ export function Canvas(props: {
     const props: Record<string, unknown> = { rotation: r }
     if (d.movable) {
       // Turn around the center: move the origin so the center stays put.
-      const [ox0, oy0] = centerOffset(d.box.w, d.box.h, d.rot0, d.flipX, d.flipY)
-      const [ox, oy] = centerOffset(d.box.w, d.box.h, r, d.flipX, d.flipY)
-      props.x = Math.round((d.x0 + ox0 - ox) * 100) / 100
-      props.y = Math.round((d.y0 + oy0 - oy) * 100) / 100
+      ;[props.x, props.y] = turnAroundCenter(d.x0, d.y0, d.box.w, d.box.h, d.rot0, r, d.flipX, d.flipY)
     }
     tryCall('update', { ids: [d.id], props })
     refresh()

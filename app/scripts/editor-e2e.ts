@@ -118,6 +118,27 @@ try {
   await sleep(300)
   assert(await until(async () => !(await count('rotated-overlay')) && (await size()).join() === [rw0, rh0].join()), 'two undo steps revert the resize and the rotation')
 
+  // Typing a rotation in the Inspector turns the layer around its center like the handle does: the center stays put.
+  const frame = async () => {
+    const f = (await app.getByTestId('selection-box').all()).concat(await app.getByTestId('rotated-overlay').all())[0]?.bounds
+    return f ? { cx: f.x + f.width / 2, cy: f.y + f.height / 2, w: f.width } : { cx: NaN, cy: NaN, w: NaN }
+  }
+  const f0 = await frame()
+  const rot = await app.getByTestId('inspector-rotation').bounds()
+  await app.mouse.click({ x: rot.x + rot.width - 10, y: rot.y + rot.height / 2 })
+  await sleep(500)
+  await app.call('keystrokes', { keys: 'ctrl-a 9 0' })
+  await sleep(500)
+  await app.call('keystrokes', { keys: 'enter' })
+  // A quarter turn swaps the rectangle's frame width for its height (101 → 92 px on screen).
+  assert(await until(async () => Math.abs((await frame()).w - f0.w) > 4, 6000), 'the Inspector rotation applies')
+  await sleep(500)
+  const f1 = await frame()
+  await shot('00c2-inspector-rotated')
+  assert(Math.abs(f1.cx - f0.cx) <= 2 && Math.abs(f1.cy - f0.cy) <= 2, `Inspector rotation keeps the center (${f0.cx},${f0.cy} → ${f1.cx},${f1.cy})`)
+  await canvas.press('ctrl-z')
+  assert(await until(async () => { const u = await frame(); return Math.abs(u.w - f0.w) <= 2 && Math.abs(u.cx - f0.cx) <= 2 && Math.abs(u.cy - f0.cy) <= 2 }), 'one undo step reverts the Inspector rotation')
+
   // Dragging the right edge past the left one flips the rectangle: it now paints left of its old left edge.
   await app.mouse.drag(at(250, 300), at(100, 300), { steps: 6 })
   await sleep(300)
@@ -133,6 +154,19 @@ try {
   await canvas.press('ctrl-z')
   await sleep(300)
   assert((await size()).join() === [rw0, rh0].join(), 'one undo step reverts the flip')
+
+  // A hidden layer has no render box: the Inspector still reports its own size, not 0 × 0. Hiding drops the
+  // selection (no box to select), so pick the layer from the Layers panel again.
+  const rectRow = app.getByTestId('layers').getByText('Rectangle')
+  await app.getByTestId('inspector-visibility').click()
+  assert(await until(async () => !(await count('inspector-visibility'))), 'hiding the layer clears the selection')
+  await rectRow.click()
+  assert(await until(async () => (await app.getByText(`Hidden ${rw0} × ${rh0}`).count()) > 0), `a hidden layer still shows its ${rw0} × ${rh0} size in the Inspector`)
+  assert(!(await app.getByText('× 0 ·').count()), 'a hidden layer is not reported as 0 tall')
+  await canvas.press('ctrl-z')
+  await sleep(600) // past the double-click window, or the second row click would start a rename
+  await rectRow.click()
+  assert(await until(async () => (await app.getByText(`Rendered ${rw0} × ${rh0}`).count()) > 0), 'one undo step shows the layer again at its rendered size')
 
   await app.getByTestId('tool-rectangle').click()
   await app.mouse.drag(at(420, 260), at(520, 340), { steps: 5 })
@@ -169,11 +203,46 @@ try {
   await shot('02-alt-measure')
   assert(measures > 0, 'Alt+hover measures to the hovered layer')
 
+  // Shift+H / Shift+V flip the selected layer about its center: the origin moves across the box (X + width, Y + height)
+  // and one undo step puts it back.
+  const [fx0, fy0, fw, fh] = await Promise.all(['inspector-x', 'inspector-y', 'inspector-w', 'inspector-h'].map(async (id) => Number(await val(id))))
+  for (const [key, field, want] of [['shift-h', 'inspector-x', fx0 + fw], ['shift-v', 'inspector-y', fy0 + fh]] as const) {
+    await canvas.press(key)
+    assert(await until(async () => Number(await val(field)) === want), `${key} moves the origin across the box (${field} → ${want}, got ${await val(field)})`)
+    assert(Number(await val(field === 'inspector-x' ? 'inspector-y' : 'inspector-x')) === (field === 'inspector-x' ? fy0 : fx0), `${key} leaves the other axis alone`)
+    await canvas.press('ctrl-z')
+    assert(await until(async () => Number(await val(field)) === (field === 'inspector-x' ? fx0 : fy0)), `one undo step restores the origin after ${key}`)
+  }
+
   // Marquee from the artboard's empty area selects both rectangles (touch semantics).
   await app.mouse.drag(at(120, 420), at(430, 300), { steps: 6 })
   await sleep(300)
   await shot('03-marquee')
   assert(await app.getByText('2 layers selected').count(), 'marquee selects both rectangles')
+
+  // Shift+H / Shift+V mirror every selected layer in place; one undo step reverts the whole flip.
+  const boxes = async () => JSON.stringify((await app.getByTestId('selection-box').all()).map((n: any) => n.bounds))
+  const still = async (a: string) => until(async () => (await boxes()) === a)
+  const placed = await boxes()
+  const flipKey = async (key: string) => {
+    await canvas.press(key)
+    await sleep(500)
+  }
+  for (const key of ['shift-h', 'shift-v']) {
+    await flipKey(key)
+    assert(await still(placed), `${key} keeps both layers where they were painted (${placed} → ${await boxes()})`)
+    await canvas.press('ctrl-z')
+    await sleep(500)
+    assert(await still(placed), `one undo step reverts the ${key} flip of both layers`)
+  }
+  // Flipped twice (a second Shift+H) the layers are back to unflipped and still in place.
+  await flipKey('shift-h')
+  await flipKey('shift-h')
+  assert(await still(placed), 'flipping twice returns the layers to where they started')
+  await canvas.press('ctrl-z')
+  await canvas.press('ctrl-z')
+  await sleep(500)
+  assert(await still(placed), 'two undo steps revert the two flips')
 
   // Ctrl+G groups, Ctrl+Shift+G ungroups.
   await canvas.press('ctrl-g')
@@ -301,6 +370,37 @@ try {
   await app.getByTestId('tool-rectangle').click()
   await app.mouse.drag(at(600, 420), at(780, 580), { steps: 5 })
   await sleep(300)
+
+  // Inspector: an empty or unparsable value is rejected (the field reverts) instead of committing 0, an empty
+  // name or an unpaintable color. Click the field's right end, then send each key batch in its own call.
+  const typeInto = async (testId: string, keys: string) => {
+    const b = (await app.getByTestId(testId).bounds())!
+    await app.mouse.click({ x: b.x + b.width - 10, y: b.y + b.height / 2 })
+    await sleep(700)
+    await app.call('keystrokes', { keys })
+    await sleep(1000)
+    await app.call('keystrokes', { keys: 'enter' })
+    await sleep(1500)
+  }
+  if (await count('toast-dismiss')) await app.getByTestId('toast-dismiss').click()
+  const sized0 = (await app.getByTestId('size-label').textContent()).trim()
+  const rows0 = await rectRows()
+  await typeInto('inspector-w', 'ctrl-a backspace')
+  assert((await app.getByTestId('size-label').textContent()).trim() === sized0, 'an empty width reverts instead of committing 0')
+  await typeInto('inspector-w', 'ctrl-a a b c')
+  assert((await app.getByTestId('size-label').textContent()).trim() === sized0, 'a non-numeric width is ignored')
+  await typeInto('inspector-name', 'ctrl-a backspace')
+  assert((await rectRows()) === rows0, 'an empty layer name is rejected')
+  assert(!(await count('toast')), 'no error toast before a bad color')
+  await typeInto('inspector-fill', 'ctrl-a r e d')
+  assert(await until(async () => (await count('toast')) > 0), 'a color the renderer cannot read raises an error toast')
+  await app.getByTestId('toast-dismiss').click()
+  await typeInto('inspector-fill', 'ctrl-a # 1 1 2 2 3 3')
+  await sleep(500)
+  assert(!(await count('toast')), 'a valid hex color is applied without an error')
+  await canvas.press('ctrl-z')
+  await sleep(300)
+
   // Handle centers (canvas px), tl, tr, br, bl. Each sits 12 px in at radius 0 and slides toward the middle
   // (80 px for a 180×160 box) as the radius grows: inset = 12 + radius·68/80.
   const insets = async () => (await app.getByTestId('radius-handle').all()).map((n, i) => {

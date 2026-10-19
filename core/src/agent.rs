@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -114,6 +114,7 @@ impl AgentState {
         self.messages.clear();
         self.session = None;
         self.main = None;
+        self.profiles.clear();
         self.queue.clear();
         self.chat = None;
         self.cook.0 = 1;
@@ -124,23 +125,36 @@ impl AgentState {
         self.clear();
         self.messages = saved["messages"].as_array().cloned().unwrap_or_default();
         self.session = saved["session"].as_str().map(str::to_string);
-        let a = &saved["agent"];
-        if let (Some(pid), Some(name), Some(color)) = (a["id"].as_str(), a["name"].as_str(), a["color"].as_str()) {
-            if self.profile(pid).is_none() {
-                self.profiles.push(Profile { id: pid.into(), name: name.into(), color: color.into(), parent: None });
-            }
-            self.main = Some(pid.into());
-        }
+        self.main = self.add_saved(&saved["agent"]);
         let events = saved["events"].as_array().cloned().unwrap_or_default();
+        // Every agent of the chat keeps its name, so agents spawned from here on get other names.
+        for ev in &events {
+            self.add_saved(&ev["agent"]);
+        }
         self.chat = Some(Chat { id: id.into(), title: saved["title"].as_str().unwrap_or_default().into(), events });
     }
 
+    /// A saved agent identity (`Profile::json`), added once per id; returns its id.
+    fn add_saved(&mut self, a: &Value) -> Option<String> {
+        let (Some(pid), Some(name), Some(color)) = (a["id"].as_str(), a["name"].as_str(), a["color"].as_str()) else { return None };
+        if self.profile(pid).is_none() {
+            self.profiles.push(Profile { id: pid.into(), name: name.into(), color: color.into(), parent: a["parent"].as_str().map(str::to_string) });
+        }
+        Some(pid.into())
+    }
+
     fn new_profile(&mut self, parent: Option<String>) -> Profile {
+        // Ids count up for the whole process, not per conversation: the script globals of an
+        // earlier conversation's main agent stay keyed by its id. The fixed-width suffix keeps two counts from spelling one id.
+        static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
         let n = self.profiles.len();
         let used: Vec<&str> = self.profiles.iter().map(|p| p.name.as_str()).collect();
         let pick = (crate::doc::random_u64() as usize) % NAMES.len();
-        let name = (0..NAMES.len()).map(|i| NAMES[(pick + i) % NAMES.len()]).find(|n| !used.contains(n)).unwrap_or(NAMES[pick]);
-        let p = Profile { id: format!("ag{}{:x}", n, crate::doc::random_u64() & 0xfff), name: name.to_string(), color: COLORS[(pick + n * 5) % COLORS.len()].to_string(), parent };
+        // Names stay unique within a conversation: once all are taken, count up ("Surya 2").
+        let name = (0..NAMES.len()).map(|i| NAMES[(pick + i) % NAMES.len()].to_string()).find(|n| !used.contains(&n.as_str())).unwrap_or_else(|| {
+            (2..).map(|k| format!("{} {k}", NAMES[pick])).find(|n| !used.contains(&n.as_str())).unwrap_or_default()
+        });
+        let p = Profile { id: format!("ag{}{:03x}", NEXT_ID.fetch_add(1, Ordering::Relaxed), crate::doc::random_u64() & 0xfff), name, color: COLORS[(pick + n * 5) % COLORS.len()].to_string(), parent };
         self.profiles.push(p.clone());
         p
     }
@@ -158,8 +172,7 @@ fn emit(p: &Profile, kind: &str, extra: Value) {
 }
 
 pub(crate) fn backend() -> String {
-    let e = engine();
-    e.setting("agent_backend").unwrap_or_else(|| if e.setting("anthropic_api_key").is_some() || std::env::var("ANTHROPIC_API_KEY").is_ok() { "api".into() } else { "claude-code".into() })
+    engine().backend()
 }
 
 const SYSTEM_INTRO: &str = "You are a design agent inside Nalarupa, an infinite-canvas design editor. You design directly on the user's canvas \
@@ -210,6 +223,11 @@ fn begin(prompt: String, parallel: usize, mode: &str, designs: usize, iterate: &
     start_turn(&prompt, text, resume);
 }
 
+/// One-line chat title: the first prompt with whitespace runs (line breaks too) collapsed, capped at 100 chars.
+fn chat_title(shown: &str) -> String {
+    shown.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(100).collect()
+}
+
 /// Send `prompt` to the main agent (same conversation), showing `shown` as the user's message.
 /// A `resume` turn continues a finished run: it is dropped when Stop came in since that run ended.
 fn start_turn(shown: &str, prompt: String, resume: bool) {
@@ -230,7 +248,7 @@ fn start_turn(shown: &str, prompt: String, resume: bool) {
         }
         if e.agent.chat.is_none() {
             let id = format!("{:x}{:04x}", now_ms(), crate::doc::random_u64() & 0xffff);
-            e.agent.chat = Some(Chat { id, title: shown.trim().chars().take(100).collect(), events: Vec::new() });
+            e.agent.chat = Some(Chat { id, title: chat_title(shown), events: Vec::new() });
         }
         let main = match e.agent.main.clone().and_then(|id| e.agent.profile(&id).cloned()) {
             Some(p) => p,
@@ -645,7 +663,7 @@ pub fn spawn_spec() -> Value {
 fn run_api(p: &Profile, prompt: &str, child: bool) -> Result<Value, String> {
     let (key, model, effort, cancel, state, fast) = {
         let mut e = engine();
-        let key = e.setting("anthropic_api_key").or_else(|| std::env::var("ANTHROPIC_API_KEY").ok())
+        let key = e.api_key()
             .ok_or("No Anthropic API key. Add one in Settings, set ANTHROPIC_API_KEY, or switch the backend to Claude Code.")?;
         let model = e.setting("agent_model").unwrap_or_else(|| DEFAULT_MODEL.into());
         let effort = e.setting("agent_effort").unwrap_or_else(|| "high".into());
@@ -812,7 +830,8 @@ fn run_claude_code(p: &Profile, prompt: &str, child: bool) -> Result<Value, Stri
         (e.settings.get("agent_auto_permissions") == Some(&json!(true)), model, fast)
     };
     let mut cmd = Command::new("claude");
-    cmd.arg("-p").arg(&full_prompt)
+    // The prompt goes in on stdin: as an argument a long message or selection overflows the OS limit.
+    cmd.arg("-p")
         .args(["--output-format", "stream-json", "--verbose", "--include-partial-messages", "--strict-mcp-config"])
         .arg("--mcp-config").arg(&cfg)
         // Pre-allowed set: the canvas tools plus web search/fetch. Every other tool asks the
@@ -822,7 +841,7 @@ fn run_claude_code(p: &Profile, prompt: &str, child: bool) -> Result<Value, Stri
         .args(["--permission-prompt-tool", &format!("mcp__nalarupa__{PERMISSION_TOOL}")])
         .arg("--append-system-prompt")
         .arg(format!("{SYSTEM_INTRO}Your canvas tools are the `mcp__nalarupa__*` MCP tools. Read the guide with read_guide before your first execute."))
-        .stdin(Stdio::null())
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     if let Some(s) = &session {
@@ -838,7 +857,17 @@ fn run_claude_code(p: &Profile, prompt: &str, child: bool) -> Result<Value, Stri
     if fast {
         cmd.args(["--settings", r#"{"fastMode":true}"#]);
     }
-    let mut child_proc = cmd.spawn().map_err(|e| format!("could not start the `claude` CLI ({e}). Install Claude Code or switch the backend to the Claude API."))?;
+    let mut child_proc = cmd.spawn().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            format!("could not start the `claude` CLI ({e}). Install Claude Code or switch the backend to the Claude API.")
+        } else {
+            format!("could not start the `claude` CLI ({e})")
+        }
+    })?;
+    // A thread writes it so a prompt larger than the pipe buffer cannot block before output is read; dropping the handle sends EOF.
+    let stdin_writer = child_proc.stdin.take().map(|mut stdin| {
+        std::thread::spawn(move || std::io::Write::write_all(&mut stdin, full_prompt.as_bytes()))
+    });
     let stdout = child_proc.stdout.take().unwrap();
     let mut stderr = child_proc.stderr.take().unwrap();
     let proc = Arc::new(std::sync::Mutex::new(child_proc));
@@ -956,8 +985,13 @@ fn run_claude_code(p: &Profile, prompt: &str, child: bool) -> Result<Value, Stri
     let _ = watcher.join();
     let status = proc.lock().unwrap_or_else(|e| e.into_inner()).wait().map_err(|e| e.to_string())?;
     let err = err_reader.join().unwrap_or_default();
+    let sent = stdin_writer.map_or(Ok(()), |w| w.join().unwrap_or_else(|_| Err(std::io::Error::other("writer thread panicked"))));
     if !cancel.load(Ordering::SeqCst) && !status.success() {
         return Err(exit_error(&status.to_string(), &err, reported));
+    }
+    // A clean exit after a cut-off prompt would otherwise pass as a finished run.
+    if let (Err(e), false) = (sent, cancel.load(Ordering::SeqCst)) {
+        return Err(format!("could not send the prompt to the `claude` CLI ({e})"));
     }
     if textless_error && !cancel.load(Ordering::SeqCst) {
         emit(p, "error", json!({"text": "Claude Code reported an error"}));
@@ -1020,6 +1054,8 @@ mod tests {
         assert!(!a.record(&ev("tool_progress", "")));
         assert!(!a.record(&ev("text_delta", "lo")));
         assert!(a.record(&ev("done", "")));
+        let helper = a.new_profile(Some(p.id.clone()));
+        assert!(a.record(&json!({"type": "agent", "kind": "done", "agent": helper.json()})));
         save_chat(&dir, &a).unwrap();
 
         let listed = list_chats(&dir);
@@ -1032,12 +1068,34 @@ mod tests {
         assert_eq!(b.messages, a.messages);
         assert_eq!(b.main, a.main);
         assert_eq!(b.profile(&p.id).map(|q| q.name.as_str()), Some(p.name.as_str()));
+        assert_eq!(b.profile(&helper.id).map(|q| (q.name.as_str(), q.parent.as_deref())), Some((helper.name.as_str(), Some(p.id.as_str()))), "a restored chat keeps its helpers' names");
         let events = &b.chat.as_ref().unwrap().events;
         let kinds: Vec<&str> = events.iter().filter_map(|e| e["kind"].as_str()).collect();
-        assert_eq!(kinds, ["user", "text_delta", "done"]);
+        assert_eq!(kinds, ["user", "text_delta", "done", "done"]);
         assert_eq!(events[1]["text"], "Hello");
         assert!(read_chat(&dir, "../settings").is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn profile_names_are_unique_and_a_new_conversation_starts_empty() {
+        let mut a = AgentState::default();
+        let mut names: Vec<String> = (0..40).map(|_| a.new_profile(None).name).collect();
+        names.sort();
+        names.dedup();
+        assert_eq!(names.len(), 40, "no two agents of one conversation share a name");
+        let old: Vec<String> = a.profiles.iter().map(|p| p.id.clone()).collect();
+        a.clear();
+        assert!(a.profiles.is_empty(), "a new conversation forgets the old agents");
+        let fresh = a.new_profile(None);
+        assert!(!old.contains(&fresh.id), "a new conversation's agent never takes an old id (its script globals are kept)");
+    }
+
+    #[test]
+    fn chat_title_is_one_line() {
+        assert_eq!(chat_title("  Make it dark\nand add a footer "), "Make it dark and add a footer");
+        assert_eq!(chat_title("Design a pricing page\n\nPlans:\r\n- Free\t- Pro"), "Design a pricing page Plans: - Free - Pro");
+        assert_eq!(chat_title(&"word ".repeat(40)).chars().count(), 100);
     }
 
     #[test]
