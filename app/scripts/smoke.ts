@@ -171,6 +171,7 @@ resetChat()
   turn(null, 'three')
   turn(null, 'four', {})
   const replies = store.items.filter((i) => i.kind === 'assistant')
+  assert(replies[3]?.kind === 'assistant' && replies[3].by === undefined, 'a chat saved before replies recorded their model has no author')
   assert(JSON.stringify(replies.map((i) => i.kind === 'assistant' && i.by)) === JSON.stringify([
     { backend: 'claude-code', model: 'claude-opus-5-5' }, { backend: 'claude-code', model: 'claude-sonnet-5-5' }, { backend: 'claude-code', model: null }, undefined,
   ]), `each reply records its own model: ${JSON.stringify(replies)}`)

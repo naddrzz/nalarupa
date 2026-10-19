@@ -310,7 +310,7 @@ fn start_thread(p: Profile, prompt: String, child: Option<String>) {
             (backend, model)
         };
         emit(&p, "start", json!({"child": child.is_some(), "backend": backend, "model": model}));
-        let result = if backend == "claude-code" { run_claude_code(&p, &prompt, child.is_some()) } else { run_api(&p, &prompt, child.is_some()) };
+        let result = if backend == "claude-code" { run_claude_code(&p, &prompt, child.is_some(), model) } else { run_api(&p, &prompt, child.is_some(), model) };
         let stopped = engine().agent.cancel.load(Ordering::SeqCst);
         let usage = match result {
             Ok(u) => u,
@@ -785,12 +785,12 @@ pub fn spawn_spec() -> Value {
            "required": ["config"]}})
 }
 
-fn run_api(p: &Profile, prompt: &str, child: bool) -> Result<Value, String> {
+fn run_api(p: &Profile, prompt: &str, child: bool, model: Option<String>) -> Result<Value, String> {
     let (key, model, effort, cancel, state, fast) = {
         let mut e = engine();
         let key = e.api_key()
             .ok_or("No Anthropic API key. Add one in Settings, set ANTHROPIC_API_KEY, or switch the backend to Claude Code.")?;
-        let model = e.setting("agent_model").unwrap_or_else(|| DEFAULT_MODEL.into());
+        let model = model.unwrap_or_else(|| DEFAULT_MODEL.into());
         let effort = e.setting("agent_effort").unwrap_or_else(|| "high".into());
         let fast = fast_for(Some(&model), e.settings.get("agent_fast") == Some(&json!(true)));
         (key, model, effort, e.agent.cancel.clone(), e.editor_state(), fast)
@@ -940,7 +940,7 @@ fn claude_mcp_config(agent: &str) -> Result<std::path::PathBuf, String> {
     Ok(path)
 }
 
-fn run_claude_code(p: &Profile, prompt: &str, child: bool) -> Result<Value, String> {
+fn run_claude_code(p: &Profile, prompt: &str, child: bool, model: Option<String>) -> Result<Value, String> {
     let cfg = claude_mcp_config(&p.id)?;
     let (session, cancel, state) = {
         let mut e = engine();
@@ -950,7 +950,6 @@ fn run_claude_code(p: &Profile, prompt: &str, child: bool) -> Result<Value, Stri
     let full_prompt = if child { prompt.to_string() } else { format!("{prompt}\n\nThe result of `get_editor_state` (fresh; call it again only if the document changed):\n{state}") };
     let (auto, model, fast) = {
         let e = engine();
-        let model = e.setting("agent_model");
         let fast = fast_for(model.as_deref(), e.settings.get("agent_fast") == Some(&json!(true)));
         (e.settings.get("agent_auto_permissions") == Some(&json!(true)), model, fast)
     };

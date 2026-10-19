@@ -178,7 +178,8 @@ if (!windows) {
   const id = list().current!
   const starts = JSON.parse(readFileSync(join(sessions, `${id}.json`), 'utf8')).events.filter((e: any) => e.kind === 'start')
   assert(JSON.stringify(starts.map((e: any) => [e.backend, e.model])) === JSON.stringify([['claude-code', 'claude-opus-5-5'], ['claude-code', 'claude-sonnet-5-5']]), `start events record the model: ${JSON.stringify(starts)}`)
-  call('chat_load', { id })
+  const reopened = call('chat_load', { id }).events.filter((e: any) => e.kind === 'start')
+  assert(JSON.stringify(reopened.map((e: any) => [e.backend, e.model])) === JSON.stringify([['claude-code', 'claude-opus-5-5'], ['claude-code', 'claude-sonnet-5-5']]), `reopened chat keeps the models: ${JSON.stringify(reopened)}`)
   assert(call('chat_clear') === true, 'the chat is cleared again')
 }
 

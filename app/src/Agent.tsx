@@ -524,7 +524,8 @@ function AgentHeader({ agentId, by }: { agentId: string; by?: Author }) {
     <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, paddingTop: 8 }}>
       <div style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: p.color }} />
       <T size={12} weight="600" color={C.text}>{p.name}</T>
-      {p.parent ? <T size={11} color={C.ghost}>{`· helping ${profileOf(p.parent).name}`}</T> : model ? <T size={11} color={C.ghost}>{model}</T> : null}
+      {p.parent ? <T size={11} color={C.ghost}>{`· helping ${profileOf(p.parent).name}`}</T> : null}
+      {model ? <T size={11} color={C.ghost}>{model}</T> : null}
     </div>
   )
 }
