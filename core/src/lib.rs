@@ -92,7 +92,7 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             let e = engine();
             Ok(json!({"mcpPort": e.mcp_port, "mcpUrl": mcp::url(e.mcp_port), "dataDir": e.data_dir, "state": state(&e),
                       "recent": e.settings.get("recent").cloned().unwrap_or(json!([])),
-                      "hasApiKey": e.setting("anthropic_api_key").is_some() || std::env::var("ANTHROPIC_API_KEY").is_ok()}))
+                      "hasApiKey": e.api_key().is_some()}))
         }
         "poll" => {
             let mut e = engine();
@@ -172,8 +172,12 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             let parent_layout = parent.as_deref().and_then(|p| e.doc.find(p)).map(|p| {
                 if p["type"] == "frame" { p["layout"].as_str().unwrap_or("horizontal").to_string() } else { "none".into() }
             }).unwrap_or_else(|| "none".into());
+            let local = e.renderer.find(id).map(|f| {
+                let ([bx, by], rotation, flip_x, flip_y) = f.local;
+                json!({"bx": bx, "by": by, "rotation": rotation, "flipX": flip_x, "flipY": flip_y})
+            });
             let flat = e.renderer.find(id).map(rect);
-            Ok(json!({"node": raw, "box": flat, "parent": parent, "parentLayout": parent_layout,
+            Ok(json!({"node": raw, "box": flat, "local": local, "parent": parent, "parentLayout": parent_layout,
                       "variables": e.doc.root.get("variables").cloned().unwrap_or(json!({}))}))
         }
         "select" => {
@@ -360,6 +364,8 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             if s.contains_key("anthropic_api_key") {
                 s.insert("anthropic_api_key".into(), json!("••••••••"));
             }
+            // The backend the agent will use, so the UI never re-derives it from settings alone.
+            s.insert("backend".into(), json!(e.backend()));
             Ok(Value::Object(s))
         }
         "settings_set" => {

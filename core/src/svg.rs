@@ -253,15 +253,15 @@ struct Shadow {
 }
 
 #[derive(Default)]
-struct Effects {
+pub(crate) struct Effects {
     shadows: Vec<Shadow>,
     /// Layer blur sigma (radius / 2; several blurs compound).
-    blur: f64,
+    pub(crate) blur: f64,
     backdrop: f64,
 }
 
 impl Effects {
-    fn of(n: &RNode) -> Effects {
+    pub(crate) fn of(n: &RNode) -> Effects {
         let mut fx = Effects::default();
         let list: Vec<&Value> = match n.p.get("effect") {
             Some(Value::Array(a)) => a.iter().collect(),
@@ -560,25 +560,42 @@ impl<'a> Svg<'a> {
     /// Text and icons: every fill paints the glyphs; shadows use the glyph outline.
     fn glyphs(&mut self, n: &RNode, fx: &Effects, outline: Option<&str>) {
         let text = n.ty == "text";
-        let b = if text { inflate((n.x, n.y, n.w, n.h), TextStyle::of(n).size / 2.0) } else { (n.x, n.y, n.w, n.h) };
+        // Text takes a stroke like any shape; icons draw their own strokes.
+        let stroke = if text { self.stroke_of(n, &Geo { d: String::new(), evenodd: false, closed: true }) } else { None };
+        let reach = stroke.as_ref().map_or(0.0, Stroke::reach);
+        let b = if text { inflate((n.x, n.y, n.w, n.h), TextStyle::of(n).size / 2.0 + reach) } else { (n.x, n.y, n.w, n.h) };
+        let fills = if text { self.paints(n.p.get("fill"), (n.x, n.y, n.w, n.h)) } else { Vec::new() };
+        let visible = fills.iter().any(|p| p.alpha > 0.0);
         let mask = outline.map(|m| {
             let black = [Paint { value: "#000".into(), alpha: 1.0, blend: None }];
-            let body = if text { self.text_markup(n, &black) } else { self.icon_markup(n, Some(&black)) };
+            // Like shapes, glyphs without a visible fill are no outline: stroke-only text casts its stroke.
+            let mut body = if !text {
+                self.icon_markup(n, Some(&black))
+            } else if visible {
+                self.text_markup(n, &black)
+            } else {
+                String::new()
+            };
+            match &stroke {
+                Some(s) if !visible => body += &self.text_stroke(n, s, &black),
+                // Over the fill an unclipped stroke adds the same outline; an inner one adds nothing.
+                Some(s) if s.align != "inner" => body += &self.text_stroke_markup(n, s, &black),
+                _ => {}
+            }
             let _ = write!(self.defs, r#"<g id="{m}">{body}</g>"#);
             m
         });
         if let Some(m) = &mask {
             self.drop_shadows(fx, m, b, None);
         }
-        let body = if text {
-            let paints = self.paints(n.p.get("fill"), (n.x, n.y, n.w, n.h));
-            self.text_markup(n, &paints)
-        } else {
-            self.icon_markup(n, None)
-        };
+        let body = if text { self.text_markup(n, &fills) } else { self.icon_markup(n, None) };
         self.out.push_str(&body);
         if let Some(m) = &mask {
             self.inner_shadows(fx, m, b, None);
+        }
+        if let Some(s) = &stroke {
+            let body = self.text_stroke(n, s, &s.paints);
+            self.out.push_str(&body);
         }
     }
 
@@ -750,6 +767,34 @@ impl<'a> Svg<'a> {
             }
             _ => self.out.push_str(&body),
         }
+    }
+
+    /// Glyph outlines stroked with `paints`, unclipped: width k·w, so inner/outer strokes
+    /// are double width and `text_stroke` clips them.
+    fn text_stroke_markup(&mut self, n: &RNode, s: &Stroke, paints: &[Paint]) -> String {
+        let mut extra = format!(r#" fill="none" stroke-width="{}""#, s.widths[0] * s.k());
+        for (prop, attr) in [("strokeLinecap", "stroke-linecap"), ("strokeLinejoin", "stroke-linejoin")] {
+            if let Some(v) = n.s(prop) {
+                let _ = write!(extra, r#" {attr}="{}""#, esc(v));
+            }
+        }
+        let st = TextStyle::of(n);
+        self.lines_with(n, &st, &n.lines, (n.x, n.y, n.w, n.h), paints, "stroke", &extra)
+    }
+
+    /// Text stroke painted with `paints`; inner/outer keep the half of the double-width stroke inside/outside the glyphs.
+    fn text_stroke(&mut self, n: &RNode, s: &Stroke, paints: &[Paint]) -> String {
+        let body = self.text_stroke_markup(n, s, paints);
+        if s.align == "center" {
+            return body;
+        }
+        let id = self.id("k");
+        let (x, y, w, h) = inflate((n.x, n.y, n.w, n.h), TextStyle::of(n).size / 2.0 + s.reach() + 2.0);
+        let inner = s.align == "inner";
+        let glyphs = self.text_markup(n, &[Paint { value: if inner { "#fff" } else { "#000" }.into(), alpha: 1.0, blend: None }]);
+        let rect = if inner { String::new() } else { format!(r##"<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="#fff"/>"##) };
+        let _ = write!(self.defs, r#"<mask id="{id}" maskUnits="userSpaceOnUse" x="{x}" y="{y}" width="{w}" height="{h}">{rect}{glyphs}</mask>"#);
+        format!(r#"<g mask="url(#{id})">{body}</g>"#)
     }
 
     /// Paints of a `fill`/`stroke` value. Gradients and images span the node box `b`
@@ -958,6 +1003,11 @@ impl<'a> Svg<'a> {
     /// One `<text>` per paint; lines are positioned from our own measurement (text-anchor start),
     /// so alignment, justify and wrapping match the layout exactly.
     fn lines_markup(&mut self, n: &RNode, st: &TextStyle, lines: &[Line], b: Rect, paints: &[Paint]) -> String {
+        self.lines_with(n, st, lines, b, paints, "fill", "")
+    }
+
+    /// `lines_markup` painting each `<text>` with `prop` (`fill` or `stroke`) plus the raw attributes `extra`.
+    fn lines_with(&mut self, n: &RNode, st: &TextStyle, lines: &[Line], b: Rect, paints: &[Paint], prop: &str, extra: &str) -> String {
         if paints.is_empty() {
             return String::new();
         }
@@ -1004,8 +1054,8 @@ impl<'a> Svg<'a> {
                 // `wght` = weight on every variable font (usvg skips 400, which leaves
                 // fonts whose default master is lighter, e.g. Manrope, too thin) and nothing else:
                 // optical size stays at the font's default.
-                r#"<text font-family="'{}', 'Noto Sans', sans-serif" font-size="{}" font-weight="{}" font-variation-settings="'wght' {}" font-optical-sizing="none"{italic}{ls}{deco} xml:space="preserve"{}>{spans}</text>"#,
-                esc(&st.family), st.size, st.weight, st.weight, p.attrs("fill")
+                r#"<text font-family="'{}', 'Noto Sans', sans-serif" font-size="{}" font-weight="{}" font-variation-settings="'wght' {}" font-optical-sizing="none"{italic}{ls}{deco} xml:space="preserve"{extra}{}>{spans}</text>"#,
+                esc(&st.family), st.size, st.weight, st.weight, p.attrs(prop)
             );
         }
         out
@@ -1246,6 +1296,20 @@ fn has_backdrop_blur(n: &RNode) -> bool {
     own || n.kids.iter().any(has_backdrop_blur)
 }
 
+/// The node has its own rotation or flip (`transform` is not empty).
+pub fn is_turned(n: &RNode) -> bool {
+    n.f("rotation").is_some_and(|r| r.abs() > 1e-6) || n.b("flipX") || n.b("flipY")
+}
+
+/// A node's own rotation (CCW) and flips about its origin, the matrix form of `transform`.
+pub fn own_matrix(n: &RNode) -> [f64; 6] {
+    let t = -n.f("rotation").unwrap_or(0.0).to_radians();
+    let (sx, sy) = (if n.b("flipX") { -1.0 } else { 1.0 }, if n.b("flipY") { -1.0 } else { 1.0 });
+    let (a, b, c, d) = (t.cos() * sx, t.sin() * sx, -t.sin() * sy, t.cos() * sy);
+    let (px, py) = (n.x - n.bx, n.y - n.by);
+    [a, b, c, d, px - a * px - c * py, py - b * px - d * py]
+}
+
 /// Rotation (CCW) and flips about the node's origin, as an SVG transform list (flip applies first).
 fn transform(n: &RNode) -> String {
     let (px, py) = (n.x - n.bx, n.y - n.by);
@@ -1302,9 +1366,27 @@ fn extent(n: &RNode) -> Rect {
     n.kids.iter().map(extent).fold(own, union)
 }
 
+/// Axis-aligned box of `r` (in the node's own space) after the node's rotation and flips, so it
+/// matches what `transform` paints. Rounded to 1e-6 to drop trig noise (cos 90° ≠ 0), which would
+/// add a pixel row on export.
+fn turn(n: &RNode, r: Rect) -> Rect {
+    if !is_turned(n) {
+        return r;
+    }
+    let m = own_matrix(n);
+    let (x1, y1) = (r.0 + r.2, r.1 + r.3);
+    let mut o = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
+    for (x, y) in [(r.0, r.1), (x1, r.1), (r.0, y1), (x1, y1)] {
+        let (x, y) = (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]);
+        o = [o[0].min(x), o[1].min(y), o[2].max(x), o[3].max(y)];
+    }
+    let [x0, y0, x1, y1] = o.map(|v| (v * 1e6).round() / 1e6);
+    (x0, y0, x1 - x0, y1 - y0)
+}
+
 /// Visual bounds, the area an export covers: the box,
 /// the stroke's outer part, the children of groups and unclipped frames, drop shadows
-/// (offset ± 3σ, no spread) and layer blur (± 3σ).
+/// (offset ± 3σ, no spread) and layer blur (± 3σ), all under the node's own rotation and flips.
 pub fn visual_bounds(n: &RNode) -> Rect {
     let w = if n.p.get("stroke").is_some() { max_stroke(n) } else { 0.0 };
     let out = match n.s("strokeAlignment") {
@@ -1325,7 +1407,7 @@ pub fn visual_bounds(n: &RNode) -> Rect {
     for s in fx.shadows.iter().filter(|s| !s.inner) {
         b = union(b, inflate((base.0 + s.dx, base.1 + s.dy, base.2, base.3), 3.0 * s.sigma));
     }
-    inflate(b, 3.0 * fx.blur)
+    turn(n, inflate(b, 3.0 * fx.blur))
 }
 
 fn max_stroke(n: &RNode) -> f64 {
@@ -1550,6 +1632,19 @@ mod tests {
             "effect": [{"type": "shadow", "offset": {"x": 0, "y": 4}, "blur": 8}, {"type": "shadow", "shadowType": "inner", "blur": 40}]}), (0.0, 0.0, 100.0, 50.0));
         assert_eq!(visual_bounds(&n), (-14.0, -10.0, 128.0, 78.0));
         assert_eq!(visual_bounds(&node("rectangle", json!({}), (5.0, 6.0, 7.0, 8.0))), (5.0, 6.0, 7.0, 8.0));
+    }
+
+    /// Rotated and flipped nodes export the box they paint, not their unrotated box.
+    #[test]
+    fn export_visual_bounds_follow_rotation_and_flips() {
+        let rot = |p: Value| visual_bounds(&node("rectangle", p, (340.0, 40.0, 100.0, 60.0)));
+        assert_eq!(rot(json!({"rotation": 90})), (340.0, -60.0, 60.0, 100.0));
+        assert_eq!(rot(json!({"flipX": true})), (240.0, 40.0, 100.0, 60.0));
+        assert_eq!(rot(json!({"flipY": true})), (340.0, -20.0, 100.0, 60.0));
+        let (x, y, w, h) = rot(json!({"rotation": 30}));
+        let (c, s) = (30f64.to_radians().cos(), 30f64.to_radians().sin());
+        assert!((w - (100.0 * c + 60.0 * s)).abs() < 1e-5 && (h - (100.0 * s + 60.0 * c)).abs() < 1e-5, "{w}x{h}");
+        assert!((x - 340.0).abs() < 1e-5 && (y - (40.0 - 100.0 * s)).abs() < 1e-5, "{x},{y}");
     }
 
     #[test]

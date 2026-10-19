@@ -8,7 +8,7 @@
 use crate::doc::Doc;
 use crate::raster;
 use crate::resolve::{RNode, Resolver};
-use crate::svg::{fxhash, Assets, Svg};
+use crate::svg::{fxhash, is_turned, own_matrix, Assets, Svg};
 use crate::text::Fonts;
 use resvg::{tiny_skia, usvg};
 use serde_json::{json, Map, Value};
@@ -83,6 +83,8 @@ pub struct Flat {
     /// Painted transform `[a, b, c, d, e, f]` (x' = a·x + c·y + e, y' = b·x + d·y + f) from this box's
     /// coordinates to the canvas: own and ancestors' rotations/flips. `None` = identity.
     pub m: Option<[f64; 6]>,
+    /// Local bounds' offset from the origin (non-zero for groups) and the node's own effective rotation and flips.
+    pub local: ([f64; 2], f64, bool, bool),
     /// Own props, box, parent and sibling index: a change means this node must repaint.
     sig: u64,
     /// How far shadows, blurs and strokes paint outside the box; infinite when the node or an
@@ -452,16 +454,25 @@ impl Renderer {
     }
 
     /// Paint the sliding nodes over the w×h frame in `self.pixels` (device origin = camera·zoom).
-    fn composite_slides(&mut self, w: u32, h: u32, cam_x: f64, cam_y: f64, zoom: f64) {
+    /// With `solo` only the nodes inside that top-level frame paint; the cached view leaves
+    /// every sliding node out, so skipping them would blank the presented slide.
+    fn composite_slides(&mut self, w: u32, h: u32, cam_x: f64, cam_y: f64, zoom: f64, solo: Option<&str>) {
         let now = Instant::now();
+        let shown: Option<HashSet<&str>> = solo.map(|id| self.layers.get(id).into_iter().flat_map(|l| l.flat.iter().map(|f| f.id.as_str())).collect());
+        // A slide in another frame keeps waiting: its clock starts when it is first on screen.
         for s in &mut self.slides {
-            s.start.get_or_insert(now);
+            if shown.as_ref().is_none_or(|ids| ids.contains(s.id.as_str())) {
+                s.start.get_or_insert(now);
+            }
         }
         let states: HashMap<String, (f64, f64, f64)> = self.slides.iter().map(|s| (s.id.clone(), s.state(now))).collect();
         let (vx, vy) = ((cam_x * zoom).round() as i32, (cam_y * zoom).round() as i32);
         let Some(mut out) = tiny_skia::PixmapMut::from_bytes(&mut self.pixels, w, h) else { return };
         for s in &mut self.slides {
             let Some(tree) = &s.tree else { continue };
+            if shown.as_ref().is_some_and(|ids| !ids.contains(s.id.as_str())) {
+                continue;
+            }
             let (mut dx, mut dy, mut alpha) = states[&s.id];
             for a in &s.ancestors {
                 if let Some((adx, ady, aa)) = states.get(a) {
@@ -520,8 +531,8 @@ impl Renderer {
         let (w, h) = (w.clamp(1, 8192), h.clamp(1, 8192));
         let zoom = zoom.clamp(0.01, 256.0);
         self.render_view(w, h, cam_x, cam_y, zoom, bg, solo, sharp);
-        if !self.slides.is_empty() && solo.is_none() && self.pixels.len() == (w * h * 4) as usize {
-            self.composite_slides(w, h, cam_x, cam_y, zoom);
+        if !self.slides.is_empty() && self.pixels.len() == (w * h * 4) as usize {
+            self.composite_slides(w, h, cam_x, cam_y, zoom, solo);
         }
         &self.pixels
     }
@@ -824,7 +835,7 @@ fn prepare_layer(cx: &mut Ctx, index: usize, hash: u64, hidden: &HashSet<String>
         index.truncate(depth + 1);
         turned.truncate(depth);
         mats.truncate(depth);
-        let rotated = n.f("rotation").is_some_and(|r| r.abs() > 1e-6) || n.b("flipX") || n.b("flipY");
+        let rotated = is_turned(n);
         turned.push(rotated || turned.last() == Some(&true));
         let parent_m = mats.last().copied().flatten();
         mats.push(if rotated { Some(compose(parent_m, own_matrix(n))) } else { parent_m });
@@ -855,6 +866,7 @@ fn prepare_layer(cx: &mut Ctx, index: usize, hash: u64, hidden: &HashSet<String>
             placeholder: n.ty == "frame" && n.b("placeholder"),
             pending: crate::svg::fills(n.p.get("fill")).iter().any(|f| f["url"].as_str().is_some_and(is_pending_url)),
             m: mats[depth],
+            local: ([n.bx, n.by], n.f("rotation").unwrap_or(0.0), n.b("flipX"), n.b("flipY")),
             sig: fxhash(&sig),
             reach: if turned[depth] { f64::INFINITY } else { reach(&n.p) },
         });
@@ -871,15 +883,6 @@ fn prepare_layer(cx: &mut Ctx, index: usize, hash: u64, hidden: &HashSet<String>
     svg.skip = hidden.clone();
     svg.node(&root);
     (Layer { hash, tree: None, scene: None, bbox, paint: padded, flat }, Some(svg.finish(None)))
-}
-
-/// A node's own rotation (CCW) and flips about its origin, as in `svg::transform`.
-fn own_matrix(n: &RNode) -> [f64; 6] {
-    let t = -n.f("rotation").unwrap_or(0.0).to_radians();
-    let (sx, sy) = (if n.b("flipX") { -1.0 } else { 1.0 }, if n.b("flipY") { -1.0 } else { 1.0 });
-    let (a, b, c, d) = (t.cos() * sx, t.sin() * sx, -t.sin() * sy, t.cos() * sy);
-    let (px, py) = (n.x - n.bx, n.y - n.by);
-    [a, b, c, d, px - a * px - c * py, py - b * px - d * py]
 }
 
 /// `p ∘ m` (m applies first).
@@ -1104,6 +1107,79 @@ pub(crate) mod tests {
         assert!(missing.is_empty(), "hairline pixels missing: {missing:?}");
     }
 
+    /// Text takes a stroke like a shape: stroke-only text is visible, and a stroke paints around filled glyphs.
+    #[test]
+    fn text_stroke_is_painted() {
+        let text = |x: u32, extra: &str| format!(r##"{{"type":"text","x":{x},"y":10,"content":"Out","fontSize":50,"fontWeight":"700"{extra}}}"##);
+        let json = format!(
+            r##"{{"version":"2.19","children":[{{"type":"frame","id":"f","x":0,"y":0,"width":580,"height":80,"layout":"none","fill":"#ffffff","children":[{},{},{},{},{}]}}]}}"##,
+            text(10, r##","fill":"#ffff00""##),
+            text(150, r##","fill":"#ffff00","stroke":"#000000","strokeWidth":4"##),
+            text(290, r##","stroke":"#000000","strokeWidth":4"##),
+            text(430, r##","fill":"#ffff00","stroke":"#000000","strokeWidth":4,"strokeAlignment":"outer""##),
+            text(570, r##","fill":"#ffff00","stroke":"#000000","strokeWidth":4,"strokeAlignment":"inner""##),
+        );
+        let doc = Doc::from_json(&json).unwrap();
+        for raster in [Raster::Resvg, Raster::Vello] {
+            let mut r = Renderer { raster, ..Renderer::default() };
+            sync(&mut r, &doc);
+            let px = r.render(720, 80, 0.0, 0.0, 1.0, [255, 255, 255], None, true).to_vec();
+            let dark = |x0: usize, x1: usize| (0..80).flat_map(|y| (x0..x1).map(move |x| (x, y))).filter(|&(x, y)| px[(y * 720 + x) * 4] < 80).count();
+            let counts = [dark(0, 140), dark(140, 280), dark(280, 420), dark(420, 560), dark(560, 720)];
+            assert_eq!(counts[0], 0, "{raster:?}: fill-only text has no dark pixels");
+            assert!(counts[1] > 100 && counts[2] > 100 && counts[3] > 100 && counts[4] > 100, "{raster:?}: stroke pixels {counts:?}");
+            // An outer stroke grows past the glyphs, an inner one stays inside them.
+            assert!(counts[3] > counts[1] && counts[4] < counts[1], "{raster:?}: outer > center > inner expected, got {counts:?}");
+        }
+    }
+
+    /// A text shadow follows what paints: stroke-only text casts its stroke, not solid glyphs.
+    #[test]
+    fn stroke_only_text_casts_a_hollow_shadow() {
+        let text = |y: u32, extra: &str| {
+            format!(r##"{{"type":"text","x":10,"y":{y},"content":"Out","fontSize":50,"fontWeight":"700","stroke":"#000000","strokeWidth":2,"effect":{{"type":"shadow","offset":{{"x":150,"y":0}},"color":"#ff0000"}}{extra}}}"##)
+        };
+        let json = format!(
+            r##"{{"version":"2.19","children":[{{"type":"frame","id":"f","x":0,"y":0,"width":300,"height":180,"layout":"none","fill":"#ffffff","children":[{},{}]}}]}}"##,
+            text(10, r##","fill":"#ffff00""##),
+            text(100, ""),
+        );
+        let doc = Doc::from_json(&json).unwrap();
+        for raster in [Raster::Resvg, Raster::Vello] {
+            let mut r = Renderer { raster, ..Renderer::default() };
+            sync(&mut r, &doc);
+            let px = r.render(300, 180, 0.0, 0.0, 1.0, [255, 255, 255], None, true).to_vec();
+            let red = |y0: usize, y1: usize| (y0..y1).flat_map(|y| (150..300).map(move |x| (y * 300 + x) * 4)).filter(|&o| px[o] > 200 && px[o + 1] < 80).count();
+            let (solid, hollow) = (red(0, 95), red(95, 180));
+            assert!(hollow > 100 && hollow * 3 < solid * 2, "{raster:?}: shadow pixels filled {solid}, stroke-only {hollow}");
+        }
+    }
+
+    /// Text paints like a shape: fill, then inner shadows, then the stroke, so the stroke covers an inner shadow.
+    #[test]
+    fn text_stroke_covers_inner_shadow() {
+        let text = |x: u32, extra: &str| {
+            format!(r##"{{"type":"text","x":{x},"y":10,"content":"Out","fontSize":50,"fontWeight":"700","fill":"#ffff00","stroke":"#000000","strokeWidth":4{extra}}}"##)
+        };
+        let json = format!(
+            r##"{{"version":"2.19","children":[{{"type":"frame","id":"f","x":0,"y":0,"width":300,"height":80,"layout":"none","fill":"#ffffff","children":[{},{}]}}]}}"##,
+            text(10, ""),
+            text(150, r##","effect":{"type":"shadow","shadowType":"inner","offset":{"x":8,"y":8},"color":"#ff0000"}"##),
+        );
+        let doc = Doc::from_json(&json).unwrap();
+        for raster in [Raster::Resvg, Raster::Vello] {
+            let mut r = Renderer { raster, ..Renderer::default() };
+            sync(&mut r, &doc);
+            let px = r.render(300, 80, 0.0, 0.0, 1.0, [255, 255, 255], None, true).to_vec();
+            let count = |x0: usize, keep: &dyn Fn(&[u8]) -> bool| (0..80).flat_map(|y| (x0..x0 + 140).map(move |x| (y * 300 + x) * 4)).filter(|&o| keep(&px[o..o + 3])).count();
+            // White, yellow and red all have full red, so only the stroke darkens the red channel.
+            let (plain, shadowed) = (count(0, &|p| p[0] < 80), count(140, &|p| p[0] < 80));
+            let red = count(140, &|p| p[0] > 200 && p[1] < 80);
+            assert!(red > 50, "{raster:?}: the inner shadow shows inside the fill, got {red} red pixels");
+            assert!(plain > 100 && shadowed + plain / 50 >= plain, "{raster:?}: stroke pixels without shadow {plain}, with inner shadow {shadowed}");
+        }
+    }
+
     /// An agent-inserted node is left out of the cached view, painted 50 units low and
     /// transparent at its first frame, part way there 100 ms later, and back in the
     /// cached view (at its real place) once it settles.
@@ -1139,6 +1215,40 @@ pub(crate) mod tests {
         sync(&mut r);
         let px = frame(&mut r);
         assert!(red(&px, 150, 101) && !red(&px, 150, 152), "settled in the cached view at its own place");
+    }
+
+    /// Present mode renders one frame alone; a node sliding into it must still paint there (the
+    /// cached layer leaves it out), and one sliding in another frame must not.
+    #[test]
+    fn solo_frame_paints_its_sliding_nodes() {
+        let json = r##"{"version":"2.19","children":[
+            {"type":"frame","id":"f","x":0,"y":0,"width":400,"height":400,"layout":"none","fill":"#ffffff","children":[
+                {"type":"rectangle","id":"r","x":100,"y":100,"width":100,"height":50,"fill":"#ff0000"}]},
+            {"type":"frame","id":"g","x":0,"y":500,"width":400,"height":400,"layout":"none","fill":"#ffffff","children":[
+                {"type":"rectangle","id":"s","x":100,"y":100,"width":100,"height":50,"fill":"#ff0000"}]}]}"##;
+        let doc = Doc::from_json(json).unwrap();
+        let (mut fonts, mut assets) = offline();
+        let mut r = Renderer::default();
+        r.slides.extend([Slide::new("r"), Slide::new("s")]);
+        let mut cx = Ctx { doc: &doc, libs: &[], fonts: &mut fonts, assets: &mut assets };
+        let roots = r.shift_siblings(&mut cx);
+        let rebuilt = r.sync(&mut cx);
+        r.refresh_slides(&mut cx, &rebuilt, roots);
+        let green = |px: &[u8], x: usize, y: usize| px[(y * 400 + x) * 4 + 1];
+        // Paint the cached view first: the slide must be read within ~40 ms of its start below
+        // (offset 50·e^-20t > 3), and a cold first paint on a loaded machine can take longer.
+        r.render(400, 400, 0.0, 0.0, 1.0, [30, 30, 30], Some("f"), true);
+        // 100 ms in the node is part way there; only the presented frame's node paints.
+        for s in &mut r.slides {
+            s.start = Some(Instant::now() - Duration::from_millis(100));
+        }
+        let px = r.render(400, 400, 0.0, 0.0, 1.0, [30, 30, 30], Some("f"), true).to_vec();
+        assert!(green(&px, 150, 153) < 200, "the sliding node paints in the solo frame");
+        let px = r.render(400, 400, 0.0, 500.0, 1.0, [30, 30, 30], Some("f"), true).to_vec();
+        assert!(green(&px, 150, 153) == 30, "a node sliding in another frame stays out");
+        r.slides.iter_mut().find(|s| s.id == "s").unwrap().start = None;
+        r.render(400, 400, 0.0, 0.0, 1.0, [30, 30, 30], Some("f"), true);
+        assert!(r.slides.iter().find(|s| s.id == "s").unwrap().start.is_none(), "its clock does not start while another frame is presented");
     }
 
     /// Inserting into a centered column moves the existing child up (auto-layout reflow); it

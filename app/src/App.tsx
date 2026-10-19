@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { useGpuixRequired, useWindowSize, type PublicInstance } from '@gpuix/react'
 import { call, tryCall, type Box, type State } from './core'
 import { applyEvents, store } from './agents'
-import { Canvas, fitCam, type Cam, type Mods, type Tool } from './Canvas'
+import { Canvas, fitCam, isMovable, type Cam, type Mods, type Tool } from './Canvas'
 import { readClipboard, writeClipboard } from './clipboard'
 import { LeftPanel } from './Layers'
 import { Inspector } from './Inspector'
@@ -14,7 +14,10 @@ import { Home } from './Home'
 import { Present } from './Present'
 import { C, LEFT_W, REDUCED_MOTION, RIGHT_W, TOP_H } from './theme'
 import { Icon, IconButton, Pressable, Segmented, T, type Toast } from './ui'
+import { centerOffset } from './geometry'
 import type { IconName } from './icons'
+
+let flips = 0
 
 const TOOLS: { tool: Tool; icon: IconName; key: string; label: string }[] = [
   { tool: 'move', icon: 'cursor', key: 'v', label: 'Move (V)' },
@@ -46,6 +49,7 @@ export function App() {
   const win = useWindowSize()
   const [init] = useState(() => call('init'))
   const [screen, setScreen] = useState<'home' | 'editor' | 'present'>('home')
+  const [opened, setOpened] = useState(false)
   const [state, setState] = useState<State>(init.state)
   const [selection, setSelection] = useState<string[]>([])
   const [tool, setTool] = useState<Tool>('move')
@@ -83,6 +87,7 @@ export function App() {
 
   const openedDoc = useCallback(() => {
     setSelection([])
+    setOpened(true)
     setScreen('editor')
     setTimeout(() => fitTo(), 0)
   }, [fitTo])
@@ -112,16 +117,18 @@ export function App() {
     if (boxes.length !== selection.length) setSelection(boxes.map((b) => b.id))
   }, [state.version])
 
+  const saveTo = (path?: string) => {
+    const r = tryCall('save', { path })
+    if (r) toast(`Saved ${r.path}`)
+    else toast('Unable to save the document. Check that the folder exists and is writable.', true)
+    return !!r
+  }
   const save = (as = false) => {
-    const run = (path?: string) => {
-      const r = tryCall('save', { path })
-      if (r) toast(`Saved ${r.path}`)
-    }
     if (as) {
       renderer.promptForPaths?.({ directories: true, prompt: 'Save here' }).then((dirs) => {
-        if (dirs?.[0]) run(join(dirs[0], `${state.title}.nala`))
+        if (dirs?.[0]) saveTo(join(dirs[0], `${state.title}.nala`))
       })
-    } else run(state.path ?? defaultSavePath(state.title))
+    } else saveTo(state.path ?? defaultSavePath(state.title))
   }
 
   const present = useCallback((from?: string) => {
@@ -171,7 +178,31 @@ export function App() {
     if (m.alt && !m.mod && !m.shift && ALIGN[key] && has) return run('align', { ids: sel, dir: ALIGN[key] })
     if (m.shift && !m.mod && !m.alt && (key === 'h' || key === 'v') && has) {
       const k = key === 'h' ? 'flipX' : 'flipY'
-      for (const id of sel) tryCall('update', { ids: [id], props: { [k]: nodeOf(id)?.node?.[k] ? null : true } })
+      const undoKey = `flip:${++flips}`
+      // A flipped layer mirrors its descendants too, so a selected descendant of a selected layer is left to it.
+      const inside = (id: string, of: string) => {
+        if (id.startsWith(`${of}/`)) return true
+        for (let p = parentOf(id); p !== 'document'; p = parentOf(p)) if (p === of) return true
+        return false
+      }
+      for (const id of sel.filter((id) => !sel.some((o) => o !== id && inside(id, o)))) {
+        const info = nodeOf(id)
+        const l = info?.local
+        if (!l) continue
+        const slash = id.includes('/')
+        // Instances and their descendants inherit the component's flip: write it explicitly, `null` would fall back to it.
+        const props: Record<string, unknown> = { [k]: l[k] ? (slash || info.node?.type === 'ref' ? false : null) : true }
+        if (info.box && !slash && (isMovable(info) || info.parent === 'document')) {
+          // The flip mirrors about the origin: move the origin so the center stays put.
+          const [rot, fx, fy] = [Number(l.rotation), !!l.flipX, !!l.flipY]
+          const n = info.node
+          const [ox0, oy0] = centerOffset(info.box.w, info.box.h, rot, fx, fy, l.bx, l.by)
+          const [ox, oy] = centerOffset(info.box.w, info.box.h, rot, k === 'flipX' ? !fx : fx, k === 'flipY' ? !fy : fy, l.bx, l.by)
+          props.x = Math.round((Number(n.x ?? 0) + ox0 - ox) * 100) / 100
+          props.y = Math.round((Number(n.y ?? 0) + oy0 - oy) * 100) / 100
+        }
+        tryCall('update', { ids: [id], props, coalesce: undoKey })
+      }
       return true
     }
     const t = TOOLS.find((x) => x.key === key) ?? (key === 'a' ? TOOLS[1] : undefined)
@@ -270,14 +301,32 @@ export function App() {
   ) : null
 
   if (screen === 'present') {
-    return <Present w={win?.width ?? 1440} h={win?.height ?? 900} start={presentFrom} version={state.version} exit={() => setScreen('editor')} />
+    return <Present w={win?.width ?? 1440} h={win?.height ?? 900} start={presentFrom} version={state.version} animating={!!state.animating} exit={() => setScreen('editor')} />
   }
   if (screen === 'home') {
     // One root like the editor: as two window-level siblings, a showing toast blanked Home.
     return (
       <div style={{ width: '100%', height: '100%' }}>
         {/* Read fresh: files saved or opened since startup belong in Recent too. */}
-        <Home recent={tryCall<{ recent?: string[] }>('settings_get')?.recent ?? []} onOpened={openedDoc} toast={toast} />
+        <Home
+          recent={tryCall<{ recent?: string[] }>('settings_get')?.recent ?? []}
+          // The polled flag lags an edit by up to 120 ms, so ask the core when a template or file is picked.
+          dirty={() => tryCall<State>('state')?.dirty ?? state.dirty}
+          title={state.title}
+          save={() => {
+            try {
+              // Fresh like `dirty`: an open or Save As moments ago is not in the polled state yet.
+              const current = tryCall<State>('state') ?? state
+              return saveTo(current.path ?? defaultSavePath(current.title))
+            } catch {
+              toast('Unable to save the document. Check that the folder exists and is writable.', true)
+              return false
+            }
+          }}
+          back={opened ? () => setScreen('editor') : undefined}
+          onOpened={openedDoc}
+          toast={toast}
+        />
         {toastEl}
       </div>
     )
