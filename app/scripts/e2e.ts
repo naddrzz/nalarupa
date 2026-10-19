@@ -169,10 +169,23 @@ TakeScreenshot([s])`,
 
   // The Plan block: a long todo wraps inside the panel (it used to run past the window edge) and 32 of
   // them scroll in a capped block, so the composer stays on screen (it used to be pushed out of the window).
+  const until = async (ok: () => Promise<boolean>, ms = 5000) => {
+    for (const end = Date.now() + ms; Date.now() < end; await sleep(100)) if (await ok()) return true
+    return false
+  }
+  const laidOut = async () => !!((await app!.getByText('Step 1: lay out').bounds())?.height && (await app!.getByTestId('plan-todos').bounds())?.height && (await app!.getByTestId('agent-input').bounds())?.height)
+  if (!(await until(laidOut))) throw new Error('the Plan block did not lay out')
   const planField = (await app.getByTestId('agent-input').bounds())!
   const count = (await app.getByText('3/32').bounds())!
   const step = (await app.getByText('Step 1: lay out').bounds())!
   if (step.x + step.width > count.x + count.width) throw new Error(`a long todo ends at ${step.x + step.width}, past the Plan block's right edge ${count.x + count.width}`)
+  // The status glyph sits on the first line of its todo, not centered on the wrapped text.
+  const glyph = (await app.getByText('✓').all()).find((n) => (n.bounds?.height ?? 0) > 0)?.bounds
+  if (!glyph || Math.abs(glyph.y - step.y) > 1) throw new Error(`the status glyph is not aligned to the first todo line: ${glyph?.y} vs ${step.y}`)
+  // The list is capped at 240px and scrolls: all 32 todos are still there.
+  const list = (await app.getByTestId('plan-todos').bounds())!
+  if (list.height > 240) throw new Error(`the Plan list is ${list.height}px tall, over its 240px cap`)
+  if (!(await app.getByText('Step 32: lay out').count())) throw new Error('the Plan list lost todos')
   const canvasBox = (await app.getByTestId('canvas').bounds())!
   if (planField.y + planField.height > canvasBox.y + canvasBox.height) throw new Error(`32 todos pushed the composer to ${planField.y + planField.height}, below the window's bottom ${canvasBox.y + canvasBox.height}`)
 

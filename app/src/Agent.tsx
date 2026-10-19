@@ -187,7 +187,7 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
             <T size={11} color={C.ghost}>{`${doneTodos}/${todos.length}`}</T>
           </Pressable>
           {planOpen ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flexShrink: 1, minHeight: 0, maxHeight: 240, overflowY: 'scroll' }}>
+            <div testId="plan-todos" style={{ display: 'flex', flexDirection: 'column', gap: 4, flexShrink: 1, minHeight: 0, maxHeight: 240, overflowY: 'scroll' }}>
               {todos.map((t, i) => (
                 <div key={i} style={{ display: 'flex', flexDirection: 'row', gap: 6, alignItems: 'flex-start' }}>
                   <T size={11} color={t.status === 'completed' ? C.ok : t.status === 'in_progress' ? C.accent : C.ghost} mono>{t.status === 'completed' ? '✓' : t.status === 'in_progress' ? '◐' : t.status === 'cancelled' ? '✕' : '○'}</T>
