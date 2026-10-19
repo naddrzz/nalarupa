@@ -1262,7 +1262,7 @@ fn blends(n: &RNode) -> bool {
 
 /// Blend modes as CSS `mix-blend-mode`; linearBurn is multiply and
 /// linearDodge (Skia plus) is approximated by screen, since resvg has no additive mode.
-fn blend_mode(mode: Option<&str>) -> Option<&'static str> {
+pub fn blend_mode(mode: Option<&str>) -> Option<&'static str> {
     Some(match mode? {
         "darken" => "darken",
         "multiply" | "linearBurn" => "multiply",
