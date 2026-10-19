@@ -210,6 +210,11 @@ fn begin(prompt: String, parallel: usize, mode: &str, designs: usize, iterate: &
     start_turn(&prompt, text, resume);
 }
 
+/// One-line chat title: the first prompt with whitespace runs (line breaks too) collapsed, capped at 100 chars.
+fn chat_title(shown: &str) -> String {
+    shown.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(100).collect()
+}
+
 /// Send `prompt` to the main agent (same conversation), showing `shown` as the user's message.
 /// A `resume` turn continues a finished run: it is dropped when Stop came in since that run ended.
 fn start_turn(shown: &str, prompt: String, resume: bool) {
@@ -230,7 +235,7 @@ fn start_turn(shown: &str, prompt: String, resume: bool) {
         }
         if e.agent.chat.is_none() {
             let id = format!("{:x}{:04x}", now_ms(), crate::doc::random_u64() & 0xffff);
-            e.agent.chat = Some(Chat { id, title: shown.trim().chars().take(100).collect(), events: Vec::new() });
+            e.agent.chat = Some(Chat { id, title: chat_title(shown), events: Vec::new() });
         }
         let main = match e.agent.main.clone().and_then(|id| e.agent.profile(&id).cloned()) {
             Some(p) => p,
@@ -1054,6 +1059,13 @@ mod tests {
         assert_eq!(events[1]["text"], "Hello");
         assert!(read_chat(&dir, "../settings").is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn chat_title_is_one_line() {
+        assert_eq!(chat_title("  Make it dark\nand add a footer "), "Make it dark and add a footer");
+        assert_eq!(chat_title("Design a pricing page\n\nPlans:\r\n- Free\t- Pro"), "Design a pricing page Plans: - Free - Pro");
+        assert_eq!(chat_title(&"word ".repeat(40)).chars().count(), 100);
     }
 
     #[test]
