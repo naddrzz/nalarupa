@@ -19,6 +19,14 @@ const px = renderPixels(320, 180, 0, 0, 1920 / 320 / 6, 0x1c1c1f)
 assert(px && px.length === 320 * 180 * 4, 'render returns RGBA')
 const hit = call('hit', { x: 200, y: 900 })
 assert(hit[0] === 'sld01', `hit-test finds the cover slide (got ${hit})`)
+// A child painted outside its unclipped parent's box is hit there.
+call('tool', { name: 'execute', args: { input: 'f = Insert(document, {type:"frame", name:"Host", layout:"none", clip:false, x:5000, y:5000, width:100, height:100}); Insert(f, {type:"rectangle", name:"Overflow", x:80, y:80, width:100, height:100, fill:"#ff0000"})' } })
+renderPixels(320, 180, 5000, 5000, 1, 0x1c1c1f) // the first frame starts the inserted child's slide-in clock
+await Bun.sleep(700) // the inserted child slides in first
+renderPixels(320, 180, 5000, 5000, 1, 0x1c1c1f)
+const overflow = call('hit', { x: 5150, y: 5150 }).map((i: string) => call('layers').find((l: any) => l.id === i)?.name)
+assert(overflow.join() === 'Host,Overflow', `hit finds a child outside its unclipped parent (got ${overflow})`)
+call('undo')
 const out = call('tool', { name: 'execute', args: { input: 'x = Insert(document, {type:"frame", name:"Smoke", width:100, height:100, fill:"#ff0000", x:0, y:2000})' } })
 assert(!out.error && out.text.includes('"Smoke"'), `execute works: ${out.text}`)
 call('undo')
