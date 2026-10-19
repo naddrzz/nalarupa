@@ -200,8 +200,8 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
         <virtual-list estimatedItemHeight={44} followTail alignment="bottom" style={{ flexGrow: 1, minHeight: 0, paddingTop: 8, paddingBottom: 8 }}>
           {items.map((m) => (
             <div key={m.id} style={{ paddingLeft: 12, paddingRight: 12 }}>
-              {/* Items are mutated in place, so `tick` (the store version) is what re-renders one; only the last and the live ones take it. */}
-              <Item m={m} isLast={m.id === lastId} expanded={open.has(m.id)} toggle={toggle} tick={m.id === lastId || changing(m) ? tick : 0} />
+              {/* Items are mutated in place, so `tick` (the store version) is what re-renders one; only the live ones take it (a finished row never changes; `isLast` and the row's own ticks cover the rest). */}
+              <Item m={m} isLast={m.id === lastId} expanded={open.has(m.id)} toggle={toggle} tick={changing(m) ? tick : 0} />
             </div>
           ))}
           {planning ? (
