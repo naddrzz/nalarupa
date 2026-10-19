@@ -91,6 +91,8 @@ pub struct Flat {
     pub m: Option<[f64; 6]>,
     /// Local bounds' offset from the origin (non-zero for groups) and the node's own effective rotation and flips.
     pub local: ([f64; 2], f64, bool, bool),
+    /// Clips its children to its box (a `clip` frame), so they cannot be hit outside it.
+    clip: bool,
     /// Own props, box, parent and sibling index: a change means this node must repaint.
     sig: u64,
     /// How far shadows, blurs and strokes paint outside the box; infinite when the node or an
@@ -931,6 +933,7 @@ fn prepare_layer(cx: &mut Ctx, index: usize, hash: u64, hidden: &HashSet<String>
             pending: crate::svg::fills(n.p.get("fill")).iter().any(|f| f["url"].as_str().is_some_and(is_pending_url)),
             m: mats[depth],
             local: ([n.bx, n.by], n.f("rotation").unwrap_or(0.0), n.b("flipX"), n.b("flipY")),
+            clip: n.ty == "frame" && n.b("clip"),
             sig: fxhash(&sig),
             reach: if turned[depth] { f64::INFINITY } else { reach(&n.p) },
         });
@@ -967,6 +970,8 @@ pub fn unapply(m: [f64; 6], x: f64, y: f64) -> (f64, f64) {
 }
 
 /// Topmost-first chain of nodes under a document point: [top-level, child, ..., deepest].
+/// The deepest node is the last-painted one whose box holds the point; a child can be hit outside
+/// its parent's box unless an ancestor clips it.
 pub fn hit_chain(r: &Renderer, x: f64, y: f64) -> Vec<String> {
     for id in r.order.iter().rev() {
         let Some(layer) = r.layers.get(id) else { continue };
@@ -974,21 +979,28 @@ pub fn hit_chain(r: &Renderer, x: f64, y: f64) -> Vec<String> {
             let (x, y) = f.m.map_or((x, y), |m| unapply(m, x, y));
             x >= f.x && y >= f.y && x <= f.x + f.w && y <= f.y + f.h
         };
-        let Some(root) = layer.flat.first().filter(|f| inside(f)) else { continue };
-        let mut chain = vec![root.id.clone()];
-        // Deepest, last-painted descendant along each level.
-        loop {
-            let cur = chain.last().unwrap().clone();
-            // A script node's generated children select the script node.
-            if layer.flat.iter().any(|f| f.id == cur && f.ty == "script") {
-                break;
-            }
-            let next = layer.flat.iter().rev().find(|f| f.parent.as_deref() == Some(&cur) && inside(f) && f.w > 0.0 && f.h > 0.0);
-            match next {
-                Some(f) => chain.push(f.id.clone()),
-                None => break,
+        // Per node, in paint order: is it reachable (no clipping ancestor misses the point), and is it
+        // under a script node (whose generated children select the script node).
+        let mut path: Vec<(usize, bool, bool)> = Vec::new(); // (index, reachable, below a script)
+        let mut hit = None;
+        for (i, f) in layer.flat.iter().enumerate() {
+            path.truncate(f.depth);
+            let (open, scripted) = path.last().map_or((true, false), |&(p, open, scripted)| {
+                let p = &layer.flat[p];
+                (open && (!p.clip || inside(p)), scripted || p.ty == "script")
+            });
+            path.push((i, open, scripted));
+            if open && !scripted && (f.depth == 0 || f.w > 0.0 && f.h > 0.0) && inside(f) {
+                hit = Some(i);
             }
         }
+        let Some(mut i) = hit else { continue };
+        let mut chain = vec![layer.flat[i].id.clone()];
+        while let Some(p) = layer.flat[i].parent.as_deref() {
+            i = layer.flat[..i].iter().rposition(|f| f.id == p).unwrap();
+            chain.push(p.to_string());
+        }
+        chain.reverse();
         return chain;
     }
     Vec::new()
@@ -1149,6 +1161,29 @@ pub(crate) mod tests {
         // Child turned back by -90° and mirrored about its origin (300, 300): local (u, v) → (300 - v, 300 - u) in frame
         // space, i.e. it paints at frame x 260..300, y 260..300 → canvas (y, -x).
         assert_eq!(hit_chain(&r, 280.0, -280.0), ["f", "k"]);
+    }
+
+    /// A child painted outside its unclipped parent's box is hit there; a clipping ancestor still hides it.
+    #[test]
+    fn overflow_hits_unless_clipped() {
+        let json = r##"{"version":"2.19","children":[
+            {"type":"frame","id":"f","x":100,"y":100,"width":100,"height":100,"layout":"none","children":[
+                {"type":"rectangle","id":"o","x":80,"y":80,"width":100,"height":100}]},
+            {"type":"frame","id":"t","x":400,"y":0,"width":200,"height":200,"layout":"none","children":[
+                {"type":"frame","id":"i","x":0,"y":0,"width":50,"height":50,"layout":"none","children":[
+                    {"type":"rectangle","id":"n","x":40,"y":40,"width":100,"height":100}]}]},
+            {"type":"frame","id":"c","x":800,"y":0,"width":100,"height":100,"layout":"none","clip":true,"children":[
+                {"type":"rectangle","id":"h","x":80,"y":80,"width":100,"height":100}]}]}"##;
+        let doc = Doc::from_json(json).unwrap();
+        let mut r = Renderer::default();
+        sync(&mut r, &doc);
+        assert_eq!(hit_chain(&r, 190.0, 190.0), ["f", "o"]);
+        assert_eq!(hit_chain(&r, 250.0, 250.0), ["f", "o"], "outside the frame's box");
+        assert!(hit_chain(&r, 285.0, 285.0).is_empty());
+        assert_eq!(hit_chain(&r, 500.0, 100.0), ["t", "i", "n"], "outside the inner frame, inside the outer one");
+        assert_eq!(hit_chain(&r, 860.0, 50.0), ["c"]);
+        assert_eq!(hit_chain(&r, 880.0, 80.0), ["c", "h"]);
+        assert!(hit_chain(&r, 950.0, 150.0).is_empty(), "clipped overflow is invisible");
     }
 
     /// Horizontal/vertical stroked lines have no layer box; both rasterizers must still draw them
