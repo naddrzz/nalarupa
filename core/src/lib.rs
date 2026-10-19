@@ -333,7 +333,7 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             Ok(state(&e))
         }
         "tool" => {
-            let out = engine().tool(req["name"].as_str().unwrap_or(""), &req["args"]);
+            let out = engine::call_tool(req["name"].as_str().unwrap_or(""), &req["args"]);
             let out = out.finish();
             Ok(json!({"text": out.text, "error": out.error, "images": out.images.len()}))
         }

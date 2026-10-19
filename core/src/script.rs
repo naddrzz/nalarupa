@@ -14,6 +14,8 @@ use rquickjs::{Coerced, Context, Ctx, Exception, FromJs, Function, Runtime};
 use serde_json::{json, Map, Value};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, MutexGuard};
 use std::time::{Duration, Instant};
 
 /// Wall-clock budget of one `execute` call.
@@ -58,9 +60,13 @@ struct Live {
 }
 
 struct Exec {
-    engine: *mut Engine,
+    /// The engine the caller holds for the whole script; None when each host function locks it
+    /// for its own work (`execute_shared`).
+    engine: Option<*mut Engine>,
     budget: Duration,
     deadline: Instant,
+    /// Stop: raised by the agent's Stop button while the script runs.
+    cancel: Option<Arc<AtomicBool>>,
     /// The script was stopped by the time or memory limit.
     limit: bool,
     prints: Vec<String>,
@@ -162,10 +168,12 @@ fn with<R>(f: impl FnOnce(&mut Engine, &mut Exec) -> Result<R, String>) -> Resul
     EXEC.with(|cell| {
         let mut guard = cell.borrow_mut();
         let ex = guard.as_mut().ok_or("no active execute call")?;
+        let Some(engine) = ex.engine else {
+            return f(&mut crate::engine::engine(), ex);
+        };
         // SAFETY: the caller of `bind` holds the only &mut Engine for the duration of the script
         // and does not touch it until evaluation returns; natives never re-enter JS.
-        let engine = unsafe { &mut *ex.engine };
-        f(engine, ex)
+        f(unsafe { &mut *engine }, ex)
     })
 }
 
@@ -490,7 +498,7 @@ fn apply_edits(source: &str, edits: &[Value]) -> Result<String, String> {
 }
 
 fn over_time() -> bool {
-    EXEC.with(|c| c.try_borrow().is_ok_and(|ex| ex.as_ref().is_some_and(|ex| Instant::now() >= ex.deadline)))
+    EXEC.with(|c| c.try_borrow().is_ok_and(|ex| ex.as_ref().is_some_and(|ex| Instant::now() >= ex.deadline || ex.stopped())))
 }
 
 /// A fresh sandbox: limits, host functions, prelude, then the globals earlier calls kept.
@@ -594,6 +602,9 @@ fn describe(ctx: &Ctx<'_>, err: rquickjs::Error) -> String {
         return err.to_string();
     }
     let thrown = ctx.catch();
+    if EXEC.with(|c| c.borrow().as_ref().is_some_and(Exec::stopped)) {
+        return limit_stop("the agent was stopped, so the snippet was interrupted".into());
+    }
     if let Some(budget) = EXEC.with(|c| c.borrow().as_ref().filter(|ex| Instant::now() >= ex.deadline).map(|ex| ex.budget)) {
         return limit_stop(format!("the snippet ran past the {:.1} s time limit and was stopped (endless loop?)", budget.as_secs_f64()));
     }
@@ -610,27 +621,38 @@ fn describe(ctx: &Ctx<'_>, err: rquickjs::Error) -> String {
     text
 }
 
+impl Exec {
+    fn new(engine: Option<*mut Engine>, preview: bool, budget: Duration, cancel: Option<Arc<AtomicBool>>) -> Exec {
+        Exec {
+            engine,
+            budget,
+            deadline: Instant::now() + budget,
+            cancel,
+            limit: false,
+            prints: vec![],
+            names: vec![],
+            shots: vec![],
+            exports: vec![],
+            notes: vec![],
+            touched: vec![],
+            read: vec![],
+            preview,
+            pens: vec![],
+        }
+    }
+
+    fn stopped(&self) -> bool {
+        self.cancel.as_ref().is_some_and(|c| c.load(Ordering::SeqCst))
+    }
+}
+
 /// Run `f` (which evaluates JavaScript) with `e` bound to the host functions.
 fn bind<R>(e: &mut Engine, preview: bool, budget: Duration, f: impl FnOnce() -> R) -> (R, Exec) {
-    let ex = Exec {
-        engine: e as *mut Engine,
-        budget,
-        deadline: Instant::now() + budget,
-        limit: false,
-        prints: vec![],
-        names: vec![],
-        shots: vec![],
-        exports: vec![],
-        notes: vec![],
-        touched: vec![],
-        read: vec![],
-        preview,
-        pens: vec![],
-    };
-    EXEC.with(|c| *c.borrow_mut() = Some(ex));
-    e.executing = true;
+    EXEC.with(|c| *c.borrow_mut() = Some(Exec::new(Some(e as *mut Engine), preview, budget, None)));
+    // A preview step can run while another thread's `execute` has the flag up.
+    let was = std::mem::replace(&mut e.executing, true);
     let r = f();
-    e.executing = false;
+    e.executing = was;
     (r, EXEC.with(|c| c.borrow_mut().take()).expect("execute state"))
 }
 
@@ -708,22 +730,32 @@ pub fn execute(e: &mut Engine, args: &Value) -> ToolOut {
     execute_within(e, args, EXECUTE_TIMEOUT)
 }
 
-fn execute_within(e: &mut Engine, args: &Value, budget: Duration) -> ToolOut {
+/// What an `execute` call needs from the engine before its JavaScript runs.
+struct Prepared {
+    source: String,
+    edit_id: Option<String>,
+    /// The document before the call: rolled back to on failure, the undo step on success.
+    before: Value,
+    agent: String,
+    globals: Map<String, Value>,
+}
+
+fn prepare(e: &mut Engine, args: &Value) -> Result<Prepared, ToolOut> {
     let edits = args["edits"].as_array();
     let input = args["input"].as_str().unwrap_or("");
     let (source, edit_id) = match edits {
         Some(edits) => {
             if !input.is_empty() {
-                return ToolOut::err("pass either `input` or `edits` (with `editId`), not both");
+                return Err(ToolOut::err("pass either `input` or `edits` (with `editId`), not both"));
             }
-            let Some(id) = args["editId"].as_str() else { return ToolOut::err("`edits` requires the `editId` from the failed call") };
-            let Some(stored) = e.script.failed.get(id) else { return ToolOut::err(format!("unknown editId '{id}'")) };
+            let Some(id) = args["editId"].as_str() else { return Err(ToolOut::err("`edits` requires the `editId` from the failed call")) };
+            let Some(stored) = e.script.failed.get(id) else { return Err(ToolOut::err(format!("unknown editId '{id}'"))) };
             match apply_edits(stored, edits) {
                 Ok(src) => (src, Some(id.to_string())),
-                Err(err) => return ToolOut::err(err),
+                Err(err) => return Err(ToolOut::err(err)),
             }
         }
-        None if input.trim().is_empty() => return ToolOut::err("`input` (JavaScript) is required"),
+        None if input.trim().is_empty() => return Err(ToolOut::err("`input` (JavaScript) is required")),
         None => (input.to_string(), None),
     };
 
@@ -733,7 +765,40 @@ fn execute_within(e: &mut Engine, args: &Value, budget: Duration) -> ToolOut {
     if let Some(seed) = args["__seed"].as_u64() {
         crate::doc::reseed(seed);
     }
-    let (result, ex) = bind(e, false, budget, || run(&source, &globals));
+    Ok(Prepared { source, edit_id, before, agent, globals })
+}
+
+fn execute_within(e: &mut Engine, args: &Value, budget: Duration) -> ToolOut {
+    let prep = match prepare(e, args) {
+        Ok(p) => p,
+        Err(out) => return out,
+    };
+    let (result, ex) = bind(e, false, budget, || run(&prep.source, &prep.globals));
+    finish(e, prep, result, ex)
+}
+
+/// `execute` without holding the engine across the JavaScript: each host function locks it for its
+/// own work, so polls, renders and Stop keep answering while a long script runs. The call stops
+/// (and rolls back) when `cancel` rises. The caller holds `EXECUTE_GATE`, so no other
+/// script edits the document meanwhile.
+pub fn execute_shared(mut e: MutexGuard<'static, Engine>, args: &Value, cancel: Option<Arc<AtomicBool>>) -> (ToolOut, MutexGuard<'static, Engine>) {
+    let prep = match prepare(&mut e, args) {
+        Ok(p) => p,
+        Err(out) => return (out, e),
+    };
+    EXEC.with(|c| *c.borrow_mut() = Some(Exec::new(None, false, EXECUTE_TIMEOUT, cancel)));
+    e.executing = true;
+    drop(e);
+    let result = run(&prep.source, &prep.globals);
+    let mut e = crate::engine::engine();
+    e.executing = false;
+    let ex = EXEC.with(|c| c.borrow_mut().take()).expect("execute state");
+    let out = finish(&mut e, prep, result, ex);
+    (out, e)
+}
+
+fn finish(e: &mut Engine, prep: Prepared, result: Result<Map<String, Value>, String>, ex: Exec) -> ToolOut {
+    let Prepared { source, edit_id, before, agent, .. } = prep;
 
     let new_globals = match result {
         Ok(g) => g,
@@ -1414,6 +1479,31 @@ mod tests {
         assert_eq!(e.doc.children().len(), 2);
         assert!(e.undo());
         assert_eq!(e.doc.children().len(), 1);
+    }
+
+    #[test]
+    fn a_running_script_leaves_the_engine_free_and_stops_with_the_agent() {
+        // The script ran under the engine lock: the window froze and Stop was dead until it ended.
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = stop.clone();
+        let run = std::thread::spawn(move || execute_shared(crate::engine::engine(), &json!({"input": "Insert(document, {type:'frame', name:'Half'}); for (;;) {}"}), Some(flag)).0);
+        let started = Instant::now();
+        while !crate::engine::engine().executing {
+            assert!(started.elapsed() < Duration::from_secs(5), "the script never started");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        std::thread::sleep(Duration::from_millis(200));
+        let asked = Instant::now();
+        drop(crate::engine::engine());
+        assert!(asked.elapsed() < Duration::from_secs(1), "the engine stayed locked while the script ran");
+        assert!(!run.is_finished(), "the script is still running");
+        stop.store(true, Ordering::SeqCst);
+        let out = run.join().unwrap();
+        assert!(out.error && out.text.contains("stopped"), "{}", out.text);
+        assert!(out.text.contains("rolled back"), "{}", out.text);
+        let e = crate::engine::engine();
+        assert!(!e.executing);
+        assert!(e.doc.children().iter().all(|n| n["name"] != "Half"), "the stopped script's edits are rolled back");
     }
 
     #[test]

@@ -767,7 +767,7 @@ fn run_api(p: &Profile, prompt: &str, child: bool) -> Result<Value, String> {
                 let mut args = b["input"].clone();
                 args["__stream"] = json!(id);
                 args["__agent"] = json!(p.id);
-                engine().tool(name, &args)
+                crate::engine::call_tool(name, &args)
             };
             // Outside the engine lock (the guard above is a temporary): screenshots rasterize here.
             let out = out.finish();
