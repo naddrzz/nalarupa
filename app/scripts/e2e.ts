@@ -430,7 +430,13 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
   await app.getByTestId('tab-agent').click()
   await app.getByTestId('agent-input').waitFor()
   if (!(await app.getByText('Side by side').count())) throw new Error('switching to the Design tab and back reset the Agents option')
-  await until(async () => (await app!.getByText('make the title bigger').count()) > 0, 'the composer draft to survive the Design tab')
+  // A textarea's value cannot be read, so send it: the prompt bubble shows what the composer held (the stand-in
+  // replies; on Windows a send would start the real CLI).
+  if (standIn) {
+    await app.getByTestId('agent-send').click()
+    await until(async () => (await app!.getByText('make the title bigger').count()) > 0, 'the composer draft to survive the Design tab and be sent')
+    await until(async () => !(await app!.getByTestId('agent-stop').count()), 'the stand-in agent to finish', 20000)
+  }
   // "1×" also appears in the agent cook button, so click the narrowest match: the segment.
   const one = (await app.getByText('1×').all()).map((n) => n.bounds!).sort((a, b) => a.width - b.width)[0]
   await app.mouse.click({ x: one.x + one.width / 2, y: one.y + one.height / 2 })

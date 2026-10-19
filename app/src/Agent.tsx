@@ -93,11 +93,11 @@ function useKept<T>(key: string, init: () => T) {
     if (!kept.has(key)) kept.set(key, init())
     return kept.get(key) as T
   })
-  const setKept = (n: T | ((p: T) => T)) => set((p) => {
-    const x = typeof n === 'function' ? (n as (p: T) => T)(p) : n
+  const setKept = (n: T | ((p: T) => T)) => {
+    const x = typeof n === 'function' ? (n as (p: T) => T)(kept.get(key) as T) : n
     kept.set(key, x)
-    return x
-  })
+    set(x)
+  }
   return [v, setKept] as const
 }
 
