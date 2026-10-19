@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import { tryCall } from './core'
 import { nodeIcon, type IconName } from './icons'
+import { turnAroundCenter } from './geometry'
 import { C } from './theme'
 import { Button, Field, Icon, IconButton, NumField, Row, Section, Segmented, Swatch, T, Toggle, type Toast } from './ui'
 
@@ -41,10 +42,32 @@ function solidColor(fill: unknown, vars: Record<string, any>): string | null {
   return typeof c === 'string' && c.startsWith('#') ? c.slice(0, 7) : null
 }
 
+const PAINT_TYPES = ['color', 'gradient', 'image', 'mesh_gradient', 'shader']
+
+/** A paint the renderer can draw: empty (none), #RGB / #RRGGBB / #RRGGBBAA, a $variable that exists, or a JSON paint (or list of them) with a known type. */
+function validPaint(v: string, vars: Record<string, any>): boolean {
+  const t = v.trim()
+  if (t === '' || /^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(t)) return true
+  if (t.startsWith('$')) return Object.prototype.hasOwnProperty.call(vars, t.slice(1))
+  const p = parse(t)
+  const one = (f: any): boolean => {
+    if (typeof f === 'string') return f.startsWith('#') || f.startsWith('$')
+    if (!f || typeof f !== 'object' || Array.isArray(f)) return false
+    return (f.type ?? 'color') === 'color' ? typeof f.color === 'string' : PAINT_TYPES.includes(f.type)
+  }
+  return Array.isArray(p) ? p.every(one) : typeof p === 'object' && one(p)
+}
+
 export function Inspector({ version, selection, select, toast }: Props) {
   const infos = useMemo(() => selection.map((id) => ({ id, ...tryCall('node', { id }) }) as Info).filter((i) => i.node), [selection, version])
   const update = (props: Record<string, unknown>, coalesce?: string) => {
     if (tryCall('update', { ids: selection, props, coalesce }) === null) toast('Unable to apply that value. Check its format, for example #FF6A3D or 24, and try again.', true)
+  }
+  /** Fill / stroke commit: a color the renderer cannot read would leave the layer unpainted, so reject it. */
+  const setPaint = (prop: 'fill' | 'stroke', vars: Record<string, any>) => (v: string) => {
+    if (validPaint(v, vars)) return void update({ [prop]: parse(v) })
+    toast('Unable to apply that color. Use a hex such as #FF6A3D, a $variable, or leave it empty for none.', true)
+    return false
   }
   /** Different props per layer, still one undo step. */
   const perNode = (make: (i: Info) => Record<string, unknown> | null, key = `inspector:${++clicks}`) => {
@@ -98,6 +121,15 @@ export function Inspector({ version, selection, select, toast }: Props) {
   const fill = fillMixed ? null : solidColor(n.fill, vars)
   const stroke = solidColor(n.stroke, vars)
 
+  // Rotation turns around the center like the canvas handle: a free layer's origin moves so the center stays put.
+  const setRotation = (v: number, key: string) => perNode((i) => {
+    const props: Record<string, unknown> = { rotation: v || null }
+    if (!inFlow(i) && i.box && i.node.type !== 'group') {
+      const [fx, fy] = [!!i.node.flipX, !!i.node.flipY]
+      ;[props.x, props.y] = turnAroundCenter(Number(i.node.x ?? 0), Number(i.node.y ?? 0), i.box.w, i.box.h, Number(i.node.rotation ?? 0), v, fx, fy)
+    }
+    return props
+  }, key)
   // W/H: typing a number makes that axis fixed; auto text becomes fixed width (height: fixed size).
   const setSize = (axis: 'width' | 'height', v: number, key: string) => perNode((i) => {
     const p: Record<string, unknown> = { [axis]: Math.max(0, Math.round(v * 100) / 100) }
@@ -130,7 +162,7 @@ export function Inspector({ version, selection, select, toast }: Props) {
         <Icon name={multi ? 'layers' : nodeIcon(n.type, n.reusable)} color={!multi && (n.reusable || n.type === 'ref') ? C.component : C.muted} />
         {multi
           ? <T color={C.text}>{`${infos.length} layers selected`}</T>
-          : <Field name="Layer name" value={str(n.name)} placeholder={n.type} onCommit={(v) => update({ name: v })} testId="inspector-name" />}
+          : <Field name="Layer name" value={str(n.name)} placeholder={n.type} onCommit={(v) => v.trim() ? void update({ name: v }) : false} testId="inspector-name" />}
       </div>
 
       <Section title="Position">
@@ -144,7 +176,7 @@ export function Inspector({ version, selection, select, toast }: Props) {
           </Row>
         ) : null}
         <Row>
-          <NumField label="↻" name="Rotation" {...numOf((i) => i.node.rotation)} onCommit={(v, k) => update({ rotation: v || null }, k)} testId="inspector-rotation" />
+          <NumField label="↻" name="Rotation" {...numOf((i) => i.node.rotation)} onCommit={(v, k) => setRotation(v, k)} testId="inspector-rotation" />
           <NumField label="α" name="Opacity" {...numOf((i) => (i.node.opacity ?? 1) * 100)} onCommit={(v, k) => update({ opacity: v >= 100 ? null : Math.max(0, v) / 100 }, k)} testId="inspector-opacity" />
         </Row>
       </Section>
@@ -249,7 +281,7 @@ export function Inspector({ version, selection, select, toast }: Props) {
         <Section title="Fill">
           <Row>
             {fill ? <Swatch color={fill} /> : null}
-            <Field value={fillMixed ? '' : fillValues[0]} mono onCommit={(v) => update({ fill: parse(v) })} name="Fill" placeholder={fillMixed ? 'Mixed' : '#FFFFFF'} testId="inspector-fill" />
+            <Field value={fillMixed ? '' : fillValues[0]} mono onCommit={setPaint('fill', vars)} name="Fill" placeholder={fillMixed ? 'Mixed' : '#FFFFFF'} testId="inspector-fill" />
           </Row>
         </Section>
       ) : null}
@@ -258,7 +290,7 @@ export function Inspector({ version, selection, select, toast }: Props) {
         <Section title="Stroke & corners">
           <Row>
             {stroke ? <Swatch color={stroke} /> : null}
-            <Field name="Stroke color" value={str(n.stroke)} mono onCommit={(v) => update({ stroke: parse(v) })} placeholder="#000000" />
+            <Field name="Stroke color" value={str(n.stroke)} mono onCommit={setPaint('stroke', vars)} placeholder="#000000" />
             <Field name="Stroke width" value={str(n.strokeWidth ?? '')} width={58} onCommit={(v) => update({ strokeWidth: parse(v) })} placeholder="1" />
           </Row>
           {n.type !== 'ellipse' && n.type !== 'path' ? (
