@@ -264,7 +264,7 @@ try {
   const g1 = await frame()
   assert(Math.abs(g1.cx - g0.cx) <= 2 && Math.abs(g1.cy - g0.cy) <= 2, `Inspector rotation keeps a group's center (${g0.cx},${g0.cy} → ${g1.cx},${g1.cy})`)
   await canvas.press('ctrl-z')
-  await sleep(400)
+  assert(await until(async () => !(await count('rotated-overlay'))), 'one undo step reverts the group rotation')
   await canvas.press('ctrl-shift-g')
   await sleep(400)
   assert(await app.getByText('2 layers selected').count(), 'Ctrl+Shift+G ungroups back to the two rectangles')

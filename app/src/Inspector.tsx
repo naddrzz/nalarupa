@@ -154,7 +154,8 @@ export function Inspector({ version, selection, select, toast }: Props) {
     return p
   })
   const canHug = all((i) => i.node.type === 'frame' && i.node.layout !== 'none')
-  const canFill = all(inFlow)
+  // A group's size is its children's union, so it cannot fill either.
+  const canFill = all((i) => inFlow(i) && i.node.type !== 'group')
   const hugW = all((i) => isMode(i.node.width, 'fit_content'))
   const hugH = all((i) => isMode(i.node.height, 'fit_content'))
   const fillW = all((i) => isMode(i.node.width, 'fill_container'))
