@@ -44,12 +44,15 @@ const alignRight = glyph('<path d="M20 3v18"/><rect x="4" y="6" width="12" heigh
 const alignTop = glyph('<path d="M3 4h18"/><rect x="6" y="8" width="4" height="12" rx="1"/><rect x="14" y="8" width="4" height="7" rx="1"/>')
 const alignVCenter = glyph('<path d="M3 12h18"/><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="8" width="4" height="8" rx="1"/>')
 const alignBottom = glyph('<path d="M3 20h18"/><rect x="6" y="4" width="4" height="12" rx="1"/><rect x="14" y="9" width="4" height="7" rx="1"/>')
+const note = glyph('<path d="M15 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h8l6-6V5a2 2 0 0 0-2-2z"/><path d="M14 21v-5a2 2 0 0 1 2-2h5"/>')
+const globe = glyph('<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18z"/>')
+const paperclip = glyph('<path d="m21 11-8.5 8.5a5 5 0 0 1-7-7L14 4a3.5 3.5 0 0 1 5 5l-8.5 8.5a2 2 0 0 1-3-3L15 6.5"/>')
 const eye = glyph('<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>')
 
 export const ICONS = {
   cursor, frame, square, circle, type, hand, play, save, open, filePlus, undo, redo, download, sparkles, layers,
   presentation, settings, trash, copy, x, alert, send, stop, plus, minus, maximize, chevronRight, chevronDown, image, plug,
-  home, component, hidden, pen, smile, history, eye, alignLeft, alignHCenter, alignRight, alignTop, alignVCenter, alignBottom,
+  home, component, hidden, pen, smile, history, eye, note, globe, paperclip, alignLeft, alignHCenter, alignRight, alignTop, alignVCenter, alignBottom,
 }
 export type IconName = keyof typeof ICONS
 
@@ -64,6 +67,12 @@ export function nodeIcon(type: string, reusable = false): IconName {
     case 'icon': return 'smile'
     case 'path':
     case 'polygon': return 'pen'
+    case 'line': return 'minus'
+    case 'note': return 'note'
+    case 'prompt': return 'sparkles'
+    case 'context': return 'paperclip'
+    case 'script': return 'play'
+    case 'browser': return 'globe'
     case 'ref': return 'component'
     default: return 'square'
   }
