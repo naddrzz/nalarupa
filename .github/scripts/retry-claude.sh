@@ -4,7 +4,7 @@
 # its failed jobs shows that, since `gh run rerun --failed` reruns them all. Waits an hour after each failed attempt, so
 # a still-limited account does not use up attempts, and stops after 6 attempts (about 5 hours, one limit window).
 # claude runs are retried only while their issue or PR (the "#N" that leads the run name) is open. Looks back 24 hours.
-# DRY_RUN=1 only prints the decisions. Needs GH_TOKEN and GITHUB_REPOSITORY (owner/name).
+# A second pass restarts claude issues whose run ended without a PR (see below). DRY_RUN=1 only prints the decisions. Needs GH_TOKEN and GITHUB_REPOSITORY (owner/name).
 set -u
 R=${GITHUB_REPOSITORY:?}
 since=$(date -u -d '-24 hours' +%Y-%m-%dT%H:%M:%SZ) cutoff=$(date -u -d '-60 minutes' +%Y-%m-%dT%H:%M:%SZ)
@@ -40,4 +40,38 @@ while IFS=$'\t' read -r id wf attempt updated title; do
   elif gh run rerun "$id" -R "$R" --failed; then echo "reran $id ($wf, attempt $attempt) $title"
   else echo "rerun failed $id ($wf) $title"; fi
 done <<<"$runs"
+
+# Open issues labelled "claude" whose last claude run succeeded without leaving an open PR (the session ended early, or
+# Claude stopped to ask): label them again, which starts the claude workflow, an hour after that run and at most 3 runs
+# per issue. Failed runs are left to the rerun pass above.
+issues=$(gh api "repos/$R/issues?state=open&labels=claude&per_page=100" --paginate --jq '.[]|select(.pull_request|not)|.number')   || { echo "cannot list claude issues"; exit 0; }
+week=$(date -u -d '-7 days' +%Y-%m-%dT%H:%M:%SZ)
+issue_runs=$(gh api "repos/$R/actions/workflows/claude.yml/runs?event=issues&created=>$week&per_page=100" --paginate   --jq '.workflow_runs[]|select(.conclusion!="skipped")|[(.display_title|capture("^#(?<n>[0-9]+) ").n // ""), .status, (.conclusion // ""), .updated_at]|@tsv')   || { echo "cannot list claude runs"; exit 0; }
+# At most 3 issues per pass (twice an hour), so a backlog does not use up the Claude usage limit at once.
+started=0
+for n in $issues; do
+  if [ "$started" -ge 3 ]; then echo "later #$n (3 issues restarted this pass)"; continue; fi
+  mine=$(awk -F'	' -v n="$n" '$1==n' <<<"$issue_runs")
+  # No run this week (runs from before claude.yml had a run-name carry no number) counts as never tried.
+  if [ -n "$mine" ]; then
+    if awk -F'	' '$2!="completed"' <<<"$mine" | grep -q .; then echo "wait #$n (a claude run is active)"; continue; fi
+    last=$(sort -t$'	' -k4,4r <<<"$mine" | head -1)
+    IFS=$'	' read -r _ _ conclusion updated <<<"$last"
+    if [ "$conclusion" != success ]; then echo "skip #$n (last run: $conclusion)"; continue; fi
+    if [[ ! "$updated" < "$cutoff" ]]; then echo "wait #$n (last run ended under an hour ago)"; continue; fi
+  fi
+  if ! prs=$(gh api "repos/$R/issues/$n/timeline" --paginate --jq '.[]|select(.event=="cross-referenced" and .source.issue.pull_request!=null and .source.issue.state=="open")|.source.issue.number'); then
+    echo "wait #$n (cannot read its timeline)"; continue
+  fi
+  if [ -n "$prs" ]; then echo "skip #$n (open PR $(tr '
+' ' ' <<<"$prs"))"; continue; fi
+  tries=$(grep -c . <<<"$mine")
+  why=$([ "$tries" = 0 ] && echo "no claude run this week" || echo "run $tries ended without a PR")
+  if [ "$tries" -ge 3 ]; then echo "give up #$n ($tries runs and no PR: needs a person)"; continue; fi
+  started=$((started + 1))
+  if [ "${DRY_RUN:-}" = 1 ]; then echo "would relabel #$n ($why)"
+  elif gh issue edit "$n" -R "$R" --remove-label claude >/dev/null && gh issue edit "$n" -R "$R" --add-label claude >/dev/null; then
+    echo "relabeled #$n ($why)"
+  else echo "relabel failed #$n"; fi
+done
 exit 0
