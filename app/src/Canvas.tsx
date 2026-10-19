@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject, type Ref } from 'react'
 import type { EventModifiers, EventPayload } from '@gpuix/native'
 import type { CursorValue } from '@gpuix/native/host'
-import type { ImgInstance, PublicInstance } from '@gpuix/react'
+import { useGpuixRequired, type ImgInstance, type PublicInstance } from '@gpuix/react'
 import { call, renderPixels, tryCall, type Box } from './core'
 import { CANVAS_BG, C, DPR, FONT, FRAME_LABEL_TEXT, LEFT_W, TOP_H } from './theme'
 import { FocusRing, setKeyboardFocus, SvgOverlay, T, useRing, type Toast } from './ui'
@@ -174,6 +174,9 @@ export function Canvas(props: {
   const { w, h, cam, setCam, version, selection, select, tool, setTool, toast } = props
   // Keyboard focus ring (Tab onto the canvas); a press clears it in onMouseDown.
   const ring = useRing(props.rootRef)
+  const renderer = useGpuixRequired()
+  // An in-place editor unmounts while it holds focus: Enter or Escape hands the keys back to the canvas.
+  const refocus = () => void (ring.el.current && renderer.focusElement?.(ring.el.current.id))
 
   // Tell the core what the user sees, so the agent's editor state marks visible frames.
   useEffect(() => {
@@ -1322,12 +1325,13 @@ export function Canvas(props: {
                 autoFocus
                 value={renaming.draft}
                 onChange={(ev) => setRenaming((s) => (s ? { ...s, draft: ev.value ?? '' } : s))}
-                onSubmit={(ev) => commitRename(ev.value)}
+                onSubmit={(ev) => { commitRename(ev.value); refocus() }}
                 onBlur={() => commitRename()}
                 onKeyDown={(ev) => {
                   if ((ev.key ?? '').toLowerCase() !== 'escape') return
                   renameLive.current = null
                   setRenaming(null)
+                  refocus()
                 }}
                 style={{ flexGrow: 1, minWidth: 0, fontSize: 11, color: C.text, fontFamily: FONT }}
               />
@@ -1480,9 +1484,9 @@ export function Canvas(props: {
               minRows={1}
               maxRows={12}
               onChange={(ev) => setEditing((s) => (s ? { ...s, value: ev.value ?? '' } : s))}
-              onSubmit={(ev) => commitEdit(ev.value ?? editing.value)}
+              onSubmit={(ev) => { commitEdit(ev.value ?? editing.value); refocus() }}
               onBlur={() => commitEdit(editing.value)}
-              onKeyDown={(ev) => { if ((ev.key ?? '').toLowerCase() === 'escape') setEditing(null) }}
+              onKeyDown={(ev) => { if ((ev.key ?? '').toLowerCase() === 'escape') { setEditing(null); refocus() } }}
               style={{ fontSize: Math.max(10, Math.min(72, editing.size * cam.zoom)), color: '#111111', fontFamily: FONT, width: '100%' }}
             />
           </div>

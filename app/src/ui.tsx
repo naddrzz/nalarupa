@@ -102,7 +102,7 @@ export function useRing<T extends PublicInstance>(forwarded?: Ref<T>) {
     else if (forwarded) (forwarded as { current: T | null }).current = v
   }, [forwarded])
   const on = id !== null && el.current?.id === id
-  return { ref, on, clear: () => setKeyboardFocus(null) }
+  return { ref, el, on, clear: () => setKeyboardFocus(null) }
 }
 
 /** Focus state of a text field: `ring` is true while it has focus, from the mouse or Tab. GPUIX sends no
