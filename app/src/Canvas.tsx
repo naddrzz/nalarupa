@@ -94,7 +94,7 @@ function handlePoints(b: { x: number; y: number; w: number; h: number }): Record
   return { nw: [x, y], n: [x + w / 2, y], ne: [x + w, y], e: [x + w, y + h / 2], se: [x + w, y + h], s: [x + w / 2, y + h], sw: [x, y + h], w: [x, y + h / 2] }
 }
 
-const isMovable = (n: any) => n && (n.parentLayout === 'none' || n.node?.layoutPosition === 'absolute')
+export const isMovable = (n: any) => n && (n.parentLayout === 'none' || n.node?.layoutPosition === 'absolute')
 const inFlow = (n: any) => !!n && n.parentLayout !== 'none' && n.node?.layoutPosition !== 'absolute'
 /** cornerRadius as [tl, tr, br, bl]; variable references count as 0. */
 function radiiOf(n: any): number[] {
@@ -246,8 +246,17 @@ export function Canvas(props: {
     settle.current = setTimeout(() => { settle.current = null; draw(true) }, 200)
   }
   useLayoutEffect(schedule, [w, h, cam, version])
+  const animated = useRef(false)
   useEffect(() => {
-    if (!props.animating) return
+    if (!props.animating) {
+      // The poll can end the slide between two redraws: paint the settled view once more, or the
+      // bitmap keeps the last slide frame (neither the camera nor `version` changed to repaint it).
+      // Only when the slide ends, not on mount or unmount (that frame would be thrown away).
+      if (animated.current) draw(false)
+      animated.current = false
+      return
+    }
+    animated.current = true
     const t = setInterval(() => draw(false), 16)
     return () => clearInterval(t)
   }, [props.animating])

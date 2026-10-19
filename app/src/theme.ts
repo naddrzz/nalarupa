@@ -64,6 +64,13 @@ function detectReducedMotion(): boolean {
 }
 export const REDUCED_MOTION = detectReducedMotion()
 
+/** Chat indicators (animated ellipsis, running-tool dot) are pure functions of the clock; the panel
+ *  re-renders every `INDICATOR_TICK_MS` while one is live, so an ellipsis step lasts 400 ± one tick
+ *  and the pulse is sampled ~25 times per period instead of strobing. */
+export const INDICATOR_TICK_MS = 50
+export const ellipsisAt = (now: number) => '.'.repeat(1 + (Math.floor(now / 400) % 3))
+export const pulseAt = (now: number) => 0.5 + 0.5 * Math.sin(now / 200)
+
 /** The primary monitor's work area (screen minus taskbar) in logical px, or null where unknown. */
 function workArea(): { w: number; h: number } | null {
   if (process.platform !== 'win32') return null

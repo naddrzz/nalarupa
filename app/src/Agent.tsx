@@ -6,7 +6,7 @@ import { call, tryCall } from './core'
 import { barAgents, imageSrc, profileOf, resetChat, restoreChat, store, type ChatItem } from './agents'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import * as SelectPrimitive from '@gpuix/react/select'
-import { C, FONT, MONO, REDUCED_MOTION } from './theme'
+import { C, FONT, INDICATOR_TICK_MS, MONO, REDUCED_MOTION, ellipsisAt, pulseAt } from './theme'
 import { Button, Field, FocusRing, Icon, IconButton, Pressable, Row, Segmented, setKeyboardFocus, T, Toggle, useKeyboardFocusId, useRing, useTrigger, type Toast } from './ui'
 
 // Suggestion set; the empty chat shows 6 random picks of these 12.
@@ -59,7 +59,7 @@ function useTick(ms: number, active: boolean) {
 }
 
 // Under reduced motion the ellipsis stays still and replies appear whole (no typewriter).
-const dots = () => (REDUCED_MOTION ? '…' : '.'.repeat(1 + (Math.floor(performance.now() / 400) % 3)))
+const dots = () => (REDUCED_MOTION ? '…' : ellipsisAt(performance.now()))
 
 // Typewriter: ~5 words per 16 ms frame, instant once a later message exists.
 const revealed = new Map<number, number>()
@@ -93,7 +93,7 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
   const lastId = items[items.length - 1]?.id
   const typing = items.some((i) => i.kind === 'assistant' && i.id === lastId && (revealed.get(i.id) ?? 0) < i.text.split(/(\s+)/).length)
   useTick(16, typing)
-  useTick(400, running)
+  useTick(REDUCED_MOTION ? 400 : INDICATOR_TICK_MS, running)
 
   const send = (text: string) => {
     const t = text.trim()
@@ -512,7 +512,7 @@ let cachedModel: string | null = null
 function tryModel() {
   if (cachedModel === null) {
     const s = tryCall<Record<string, string>>('settings_get') ?? {}
-    const cli = s.agent_backend === 'claude-code' || !s.anthropic_api_key
+    const cli = s.backend === 'claude-code'
     const model = MODELS.find((m) => m.value === s.agent_model)?.label
     cachedModel = cli ? (model ? `Claude Code · ${model}` : 'Claude Code') : model ?? 'Opus 5.5'
   }
@@ -533,7 +533,7 @@ const FAST_MODELS = ['claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8']
 function ModelPicker({ settingsOpen }: { settingsOpen: boolean }) {
   // Re-read when the settings panel closes: the backend may have changed.
   const s = useMemo(() => tryCall<Record<string, unknown>>('settings_get') ?? {}, [settingsOpen])
-  const cli = (s.agent_backend ?? (s.anthropic_api_key ? 'api' : 'claude-code')) === 'claude-code'
+  const cli = s.backend === 'claude-code'
   const items = cli ? [{ value: 'default', label: 'Default' }, ...MODELS] : MODELS
   const stored = typeof s.agent_model === 'string' ? s.agent_model : null
   const current = stored ?? (cli ? 'default' : 'claude-opus-5-5')
@@ -653,7 +653,7 @@ function Item({ m, isLast, expanded, toggle }: { m: ChatItem; isLast: boolean; e
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 3, paddingBottom: 3 }}>
           <Pressable label={m.running ? `${label}, running` : `${label}, ${m.error ? 'failed' : 'done'}`} expanded={expanded} onClick={toggle} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 24, borderRadius: 4 }}>
-            <div style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: m.agent.color, opacity: m.running && !REDUCED_MOTION ? 0.5 + 0.5 * Math.sin(performance.now() / 200) : 1 }} />
+            <div style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: m.agent.color, opacity: m.running && !REDUCED_MOTION ? pulseAt(performance.now()) : 1 }} />
             <T size={12} color={m.running ? C.text : C.muted}>{m.running ? `${label}${dots()}` : label}</T>
             {m.running && m.lines ? <T size={11} color={C.ghost}>{`${m.lines} lines`}</T> : null}
             {!m.running ? <T size={12} color={m.error ? C.ghost : C.ok}>{m.error ? '✕' : '✓'}</T> : null}
@@ -761,7 +761,7 @@ function PermissionCard({ m }: { m: Extract<ChatItem, { kind: 'permission' }> })
 
 function AgentSettings({ mcpUrl, toast }: { mcpUrl: string; toast: Toast }) {
   const s = useMemo(() => tryCall<Record<string, string>>('settings_get') ?? {}, [])
-  const [backend, setBackend] = useState(s.agent_backend ?? (s.anthropic_api_key ? 'api' : 'claude-code'))
+  const [backend, setBackend] = useState(s.backend ?? 'claude-code')
   const [perms, setPerms] = useState<'ask' | 'auto'>((s as Record<string, unknown>).agent_auto_permissions === true ? 'auto' : 'ask')
   const set = (key: string, value: unknown) => {
     tryCall('settings_set', { key, value })

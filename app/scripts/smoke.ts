@@ -1,6 +1,7 @@
 // FFI smoke check: `bun scripts/smoke.ts` — exercises the core without opening a window.
 import { call, renderPixels } from '../src/core'
 import { applyEvents, barAgents, imageSrc, needsFrame, resetChat, store } from '../src/agents'
+import { INDICATOR_TICK_MS, ellipsisAt, pulseAt } from '../src/theme'
 
 const assert = (ok: unknown, msg: string) => {
   if (!ok) throw new Error(`smoke failed: ${msg}`)
@@ -26,6 +27,18 @@ renderPixels(320, 180, 0, 0, 1920 / 320 / 6, 0x1c1c1f)
 await Bun.sleep(700)
 renderPixels(320, 180, 0, 0, 1920 / 320 / 6, 0x1c1c1f)
 assert(!call('state').animating, 'slide settled after ~0.6 s')
+call('undo')
+// The poll can end the slide between two canvas redraws: the last slide frame is not the settled view,
+// so the canvas must repaint when `animating` turns false (Canvas.tsx, the `[props.animating]` effect).
+call('tool', { name: 'execute', args: { input: 'Insert("sld01", {type:"rectangle", name:"Slide", width:100, height:100, fill:"#00ff00"})' } })
+// What the canvas does: redraw every ~16 ms while animating. The clock starts at the first frame, so render it
+// before taking t0: a slow first render (it rebuilds the layer) must not shift the poll before the slide ends.
+let lastSlide = new Uint8Array(renderPixels(320, 180, 0, 0, 1 / 6, 0x1c1c1f)!)
+for (const t0 = performance.now(); performance.now() - t0 < 560; await Bun.sleep(16)) lastSlide = new Uint8Array(renderPixels(320, 180, 0, 0, 1 / 6, 0x1c1c1f)!)
+await Bun.sleep(70) // the next redraw is late, the poll arrives first
+assert(!call('poll').state.animating, 'poll ends the slide')
+const settled = new Uint8Array(renderPixels(320, 180, 0, 0, 1 / 6, 0x1c1c1f)!)
+assert(Buffer.compare(lastSlide, settled) !== 0, 'the last slide frame differs from the settled view')
 call('undo')
 // Present renders one frame alone (solo): the sliding node and its reflowed siblings must still show, not blank the slide.
 const lit = () => {
@@ -58,6 +71,21 @@ call('tool', { name: 'execute', args: { input: 'Insert("sld01", {type:"rectangle
 assert(!call('state').animating, 'no slide-in under reduced motion')
 call('undo')
 call('reduce_motion', { on: false })
+// Chat indicators sampled on the panel's tick (even with a late first tick): ellipsis steps stay near 400 ms, the pulse never jumps.
+{
+  const steps: number[] = []
+  let last = ellipsisAt(0), since = 0, maxJump = 0
+  for (let t = 7; t < 8000; t += INDICATOR_TICK_MS) {
+    maxJump = Math.max(maxJump, Math.abs(pulseAt(t) - pulseAt(t - INDICATOR_TICK_MS)))
+    if (ellipsisAt(t) !== last) {
+      if (since) steps.push(t - since)
+      since = t
+      last = ellipsisAt(t)
+    }
+  }
+  assert(steps.length > 10 && steps.every((s) => Math.abs(s - 400) <= INDICATOR_TICK_MS), `ellipsis steps ${steps}`)
+  assert(maxJump < 0.3, `pulse jumps ${maxJump.toFixed(2)} between samples`)
+}
 // Stop drops queued prompts: the chat must not keep a bubble promising to send them.
 resetChat()
 applyEvents([{ type: 'agent', kind: 'queued', text: 'also add a footer' }], 0)
