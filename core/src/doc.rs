@@ -137,6 +137,7 @@ impl Doc {
         self.assign_ids(&mut node, &mut Vec::new());
         let id = node["id"].as_str().unwrap().to_string();
         let parent_ip = self.container_path(parent)?;
+        check_depth(parent_ip.len(), &node)?;
         let kids = self.children_at_mut(&parent_ip);
         let at = index.unwrap_or(kids.len()).min(kids.len());
         kids.insert(at, node);
@@ -187,6 +188,8 @@ impl Doc {
                 return Err("cannot move a node into itself".into());
             }
         }
+        let tip = self.container_path(&target)?;
+        check_depth(tip.len(), self.find(path).unwrap())?;
         let (last, parent_ip) = ip.split_last().unwrap();
         let node = self.children_at_mut(parent_ip).remove(*last);
         let tip = self.container_path(&target)?;
@@ -253,6 +256,7 @@ impl Doc {
             return Ok(path.to_string());
         }
         let ip = self.index_path(path).ok_or_else(|| format!("node not found: {path}"))?;
+        check_depth(ip.len() - 1, &node)?;
         self.assign_ids(&mut node, &mut Vec::new());
         let id = node["id"].as_str().unwrap().to_string();
         *self.node_at_mut(&ip) = node;
@@ -345,6 +349,7 @@ impl Doc {
     fn insert_prepared(&mut self, parent: &str, node: Value) -> Result<String, String> {
         let id = node["id"].as_str().unwrap_or_default().to_string();
         let ip = self.container_path(parent)?;
+        check_depth(ip.len(), &node)?;
         self.children_at_mut(&ip).push(node);
         Ok(id)
     }
@@ -425,6 +430,23 @@ pub fn walk<'a>(nodes: &'a [Value], f: &mut dyn FnMut(&'a Value)) {
             walk(kids, f);
         }
     }
+}
+
+/// Deepest frame/group nesting we accept. serde_json refuses documents more than
+/// 128 JSON levels deep and each node costs two (object + `children` array), so
+/// deeper trees would save but never reopen. 60 leaves room for property nesting.
+const MAX_DEPTH: usize = 60;
+
+fn node_depth(node: &Value) -> usize {
+    1 + node["children"].as_array().map_or(0, |kids| kids.iter().map(node_depth).max().unwrap_or(0))
+}
+
+/// Refuse a subtree that would sit deeper than `MAX_DEPTH` under `parent_depth` ancestors.
+fn check_depth(parent_depth: usize, node: &Value) -> Result<(), String> {
+    if parent_depth + node_depth(node) > MAX_DEPTH {
+        return Err(format!("nesting too deep: frames and groups can be nested at most {MAX_DEPTH} levels"));
+    }
+    Ok(())
 }
 
 fn validate_node(node: &Value) -> Result<(), String> {
@@ -530,5 +552,34 @@ mod tests {
         let mut d = Doc::new();
         d.set_variables(&json!({"bg":{"type":"color","value":[{"value":"#fff"},{"value":"#111","theme":{"mode":"dark"}}]}}), false).unwrap();
         assert_eq!(d.root["themes"]["mode"], json!(["default","dark"]));
+    }
+
+    /// Everything the doc accepts must reopen: nesting is capped below serde_json's recursion limit.
+    #[test]
+    fn nesting_is_capped_to_what_reopens() {
+        let frame = || json!({"type":"frame","children":[]});
+        let mut d = Doc::new();
+        let mut parent = ROOT.to_string();
+        let mut ids = Vec::new();
+        for _ in 0..MAX_DEPTH {
+            parent = d.insert(&parent, frame(), None).unwrap();
+            ids.push(parent.clone());
+        }
+        let err = d.insert(&parent, frame(), None).unwrap_err();
+        assert!(err.contains("nesting too deep"), "{err}");
+        assert!(Doc::from_json(&serde_json::to_string_pretty(&d.root).unwrap()).is_ok());
+        // Paste/copy, replace and move are held to the same cap.
+        assert!(d.copy(&frame(), &parent, None).is_err());
+        assert!(d.replace(&parent, json!({"type":"frame","children":[frame()]})).is_err());
+        let top = d.insert(ROOT, frame(), None).unwrap();
+        assert!(d.move_node(&top, Some(&parent), None).is_err());
+        assert!(d.move_node(&ids[0], Some(&top), None).is_err());
+        assert!(d.find(&top).is_some() && d.find(&parent).is_some());
+        // A whole subtree is measured, not just its root.
+        let mut deep = frame();
+        for _ in 0..MAX_DEPTH {
+            deep = json!({"type":"frame","children":[deep]});
+        }
+        assert!(Doc::new().insert(ROOT, deep, None).is_err());
     }
 }
