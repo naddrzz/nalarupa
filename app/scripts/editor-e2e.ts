@@ -509,6 +509,21 @@ try {
   await canvas.press('escape')
   await sleep(200)
 
+  // A clicked Layers row owns the keyboard: the editor shortcuts still work (keys go to the focused element).
+  const paths = () => app.getByTestId('layers').getByText('Path').count()
+  const paths0 = await paths()
+  await app.getByTestId('layers').getByText('Path').click()
+  await sleep(300)
+  await app.call('keystrokes', { keys: 'ctrl-d' })
+  assert(await until(async () => (await paths()) === paths0 + 1), 'Ctrl+D duplicates the layer selected in the Layers panel')
+  await app.call('keystrokes', { keys: 'delete' })
+  assert(await until(async () => (await paths()) === paths0), 'Delete removes the layer selected in the Layers panel')
+  await app.getByTestId('layers').getByText('Path').click()
+  await sleep(300)
+  assert(await count('size-label'), 'clicking a Layers row selects it')
+  await app.call('keystrokes', { keys: 'escape' })
+  assert(await until(async () => !(await count('size-label'))), 'Escape clears the selection from a Layers row')
+
   // Clipboard pastes: only Windows has a system clipboard (src/clipboard.ts); elsewhere it is per process,
   // so this script can't put data on the app's clipboard.
   if (process.platform === 'win32') {
