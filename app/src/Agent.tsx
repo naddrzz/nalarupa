@@ -36,6 +36,17 @@ const LABELS: Record<string, [string, string]> = {
   TodoWrite: ['Updating plan', 'Updated plan'],
 }
 
+// Monospace lines that wrap at the card edge: <code> never wraps and scrolls only sideways, which hid most of a long script or error.
+function Mono({ text, color }: { text: string; color: string }) {
+  return (
+    <>
+      {text.split('\n').map((line, i) => (
+        <text key={i} style={{ fontSize: 11, color, fontFamily: MONO, minWidth: 0 }}>{line || ' '}</text>
+      ))}
+    </>
+  )
+}
+
 function toolLabel(name: string, running: boolean) {
   const l = LABELS[name]
   if (l) return running ? l[0] : l[1]
@@ -675,21 +686,15 @@ function Item({ m, isLast, expanded, toggle }: { m: ChatItem; isLast: boolean; e
             <img key={i} src={imageSrc(img)} objectFit="contain" style={{ width: 252, height: 158, borderRadius: 6 }} />
           ))}
           {expanded ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: 8, borderRadius: 8, backgroundColor: C.panel2, borderWidth: 1, borderColor: C.border }}>
+            <div testId="tool-detail" style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: 8, borderRadius: 8, backgroundColor: C.panel2, borderWidth: 1, borderColor: C.border }}>
               {m.output ? (
                 <>
                   <T size={11} color={C.ghost} weight="600">OUTPUT</T>
-                  {m.output.split('\n').slice(0, 40).map((line, i) => (
-                    <text key={i} style={{ fontSize: 11, color: m.error ? C.danger : C.muted, fontFamily: MONO, whiteSpace: 'nowrap' }}>{line || ' '}</text>
-                  ))}
+                  <Mono text={m.output.split('\n').slice(0, 40).join('\n')} color={m.error ? C.danger : C.muted} />
                 </>
               ) : null}
               <T size={11} color={C.ghost} weight="600">{src !== null ? 'SCRIPT' : 'INPUT'}</T>
-              {src !== null ? (
-                <code code={src} language="javascript" style={{ fontSize: 11 }} />
-              ) : (
-                <code code={JSON.stringify(m.input ?? {}, null, 2)} language="json" style={{ fontSize: 11 }} />
-              )}
+              <Mono text={src ?? JSON.stringify(m.input ?? {}, null, 2)} color={C.text} />
             </div>
           ) : null}
         </div>

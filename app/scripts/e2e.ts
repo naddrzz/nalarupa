@@ -421,6 +421,30 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
     await shot('12-agent-pill')
     if (Math.abs(size.width - 8) > 0.5 || Math.abs(size.height - 8) > 0.5) throw new Error(`the pill's status dot is ${size.width}x${size.height}, expected 8x8`)
     await sleep(4500) // the stand-in reply ends and the run finishes
+
+    // An expanded tool row wraps long output and script lines at the card edge, so a failed call's whole error and script can be read.
+    const tail = 'tail-of-the-error-line-3'
+    const script = `page = Insert(document, {type:"frame", name:"Hero", x:0, y:0, width:1200, height:600, fill:"#101820"}); Insert("does-not-exist-with-a-very-long-identifier-0123456789", {type:"frame", name:"Oops-${tail}"})`
+    const block = (type: string, extra: object) => JSON.stringify({ type, message: { content: [extra] } })
+    const err = `Error: parent not found: does-not-exist-with-a-very-long-identifier-0123456789 (${tail})`
+    writeFileSync(join(bin, 'claude'), `#!/bin/sh\necho '${block('assistant', { type: 'tool_use', id: 'tu1', name: 'mcp__nalarupa__execute', input: { input: script } })}'\necho '${block('user', { type: 'tool_result', tool_use_id: 'tu1', is_error: true, content: err })}'\n`, { mode: 0o755 })
+    await app.getByTestId('tab-agent').click()
+    await app.getByTestId('agent-input').click()
+    await app.getByTestId('agent-input').fill('Run a failing script')
+    await sleep(200)
+    await app.getByTestId('agent-send').click()
+    await app.getByText('Designed').waitFor({ timeoutMs: 15000 })
+    await app.getByText('Designed').click()
+    await app.getByTestId('tool-detail').waitFor()
+    await sleep(500)
+    await shot('13-tool-detail')
+    const card = (await app.getByTestId('tool-detail').bounds())!
+    for (const text of [err, script]) {
+      const b = await app.getByTestId('tool-detail').getByText(text).bounds()
+      if (!b) throw new Error(`the expanded tool row does not show ${text.slice(0, 30)}`)
+      if (b.x + b.width > card.x + card.width + 0.5) throw new Error(`a tool row line runs ${Math.round(b.x + b.width - card.x - card.width)} px past its card: ${text.slice(0, 30)}`)
+      if (b.height < 20) throw new Error(`a long tool row line is not wrapped (${b.height} px high): ${text.slice(0, 30)}`)
+    }
   }
 
   await app.getByTestId('present').click()
