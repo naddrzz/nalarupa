@@ -1114,10 +1114,12 @@ fn run_claude_code(p: &Profile, prompt: &str, child: bool, model: Option<String>
     let err = err_reader.join().unwrap_or_default();
     // The CLI no longer knows the saved session (another working directory, a cleaned `~/.claude`): the
     // id would fail every later message too, so forget it and run this prompt again as a fresh session.
-    if session.is_some() && (stale || err.contains(NO_SESSION)) && !cancel.load(Ordering::SeqCst) {
+    if session.is_some() && (stale || err.contains(NO_SESSION)) {
         engine().agent.session = None;
-        emit(p, "note", json!({"text": "Claude Code could no longer find this chat's earlier session, so the earlier context is gone. Continuing in a new session."}));
-        return run_claude_code(p, prompt, child, model);
+        if !cancel.load(Ordering::SeqCst) {
+            emit(p, "note", json!({"text": "Claude Code could no longer find this chat's earlier session, so the earlier context is gone. Continuing in a new session."}));
+            return run_claude_code(p, prompt, child, model);
+        }
     }
     let sent = stdin_writer.map_or(Ok(()), |w| w.join().unwrap_or_else(|_| Err(std::io::Error::other("writer thread panicked"))));
     if !cancel.load(Ordering::SeqCst) && !status.success() {
