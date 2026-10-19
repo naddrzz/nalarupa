@@ -92,5 +92,40 @@ assert(/required/.test(ex('   ').text) && ex('   ').error, 'an empty input is an
 assert(/not allowed/.test(ex('Print(Get("document"))').text), 'Get("document") without a visitor is refused')
 assert(/page is not defined/.test(ex('Print(page)').text), 'unknown globals are a ReferenceError')
 
+// User edits and agent calls do not corrupt each other's undo steps.
+const names = () => (call('frames') as { name: string; x: number }[]).map((f) => `${f.name}@${Math.round(f.x)}`).join(',')
+call('new', { template: 'empty' })
+const uid = call('insert', { parent: 'document', node: { type: 'frame', name: 'U', x: 0, y: 0, width: 100, height: 100 } }).id
+// A drag that overlaps an agent commit: the first undo takes back the drag only.
+call('drag_begin')
+call('move_by', { ids: [uid], dx: 50, dy: 0 })
+run('Insert(document, {type:"frame", name:"AgentF", x:300, y:0, width:100, height:100})')
+call('move_by', { ids: [uid], dx: 50, dy: 0 })
+call('drag_end')
+assert(names() === 'U@100,AgentF@300', `drag overlapping an agent edit: ${names()}`)
+call('undo')
+assert(names() === 'U@0,AgentF@300', `undo takes back the drag only: ${names()}`)
+call('undo')
+assert(names() === 'U@0', `undo takes back the agent step: ${names()}`)
+// A user edit while a script runs waits for it; the script then fails and rolls back only its own changes.
+call('new', { template: 'empty' })
+const u2 = call('insert', { parent: 'document', node: { type: 'frame', name: 'U', x: 0, y: 0, width: 100, height: 100 } }).id
+const failing = fetch(`http://127.0.0.1:${call('state').mcpPort}/mcp`, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({
+    jsonrpc: '2.0', id: 1, method: 'tools/call',
+    params: { name: 'execute', arguments: { input: 'Insert(document, {type:"frame", name:"AgentF", x:300, y:0, width:100, height:100})\nlet t = Date.now(); while (Date.now() - t < 2000) {}\nthrow new Error("boom")' } },
+  }),
+})
+for (const until = Date.now() + 5000; !names().includes('AgentF') && Date.now() < until; await new Promise((r) => setTimeout(r, 10))) {}
+assert(names().includes('AgentF'), 'the failing execute started before the user edit')
+call('update', { ids: [u2], props: { x: 500 } })
+const res = await (await failing).json()
+assert(res.result?.isError && /boom/.test(JSON.stringify(res.result.content)), `the script must fail with boom: ${JSON.stringify(res)}`)
+assert(names() === 'U@500', `a failed script keeps the user's edit: ${names()}`)
+call('undo')
+assert(names() === 'U@0', `undo never brings back the rolled-back call: ${names()}`)
+
 console.log('script-check ok')
 process.exit(0)

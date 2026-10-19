@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { call, renderPixels } from '../src/core'
-import { applyEvents, barAgents, cursorFaded, imageSrc, lastContentId, needsFrame, poke, resetChat, store } from '../src/agents'
+import { applyEvents, barAgents, cursorFaded, imageSrc, lastContentId, needsFrame, poke, resetChat, restoreChat, store } from '../src/agents'
 import { FRAME_LABEL_TEXT, INDICATOR_TICK_MS, ellipsisAt, ellipsisPadAt, pulseAt } from '../src/theme'
 
 const assert = (ok: unknown, msg: string) => {
@@ -110,6 +110,20 @@ assert(store.items.some((i) => i.kind === 'usage') && store.items.some((i) => i.
 assert(lastContentId(store.items) === reply.id, 'a usage row or a note after the reply does not end its typewriter')
 applyEvents([{ type: 'agent', kind: 'message_end', agent: { id: 'a0', name: 'Agent 0', color: '#ffffff' } }, { type: 'agent', kind: 'text_delta', text: 'Next.', agent: { id: 'a0', name: 'Agent 0', color: '#ffffff' } }], 0)
 assert(lastContentId(store.items) !== reply.id, 'a later reply does')
+// A long chat keeps every item, the first prompt included, live and when reopened from history.
+{
+  const agent = { id: 'ag1', name: 'Surya', color: '#38B2AC' }
+  const ev = (kind: string, o: object = {}) => ({ type: 'agent', kind, agent, ...o })
+  const events: any[] = [ev('user', { text: 'Design me a pricing page' }), ev('start')]
+  for (let i = 0; i < 500; i++) events.push(ev('text_delta', { text: `Step ${i}` }), ev('message_end'), ev('tool_start', { id: `t${i}`, name: 'execute' }), ev('tool_done', { id: `t${i}`, name: 'execute', input: {}, output: 'ok' }))
+  events.push(ev('done', { durationMs: 1, usage: {}, stopped: false }))
+  resetChat()
+  for (const e of events) applyEvents([e], 0)
+  assert(store.items.length === 1002 && store.items[0].kind === 'user', `a long chat is not cut live (${store.items.length} items)`)
+  restoreChat(events)
+  assert(store.items.length === 1002 && store.items[0].kind === 'user', `a long chat is not cut when reopened (${store.items.length} items)`)
+  resetChat()
+}
 // Agent bar: running agents come first and survive the cap; a new conversation forgets every agent.
 resetChat()
 for (let i = 0; i < 10; i++) applyEvents([{ type: 'agent', kind: i < 7 ? 'done' : 'start', agent: { id: `a${i}`, name: `Agent ${i}`, color: '#ffffff' } }], 0)

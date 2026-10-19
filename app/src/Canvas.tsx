@@ -36,7 +36,7 @@ const ROTATE_HIT = 17.5
 const X_MARK = '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 8 8"><path d="M2 2L6 6M6 2L2 6" fill="none" stroke="#000" stroke-width="1.2" stroke-linecap="round"/></svg>'
 
 /** Result of the core's `drop_target`: where a drag would land (auto-layout targets carry index + line). */
-type Drop = { id: string; layout: string; x?: number; y?: number; w?: number; h?: number; index?: number; line?: [number, number, number, number] }
+type Drop = { id: string; layout: string; x?: number; y?: number; w?: number; h?: number; m?: M | null; index?: number; line?: [number, number, number, number] }
 type Item = { id: string; box: Box; node: any; movable: boolean }
 /** A rotated outline or handle in screen px (drawn through `Quads`). */
 type Quad = { pts: Pt[]; stroke: string; width: number; fill?: string }
@@ -503,7 +503,8 @@ export function Canvas(props: {
     const tx = Math.round(dx - d.dx0)
     const ty = Math.round(dy - d.dy0)
     const c = d.container
-    const inC = !!c && c.id !== 'document' && dx >= c.x! && dy >= c.y! && dx <= c.x! + c.w! && dy <= c.y! + c.h!
+    const [lx, ly] = unapply(c?.m, dx, dy)
+    const inC = !!c && c.id !== 'document' && lx >= c.x! && ly >= c.y! && lx <= c.x! + c.w! && ly <= c.y! + c.h!
     d.deferred = undefined
     if (c && inC && c.layout !== 'none' && d.flow) {
       // Live reorder by child midpoints; the node itself sits in its slot, a ghost follows the pointer.
@@ -1347,7 +1348,6 @@ export function Canvas(props: {
         const [x, y] = frameScreen(hx, hy)
         return <div key={hnd} style={{ position: 'absolute', left: x - 4, top: y - 4, width: 8, height: 8, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: C.select, pointerEvents: 'none' }} />
       }) : null}
-      {quads.length ? <Quads quads={quads} testId="rotated-overlay" /> : null}
       {!float ? radiusHandles().map(({ i, x, y }) => (
         <div key={`radius-${i}`} testId="radius-handle" style={{ position: 'absolute', left: x - 5.5, top: y - 5.5, width: 11, height: 11, borderRadius: 5.5, borderWidth: 1, borderColor: C.select, backgroundColor: i === activeCorner ? C.select : '#FFFFFF', display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
           {/* Corners that differ show a dot (they move one at a time). */}
@@ -1372,11 +1372,12 @@ export function Canvas(props: {
         const [x2, y2] = pt(drop.line[2], drop.line[3])
         return (
           <>
-            <Outline r={screenRect({ x: drop.x!, y: drop.y!, w: drop.w!, h: drop.h! })} color={C.select} width={3} testId="drop-target" />
+            {outline({ id: drop.id, name: '', type: 'frame', x: drop.x!, y: drop.y!, w: drop.w!, h: drop.h!, m: drop.m }, C.select, 3, 'drop-target')}
             <Dashed x1={x1} y1={y1} x2={x2} y2={y2} color={C.select} width={2} dash={8} />
           </>
         )
       })() : null}
+      {quads.length ? <Quads quads={quads} testId="rotated-overlay" /> : null}
       {guides.map((g, i) => {
         const [a1, b1] = g.axis === 0 ? pt(g.pos, g.from) : pt(g.from, g.pos)
         const [a2, b2] = g.axis === 0 ? pt(g.pos, g.to) : pt(g.to, g.pos)
