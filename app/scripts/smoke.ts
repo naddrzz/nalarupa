@@ -1,6 +1,6 @@
 // FFI smoke check: `bun scripts/smoke.ts` — exercises the core without opening a window.
 import { call, renderPixels } from '../src/core'
-import { applyEvents, imageSrc, needsFrame, resetChat, store } from '../src/agents'
+import { applyEvents, barAgents, imageSrc, needsFrame, resetChat, store } from '../src/agents'
 import { INDICATOR_TICK_MS, ellipsisAt, pulseAt } from '../src/theme'
 
 const assert = (ok: unknown, msg: string) => {
@@ -93,6 +93,16 @@ assert(store.items.some((i) => i.kind === 'queued'), 'queued prompt shows a bubb
 applyEvents([{ type: 'agent', kind: 'dequeued' }], 0)
 assert(!store.items.some((i) => i.kind === 'queued'), 'dequeued drops the queued bubble')
 assert(store.items.some((i) => i.kind === 'note' && /discarded/.test(i.text)), 'dequeued says the prompt was discarded')
+// Agent bar: running agents come first and survive the cap; a new conversation forgets every agent.
+resetChat()
+for (let i = 0; i < 10; i++) applyEvents([{ type: 'agent', kind: i < 7 ? 'done' : 'start', agent: { id: `a${i}`, name: `Agent ${i}`, color: '#ffffff' } }], 0)
+const bar = barAgents(8)
+assert(bar.all.length === 10 && bar.running.length === 3, 'bar counts every agent of the conversation')
+assert(bar.shown.length === 8 && bar.more === 2, 'bar caps the pills and counts the rest')
+assert(bar.shown.slice(0, 3).every((a) => store.running.has(a.id)), 'running agents are listed first')
+resetChat()
+assert(store.profiles.size === 0 && store.running.size === 0 && barAgents().shown.length === 0, 'a new conversation clears the agent bar')
+assert(store.cursors.size === 0, "a new conversation drops the old agents' canvas cursors")
 resetChat()
 // Reduced motion: a running agent repaints the canvas layer only for fades, not every frame of the run.
 {

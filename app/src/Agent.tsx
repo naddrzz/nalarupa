@@ -3,7 +3,7 @@
 // usage rows, queued prompts, parallel agents.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { call, tryCall } from './core'
-import { imageSrc, profileOf, resetChat, restoreChat, store, type ChatItem } from './agents'
+import { barAgents, imageSrc, profileOf, resetChat, restoreChat, store, type ChatItem } from './agents'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import * as SelectPrimitive from '@gpuix/react/select'
 import { C, FONT, INDICATOR_TICK_MS, MONO, REDUCED_MOTION, ellipsisAt, pulseAt } from './theme'
@@ -121,8 +121,7 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
     return n
   })
 
-  const agents = [...store.profiles.values()]
-  const runningAgents = agents.filter((a) => store.running.has(a.id))
+  const { all: agents, running: runningAgents, shown: shownAgents, more: moreAgents } = barAgents()
   const planning = running && (() => {
     const last = items[items.length - 1]
     return !!last && ((last.kind === 'tool' && !last.running) || (last.kind === 'assistant' && !last.streaming) || last.kind === 'user')
@@ -141,17 +140,20 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
       </div>
       {settings ? <AgentSettings mcpUrl={mcpUrl} toast={toast} /> : null}
       {agents.length > 1 && (running || agents.some((a) => a.parent)) ? (
-        <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8, paddingLeft: 14, paddingRight: 8, height: 34, borderBottomWidth: 1, borderColor: C.border, backgroundColor: C.panel2 }}>
-          <T size={11} color={C.muted}>{running ? `${runningAgents.length}/${agents.length} agents running` : 'Finished'}</T>
-          <div style={{ flexGrow: 1, display: 'flex', flexDirection: 'row', gap: 4, overflow: 'hidden' }}>
-            {agents.slice(0, 6).map((a) => (
-              <div key={a.id} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 4, paddingLeft: 6, paddingRight: 6, height: 20, borderRadius: 10, backgroundColor: C.raised, opacity: store.running.has(a.id) ? 1 : 0.6 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 14, paddingRight: 8, paddingTop: 5, paddingBottom: 6, borderBottomWidth: 1, borderColor: C.border, backgroundColor: C.panel2 }}>
+          <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8, height: 24 }}>
+            <T size={11} color={C.muted} grow>{running ? `${runningAgents.length}/${agents.length} agents running` : 'Finished'}</T>
+            {running ? <IconButton icon="stop" title="Stop all agents" color={C.danger} onClick={() => tryCall('agent_stop')} size={24} /> : null}
+          </div>
+          <div testId="agent-bar" style={{ display: 'flex', flexDirection: 'row', flexWrap: 'wrap', gap: 4 }}>
+            {shownAgents.map((a) => (
+              <div key={a.id} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 4, paddingLeft: 6, paddingRight: 6, height: 20, flexShrink: 0, borderRadius: 10, backgroundColor: C.raised, opacity: store.running.has(a.id) ? 1 : 0.6 }}>
                 <div style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: a.color }} />
                 <T size={10} color={C.text}>{a.name}</T>
               </div>
             ))}
+            {moreAgents ? <T size={10} color={C.muted}>{`+${moreAgents}`}</T> : null}
           </div>
-          {running ? <IconButton icon="stop" title="Stop all agents" color={C.danger} onClick={() => tryCall('agent_stop')} size={24} /> : null}
         </div>
       ) : null}
 
