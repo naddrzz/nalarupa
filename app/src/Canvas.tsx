@@ -4,10 +4,10 @@ import type { CursorValue } from '@gpuix/native/host'
 import type { ImgInstance, PublicInstance } from '@gpuix/react'
 import { call, renderPixels, tryCall, type Box } from './core'
 import { CANVAS_BG, C, DPR, FONT, LEFT_W, TOP_H } from './theme'
-import { FocusRing, setKeyboardFocus, T, useRing, type Toast } from './ui'
+import { FocusRing, setKeyboardFocus, SvgOverlay, T, useRing, type Toast } from './ui'
 import { AgentLayer } from './AgentLayer'
 import {
-  anchorPoints, apply, centerOffset, corners, dragPoints, lin, measure, own, painted, resizeBox, resizeCursor, snap, turned, unapply, unionRect,
+  anchorPoints, apply, corners, dragPoints, lin, measure, own, painted, resizeBox, resizeCursor, snap, turnAroundCenter, turned, unapply, unionRect,
   type Guide, type M, type Measure, type Pt, type Rect,
 } from './geometry'
 import {
@@ -157,14 +157,6 @@ function Quads({ quads, testId }: { quads: Quad[]; testId?: string }) {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(w * DPR)}" height="${Math.round(h * DPR)}" viewBox="0 0 ${w} ${h}">${shapes}</svg>`
   useLayoutEffect(() => img.current?.setImage(Buffer.from(svg)), [svg])
   return <img ref={img} testId={testId} objectFit="fill" style={{ position: 'absolute', left: x, top: y, width: w, height: h, pointerEvents: 'none' }} />
-}
-
-/** Screen-space SVG markup inside `box` (the vector-edit overlay), drawn like `Quads`. */
-function SvgOverlay({ body, box, testId }: { body: string; box: Rect; testId?: string }) {
-  const img = useRef<ImgInstance>(null)
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(box.w * DPR)}" height="${Math.round(box.h * DPR)}" viewBox="${box.x} ${box.y} ${box.w} ${box.h}">${body}</svg>`
-  useLayoutEffect(() => img.current?.setImage(Buffer.from(svg)), [svg])
-  return <img ref={img} testId={testId} objectFit="fill" style={{ position: 'absolute', left: box.x, top: box.y, width: box.w, height: box.h, pointerEvents: 'none' }} />
 }
 
 export function Canvas(props: {
@@ -591,10 +583,7 @@ export function Canvas(props: {
     const props: Record<string, unknown> = { rotation: r }
     if (d.movable) {
       // Turn around the center: move the origin so the center stays put.
-      const [ox0, oy0] = centerOffset(d.box.w, d.box.h, d.rot0, d.flipX, d.flipY)
-      const [ox, oy] = centerOffset(d.box.w, d.box.h, r, d.flipX, d.flipY)
-      props.x = Math.round((d.x0 + ox0 - ox) * 100) / 100
-      props.y = Math.round((d.y0 + oy0 - oy) * 100) / 100
+      ;[props.x, props.y] = turnAroundCenter(d.x0, d.y0, d.box.w, d.box.h, d.rot0, r, d.flipX, d.flipY)
     }
     tryCall('update', { ids: [d.id], props })
     refresh()

@@ -52,18 +52,47 @@ pub fn num(v: &Value) -> Option<f64> {
 }
 
 pub struct Resolver<'a> {
-    vars: &'a Map<String, Value>,
-    defaults: Vec<(String, String)>,
+    /// Variables and default themes per scope: `""` is the open document, an import alias is that library.
+    scopes: HashMap<&'a str, (&'a Map<String, Value>, Vec<(String, String)>)>,
     index: HashMap<String, &'a Value>,
 }
 
+fn theme_defaults(root: &Value) -> Vec<(String, String)> {
+    root["themes"].as_object().map(|t| {
+        t.iter().filter_map(|(axis, vals)| Some((axis.clone(), vals.as_array()?.first()?.as_str()?.to_string()))).collect()
+    }).unwrap_or_default()
+}
+
+/// Apply a node's `theme` axes over the active theme.
+fn apply_theme(theme: &mut Vec<(String, String)>, node: &Value) {
+    if let Some(t) = node["theme"].as_object() {
+        for (axis, val) in t {
+            let val = val.as_str().unwrap_or_default().to_string();
+            match theme.iter_mut().find(|(a, _)| a == axis) {
+                Some(slot) => slot.1 = val,
+                None => theme.push((axis.clone(), val)),
+            }
+        }
+    }
+}
+
+/// Prefix on a `$name` string already settled in its written scope, so the component's scope leaves it alone.
+const SETTLED: char = '\u{e000}';
+
+/// Index key of a `ref` written inside `scope`: a library's plain ids live under `alias:`.
+fn scoped(scope: &str, r: &str) -> String {
+    if scope.is_empty() || r.contains(':') { r.to_string() } else { format!("{scope}:{r}") }
+}
+
 impl<'a> Resolver<'a> {
-    /// `libs` are imported documents as (alias, root); their nodes are addressable as `alias:id`.
+    /// `libs` are imported documents as (alias, root); their nodes are addressable as `alias:id`,
+    /// and they resolve their own variables and refs inside their own scope.
     pub fn new(root: &'a Value, libs: &'a [(String, Value)], empty: &'a Map<String, Value>) -> Self {
-        let vars = root["variables"].as_object().unwrap_or(empty);
-        let defaults = root["themes"].as_object().map(|t| {
-            t.iter().filter_map(|(axis, vals)| Some((axis.clone(), vals.as_array()?.first()?.as_str()?.to_string()))).collect()
-        }).unwrap_or_default();
+        let mut scopes = HashMap::new();
+        scopes.insert("", (root["variables"].as_object().unwrap_or(empty), theme_defaults(root)));
+        for (alias, lib) in libs {
+            scopes.insert(alias.as_str(), (lib["variables"].as_object().unwrap_or(empty), theme_defaults(lib)));
+        }
         let mut index = HashMap::new();
         crate::doc::walk(root["children"].as_array().map(Vec::as_slice).unwrap_or(&[]), &mut |n| {
             if let Some(id) = n["id"].as_str() {
@@ -77,7 +106,7 @@ impl<'a> Resolver<'a> {
                 }
             });
         }
-        Resolver { vars, defaults, index }
+        Resolver { scopes, index }
     }
 
     pub fn node(&self, id: &str) -> Option<&'a Value> {
@@ -85,23 +114,15 @@ impl<'a> Resolver<'a> {
     }
 
     pub fn resolve(&self, node: &Value) -> Option<RNode> {
-        self.resolve_in(node, "", &self.defaults.clone(), 0)
+        self.resolve_in(node, "", &self.scopes[""].1.clone(), "", 0)
     }
 
-    fn resolve_in(&self, node: &Value, prefix: &str, theme: &[(String, String)], depth: usize) -> Option<RNode> {
+    fn resolve_in(&self, node: &Value, prefix: &str, theme: &[(String, String)], scope: &str, depth: usize) -> Option<RNode> {
         if depth > 64 {
             return None;
         }
         let mut theme = theme.to_vec();
-        if let Some(t) = node["theme"].as_object() {
-            for (axis, val) in t {
-                let val = val.as_str().unwrap_or_default().to_string();
-                match theme.iter_mut().find(|(a, _)| a == axis) {
-                    Some(slot) => slot.1 = val,
-                    None => theme.push((axis.clone(), val)),
-                }
-            }
-        }
+        apply_theme(&mut theme, node);
         let own_id = node["id"].as_str().unwrap_or_default();
         let path = if prefix.is_empty() { own_id.to_string() } else { format!("{prefix}/{own_id}") };
         // Instance roots keep their own id; their children are addressed as instanceId/childId.
@@ -111,8 +132,9 @@ impl<'a> Resolver<'a> {
 
         // Component instance: clone the component, apply instance props and descendant overrides.
         let expanded;
-        let node = if node["type"] == "ref" {
-            let Some(merged) = self.expand(node, 0) else {
+        let expanded_scope;
+        let (node, scope) = if node["type"] == "ref" {
+            let Some((merged, merged_scope)) = self.expand(node, scope, &theme, 0) else {
                 let mut p = Map::new();
                 for (k, v) in node.as_object()? {
                     p.insert(k.clone(), v.clone());
@@ -121,15 +143,26 @@ impl<'a> Resolver<'a> {
                 return Some(RNode::leaf(path, "frame", p, Some("missing component")));
             };
             expanded = merged;
-            &expanded
+            expanded_scope = merged_scope;
+            if expanded_scope != scope {
+                // Entering a library: its theme axes default to its own first values.
+                for (axis, val) in &self.scopes[expanded_scope.as_str()].1 {
+                    if !theme.iter().any(|(a, _)| a == axis) {
+                        theme.push((axis.clone(), val.clone()));
+                    }
+                }
+            }
+            // The component root's own theme (merged under the instance's) governs its subtree.
+            apply_theme(&mut theme, &expanded);
+            (&expanded, expanded_scope.as_str())
         } else {
-            node
+            (node, scope)
         };
 
         let mut p = Map::new();
         for (k, v) in node.as_object()? {
             if k != "children" {
-                p.insert(k.clone(), self.subst(v, &theme, 0));
+                p.insert(k.clone(), self.subst(v, scope, &theme, 0));
             }
         }
         if p.get("enabled") == Some(&json!(false)) {
@@ -140,7 +173,7 @@ impl<'a> Resolver<'a> {
             t => t.to_string(),
         };
         let kids = node["children"].as_array().map(|ks| {
-            ks.iter().filter_map(|k| self.resolve_in(k, &child_prefix, &theme, depth + 1)).collect()
+            ks.iter().filter_map(|k| self.resolve_in(k, &child_prefix, &theme, scope, depth + 1)).collect()
         }).unwrap_or_default();
         let mut r = RNode::leaf(path, &ty, p, None);
         r.kids = kids;
@@ -153,51 +186,80 @@ impl<'a> Resolver<'a> {
     /// A `ref` instance as a plain node: the component cloned, then the instance's props and
     /// descendant overrides applied. A component may itself be an instance of another component
     /// (.pen allows refs of refs), so the chain is expanded from the innermost component out.
-    fn expand(&self, node: &Value, depth: usize) -> Option<Value> {
-        let comp = *self.index.get(node["ref"].as_str()?)?;
-        let mut merged = if comp["type"] == "ref" && depth < 16 { self.expand(comp, depth + 1)? } else { comp.clone() };
+    /// `scope` is where `node` is written (it names its `ref` there); the result comes with the
+    /// scope its content lives in, the component's library, so its variables and inner refs
+    /// resolve there.
+    fn expand(&self, node: &Value, scope: &str, theme: &[(String, String)], depth: usize) -> Option<(Value, String)> {
+        let key = scoped(scope, node["ref"].as_str()?);
+        let comp = *self.index.get(&key)?;
+        let comp_scope = key.split_once(':').map(|(a, _)| a).filter(|a| self.scopes.contains_key(a)).unwrap_or("");
+        let (mut merged, merged_scope) = if comp["type"] == "ref" && depth < 16 {
+            self.expand(comp, comp_scope, theme, depth + 1)?
+        } else {
+            (comp.clone(), comp_scope.to_string())
+        };
+        // The instance's own values were written in `scope`; settle their variables there.
+        let outer = |v: &Value| if merged_scope == scope { v.clone() } else { settled(self.subst(v, scope, theme, 0)) };
         for (k, v) in node.as_object()? {
-            if !matches!(k.as_str(), "id" | "type" | "ref" | "descendants" | "reusable") {
-                merged[k] = v.clone();
+            match k.as_str() {
+                "id" | "type" | "ref" | "descendants" | "reusable" => {}
+                "theme" if merged["theme"].is_object() => merge_into(&mut merged["theme"], v),
+                _ => merged[k] = outer(v),
             }
         }
         merged["reusable"] = json!(false);
         if let Some(desc) = node["descendants"].as_object() {
             for (key, over) in desc {
-                apply_override(&mut merged, key, over);
+                apply_override(&mut merged, key, &outer(over));
             }
         }
-        Some(merged)
+        Some((merged, merged_scope))
     }
 
-    /// Replace `$name` strings with the variable's value for the active theme.
+    /// Replace `$name` strings with the variable's value for the active theme, looked up in `scope`.
     /// Unknown names stay literal (so "$49" prices survive).
-    fn subst(&self, v: &Value, theme: &[(String, String)], depth: usize) -> Value {
+    fn subst(&self, v: &Value, scope: &str, theme: &[(String, String)], depth: usize) -> Value {
         match v {
-            Value::String(s) if s.starts_with('$') && depth < 16 => match self.var_value(&s[1..], theme) {
-                Some(val) => self.subst(&val, theme, depth + 1),
+            Value::String(s) if s.starts_with(SETTLED) => Value::String(s[SETTLED.len_utf8()..].to_string()),
+            Value::String(s) if s.starts_with('$') && depth < 16 => match self.var_value(scope, &s[1..], theme) {
+                Some(val) => self.subst(&val, scope, theme, depth + 1),
                 None => v.clone(),
             },
-            Value::Array(a) => Value::Array(a.iter().map(|x| self.subst(x, theme, depth)).collect()),
-            Value::Object(o) => Value::Object(o.iter().map(|(k, x)| (k.clone(), self.subst(x, theme, depth))).collect()),
+            Value::Array(a) => Value::Array(a.iter().map(|x| self.subst(x, scope, theme, depth)).collect()),
+            Value::Object(o) => Value::Object(o.iter().map(|(k, x)| (k.clone(), self.subst(x, scope, theme, depth))).collect()),
             _ => v.clone(),
         }
     }
 
-    pub fn var_value(&self, name: &str, theme: &[(String, String)]) -> Option<Value> {
-        let def = self.vars.get(name)?;
+    pub fn var_value(&self, scope: &str, name: &str, theme: &[(String, String)]) -> Option<Value> {
+        let def = self.scopes.get(scope)?.0.get(name)?;
         let val = &def["value"];
         let Some(list) = val.as_array() else { return Some(val.clone()) };
-        // Scan from the end, first entry whose theme fully matches wins.
-        list.iter().rev().find(|e| {
+        // Scan from the end, first entry whose theme fully matches wins; an un-themed entry is the base and
+        // only applies when no themed entry matches, wherever it sits in the list.
+        let matches = |e: &&Value| {
             e["theme"].as_object().map_or(true, |t| t.iter().all(|(a, v)| theme.iter().any(|(ta, tv)| ta == a && Some(tv.as_str()) == v.as_str())))
-        }).or_else(|| list.first()).map(|e| e.get("value").cloned().unwrap_or_else(|| e.clone()))
+        };
+        let themed = |e: &&Value| e["theme"].as_object().is_some_and(|t| !t.is_empty());
+        list.iter().rev().find(|e| themed(e) && matches(e))
+            .or_else(|| list.iter().rev().find(matches))
+            .or_else(|| list.first()).map(|e| e.get("value").cloned().unwrap_or_else(|| e.clone()))
     }
 }
 
 impl RNode {
     pub fn leaf(id: String, ty: &str, p: Map<String, Value>, problem: Option<&'static str>) -> RNode {
         RNode { id, ty: ty.to_string(), p, kids: Vec::new(), x: 0.0, y: 0.0, w: 0.0, h: 0.0, bx: 0.0, by: 0.0, lines: Vec::new(), problem, inst: None }
+    }
+}
+
+/// Mark `$name` strings that survived substitution (unknown names, "$49" prices) as settled.
+fn settled(v: Value) -> Value {
+    match v {
+        Value::String(s) if s.starts_with('$') => Value::String(format!("{SETTLED}{s}")),
+        Value::Array(a) => Value::Array(a.into_iter().map(settled).collect()),
+        Value::Object(o) => Value::Object(o.into_iter().map(|(k, x)| (k, settled(x))).collect()),
+        v => v,
     }
 }
 
@@ -371,6 +433,38 @@ mod tests {
         assert_eq!(comp.kids[0].p["fill"], "#111111");
     }
 
+    /// A base value plus one themed override must keep the base as the default theme.
+    #[test]
+    fn base_value_stays_default_with_one_override() {
+        let mut d = crate::doc::Doc::new();
+        d.set_variables(&json!({"bg": {"type": "color", "value": [{"value": "#ffffff"}, {"value": "#111111", "theme": {"mode": "dark"}}]}}), false).unwrap();
+        let mut root = d.root.clone();
+        root["children"] = json!([
+            {"type": "frame", "id": "f", "fill": "$bg"},
+            {"type": "frame", "id": "g", "fill": "$bg", "theme": {"mode": "dark"}}
+        ]);
+        let empty = Map::new();
+        let r = Resolver::new(&root, &[], &empty);
+        assert_eq!(r.resolve(&root["children"][0]).unwrap().p["fill"], "#ffffff");
+        assert_eq!(r.resolve(&root["children"][1]).unwrap().p["fill"], "#111111");
+    }
+
+    /// The un-themed base applies only when no themed entry matches, even if it is listed after the override.
+    #[test]
+    fn base_value_after_override_stays_default() {
+        let mut d = crate::doc::Doc::new();
+        d.set_variables(&json!({"bg": {"type": "color", "value": [{"value": "#111111", "theme": {"mode": "dark"}}, {"value": "#ffffff"}]}}), false).unwrap();
+        let mut root = d.root.clone();
+        root["children"] = json!([
+            {"type": "frame", "id": "f", "fill": "$bg"},
+            {"type": "frame", "id": "g", "fill": "$bg", "theme": {"mode": "dark"}}
+        ]);
+        let empty = Map::new();
+        let r = Resolver::new(&root, &[], &empty);
+        assert_eq!(r.resolve(&root["children"][0]).unwrap().p["fill"], "#ffffff");
+        assert_eq!(r.resolve(&root["children"][1]).unwrap().p["fill"], "#111111");
+    }
+
     /// A component that is itself an instance (ref of a ref) expands through the whole chain,
     /// keeping each level's overrides (the shadcn kit's modals are built this way).
     #[test]
@@ -387,6 +481,63 @@ mod tests {
         assert_eq!((inst.p["width"].as_f64(), inst.p["x"].as_f64()), (Some(80.0), Some(5.0)));
         assert_eq!(inst.kids.len(), 1);
         assert_eq!((inst.kids[0].id.as_str(), inst.kids[0].p["content"].as_str()), ("i/t", Some("B")));
+    }
+
+    /// An imported library resolves its own variables and its plain-id refs in its own scope,
+    /// while the instance's values still use the open document's variables.
+    #[test]
+    fn library_scope() {
+        let lib = json!({
+            "themes": {"mode": ["light", "dark"]},
+            "variables": {"brand": {"type": "color", "value": [{"value": "#ff0000"}, {"value": "#00ff00", "theme": {"mode": "dark"}}]}},
+            "children": [
+                {"type": "frame", "id": "btn", "reusable": true, "fill": "$brand", "children": [{"type": "text", "id": "lbl", "content": "Kit"}]},
+                {"type": "frame", "id": "card", "reusable": true, "children": [{"type": "ref", "id": "inner", "ref": "btn"}]}
+            ]
+        });
+        let root = json!({
+            "variables": {"brand": {"type": "color", "value": "#0000ff"}, "ink": {"type": "color", "value": "#111111"}},
+            "children": [
+                {"type": "ref", "id": "b", "ref": "kit:btn"},
+                {"type": "ref", "id": "c", "ref": "kit:card", "descendants": {"inner/lbl": {"fill": "$ink"}}},
+                {"type": "ref", "id": "d", "ref": "kit:btn", "stroke": "$brand"}
+            ]
+        });
+        let libs = vec![("kit".to_string(), lib)];
+        let empty = Map::new();
+        let r = Resolver::new(&root, &libs, &empty);
+        assert_eq!(r.resolve(&root["children"][0]).unwrap().p["fill"], "#ff0000");
+        let c = r.resolve(&root["children"][1]).unwrap();
+        assert_eq!(c.kids[0].problem, None);
+        assert_eq!(c.kids[0].p["fill"], "#ff0000");
+        assert_eq!((c.kids[0].kids[0].id.as_str(), c.kids[0].kids[0].p["fill"].as_str()), ("c/inner/lbl", Some("#111111")));
+        assert_eq!(r.resolve(&root["children"][2]).unwrap().p["stroke"], "#0000ff");
+    }
+
+    /// Values written in the open document are settled there: an unknown `$name` stays literal
+    /// even when the library happens to define it. A component root's own theme governs its subtree.
+    #[test]
+    fn library_scope_settles_instance_values() {
+        let lib = json!({
+            "themes": {"mode": ["light", "dark"]},
+            "variables": {"brand": {"type": "color", "value": "#ff0000"}, "fg": {"type": "color", "value": [{"value": "#111111"}, {"value": "#eeeeee", "theme": {"mode": "dark"}}]}},
+            "children": [
+                {"type": "frame", "id": "btn", "reusable": true, "theme": {"mode": "dark"}, "fill": "$fg", "children": [{"type": "text", "id": "lbl", "content": "Kit", "fill": "$fg"}]}
+            ]
+        });
+        let root = json!({"children": [
+            {"type": "ref", "id": "a", "ref": "kit:btn", "stroke": "$brand", "descendants": {"lbl": {"content": "$brand"}}},
+            {"type": "ref", "id": "b", "ref": "kit:btn", "theme": {"mode": "light"}}
+        ]});
+        let libs = vec![("kit".to_string(), lib)];
+        let empty = Map::new();
+        let r = Resolver::new(&root, &libs, &empty);
+        let a = r.resolve(&root["children"][0]).unwrap();
+        assert_eq!(a.p["stroke"], "$brand");
+        assert_eq!(a.kids[0].p["content"], "$brand");
+        assert_eq!((a.p["fill"].as_str(), a.kids[0].p["fill"].as_str()), (Some("#eeeeee"), Some("#eeeeee")));
+        let b = r.resolve(&root["children"][1]).unwrap();
+        assert_eq!(b.p["fill"], "#111111");
     }
 
     #[test]

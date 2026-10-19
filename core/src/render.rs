@@ -8,7 +8,7 @@
 use crate::doc::Doc;
 use crate::raster;
 use crate::resolve::{RNode, Resolver};
-use crate::svg::{fxhash, Assets, Svg};
+use crate::svg::{fxhash, is_turned, own_matrix, Assets, Svg};
 use crate::text::Fonts;
 use resvg::{tiny_skia, usvg};
 use serde_json::{json, Map, Value};
@@ -306,6 +306,9 @@ fn shared_hash(doc: &Doc, libs: &[(String, Value)]) -> u64 {
     for (a, l) in libs {
         s.push_str(a);
         s.push_str(&l["children"].as_array().map(|c| c.len()).unwrap_or(0).to_string());
+        // Instances resolve a library's variables in its own scope.
+        s.push_str(&l.get("variables").map(Value::to_string).unwrap_or_default());
+        s.push_str(&l.get("themes").map(Value::to_string).unwrap_or_default());
     }
     s.push_str(&doc.dir().map(|d| d.to_string_lossy().to_string()).unwrap_or_default());
     fxhash(&s)
@@ -451,16 +454,25 @@ impl Renderer {
     }
 
     /// Paint the sliding nodes over the w×h frame in `self.pixels` (device origin = camera·zoom).
-    fn composite_slides(&mut self, w: u32, h: u32, cam_x: f64, cam_y: f64, zoom: f64) {
+    /// With `solo` only the nodes inside that top-level frame paint; the cached view leaves
+    /// every sliding node out, so skipping them would blank the presented slide.
+    fn composite_slides(&mut self, w: u32, h: u32, cam_x: f64, cam_y: f64, zoom: f64, solo: Option<&str>) {
         let now = Instant::now();
+        let shown: Option<HashSet<&str>> = solo.map(|id| self.layers.get(id).into_iter().flat_map(|l| l.flat.iter().map(|f| f.id.as_str())).collect());
+        // A slide in another frame keeps waiting: its clock starts when it is first on screen.
         for s in &mut self.slides {
-            s.start.get_or_insert(now);
+            if shown.as_ref().is_none_or(|ids| ids.contains(s.id.as_str())) {
+                s.start.get_or_insert(now);
+            }
         }
         let states: HashMap<String, (f64, f64, f64)> = self.slides.iter().map(|s| (s.id.clone(), s.state(now))).collect();
         let (vx, vy) = ((cam_x * zoom).round() as i32, (cam_y * zoom).round() as i32);
         let Some(mut out) = tiny_skia::PixmapMut::from_bytes(&mut self.pixels, w, h) else { return };
         for s in &mut self.slides {
             let Some(tree) = &s.tree else { continue };
+            if shown.as_ref().is_some_and(|ids| !ids.contains(s.id.as_str())) {
+                continue;
+            }
             let (mut dx, mut dy, mut alpha) = states[&s.id];
             for a in &s.ancestors {
                 if let Some((adx, ady, aa)) = states.get(a) {
@@ -519,8 +531,8 @@ impl Renderer {
         let (w, h) = (w.clamp(1, 8192), h.clamp(1, 8192));
         let zoom = zoom.clamp(0.01, 256.0);
         self.render_view(w, h, cam_x, cam_y, zoom, bg, solo, sharp);
-        if !self.slides.is_empty() && solo.is_none() && self.pixels.len() == (w * h * 4) as usize {
-            self.composite_slides(w, h, cam_x, cam_y, zoom);
+        if !self.slides.is_empty() && self.pixels.len() == (w * h * 4) as usize {
+            self.composite_slides(w, h, cam_x, cam_y, zoom, solo);
         }
         &self.pixels
     }
@@ -823,7 +835,7 @@ fn prepare_layer(cx: &mut Ctx, index: usize, hash: u64, hidden: &HashSet<String>
         index.truncate(depth + 1);
         turned.truncate(depth);
         mats.truncate(depth);
-        let rotated = n.f("rotation").is_some_and(|r| r.abs() > 1e-6) || n.b("flipX") || n.b("flipY");
+        let rotated = is_turned(n);
         turned.push(rotated || turned.last() == Some(&true));
         let parent_m = mats.last().copied().flatten();
         mats.push(if rotated { Some(compose(parent_m, own_matrix(n))) } else { parent_m });
@@ -873,15 +885,6 @@ fn prepare_layer(cx: &mut Ctx, index: usize, hash: u64, hidden: &HashSet<String>
     (Layer { hash, tree: None, scene: None, bbox, paint: padded, flat }, Some(svg.finish(None)))
 }
 
-/// A node's own rotation (CCW) and flips about its origin, as in `svg::transform`.
-fn own_matrix(n: &RNode) -> [f64; 6] {
-    let t = -n.f("rotation").unwrap_or(0.0).to_radians();
-    let (sx, sy) = (if n.b("flipX") { -1.0 } else { 1.0 }, if n.b("flipY") { -1.0 } else { 1.0 });
-    let (a, b, c, d) = (t.cos() * sx, t.sin() * sx, -t.sin() * sy, t.cos() * sy);
-    let (px, py) = (n.x - n.bx, n.y - n.by);
-    [a, b, c, d, px - a * px - c * py, py - b * px - d * py]
-}
-
 /// `p ∘ m` (m applies first).
 fn compose(p: Option<[f64; 6]>, m: [f64; 6]) -> [f64; 6] {
     let Some(p) = p else { return m };
@@ -893,7 +896,7 @@ fn compose(p: Option<[f64; 6]>, m: [f64; 6]) -> [f64; 6] {
 }
 
 /// Canvas point → box coordinates (inverse of `m`).
-fn unapply(m: [f64; 6], x: f64, y: f64) -> (f64, f64) {
+pub fn unapply(m: [f64; 6], x: f64, y: f64) -> (f64, f64) {
     let det = m[0] * m[3] - m[1] * m[2];
     let (x, y) = (x - m[4], y - m[5]);
     ((m[3] * x - m[2] * y) / det, (m[0] * y - m[1] * x) / det)
@@ -1139,6 +1142,37 @@ pub(crate) mod tests {
         sync(&mut r);
         let px = frame(&mut r);
         assert!(red(&px, 150, 101) && !red(&px, 150, 152), "settled in the cached view at its own place");
+    }
+
+    /// Present mode renders one frame alone; a node sliding into it must still paint there (the
+    /// cached layer leaves it out), and one sliding in another frame must not.
+    #[test]
+    fn solo_frame_paints_its_sliding_nodes() {
+        let json = r##"{"version":"2.19","children":[
+            {"type":"frame","id":"f","x":0,"y":0,"width":400,"height":400,"layout":"none","fill":"#ffffff","children":[
+                {"type":"rectangle","id":"r","x":100,"y":100,"width":100,"height":50,"fill":"#ff0000"}]},
+            {"type":"frame","id":"g","x":0,"y":500,"width":400,"height":400,"layout":"none","fill":"#ffffff","children":[
+                {"type":"rectangle","id":"s","x":100,"y":100,"width":100,"height":50,"fill":"#ff0000"}]}]}"##;
+        let doc = Doc::from_json(json).unwrap();
+        let (mut fonts, mut assets) = offline();
+        let mut r = Renderer::default();
+        r.slides.extend([Slide::new("r"), Slide::new("s")]);
+        let mut cx = Ctx { doc: &doc, libs: &[], fonts: &mut fonts, assets: &mut assets };
+        let roots = r.shift_siblings(&mut cx);
+        let rebuilt = r.sync(&mut cx);
+        r.refresh_slides(&mut cx, &rebuilt, roots);
+        let green = |px: &[u8], x: usize, y: usize| px[(y * 400 + x) * 4 + 1];
+        // 100 ms in the node is part way there; only the presented frame's node paints.
+        for s in &mut r.slides {
+            s.start = Some(Instant::now() - Duration::from_millis(100));
+        }
+        let px = r.render(400, 400, 0.0, 0.0, 1.0, [30, 30, 30], Some("f"), true).to_vec();
+        assert!(green(&px, 150, 153) < 200, "the sliding node paints in the solo frame");
+        let px = r.render(400, 400, 0.0, 500.0, 1.0, [30, 30, 30], Some("f"), true).to_vec();
+        assert!(green(&px, 150, 153) == 30, "a node sliding in another frame stays out");
+        r.slides.iter_mut().find(|s| s.id == "s").unwrap().start = None;
+        r.render(400, 400, 0.0, 0.0, 1.0, [30, 30, 30], Some("f"), true);
+        assert!(r.slides.iter().find(|s| s.id == "s").unwrap().start.is_none(), "its clock does not start while another frame is presented");
     }
 
     /// Inserting into a centered column moves the existing child up (auto-layout reflow); it
