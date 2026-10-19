@@ -95,7 +95,6 @@ struct ExecuteCall {
     args: Value,
     seen: usize,
     agent: String,
-    marker: usize,
 }
 
 /// Two `execute` calls must not interleave: each edits the document in place and rolls back by
@@ -603,13 +602,15 @@ impl Engine {
         }
         let seen = stream.as_ref().map_or(0, |s| s.touched);
         let agent = stream.map(|s| s.agent).or_else(|| args["__agent"].as_str().map(str::to_string)).unwrap_or_else(|| "agent".into());
-        ExecuteCall { args, seen, agent, marker: self.events.len() }
+        self.script.edit = None;
+        ExecuteCall { args, seen, agent }
     }
 
     /// Report what a finished `execute` call wrote and read.
     fn end_execute(&mut self, call: &ExecuteCall) {
-        let ExecuteCall { seen, agent, marker, .. } = call;
-        if let Some(ev) = self.events[(*marker).min(self.events.len())..].iter().rev().find(|e| e["type"] == "agent_edit").cloned() {
+        let ExecuteCall { seen, agent, .. } = call;
+        // Not found in `events`: a poll may have drained them while the script ran.
+        if let Some(ev) = self.script.edit.take() {
             let writes: Vec<Value> = ev["ids"].as_array().map(|a| a.iter().skip(*seen).cloned().collect()).unwrap_or_default();
             if !writes.is_empty() {
                 self.emit(json!({"type": "agent_activity", "agent": agent, "op": "write", "ids": writes, "streaming": false}));
@@ -626,6 +627,7 @@ impl Engine {
             "get_editor_state" => ToolOut::ok(self.editor_state()),
             "read_guide" => crate::guide::read(args["topic"].as_str().unwrap_or("")),
             "get_style" => crate::guide::style(args["name"].as_str().unwrap_or("")),
+            "execute" if self.executing => ToolOut::err("Another execute call is still running."),
             "execute" => {
                 let call = self.begin_execute(args);
                 let out = crate::script::execute(self, &call.args);
@@ -633,7 +635,7 @@ impl Engine {
                 out
             }
             "open_document" => {
-                if self.agent.running {
+                if self.agent.running || self.executing {
                     return ToolOut::err(SWITCH_BUSY);
                 }
                 let Some(path) = args["path"].as_str() else { return ToolOut::err("path is required") };

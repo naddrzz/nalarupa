@@ -44,6 +44,8 @@ pub struct ScriptState {
     pub failed: HashMap<String, String>,
     /// JS state of `execute` calls still streaming, by stream key.
     live: HashMap<String, Live>,
+    /// The `agent_edit` event the last finished call emitted, for `end_execute`.
+    pub edit: Option<Value>,
 }
 
 /// A streamed call whose context has run `ran` against the preview document.
@@ -804,7 +806,7 @@ fn finish(e: &mut Engine, prep: Prepared, result: Result<Map<String, Value>, Str
         Ok(g) => g,
         Err(err) => {
             e.doc.root = before;
-            e.version += 1;
+            e.touch();
             let id = edit_id.unwrap_or_else(|| format!("e{:x}", crate::doc::random_u64() & 0xffffff));
             e.script.failed.insert(id.clone(), source);
             return ToolOut::err(format!(
@@ -817,7 +819,9 @@ fn finish(e: &mut Engine, prep: Prepared, result: Result<Map<String, Value>, Str
     }
     e.script.globals.entry(agent).or_default().extend(new_globals.clone());
     e.commit(before);
-    e.emit(json!({"type": "agent_edit", "ids": ex.touched, "read": ex.read}));
+    let edit = json!({"type": "agent_edit", "ids": ex.touched, "read": ex.read});
+    e.script.edit = Some(edit.clone());
+    e.emit(edit);
     if !ex.pens.is_empty() {
         e.sync();
         for (frame, prompt) in &ex.pens {
@@ -1497,6 +1501,9 @@ mod tests {
         drop(crate::engine::engine());
         assert!(asked.elapsed() < Duration::from_secs(1), "the engine stayed locked while the script ran");
         assert!(!run.is_finished(), "the script is still running");
+        let blocked = crate::engine::engine().tool("open_document", &json!({"path": "never-opened.pen"}));
+        assert!(blocked.error && blocked.text == crate::engine::SWITCH_BUSY, "a document switch waits for the running script: {}", blocked.text);
+        assert!(crate::engine::engine().tool("execute", &json!({"input": "Print(1)"})).error, "a direct execute does not interleave with the running one");
         stop.store(true, Ordering::SeqCst);
         let out = run.join().unwrap();
         assert!(out.error && out.text.contains("stopped"), "{}", out.text);

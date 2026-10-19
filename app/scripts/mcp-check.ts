@@ -95,13 +95,13 @@ const text = (r: any) => r.content.map((c: any) => c.text ?? '').join('')
 
   // A script that runs for seconds must not freeze the window: `call` is synchronous on this one thread,
   // so a core call that waits for the script (it ran under the engine lock) blocks for its whole run.
-  const slow = tool('execute', { input: 'let s = 0; for (let i = 0; i < 1e8; i++) s += i; Print(s)' })
+  const slow = tool('execute', { input: 'const until = Date.now() + 2000; while (Date.now() < until) {} Print("done")' })
   await new Promise((r) => setTimeout(r, 400))
   const asked = performance.now()
   call('state')
   const waited = performance.now() - asked
   assert(waited < 1000, `state() answers while a script runs (waited ${waited.toFixed(0)} ms)`)
-  assert(text(await slow).includes('4999999950000000'), 'the long script still finishes and prints')
+  assert(text(await slow).includes('done'), 'the long script still finishes and prints')
 
   console.log('mcp-check ok — MCP at', mcpUrl)
 }
