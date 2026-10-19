@@ -426,7 +426,7 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
     const tail = 'tail-of-the-error-line-3'
     const script = `page = Insert(document, {type:"frame", name:"Hero", x:0, y:0, width:1200, height:600, fill:"#101820"}); Insert("does-not-exist-with-a-very-long-identifier-0123456789", {type:"frame", name:"Oops-${tail}"})`
     const block = (type: string, extra: object) => JSON.stringify({ type, message: { content: [extra] } })
-    const err = `Error: parent not found: does-not-exist-with-a-very-long-identifier-0123456789 (${tail})`
+    const err = `Error: parent not found: does-not-exist-with-a-very-long-identifier-0123456789 (${tail}) ${'x'.repeat(160)}`
     writeFileSync(join(bin, 'claude'), `#!/bin/sh\necho '${block('assistant', { type: 'tool_use', id: 'tu1', name: 'mcp__nalarupa__execute', input: { input: script } })}'\necho '${block('user', { type: 'tool_result', tool_use_id: 'tu1', is_error: true, content: err })}'\n`, { mode: 0o755 })
     await app.getByTestId('tab-agent').click()
     await app.getByTestId('agent-input').click()
