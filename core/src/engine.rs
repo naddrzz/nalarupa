@@ -198,7 +198,8 @@ impl Engine {
         if self.reduce_motion {
             return;
         }
-        if self.slid.insert(id.to_string()) {
+        let room = self.doc.parent_of(id).is_some_and(|(p, _)| self.renderer.can_slide_into(&self.doc, &p));
+        if self.slid.insert(id.to_string()) && room {
             self.renderer.slides.push(crate::render::Slide::new(id));
         }
     }

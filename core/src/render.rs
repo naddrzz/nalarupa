@@ -27,6 +27,9 @@ const FADE_DECAY: f64 = 5.0;
 const SLIDE_TIME: Duration = Duration::from_millis(600);
 /// A slide no frame has shown yet (canvas not on screen) is dropped after this.
 const SLIDE_WAIT: Duration = Duration::from_secs(2);
+/// Every slide is snapshotted on each sync (and checked against all the others), so a bulk
+/// insert animates only its first few nodes; the rest appear in place.
+pub const MAX_SLIDES: usize = 32;
 
 /// A node sliding into place. It is left out of the cached view and painted from its own
 /// snapshot, offset and faded, over every frame until it settles (cheaper than re-laying out
@@ -400,6 +403,7 @@ impl Renderer {
                 if dx.abs() < 0.5 && dy.abs() < 0.5 {
                     continue;
                 }
+                let room = self.slides.len() < MAX_SLIDES;
                 match self.slides.iter_mut().find(|s| s.id == k.id) {
                     // Already gliding: continue from where it shows now.
                     Some(s) if !s.fade => {
@@ -407,11 +411,19 @@ impl Renderer {
                         (s.from, s.start, s.cache) = ((cx0 + dx, cy0 + dy), None, None);
                     }
                     Some(_) => {}
-                    None => self.slides.push(Slide { from: (dx, dy), fade: false, fresh: false, ..Slide::new(&k.id) }),
+                    None if room => self.slides.push(Slide { from: (dx, dy), fade: false, fresh: false, ..Slide::new(&k.id) }),
+                    None => {}
                 }
             }
         }
         roots
+    }
+
+    /// Whether an insert into `parent` may start its own slide: there is room, and no inserted
+    /// node already sliding holds `parent` (its snapshot carries the new node along).
+    pub fn can_slide_into(&self, doc: &Doc, parent: &str) -> bool {
+        self.slides.len() < MAX_SLIDES
+            && !self.slides.iter().any(|s| s.fade && (s.id == parent || doc.find(&s.id).and_then(|n| n["children"].as_array()).is_some_and(|k| crate::doc::find_in(k, parent).is_some())))
     }
 
     /// Snapshot sliding nodes that are new or whose layer was just rebuilt (so a node edited
