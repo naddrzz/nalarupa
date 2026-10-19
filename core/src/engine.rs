@@ -501,10 +501,13 @@ impl Engine {
         let mut s = String::from("# Nalarupa editor state\n\n");
         let path = self.doc.path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "Untitled (not saved yet)".into());
         s += &format!("- Document: {path}{}\n", if self.dirty() { " (unsaved changes)" } else { "" });
-        let sel: Vec<String> = self.selection.iter().map(|id| match self.renderer.find(id) {
+        let mut sel: Vec<String> = self.selection.iter().take(40).map(|id| match self.renderer.find(id) {
             Some(f) => format!("`{id}` \"{}\" {} {}x{}", f.name, f.ty, f.w.round(), f.h.round()),
             None => format!("`{id}`"),
         }).collect();
+        if self.selection.len() > 40 {
+            sel.push(format!("... +{} others", self.selection.len() - 40));
+        }
         s += &format!("- Selection: {}\n", if sel.is_empty() { "nothing".into() } else { sel.join(", ") });
         let vp = self.viewport;
         let mut tops: Vec<(bool, String)> = self.doc.children().iter().filter_map(|n| {

@@ -111,6 +111,7 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
       return toast((e as Error).message, true)
     }
     resetChat()
+    setChatVersion((n) => n + 1)
     toast('New conversation')
   }
   const toggle = (id: number) => setOpen((s) => {

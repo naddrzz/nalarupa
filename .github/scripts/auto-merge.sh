@@ -1,7 +1,8 @@
 #!/bin/bash
 # Merge every open PR into dev that passes the gate: no check still running, `checks` (ci) passed, cubic's review
 # finished, CodeRabbit not pending, every thread started by cubic or CodeRabbit resolved, and GitHub says MERGEABLE.
-# Skips drafts, forks and PRs labelled no-auto-merge. DRY_RUN=1 only prints the decisions. Needs GH_TOKEN and
+# A PR that conflicts with dev gets an @claude request to merge dev in (claude workflow). Skips drafts, forks and PRs
+# labelled no-auto-merge. DRY_RUN=1 only prints the decisions. Needs GH_TOKEN and
 # GITHUB_REPOSITORY (owner/name).
 set -u
 R=${GITHUB_REPOSITORY:?}
@@ -9,6 +10,7 @@ owner=${R%%/*} name=${R#*/}
 prs=$(gh pr list -R "$R" --state open --base dev --limit 1000 --json number,isDraft,isCrossRepository,labels \
         --jq '.[] | select((.isDraft|not) and (.isCrossRepository|not) and ([.labels[].name]|index("no-auto-merge")|not)) | .number') \
   || { echo "gh pr list failed"; exit 1; }
+me=$(gh api user --jq .login) || me=
 for n in $prs; do
   info=$(gh pr view "$n" -R "$R" --json mergeable,statusCheckRollup,title --jq '
     [.mergeable,
@@ -27,6 +29,22 @@ for n in $prs; do
     if [ "${DRY_RUN:-}" = 1 ]; then echo "would merge #$n ($state) $title"
     elif gh pr merge "$n" -R "$R" --merge --subject "Merge #$n: $title"; then echo "merged #$n $title"
     else echo "merge failed #$n ($state)"; fi
+  elif [ "$mergeable" = CONFLICTING ]; then
+    # Nothing else resolves conflicts (parallel fix PRs often touch the same files): ask the claude workflow, through
+    # an @claude comment as the owner, to merge dev in. Once per head commit, at most 3 times per PR.
+    # Only markers from our own account count (anyone can comment), and a failed lookup waits instead of asking again.
+    if ! head=$(gh pr view "$n" -R "$R" --json headRefOid --jq .headRefOid) || [ -z "$head" ] || [ -z "$me" ] \
+       || ! comments=$(gh api "repos/$R/issues/$n/comments" --paginate --jq ".[]|select(.user.login==\"$me\")|.body"); then
+      echo "wait #$n (conflict, cannot read head or comment history) $title"; continue
+    fi
+    marks=$(grep -o '<!-- auto-merge:conflict [0-9a-f]* -->' <<<"$comments" || :)
+    if grep -qF "$head" <<<"$marks"; then echo "wait #$n (conflict, claude already asked for ${head:0:7}) $title"
+    elif [ "$(grep -c . <<<"$marks")" -ge 3 ]; then echo "wait #$n (conflict, asked 3 times: needs a person) $title"
+    elif [ "${DRY_RUN:-}" = 1 ]; then echo "would ask claude to resolve the conflict in #$n $title"
+    else
+      gh pr comment "$n" -R "$R" --body "@claude This PR conflicts with \`dev\`. Merge \`origin/dev\` into this branch and resolve every conflict so both sides keep working: the fixes already merged into dev stay, and this PR's change still does what it set out to do. Run the checks from the claude workflow, then push to this branch. Do not open a new PR.
+<!-- auto-merge:conflict $head -->" >/dev/null && echo "asked claude to resolve the conflict in #$n $title"
+    fi
   else
     echo "wait #$n ($state) $title"
   fi
