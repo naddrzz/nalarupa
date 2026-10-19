@@ -557,7 +557,8 @@ impl<'a> Svg<'a> {
 
     fn group(&mut self, n: &RNode, fx: &Effects, outline: Option<&str>) {
         let kids = outline.map(|m| format!("{m}k"));
-        let b = extent(n);
+        // The children's strokes, shadows and blur paint outside their boxes and shape the group's outline.
+        let b = n.kids.iter().map(visual_bounds).fold(extent(n), union);
         let mask = outline.zip(kids.as_ref()).map(|(m, k)| {
             // The children's outline in solid black (the union of their masks).
             let f = self.id("f");
