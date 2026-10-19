@@ -103,6 +103,12 @@ struct ExecuteCall {
 /// restoring a snapshot.
 static EXECUTE_GATE: Mutex<()> = Mutex::new(());
 
+/// A user edit waits here while a script runs: the script rolls back by restoring its snapshot,
+/// which would also throw away an edit made in between.
+pub fn edit_gate() -> MutexGuard<'static, ()> {
+    EXECUTE_GATE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Dispatch one agent tool call without holding the engine across it. `execute` runs its JavaScript
 /// with the engine free (each host function locks it for its own work), so polls, renders and
 /// Stop keep answering while a long script runs; the other tools run under the lock.
@@ -140,6 +146,62 @@ fn drop_pending(v: &mut Value, inflight: &std::collections::HashSet<String>) {
             }
         }
         _ => {}
+    }
+}
+
+/// `ours` with the changes that turned `base` into `theirs` applied; where both changed the same
+/// value, `theirs` wins. Lists of nodes (`id`) merge per node, the rest as a whole.
+fn merge3(base: &Value, theirs: &Value, ours: &Value) -> Value {
+    if theirs == base {
+        return ours.clone();
+    }
+    if ours == base {
+        return theirs.clone();
+    }
+    match (base, theirs, ours) {
+        (Value::Object(b), Value::Object(t), Value::Object(o)) => {
+            let mut out = Map::new();
+            for (k, ov) in o {
+                match (b.get(k), t.get(k)) {
+                    (Some(bv), Some(tv)) => {
+                        out.insert(k.clone(), merge3(bv, tv, ov));
+                    }
+                    (Some(bv), None) if bv == ov => {}
+                    (None, Some(tv)) => {
+                        out.insert(k.clone(), merge3(&Value::Null, tv, ov));
+                    }
+                    (None, None) => {
+                        out.insert(k.clone(), ov.clone());
+                    }
+                    (Some(_), None) => {}
+                }
+            }
+            for (k, tv) in t {
+                if !o.contains_key(k) && !b.contains_key(k) {
+                    out.insert(k.clone(), tv.clone());
+                }
+            }
+            Value::Object(out)
+        }
+        (Value::Array(b), Value::Array(t), Value::Array(o)) if [b, t, o].iter().all(|a| a.iter().all(|n| n["id"].is_string())) => {
+            let find = |a: &'_ [Value], id: &Value| a.iter().find(|n| n["id"] == *id).cloned();
+            let mut out: Vec<Value> = Vec::new();
+            for n in o {
+                match (find(b, &n["id"]), find(t, &n["id"])) {
+                    (Some(bn), Some(tn)) => out.push(merge3(&bn, &tn, n)),
+                    (None, _) => out.push(n.clone()),
+                    (Some(_), None) => {}
+                }
+            }
+            for (i, n) in t.iter().enumerate() {
+                if find(b, &n["id"]).is_none() && find(o, &n["id"]).is_none() {
+                    let at = t[..i].iter().rev().find_map(|p| out.iter().position(|x| x["id"] == p["id"]).map(|j| j + 1)).unwrap_or(0);
+                    out.insert(at, n.clone());
+                }
+            }
+            Value::Array(out)
+        }
+        _ => theirs.clone(),
     }
 }
 
@@ -338,11 +400,20 @@ impl Engine {
         Ctx { doc: &self.doc, libs: &self.libs, fonts: &mut self.fonts, assets: &mut self.assets }
     }
 
-    /// Record `before` as an undo step and mark the document changed.
+    /// Record `before` as an undo step and mark the document changed. A commit that lands in the
+    /// middle of a drag (an agent's `execute`) is its own step taken from the pre-drag document, and
+    /// the drag's snapshot takes the change along, so the drag undoes without it.
     pub fn commit(&mut self, before: Value) {
         if before == self.doc.root {
             return;
         }
+        let before = match self.drag_before.take() {
+            Some(start) => {
+                self.drag_before = Some(merge3(&before, &self.doc.root, &start));
+                start
+            }
+            None => before,
+        };
         self.coalesce = None;
         self.undo.push(before);
         if self.undo.len() > UNDO_LIMIT {
@@ -866,6 +937,32 @@ mod tests {
         assert!(!blocker.exists(), "a failed rename must not leave the new settings in the temp file");
         assert_eq!(e.setting("k"), None);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn xs(e: &Engine) -> Vec<(String, i64)> {
+        e.doc.root["children"].as_array().unwrap().iter().map(|n| (n["name"].as_str().unwrap().to_string(), n["x"].as_i64().unwrap())).collect()
+    }
+
+    /// A commit that lands during a drag is its own undo step; the drag undoes without it.
+    #[test]
+    fn commit_during_drag_keeps_both_steps() {
+        let mut e = Engine::new(std::env::temp_dir().join(format!("nalarupa-test-drag-commit-{}", std::process::id())));
+        e.load_template("empty");
+        e.doc.root["children"] = json!([{"id": "u", "type": "frame", "name": "U", "x": 0}]);
+        e.drag_before = Some(e.doc.root.clone());
+        e.doc.root["children"][0]["x"] = json!(50);
+        let before = e.doc.root.clone(); // the script's snapshot, taken mid-drag
+        e.doc.root["children"].as_array_mut().unwrap().push(json!({"id": "a", "type": "frame", "name": "AgentF", "x": 300}));
+        e.commit(before);
+        e.doc.root["children"][0]["x"] = json!(100);
+        let start = e.drag_before.take().unwrap();
+        e.commit(start);
+        assert_eq!(xs(&e), [("U".into(), 100), ("AgentF".into(), 300)]);
+        assert!(e.undo());
+        assert_eq!(xs(&e), [("U".into(), 0), ("AgentF".into(), 300)]);
+        assert!(e.undo());
+        assert_eq!(xs(&e), [("U".into(), 0)]);
+        assert!(!e.undo());
     }
 
     /// A font landing in the background redraws the canvas but is not an edit.
