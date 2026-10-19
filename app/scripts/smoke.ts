@@ -30,8 +30,9 @@ call('undo')
 // The poll can end the slide between two canvas redraws: the last slide frame is not the settled view,
 // so the canvas must repaint when `animating` turns false (Canvas.tsx, the `[props.animating]` effect).
 call('tool', { name: 'execute', args: { input: 'Insert("sld01", {type:"rectangle", name:"Slide", width:100, height:100, fill:"#00ff00"})' } })
-// What the canvas does: redraw every ~16 ms while animating (the clock starts at the first frame).
-let lastSlide = new Uint8Array()
+// What the canvas does: redraw every ~16 ms while animating. The clock starts at the first frame, so render it
+// before taking t0: a slow first render (it rebuilds the layer) must not shift the poll before the slide ends.
+let lastSlide = new Uint8Array(renderPixels(320, 180, 0, 0, 1 / 6, 0x1c1c1f)!)
 for (const t0 = performance.now(); performance.now() - t0 < 560; await Bun.sleep(16)) lastSlide = new Uint8Array(renderPixels(320, 180, 0, 0, 1 / 6, 0x1c1c1f)!)
 await Bun.sleep(70) // the next redraw is late, the poll arrives first
 assert(!call('poll').state.animating, 'poll ends the slide')
