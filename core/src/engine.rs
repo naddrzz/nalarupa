@@ -98,6 +98,8 @@ fn nonblank(v: Option<String>) -> Option<String> {
 const UNDO_LIMIT: usize = 100;
 /// The agent edits whatever document is open, so a document switch waits for it to stop.
 pub const SWITCH_BUSY: &str = "Stop the agent before opening another document.";
+/// An external agent has no Save / Don't save prompt, so it must not replace unsaved work.
+pub const SWITCH_DIRTY: &str = "The open document has unsaved changes; ask the user to save it first.";
 
 impl Engine {
     pub fn new(data_dir: PathBuf) -> Engine {
@@ -575,6 +577,9 @@ impl Engine {
             "open_document" => {
                 if self.agent.running {
                     return ToolOut::err(SWITCH_BUSY);
+                }
+                if self.dirty() {
+                    return ToolOut::err(SWITCH_DIRTY);
                 }
                 let Some(path) = args["path"].as_str() else { return ToolOut::err("path is required") };
                 let p = Path::new(path);
