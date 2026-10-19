@@ -510,6 +510,18 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
       if (b.x + b.width > card.x + card.width + 0.5) throw new Error(`a tool row line runs ${Math.round(b.x + b.width - card.x - card.width)} px past its card: ${text.slice(0, 30)}`)
       if (b.height < 20) throw new Error(`a long tool row line is not wrapped (${b.height} px high): ${text.slice(0, 30)}`)
     }
+
+    // A result of many short lines (the core keeps up to 6000 characters) shows its last line, not just the first 40.
+    // printf, not echo: sh's echo turns the JSON's \n escapes into real newlines.
+    const rows = Array.from({ length: 120 }, (_, i) => `result row ${i}`).join('\n')
+    writeFileSync(join(bin, 'claude'), `#!/bin/sh\nprintf '%s\\n' '${block('assistant', { type: 'tool_use', id: 'tu2', name: 'mcp__nalarupa__get_editor_state', input: {} })}'\nprintf '%s\\n' '${block('user', { type: 'tool_result', tool_use_id: 'tu2', content: rows })}'\n`, { mode: 0o755 })
+    await app.getByTestId('agent-input').click()
+    await app.getByTestId('agent-input').fill('Show a long result')
+    await sleep(200)
+    await app.getByTestId('agent-send').click()
+    await app.getByText('Got editor state').waitFor({ timeoutMs: 15000 })
+    await app.getByText('Got editor state').click()
+    await until(async () => (await app!.getByText('result row 119').count()) > 0, 'the last line of a long tool result')
   }
 
   await app.getByTestId('present').click()

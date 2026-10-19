@@ -711,7 +711,7 @@ function Item({ m, isLast, expanded, toggle }: { m: ChatItem; isLast: boolean; e
               {m.output ? (
                 <>
                   <T size={11} color={C.ghost} weight="600">OUTPUT</T>
-                  <Mono text={m.output.split('\n').slice(0, 40).join('\n')} color={m.error ? C.danger : C.muted} />
+                  <Mono text={m.output} color={m.error ? C.danger : C.muted} />
                 </>
               ) : null}
               <T size={11} color={C.ghost} weight="600">{src !== null ? 'SCRIPT' : 'INPUT'}</T>
