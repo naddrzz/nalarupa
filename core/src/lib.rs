@@ -205,7 +205,7 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
                 let y = n["y"].as_f64().unwrap_or(0.0);
                 Some((id.clone(), x, y))
             }).collect();
-            e.edit_or_drag(|d| pos.iter().try_for_each(|(id, x, y)| d.update(id, &json!({"x": x + dx, "y": y + dy}))))?;
+            e.edit_or_drag(|d| pos.iter().try_for_each(|(id, x, y)| d.update(id, &json!({"x": editor::num(x + dx), "y": editor::num(y + dy)}))))?;
             Ok(state(&e))
         }
         "insert" => {

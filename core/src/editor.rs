@@ -14,7 +14,7 @@ use std::sync::OnceLock;
 pub type Rect = (f64, f64, f64, f64);
 
 /// Integral values stay integers in the saved document; others keep two decimals.
-fn num(v: f64) -> Value {
+pub fn num(v: f64) -> Value {
     let r = (v * 100.0).round() / 100.0;
     if r.fract() == 0.0 && r.abs() < 1e15 { json!(r as i64) } else { json!(r) }
 }
