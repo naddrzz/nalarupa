@@ -925,7 +925,7 @@ fn validate(e: &mut Engine, touched: &[String]) -> Vec<String> {
             if n.ty == "text" {
                 let st = crate::text::TextStyle::of(n);
                 e.fonts.ensure(&st);
-                if !e.fonts.has_family(&st.family) {
+                if !e.fonts.has_family(&st.family) && !e.fonts.loading(&st.family) {
                     out.push(format!("text {label}: font family '{}' is not available", st.family));
                 }
             }

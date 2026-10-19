@@ -1,13 +1,13 @@
 //! Font database, text shaping/measurement and line wrapping with SkParagraph's rules.
 //! Text is shaped with rustybuzz exactly like usvg does, so measured widths match what resvg draws.
-//! Missing families are fetched once from Google Fonts (TTF) and cached on disk; characters a family
-//! lacks fall back to Noto fonts first.
+//! Missing families are fetched once from Google Fonts (TTF) by a background thread and cached on disk
+//! (text uses a fallback face until the download lands); characters a family lacks fall back to Noto fonts first.
 
 use crate::resolve::RNode;
 use resvg::usvg::fontdb;
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 
 /// Fallback face per (char, fonts already tried); usvg otherwise rescans every system font per glyph.
 type FallbackCache = Arc<Mutex<HashMap<(char, Vec<fontdb::ID>), Option<fontdb::ID>>>>;
@@ -81,8 +81,10 @@ pub struct Fonts {
     vmetrics: HashMap<(fontdb::ID, u16), (f64, f64, f64)>,
     shaped: HashMap<(fontdb::ID, u16, String), Arc<Vec<(usize, f64)>>>,
     fallback: FallbackCache,
-    /// Variation axis tags per lowercase family (Google Fonts metadata), loaded on first need.
-    axes: Option<HashMap<String, Vec<String>>>,
+    /// Downloads in flight as (lowercase family, weight, italic).
+    loading: HashSet<(String, u16, bool)>,
+    /// Bumped when a download adds a font; the renderer rebuilds every layer when it changes.
+    pub generation: u64,
     pub online: bool,
 }
 
@@ -112,53 +114,10 @@ impl Fonts {
             vmetrics: HashMap::new(),
             shaped: HashMap::new(),
             fallback: FallbackCache::default(),
-            axes: None,
+            loading: HashSet::new(),
+            generation: 0,
             online: true,
         }
-    }
-
-    /// Axis tags of a Google Fonts family in file-name order (ASCII: uppercase first), if variable.
-    fn axes(&mut self, family: &str) -> Option<Vec<String>> {
-        if self.axes.is_none() {
-            let file = self.cache.join("google-fonts-metadata.json");
-            let text = std::fs::read_to_string(&file).ok().or_else(|| {
-                let t = if self.online { crate::net::get_text("https://fonts.google.com/metadata/fonts")? } else { return None };
-                let _ = std::fs::write(&file, &t);
-                Some(t)
-            });
-            // The endpoint prefixes its JSON with an anti-XSSI guard.
-            let meta: serde_json::Value = text.and_then(|t| serde_json::from_str(&t[t.find('{')?..]).ok()).unwrap_or_default();
-            let map = meta["familyMetadataList"].as_array().into_iter().flatten().filter_map(|f| {
-                let mut tags: Vec<String> = f["axes"].as_array()?.iter().filter_map(|a| a["tag"].as_str().map(str::to_string)).collect();
-                tags.sort();
-                Some((f["family"].as_str()?.to_lowercase(), tags))
-            });
-            self.axes = Some(map.filter(|(_, t)| !t.is_empty()).collect());
-        }
-        self.axes.as_ref()?.get(&family.to_lowercase()).cloned()
-    }
-
-    /// The family's variable font (full axes, rendered at the font's default
-    /// location except `wght`). Static instances from the CSS API are pinned to opsz 14 and measure
-    /// differently for families whose default optical size is not 14 (DM Sans is ~0.6 % wider).
-    fn variable_font(&mut self, family: &str, italic: bool) -> Option<Vec<u8>> {
-        let compact: String = family.chars().filter(|c| !c.is_whitespace()).collect();
-        let file = self.cache.join("var").join(format!("{compact}{}.ttf", if italic { "-Italic" } else { "" }));
-        if let Ok(b) = std::fs::read(&file) {
-            return Some(b);
-        }
-        let axes = self.axes(family)?.join(",");
-        if !self.online {
-            return None;
-        }
-        let name = format!("{compact}{}[{axes}].ttf", if italic { "-Italic" } else { "" });
-        let dir = compact.to_lowercase();
-        let bytes = ["ofl", "apache", "ufl"]
-            .iter()
-            .find_map(|lic| crate::net::get_bytes(&format!("https://raw.githubusercontent.com/google/fonts/main/{lic}/{dir}/{}", name.replace('[', "%5B").replace(']', "%5D"))))?;
-        let _ = std::fs::create_dir_all(file.parent()?);
-        let _ = std::fs::write(&file, &bytes);
-        Some(bytes)
     }
 
     /// usvg font resolver with the same memoized, Noto-first fallback search used for measuring.
@@ -174,12 +133,18 @@ impl Fonts {
         self.db.faces().any(|f| f.families.iter().any(|(n, _)| n.eq_ignore_ascii_case(family)))
     }
 
-    /// Make sure `family` (at this weight/style) is available, fetching it from Google Fonts if needed.
-    /// An unavailable family falls back to Noto Sans.
+    /// Make sure `family` (at this weight/style) is available: loaded from the cache now, or downloaded
+    /// in the background while text falls back to Noto Sans. An unavailable family falls back to Noto Sans.
     pub fn ensure(&mut self, st: &TextStyle) {
-        if self.fetch(&st.family, st.weight, st.italic) && !st.family.eq_ignore_ascii_case("Noto Sans") && !self.has_family(&st.family) {
+        if self.fetch(&st.family, st.weight, st.italic) && !st.family.eq_ignore_ascii_case("Noto Sans") && !self.has_family(&st.family) && !self.loading(&st.family) {
             self.fetch("Noto Sans", st.weight, st.italic);
         }
+    }
+
+    /// A download of this family is still running.
+    pub fn loading(&self, family: &str) -> bool {
+        let family = family.to_lowercase();
+        self.loading.iter().any(|(f, _, _)| *f == family)
     }
 
     /// Returns false when this (family, weight, style) was already handled.
@@ -187,50 +152,58 @@ impl Fonts {
         if !self.tried.insert(format!("{family}|{weight}|{italic}")) {
             return false;
         }
+        if !self.load_cached(family, weight, italic) && self.online && self.loading.insert((family.to_lowercase(), weight, italic)) {
+            let (cache, family) = (self.cache.clone(), family.to_string());
+            std::thread::spawn(move || {
+                download(&cache, &family, weight, italic);
+                crate::engine::engine().font_ready(&family, weight, italic);
+            });
+        }
+        true
+    }
+
+    /// A download finished (or failed): load what it cached. True when a font was added.
+    pub fn downloaded(&mut self, family: &str, weight: u16, italic: bool) -> bool {
+        self.loading.remove(&(family.to_lowercase(), weight, italic));
+        let before = self.db.len();
+        self.load_cached(family, weight, italic);
+        if !self.has_family(family) && !family.eq_ignore_ascii_case("Noto Sans") {
+            self.fetch("Noto Sans", weight, italic);
+        }
+        let added = self.db.len() != before;
+        self.generation += added as u64;
+        added
+    }
+
+    /// Make the face available from what is already on disk; true when it is.
+    fn load_cached(&mut self, family: &str, weight: u16, italic: bool) -> bool {
         if self.variable_loaded(family, italic) {
             return true;
         }
         // Before the exact-face check: a cached static instance must not shadow the variable font.
-        if let Some(b) = self.variable_font(family, italic) {
+        if let Ok(b) = std::fs::read(var_file(&self.cache, family, italic)) {
             let db = Arc::make_mut(&mut self.db);
             db.load_font_data(b);
             prefer_variable(db, &self.cache);
-            self.faces.clear();
-            self.vmetrics.clear();
-            self.shaped.clear();
-            if let Ok(mut m) = self.fallback.lock() {
-                m.clear();
-            }
+            self.fonts_changed();
             return true;
         }
         if self.exact_face(family, weight, italic) {
             return true;
         }
-        let file = self.cache.join(format!("{}-{}{}.ttf", family.replace(' ', "_"), weight, if italic { "i" } else { "" }));
-        let bytes = std::fs::read(&file).ok().or_else(|| {
-            if !self.online {
-                return None;
-            }
-            let fam = family.replace(' ', "+");
-            let spec = if italic { format!("{fam}:ital,wght@1,{weight}") } else { format!("{fam}:wght@{weight}") };
-            let css = crate::net::get_text(&format!("https://fonts.googleapis.com/css2?family={spec}"))
-                .or_else(|| crate::net::get_text(&format!("https://fonts.googleapis.com/css2?family={fam}")))?;
-            let start = css.find("url(")? + 4;
-            let url = &css[start..start + css[start..].find(')')?];
-            let data = crate::net::get_bytes(url)?;
-            let _ = std::fs::write(&file, &data);
-            Some(data)
-        });
-        if let Some(b) = bytes {
-            Arc::make_mut(&mut self.db).load_font_data(b);
-            self.faces.clear();
-            self.vmetrics.clear();
-            self.shaped.clear();
-            if let Ok(mut m) = self.fallback.lock() {
-                m.clear();
-            }
-        }
+        let Ok(b) = std::fs::read(static_file(&self.cache, family, weight, italic)) else { return false };
+        Arc::make_mut(&mut self.db).load_font_data(b);
+        self.fonts_changed();
         true
+    }
+
+    fn fonts_changed(&mut self) {
+        self.faces.clear();
+        self.vmetrics.clear();
+        self.shaped.clear();
+        if let Ok(mut m) = self.fallback.lock() {
+            m.clear();
+        }
     }
 
     /// A variable face of this family (one face serves every weight via `wght`).
@@ -484,6 +457,83 @@ fn noto_family(c: char) -> &'static str {
     }
 }
 
+/// The family's variable font in the cache (full axes, rendered at the font's default
+/// location except `wght`). Static instances from the CSS API are pinned to opsz 14 and measure
+/// differently for families whose default optical size is not 14 (DM Sans is ~0.6 % wider).
+fn var_file(cache: &Path, family: &str, italic: bool) -> PathBuf {
+    let compact: String = family.chars().filter(|c| !c.is_whitespace()).collect();
+    cache.join("var").join(format!("{compact}{}.ttf", if italic { "-Italic" } else { "" }))
+}
+
+fn static_file(cache: &Path, family: &str, weight: u16, italic: bool) -> PathBuf {
+    cache.join(format!("{}-{}{}.ttf", family.replace(' ', "_"), weight, if italic { "i" } else { "" }))
+}
+
+/// Axis tags of a Google Fonts family in file-name order (ASCII: uppercase first), if variable.
+/// The metadata is read (or downloaded) once per process.
+fn family_axes(cache: &Path, family: &str) -> Option<Vec<String>> {
+    static AXES: OnceLock<HashMap<String, Vec<String>>> = OnceLock::new();
+    let all = AXES.get_or_init(|| {
+        let file = cache.join("google-fonts-metadata.json");
+        let text = std::fs::read_to_string(&file).ok().or_else(|| {
+            let t = crate::net::get_text("https://fonts.google.com/metadata/fonts")?;
+            let _ = std::fs::write(&file, &t);
+            Some(t)
+        });
+        // The endpoint prefixes its JSON with an anti-XSSI guard.
+        let meta: serde_json::Value = text.and_then(|t| serde_json::from_str(&t[t.find('{')?..]).ok()).unwrap_or_default();
+        let map = meta["familyMetadataList"].as_array().into_iter().flatten().filter_map(|f| {
+            let mut tags: Vec<String> = f["axes"].as_array()?.iter().filter_map(|a| a["tag"].as_str().map(str::to_string)).collect();
+            tags.sort();
+            Some((f["family"].as_str()?.to_lowercase(), tags))
+        });
+        map.filter(|(_, t)| !t.is_empty()).collect()
+    });
+    all.get(&family.to_lowercase()).cloned()
+}
+
+/// One download at a time: they share the metadata file and a slow link.
+static DOWNLOADS: Mutex<()> = Mutex::new(());
+
+/// Fetch a family from Google Fonts into `cache` (the variable font if it has one, else the static
+/// instance). Blocks on the network: run it off the engine lock.
+fn download(cache: &Path, family: &str, weight: u16, italic: bool) {
+    let _turn = DOWNLOADS.lock().unwrap_or_else(|e| e.into_inner());
+    let var = var_file(cache, family, italic);
+    if var.exists() {
+        return;
+    }
+    if let Some(axes) = family_axes(cache, family) {
+        let compact: String = family.chars().filter(|c| !c.is_whitespace()).collect();
+        let name = format!("{compact}{}[{}].ttf", if italic { "-Italic" } else { "" }, axes.join(","));
+        let dir = compact.to_lowercase();
+        let bytes = ["ofl", "apache", "ufl"]
+            .iter()
+            .find_map(|lic| crate::net::get_bytes(&format!("https://raw.githubusercontent.com/google/fonts/main/{lic}/{dir}/{}", name.replace('[', "%5B").replace(']', "%5D"))));
+        if let Some(bytes) = bytes {
+            if std::fs::create_dir_all(cache.join("var")).is_ok() {
+                let _ = std::fs::write(&var, &bytes);
+            }
+            return;
+        }
+    }
+    let file = static_file(cache, family, weight, italic);
+    if file.exists() {
+        return;
+    }
+    let fam = family.replace(' ', "+");
+    let spec = if italic { format!("{fam}:ital,wght@1,{weight}") } else { format!("{fam}:wght@{weight}") };
+    let data = (|| {
+        let css = crate::net::get_text(&format!("https://fonts.googleapis.com/css2?family={spec}"))
+            .or_else(|| crate::net::get_text(&format!("https://fonts.googleapis.com/css2?family={fam}")))?;
+        let start = css.find("url(")? + 4;
+        crate::net::get_bytes(&css[start..start + css[start..].find(')')?])
+    })();
+    if let Some(data) = data {
+        let _ = std::fs::write(&file, &data);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -497,6 +547,36 @@ mod tests {
 
     fn style(size: f64) -> TextStyle {
         TextStyle { family: "Arial".into(), size, weight: 400, italic: false, letter_spacing: 0.0, line_height: None }
+    }
+
+    /// A font the download thread cached is loaded when it reports back, never while text is laid out.
+    #[test]
+    fn downloaded_font_loads_from_cache() {
+        let cache = std::env::temp_dir().join(format!("nalarupa-test-dl-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&cache);
+        let mut f = Fonts::new(cache.clone());
+        f.online = false;
+        let (family, weight, bytes) = {
+            let face = f.db.faces().find(|x| x.weight.0 == 400 && x.style == fontdb::Style::Normal && matches!(x.source, fontdb::Source::File(_) | fontdb::Source::SharedFile(..))).expect("a system font");
+            let (fontdb::Source::File(p) | fontdb::Source::SharedFile(p, _)) = &face.source else { unreachable!() };
+            (face.families[0].0.clone(), face.weight.0, std::fs::read(p).unwrap())
+        };
+        let ids: Vec<_> = f.db.faces().filter(|x| x.families.iter().any(|(n, _)| *n == family)).map(|x| x.id).collect();
+        for id in ids {
+            Arc::make_mut(&mut f.db).remove_face(id);
+        }
+        assert!(!f.has_family(&family));
+        let st = TextStyle { family: family.clone(), size: 16.0, weight, italic: false, letter_spacing: 0.0, line_height: None };
+        f.ensure(&st);
+        assert!(!f.has_family(&family) && f.generation == 0, "nothing on disk: text falls back, no block");
+        f.loading.insert((family.to_lowercase(), weight, false));
+        assert!(f.loading(&family));
+        std::fs::write(static_file(&cache, &family, weight, false), bytes).unwrap();
+        assert!(f.downloaded(&family, weight, false));
+        assert!(f.has_family(&family) && !f.loading(&family) && f.generation == 1);
+        assert!(!f.downloaded(&family, weight, false), "a second report adds nothing");
+        assert_eq!(f.generation, 1);
+        let _ = std::fs::remove_dir_all(&cache);
     }
 
     #[test]
