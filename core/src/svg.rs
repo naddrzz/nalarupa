@@ -459,6 +459,16 @@ impl<'a> Svg<'a> {
         if let Some(m) = &mask {
             self.drop_shadows(fx, m, mb, outline);
         }
+        // A clip group is isolated, so a blended child would blend against transparent instead of the
+        // frame's fill: such a frame paints its fill and inner shadows inside the clip group too.
+        let clip = n.ty == "frame" && n.b("clip");
+        let inside = clip
+            && n.kids.iter().any(blends)
+            && fills.iter().all(|p| p.blend.is_none())
+            && fx.shadows.iter().all(|s| !s.inner || s.blend.is_none());
+        if inside {
+            self.open_clip(&geo);
+        }
         let fills_id = (self.tag && !fills.is_empty()).then(|| self.id("f"));
         if let Some(id) = &fills_id {
             let _ = write!(self.out, r#"<g id="{id}">"#);
@@ -483,12 +493,14 @@ impl<'a> Svg<'a> {
         if let Some(m) = &mask {
             self.inner_shadows(fx, m, mb, outline);
         }
-        let clip = n.ty == "frame" && n.b("clip");
         if !clip {
             self.stroke(n, &geo, stroke.as_ref());
         }
         if n.ty == "frame" {
-            self.children(n, fills_id, clip.then_some(&geo));
+            self.children(n, fills_id, (clip && !inside).then_some(&geo));
+        }
+        if inside {
+            self.out.push_str("</g>");
         }
         if clip {
             self.stroke(n, &geo, stroke.as_ref());
@@ -599,15 +611,20 @@ impl<'a> Svg<'a> {
         }
     }
 
+    /// Opens a group clipped to `g`; the caller closes it.
+    fn open_clip(&mut self, g: &Geo) {
+        let id = self.id("c");
+        let _ = write!(self.defs, r#"<clipPath id="{id}"><path d="{}"{}/></clipPath>"#, g.d, g.rule("clip-rule"));
+        let _ = write!(self.out, r#"<g clip-path="url(#{id})">"#);
+    }
+
     fn children(&mut self, n: &RNode, fills_id: Option<String>, clip: Option<&Geo>) {
         if n.kids.is_empty() {
             return;
         }
         self.painted.push((!transform(n).is_empty(), fills_id.into_iter().collect()));
         if let Some(g) = clip {
-            let id = self.id("c");
-            let _ = write!(self.defs, r#"<clipPath id="{id}"><path d="{}"{}/></clipPath>"#, g.d, g.rule("clip-rule"));
-            let _ = write!(self.out, r#"<g clip-path="url(#{id})">"#);
+            self.open_clip(g);
         }
         for k in &n.kids {
             self.node(k);
@@ -1221,6 +1238,12 @@ pub fn fills(v: Option<&Value>) -> Vec<&Value> {
         Some(f @ Value::Object(_)) if f["enabled"] != false => vec![f],
         _ => Vec::new(),
     }
+}
+
+/// Whether the node or a descendant paints with a blend mode (a fill, stroke or shadow).
+fn blends(n: &RNode) -> bool {
+    let paint = |k: &str| fills(n.p.get(k)).iter().any(|f| blend_mode(f["blendMode"].as_str()).is_some());
+    paint("fill") || paint("stroke") || Effects::of(n).shadows.iter().any(|s| s.blend.is_some()) || n.kids.iter().any(blends)
 }
 
 /// Blend modes as CSS `mix-blend-mode`; linearBurn is multiply and
