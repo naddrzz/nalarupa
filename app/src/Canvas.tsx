@@ -45,7 +45,7 @@ type Drag =
   | { mode: 'pan'; sx: number; sy: number; cam: Cam }
   | {
       mode: 'move'; sx: number; sy: number; dx0: number; dy0: number; ids: string[]; narrow?: string; moved: boolean
-      start: Rect; sentX: number; sentY: number; anchors: Pt[]; parent: string; pm: M | null; groupOf?: string; flow: boolean
+      start: Rect; sentX: number; sentY: number; anchors: Pt[]; parent: string; pm: M | null; groupOf?: string; from?: string; flow: boolean
       container: Drop | null; index?: number; deferred?: Drop; dup?: { originals: string[]; offAt?: number }
     }
   // `box` and the start point `f0` are in the selection frame's coordinates; `m` maps them to the canvas.
@@ -445,10 +445,17 @@ export function Canvas(props: {
     tryCall('move_by', { ids, dx: px, dy: py })
   }
 
-  /** Move the dragged nodes under `parent` (keeping their canvas position) and re-sync the drag offsets. */
-  function toParent(d: Extract<Drag, { mode: 'move' }>, parent: string) {
+  /** Is `id` a frame or layer somewhere below `ancestor`? */
+  function below(id: string, ancestor: string) {
+    for (let p = tryCall('node', { id })?.parent; p && p !== 'document'; p = tryCall('node', { id: p })?.parent) if (p === ancestor) return true
+    return false
+  }
+
+  /** Move the dragged nodes under `parent` (keeping their canvas position) and re-sync the drag offsets. `from` is where to put them back when the pointer leaves a frame nested in the one the drag started in. */
+  function toParent(d: Extract<Drag, { mode: 'move' }>, parent: string, from?: string) {
     tryCall('reparent', { ids: d.ids, parent })
     d.parent = parent
+    d.from = from
     d.pm = parentM(parent)
     d.flow = false
     d.groupOf = undefined
@@ -525,7 +532,8 @@ export function Canvas(props: {
       d.deferred = t
       if (d.flow || (!inC && d.parent !== 'document')) toParent(d, 'document')
       snapOn = false
-    } else if (!inC && t && t.id !== d.parent && t.id !== d.groupOf) toParent(d, t.id)
+    } else if (t && t.id !== d.parent && t.id !== d.groupOf && (!inC || below(t.id, c!.id))) toParent(d, t.id, inC ? d.from ?? d.parent : undefined)
+    else if (inC && d.from && !(t && below(t.id, c!.id))) toParent(d, d.from)
     setDrop(d.deferred ?? null)
     setFloat(null)
     let [ox, oy] = [0, 0]

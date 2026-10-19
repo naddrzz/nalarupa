@@ -622,6 +622,37 @@ try {
   await canvas.press('delete')
   await sleep(300)
 
+  // A layer dragged onto a frame that sits beside it in the same parent moves into that frame, and back out when the pointer leaves it.
+  await app.getByTestId('tool-frame').click()
+  await app.mouse.drag(at(400, 400), at(560, 560), { steps: 5 })
+  await sleep(300)
+  const card = await app.getByTestId('selection-box').bounds()
+  await app.getByTestId('tool-rectangle').click()
+  await app.mouse.drag(at(640, 420), at(690, 470), { steps: 5 })
+  await sleep(300)
+  // The box of the dragged layer's parent (Shift+Enter), then the layer is picked again where the pointer left it.
+  const parentBox = async (x: number, y: number) => {
+    await canvas.press('shift-enter')
+    await sleep(400)
+    const b = await app.getByTestId('selection-box').bounds()
+    await app.mouse.click(at(x, y))
+    await sleep(300)
+    return b
+  }
+  const sameBox = (b: typeof card) => Math.abs(b.x - card.x) <= 2 && Math.abs(b.y - card.y) <= 2 && Math.abs(b.width - card.width) <= 2
+  await app.mouse.drag(at(665, 445), at(480, 480), { steps: 8 })
+  await sleep(500)
+  assert(await until(async () => sameBox(await parentBox(480, 480))), 'dragging a layer onto a sibling frame moves it into that frame')
+  await app.mouse.drag(at(480, 480), at(665, 445), { steps: 8 })
+  await sleep(500)
+  assert(await until(async () => !sameBox(await parentBox(665, 445))), 'dragging it back out into the shared parent leaves the frame')
+  await canvas.press('delete')
+  await sleep(300)
+  await app.mouse.click(at(420, 540))
+  await sleep(300)
+  await canvas.press('delete')
+  await sleep(300)
+
   // A layer drawn inside a flipped or rotated frame lands where it was dragged (its center, as the ghost showed).
   const drawn = async (name: string, ox: number, turn: () => Promise<void>) => {
     await app.getByTestId('tool-frame').click()
