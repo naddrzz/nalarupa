@@ -64,6 +64,8 @@ pub struct AgentState {
     pub main: Option<String>,
     /// Prompts sent while agents were busy; flushed as one message afterwards.
     pub queue: Vec<String>,
+    /// Options of the latest queued prompt: (parallel, mode, designs, iterate), as `send` takes them.
+    queue_opts: (usize, String, usize, String),
     /// Parallel agent setting of the current turn: (count, mode "split" | "side").
     pub parallel: (usize, String),
     /// The conversation being saved to `<data_dir>/sessions/<id>.json`; None until the first prompt.
@@ -203,6 +205,8 @@ pub fn send(prompt: String, parallel: usize, mode: &str, designs: usize, iterate
         let mut e = engine();
         if e.agent.running {
             e.agent.queue.push(prompt.clone());
+            // Several queued prompts run as one turn: the latest one's options win.
+            e.agent.queue_opts = (parallel, mode.into(), designs, iterate.into());
             e.emit(json!({"type": "agent", "kind": "queued", "text": prompt}));
             return Ok(());
         }
@@ -240,15 +244,13 @@ fn start_turn(shown: &str, prompt: String, resume: bool) {
         if resume && e.agent.cancel.load(Ordering::SeqCst) {
             // Prompts sent after Stop queued behind this continuation: run them now as a fresh turn,
             // keeping the agent busy so nothing else slips in, instead of leaving them stranded.
-            let queued = std::mem::take(&mut e.agent.queue);
-            if queued.is_empty() {
+            let Some((queued, (n, mode, designs, iterate))) = take_queue(&mut e) else {
                 e.agent.running = false;
                 return;
-            }
-            let (n, mode) = e.agent.parallel.clone();
+            };
             drop(e);
             drop(ops);
-            begin(queued.join("\n\n"), n, &mode, 1, "", false);
+            begin(queued, n, &mode, designs, &iterate, false);
             return;
         }
         if e.agent.chat.is_none() {
@@ -340,7 +342,7 @@ fn start_thread(p: Profile, prompt: String, child: Option<String>) {
         emit(&p, "done", json!({"durationMs": started.elapsed().as_millis() as u64, "usage": usage, "stopped": stopped}));
         enum Next {
             Iterate(&'static str),
-            Queued(String),
+            Queued(String, (usize, String, usize, String)),
         }
         let next = {
             let mut e = engine();
@@ -359,7 +361,7 @@ fn start_thread(p: Profile, prompt: String, child: Option<String>) {
                     drop_queue(&mut e);
                     None
                 } else {
-                    (!e.agent.queue.is_empty()).then(|| Next::Queued(std::mem::take(&mut e.agent.queue).join("\n\n")))
+                    take_queue(&mut e).map(|(q, opts)| Next::Queued(q, opts))
                 };
                 // A continuation keeps the agent busy until its thread starts, so a reset cannot slip in between.
                 e.agent.running = next.is_some();
@@ -368,10 +370,7 @@ fn start_thread(p: Profile, prompt: String, child: Option<String>) {
         };
         match next {
             Some(Next::Iterate(prompt)) => start_turn(ITERATING, wrap_parallel(prompt), true),
-            Some(Next::Queued(q)) => {
-                let (n, mode) = engine().agent.parallel.clone();
-                begin(q, n, &mode, 1, "", true);
-            }
+            Some(Next::Queued(q, (n, mode, designs, iterate))) => begin(q, n, &mode, designs, &iterate, true),
             None => {}
         }
     });
@@ -390,6 +389,12 @@ fn clear_generating(e: &mut Engine) {
     for id in stale {
         e.apply_generated(&id, &off, true);
     }
+}
+
+/// The queued prompts as one message, with the options they were sent with.
+fn take_queue(e: &mut Engine) -> Option<(String, (usize, String, usize, String))> {
+    let queued = std::mem::take(&mut e.agent.queue);
+    (!queued.is_empty()).then(|| (queued.join("\n\n"), std::mem::take(&mut e.agent.queue_opts)))
 }
 
 /// Drop the queued prompts and tell the UI, so their bubbles stop promising to send them.
@@ -1280,6 +1285,19 @@ mod tests {
         e.agent.chat = None;
         e.data_dir = data_dir;
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A prompt queued behind a running agent keeps the Agents and Let it cook choices it was sent with (the latest wins).
+    #[test]
+    fn queued_prompt_keeps_its_options() {
+        engine().agent.running = true;
+        send("first".into(), 2, "side", 1, "layout").unwrap();
+        send("second".into(), 3, "split", 3, "style").unwrap();
+        let (text, opts) = take_queue(&mut engine()).unwrap();
+        engine().agent.running = false;
+        assert_eq!(text, "first\n\nsecond");
+        assert_eq!(opts, (3, "split".to_string(), 3, "style".to_string()));
+        assert!(take_queue(&mut engine()).is_none(), "the queue is empty after it is taken");
     }
 
     /// A run that ends before the call that clears `placeholder` must not leave frames "Generating", except
