@@ -1,0 +1,19 @@
+name: retry-claude
+# Reruns Claude jobs that an API error such as the usage limit ended (.github/scripts/retry-claude.sh). Its own
+# workflow and concurrency group, so a slow pass never holds up auto-merge on the same small VPS runner.
+on:
+  schedule: [{ cron: "7,37 * * * *" }]
+  workflow_dispatch:
+
+concurrency: { group: retry-claude, cancel-in-progress: false }
+permissions: { contents: read }
+
+jobs:
+  retry:
+    runs-on: [self-hosted, nalarupa-light]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with: { sparse-checkout: .github/scripts, persist-credentials: false }
+      - run: bash .github/scripts/retry-claude.sh
+        env: { GH_TOKEN: "${{ secrets.GH_PAT }}", GITHUB_REPOSITORY: "${{ github.repository }}" }
