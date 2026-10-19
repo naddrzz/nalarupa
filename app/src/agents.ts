@@ -167,8 +167,8 @@ export function applyEvents(events: any[], now: number): boolean {
         store.items.push({ kind: 'note', id: nextId++, text: 'Queued message discarded.' })
         break
       case 'start':
+        if (p) poke(p, now) // before running.add: a cursor that faded while idle fades in again
         store.running.add(aid)
-        if (p) poke(p, now)
         break
       case 'text_delta': {
         const last = lastOf(aid, ['assistant', 'thinking', 'tool'])

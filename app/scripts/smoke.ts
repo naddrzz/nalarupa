@@ -136,6 +136,12 @@ resetChat()
   assert(cursorFaded('a', cursor, 20000) && !cursorFaded('a', cursor, 10000), 'an idle agent fades off after GONE')
   poke(profile, 20000)
   assert(cursor.appearAt === 20000, 'poking a faded cursor fades it in again')
+  // A new run on a cursor that faded while idle fades it in again rather than reviving it at its old spot.
+  cursor.appearAt = 0
+  cursor.lastActivity = 0
+  applyEvents([{ type: 'agent', agent: profile, kind: 'start' }], 20000)
+  assert(store.running.has('a') && cursor.appearAt === 20000, 'starting an agent with a faded cursor restarts the fade-in')
+  store.running.clear()
   store.cursors.clear()
 }
 const mcp = await fetch(`http://127.0.0.1:${init.mcpPort}/mcp`, {
