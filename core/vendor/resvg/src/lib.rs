@@ -1,3 +1,4 @@
+// Patched for Nalarupa: render_node draws a path without a layer box (search "Nalarupa:").
 // Copyright 2017 the Resvg Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
@@ -64,7 +65,12 @@ pub fn render_node(
     mut transform: tiny_skia::Transform,
     pixmap: &mut tiny_skia::PixmapMut,
 ) -> Option<()> {
-    let bbox = node.abs_layer_bounding_box()?;
+    // Nalarupa: a horizontal or vertical stroked path has no layer box but still paints; it is
+    // drawn unshifted (the caller positions it) instead of being dropped.
+    let bbox = node.abs_layer_bounding_box();
+    if bbox.is_none() && !matches!(node, usvg::Node::Path(_)) {
+        return None;
+    }
 
     let target_size = tiny_skia::IntSize::from_wh(pixmap.width(), pixmap.height()).unwrap();
     let max_bbox = tiny_skia::IntRect::from_xywh(
@@ -75,7 +81,9 @@ pub fn render_node(
     )
     .unwrap();
 
-    transform = transform.pre_translate(-bbox.x(), -bbox.y());
+    if let Some(bbox) = bbox {
+        transform = transform.pre_translate(-bbox.x(), -bbox.y());
+    }
 
     let ctx = render::Context { max_bbox };
     render::render_node(node, &ctx, transform, pixmap);

@@ -799,8 +799,9 @@ fn painted_box(n: &usvg::Node) -> Option<usvg::NonZeroRect> {
 /// layers) and draw it at that integer offset.
 fn fallback(ctx: &mut RenderContext, tree: &usvg::Tree, at: &[u32], parent: tiny_skia::Transform, blend: BlendMode, f: &Frame, view: Rect) {
     let Some(node) = node_at(tree.root(), at) else { return };
-    // resvg's render_node origin is the layer box; the pixmap covers everything painted.
-    let Some(origin) = node.abs_layer_bounding_box() else { return };
+    // resvg's render_node origin is the layer box (none for a horizontal or vertical line, which
+    // it draws unshifted); the pixmap covers everything painted.
+    let origin = node.abs_layer_bounding_box().map_or((0.0, 0.0), |o| (o.x(), o.y()));
     let Some(b) = painted_box(node) else { return };
     let z = f.zoom;
     let x0 = (b.left() as f64).max(view.0) * z;
@@ -818,7 +819,7 @@ fn fallback(ctx: &mut RenderContext, tree: &usvg::Tree, at: &[u32], parent: tiny
     }
     let Some(mut pm) = tiny_skia::Pixmap::new(w, h) else { return };
     let tf = tiny_skia::Transform::from_row(z as f32, 0.0, 0.0, z as f32, -(f.x0 as i64 + x0) as f32, -(f.y0 as i64 + y0) as f32).pre_concat(parent);
-    resvg::render_node(node, tf.pre_translate(origin.x(), origin.y()), &mut pm.as_mut());
+    resvg::render_node(node, tf.pre_translate(origin.0, origin.1), &mut pm.as_mut());
     let pix = Pixmap::from_parts(pm.take(), w as u16, h as u16, PixelMetadata::default());
     ctx.set_transform(Affine::translate((x0 as f64, y0 as f64)));
     ctx.set_blend_mode(blend);
@@ -1483,6 +1484,18 @@ mod tests {
             let i = (70 * 140 + 16) * 4; // 4 px outside the left edge, mid height
             assert_eq!(px[i..i + 3], [0, 255, 0], "{kind}: the outer stroke is missing");
         }
+    }
+
+    /// A horizontal or vertical path has no layer box, so resvg cannot draw it alone: its pattern
+    /// stroke (an angular gradient over the node box) must still show.
+    #[test]
+    fn angular_stroke_of_an_axis_aligned_path_shows() {
+        let json = r##"{"version":"2.19","children":[
+            {"type":"frame","id":"f","x":0,"y":0,"width":140,"height":140,"fill":"#ffffff","layout":"none","children":[
+              {"type":"path","id":"n","x":20,"y":60,"width":100,"height":20,"geometry":"M0 10L100 10","stroke":{"type":"gradient","gradientType":"angular","colors":[{"color":"#00ff00","position":0},{"color":"#00ff00","position":1}]},"strokeWidth":12}]}]}"##;
+        let px = vello(&Doc::from_json(json).unwrap(), 140, 140);
+        let i = (60 * 140 + 70) * 4;
+        assert_eq!(px[i..i + 3], [0, 255, 0], "the path's stroke is missing");
     }
 
     /// A background blur blurs whatever is painted beneath it, also other top-level frames
