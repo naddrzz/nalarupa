@@ -1,6 +1,6 @@
 name: ci
 # GitHub-hosted runners: free for this public repo, a clean machine per job, and nothing from a fork PR touches the
-# VPS. The VPS only runs the Claude workflows.
+# VPS. The Claude workflows run on them too; the VPS only runs auto-merge.
 on:
   push: { branches: [dev, main] }
   pull_request:
