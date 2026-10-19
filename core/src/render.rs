@@ -1130,6 +1130,28 @@ pub(crate) mod tests {
         }
     }
 
+    /// A text shadow follows what paints: stroke-only text casts its stroke, not solid glyphs.
+    #[test]
+    fn stroke_only_text_casts_a_hollow_shadow() {
+        let text = |y: u32, extra: &str| {
+            format!(r##"{{"type":"text","x":10,"y":{y},"content":"Out","fontSize":50,"fontWeight":"700","stroke":"#000000","strokeWidth":2,"effect":{{"type":"shadow","offset":{{"x":150,"y":0}},"color":"#ff0000"}}{extra}}}"##)
+        };
+        let json = format!(
+            r##"{{"version":"2.19","children":[{{"type":"frame","id":"f","x":0,"y":0,"width":300,"height":180,"layout":"none","fill":"#ffffff","children":[{},{}]}}]}}"##,
+            text(10, r##","fill":"#ffff00""##),
+            text(100, ""),
+        );
+        let doc = Doc::from_json(&json).unwrap();
+        for raster in [Raster::Resvg, Raster::Vello] {
+            let mut r = Renderer { raster, ..Renderer::default() };
+            sync(&mut r, &doc);
+            let px = r.render(300, 180, 0.0, 0.0, 1.0, [255, 255, 255], None, true).to_vec();
+            let red = |y0: usize, y1: usize| (y0..y1).flat_map(|y| (150..300).map(move |x| (y * 300 + x) * 4)).filter(|&o| px[o] > 200 && px[o + 1] < 80).count();
+            let (solid, hollow) = (red(0, 95), red(95, 180));
+            assert!(hollow > 100 && hollow * 3 < solid * 2, "{raster:?}: shadow pixels filled {solid}, stroke-only {hollow}");
+        }
+    }
+
     /// An agent-inserted node is left out of the cached view, painted 50 units low and
     /// transparent at its first frame, part way there 100 ms later, and back in the
     /// cached view (at its real place) once it settles.

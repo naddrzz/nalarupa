@@ -486,6 +486,10 @@ impl Html<'_> {
         };
         let stroke = fills(n.p.get("stroke")).first().and_then(|f| f.as_str().map(str::to_string).or_else(|| f["color"].as_str().map(str::to_string))).and_then(|c| css_color(&c));
         if let (Some(c), Some(w)) = (stroke, width.filter(|w| *w > 0.0)) {
+            // Stroke-only text is an outline: the inherited color must not fill the glyphs.
+            if fills(n.p.get("fill")).is_empty() {
+                css.push_str("color:transparent;");
+            }
             if matches!(n.s("strokeAlignment"), Some("outer" | "outside")) {
                 let _ = write!(css, "-webkit-text-stroke:{}px {c};paint-order:stroke fill;", w * 2.0);
             } else {
@@ -596,7 +600,11 @@ mod tests {
         assert!(svg(&mut e, &outer).contains(r#"stroke-width="8""#), "an outer stroke is drawn double width and clipped");
 
         let html = |e: &mut Engine, id: &String| std::fs::read_to_string(&super::export(e, &[id.clone()], "html", out.join("export.html").to_str().unwrap(), &json!({})).unwrap()[0]).unwrap();
-        assert!(html(&mut e, &center).contains("-webkit-text-stroke:4px #000000;"));
+        let html_center = html(&mut e, &center);
+        assert!(html_center.contains("-webkit-text-stroke:4px #000000;") && !html_center.contains("color:transparent"), "{html_center}");
         assert!(html(&mut e, &outer).contains("-webkit-text-stroke:8px #000000;paint-order:stroke fill;"));
+        // Stroke-only text does not take the inherited color as its fill.
+        let hollow = e.insert_root(json!({"type": "text", "content": "Out", "fontSize": 50, "stroke": "#000000", "strokeWidth": 4})).unwrap();
+        assert!(html(&mut e, &hollow).contains("color:transparent;-webkit-text-stroke:4px #000000;"));
     }
 }

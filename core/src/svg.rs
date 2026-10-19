@@ -564,11 +564,23 @@ impl<'a> Svg<'a> {
         let stroke = if text { self.stroke_of(n, &Geo { d: String::new(), evenodd: false, closed: true }) } else { None };
         let reach = stroke.as_ref().map_or(0.0, Stroke::reach);
         let b = if text { inflate((n.x, n.y, n.w, n.h), TextStyle::of(n).size / 2.0 + reach) } else { (n.x, n.y, n.w, n.h) };
+        let fills = if text { self.paints(n.p.get("fill"), (n.x, n.y, n.w, n.h)) } else { Vec::new() };
+        let visible = fills.iter().any(|p| p.alpha > 0.0);
         let mask = outline.map(|m| {
             let black = [Paint { value: "#000".into(), alpha: 1.0, blend: None }];
-            let mut body = if text { self.text_markup(n, &black) } else { self.icon_markup(n, Some(&black)) };
-            if let Some(s) = stroke.as_ref().filter(|s| s.align != "inner") {
-                body += &self.text_stroke_markup(n, s, &black);
+            // Like shapes, glyphs without a visible fill are no outline: stroke-only text casts its stroke.
+            let mut body = if !text {
+                self.icon_markup(n, Some(&black))
+            } else if visible {
+                self.text_markup(n, &black)
+            } else {
+                String::new()
+            };
+            match &stroke {
+                Some(s) if !visible => body += &self.text_stroke(n, s, &black),
+                // Over the fill an unclipped stroke adds the same outline; an inner one adds nothing.
+                Some(s) if s.align != "inner" => body += &self.text_stroke_markup(n, s, &black),
+                _ => {}
             }
             let _ = write!(self.defs, r#"<g id="{m}">{body}</g>"#);
             m
@@ -576,15 +588,11 @@ impl<'a> Svg<'a> {
         if let Some(m) = &mask {
             self.drop_shadows(fx, m, b, None);
         }
-        let body = if text {
-            let paints = self.paints(n.p.get("fill"), (n.x, n.y, n.w, n.h));
-            self.text_markup(n, &paints)
-        } else {
-            self.icon_markup(n, None)
-        };
+        let body = if text { self.text_markup(n, &fills) } else { self.icon_markup(n, None) };
         self.out.push_str(&body);
         if let Some(s) = &stroke {
-            self.text_stroke(n, s);
+            let body = self.text_stroke(n, s, &s.paints);
+            self.out.push_str(&body);
         }
         if let Some(m) = &mask {
             self.inner_shadows(fx, m, b, None);
@@ -774,12 +782,11 @@ impl<'a> Svg<'a> {
         self.lines_with(n, &st, &n.lines, (n.x, n.y, n.w, n.h), paints, "stroke", &extra)
     }
 
-    /// Text stroke above the fill; inner/outer keep the half of the double-width stroke inside/outside the glyphs.
-    fn text_stroke(&mut self, n: &RNode, s: &Stroke) {
-        let body = self.text_stroke_markup(n, s, &s.paints);
+    /// Text stroke painted with `paints`; inner/outer keep the half of the double-width stroke inside/outside the glyphs.
+    fn text_stroke(&mut self, n: &RNode, s: &Stroke, paints: &[Paint]) -> String {
+        let body = self.text_stroke_markup(n, s, paints);
         if s.align == "center" {
-            self.out.push_str(&body);
-            return;
+            return body;
         }
         let id = self.id("k");
         let (x, y, w, h) = inflate((n.x, n.y, n.w, n.h), TextStyle::of(n).size / 2.0 + s.reach() + 2.0);
@@ -787,7 +794,7 @@ impl<'a> Svg<'a> {
         let glyphs = self.text_markup(n, &[Paint { value: if inner { "#fff" } else { "#000" }.into(), alpha: 1.0, blend: None }]);
         let rect = if inner { String::new() } else { format!(r##"<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="#fff"/>"##) };
         let _ = write!(self.defs, r#"<mask id="{id}" maskUnits="userSpaceOnUse" x="{x}" y="{y}" width="{w}" height="{h}">{rect}{glyphs}</mask>"#);
-        let _ = write!(self.out, r#"<g mask="url(#{id})">{body}</g>"#);
+        format!(r#"<g mask="url(#{id})">{body}</g>"#)
     }
 
     /// Paints of a `fill`/`stroke` value. Gradients and images span the node box `b`
