@@ -74,6 +74,7 @@ assert(bar.shown.length === 8 && bar.more === 2, 'bar caps the pills and counts 
 assert(bar.shown.slice(0, 3).every((a) => store.running.has(a.id)), 'running agents are listed first')
 resetChat()
 assert(store.profiles.size === 0 && store.running.size === 0 && barAgents().shown.length === 0, 'a new conversation clears the agent bar')
+assert(store.cursors.size === 0, "a new conversation drops the old agents' canvas cursors")
 resetChat()
 // Reduced motion: a running agent repaints the canvas layer only for fades, not every frame of the run.
 {

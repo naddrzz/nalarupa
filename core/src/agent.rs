@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -125,18 +125,28 @@ impl AgentState {
         self.clear();
         self.messages = saved["messages"].as_array().cloned().unwrap_or_default();
         self.session = saved["session"].as_str().map(str::to_string);
-        let a = &saved["agent"];
-        if let (Some(pid), Some(name), Some(color)) = (a["id"].as_str(), a["name"].as_str(), a["color"].as_str()) {
-            if self.profile(pid).is_none() {
-                self.profiles.push(Profile { id: pid.into(), name: name.into(), color: color.into(), parent: None });
-            }
-            self.main = Some(pid.into());
-        }
+        self.main = self.add_saved(&saved["agent"]);
         let events = saved["events"].as_array().cloned().unwrap_or_default();
+        // Every agent of the chat keeps its name, so agents spawned from here on get other names.
+        for ev in &events {
+            self.add_saved(&ev["agent"]);
+        }
         self.chat = Some(Chat { id: id.into(), title: saved["title"].as_str().unwrap_or_default().into(), events });
     }
 
+    /// A saved agent identity (`Profile::json`), added once per id; returns its id.
+    fn add_saved(&mut self, a: &Value) -> Option<String> {
+        let (Some(pid), Some(name), Some(color)) = (a["id"].as_str(), a["name"].as_str(), a["color"].as_str()) else { return None };
+        if self.profile(pid).is_none() {
+            self.profiles.push(Profile { id: pid.into(), name: name.into(), color: color.into(), parent: a["parent"].as_str().map(str::to_string) });
+        }
+        Some(pid.into())
+    }
+
     fn new_profile(&mut self, parent: Option<String>) -> Profile {
+        // Ids count up for the whole process, not per conversation: the script globals of an
+        // earlier conversation's main agent stay keyed by its id. The fixed-width suffix keeps two counts from spelling one id.
+        static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
         let n = self.profiles.len();
         let used: Vec<&str> = self.profiles.iter().map(|p| p.name.as_str()).collect();
         let pick = (crate::doc::random_u64() as usize) % NAMES.len();
@@ -144,7 +154,7 @@ impl AgentState {
         let name = (0..NAMES.len()).map(|i| NAMES[(pick + i) % NAMES.len()].to_string()).find(|n| !used.contains(&n.as_str())).unwrap_or_else(|| {
             (2..).map(|k| format!("{} {k}", NAMES[pick])).find(|n| !used.contains(&n.as_str())).unwrap_or_default()
         });
-        let p = Profile { id: format!("ag{}{:x}", n, crate::doc::random_u64() & 0xfff), name, color: COLORS[(pick + n * 5) % COLORS.len()].to_string(), parent };
+        let p = Profile { id: format!("ag{}{:03x}", NEXT_ID.fetch_add(1, Ordering::Relaxed), crate::doc::random_u64() & 0xfff), name, color: COLORS[(pick + n * 5) % COLORS.len()].to_string(), parent };
         self.profiles.push(p.clone());
         p
     }
@@ -1040,6 +1050,8 @@ mod tests {
         assert!(!a.record(&ev("tool_progress", "")));
         assert!(!a.record(&ev("text_delta", "lo")));
         assert!(a.record(&ev("done", "")));
+        let helper = a.new_profile(Some(p.id.clone()));
+        assert!(a.record(&json!({"type": "agent", "kind": "done", "agent": helper.json()})));
         save_chat(&dir, &a).unwrap();
 
         let listed = list_chats(&dir);
@@ -1052,9 +1064,10 @@ mod tests {
         assert_eq!(b.messages, a.messages);
         assert_eq!(b.main, a.main);
         assert_eq!(b.profile(&p.id).map(|q| q.name.as_str()), Some(p.name.as_str()));
+        assert_eq!(b.profile(&helper.id).map(|q| (q.name.as_str(), q.parent.as_deref())), Some((helper.name.as_str(), Some(p.id.as_str()))), "a restored chat keeps its helpers' names");
         let events = &b.chat.as_ref().unwrap().events;
         let kinds: Vec<&str> = events.iter().filter_map(|e| e["kind"].as_str()).collect();
-        assert_eq!(kinds, ["user", "text_delta", "done"]);
+        assert_eq!(kinds, ["user", "text_delta", "done", "done"]);
         assert_eq!(events[1]["text"], "Hello");
         assert!(read_chat(&dir, "../settings").is_err());
         let _ = std::fs::remove_dir_all(&dir);
@@ -1067,8 +1080,11 @@ mod tests {
         names.sort();
         names.dedup();
         assert_eq!(names.len(), 40, "no two agents of one conversation share a name");
+        let old: Vec<String> = a.profiles.iter().map(|p| p.id.clone()).collect();
         a.clear();
         assert!(a.profiles.is_empty(), "a new conversation forgets the old agents");
+        let fresh = a.new_profile(None);
+        assert!(!old.contains(&fresh.id), "a new conversation's agent never takes an old id (its script globals are kept)");
     }
 
     #[test]

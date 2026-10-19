@@ -254,6 +254,7 @@ export function resetChat() {
   store.pills.clear()
   store.profiles.clear()
   store.running.clear()
+  store.cursors.clear()
 }
 
 /** Agent bar pills: the running agents first, then the finished ones, at most `max`; `more` counts the rest. */
