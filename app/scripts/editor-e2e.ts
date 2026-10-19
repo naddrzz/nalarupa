@@ -559,6 +559,36 @@ try {
   await app.call('keystrokes', { keys: 'escape' })
   assert(await until(async () => !(await count('size-label'))), 'Escape clears the selection from a Layers row')
 
+  // The in-place text editor opens over a rotated text layer (centered on its painted box), not beside it.
+  await app.getByTestId('tool-text').click()
+  await app.mouse.click(at(300, 200))
+  await app.getByTestId('text-editor').waitFor({ timeoutMs: 6000 })
+  await app.call('keystrokes', { keys: 'ctrl-a H e l l o' })
+  await app.call('keystrokes', { keys: 'enter' })
+  assert(await until(async () => !(await count('text-editor')) && (await app.getByTestId('layers').getByText('Text').count()) > 0), 'the text tool creates a text layer')
+  await app.getByTestId('layers').getByText('Text').click()
+  await sleep(300)
+  const trot = await app.getByTestId('inspector-rotation').bounds()
+  await app.mouse.click({ x: trot.x + trot.width - 10, y: trot.y + trot.height / 2 })
+  await sleep(500)
+  await app.call('keystrokes', { keys: 'ctrl-a 9 0' })
+  await sleep(500)
+  await app.call('keystrokes', { keys: 'enter' })
+  assert(await until(async () => (await count('rotated-overlay')) > 0, 6000), 'the Inspector rotates the text layer')
+  await app.getByTestId('layers').getByText('Text').click()
+  await sleep(300)
+  await canvas.press('enter')
+  assert(await until(async () => (await count('text-editor')) > 0, 6000), 'Enter edits the rotated text layer')
+  await shot('13b-rotated-text-editor')
+  const te = (await app.getByTestId('text-editor').bounds())!
+  const tf = await frame()
+  assert(
+    tf.cx >= te.x && tf.cx <= te.x + te.width && tf.cy >= te.y && tf.cy <= te.y + te.height,
+    `the text editor covers the rotated text's painted center (${tf.cx},${tf.cy} vs ${te.x},${te.y} ${te.width}×${te.height})`,
+  )
+  await app.call('keystrokes', { keys: 'escape' })
+  assert(await until(async () => !(await count('text-editor'))), 'Escape ends the text edit')
+
   // A child of a rotated or flipped frame follows the pointer: the drag delta is turned into the frame's space first.
   await app.getByTestId('tool-frame').click()
   await app.mouse.drag(at(560, 80), at(800, 250), { steps: 5 })
