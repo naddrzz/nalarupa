@@ -299,7 +299,12 @@ function Layers({ version, selection, select, focus, hover, onShortcut }: { vers
                     aria-label={`${l.hidden ? 'Show' : 'Hide'} ${l.name}`}
                     onMouseDown={() => { eyeAt.current = performance.now() }}
                     onClick={() => tryCall('update', { ids: [l.id], props: { enabled: l.hidden ? null : false } })}
-                    style={{ width: 22, height: 22, borderRadius: 5, display: 'flex', alignItems: 'center', justifyContent: 'center', hover: { backgroundColor: C.raised } }}
+                    // The row keeps a press for its drag, which loses the click of an unpainted child; the
+                    // painted fill gets its own hitbox. It also takes the hover from the row, so the eye
+                    // holds the row's hover itself to stay mounted until the click.
+                    onMouseEnter={() => setHover(l.id)}
+                    onMouseLeave={() => { if (hoverRef.current === l.id) setHover(null) }}
+                    style={{ width: 22, height: 22, borderRadius: 5, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#00000001', hover: { backgroundColor: C.raised } }}
                   >
                     <Icon name={l.hidden ? 'hidden' : 'eye'} size={13} color={C.muted} />
                   </div>
