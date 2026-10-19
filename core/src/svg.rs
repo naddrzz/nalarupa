@@ -940,8 +940,9 @@ impl<'a> Svg<'a> {
             Some("radial") => {
                 let m = [bw * right.0, bh * right.1, -bw * up.0, -bh * up.1, bx + bw * cx, by + bh * cy];
                 let _ = if flat {
-                    // The ellipse collapses to a segment; a circle over its longer half-axis stands in.
-                    let r = m[0].hypot(m[1]).max(m[2].hypot(m[3]));
+                    // The ellipse collapses to a segment; a circle over its half-length stands in. Both axes
+                    // lie along the line, so their surviving components combine.
+                    let r = if bw.abs() >= bh.abs() { m[0].hypot(m[2]) } else { m[1].hypot(m[3]) };
                     write!(
                         self.defs,
                         r#"<radialGradient id="{id}" cx="{}" cy="{}" r="{}" gradientUnits="userSpaceOnUse">{}</radialGradient>"#,
@@ -966,8 +967,8 @@ impl<'a> Svg<'a> {
                 } else {
                     write!(
                         self.defs,
-                        r#"<linearGradient id="{id}" x1="{}" y1="{}" x2="{}" y2="{}" gradientUnits="userSpaceOnUse" gradientTransform="matrix({bw} 0 0 {bh} {bx} {by})">{}</linearGradient>"#,
-                        n(cx - up.0), n(cy - up.1), n(cx + up.0), n(cy + up.1),
+                        r#"<linearGradient id="{id}" x1="{}" y1="{}" x2="{}" y2="{}" gradientUnits="userSpaceOnUse" gradientTransform="matrix({} 0 0 {} {} {})">{}</linearGradient>"#,
+                        n(cx - up.0), n(cy - up.1), n(cx + up.0), n(cy + up.1), n(bw), n(bh), n(bx), n(by),
                         stop_tags(&stops)
                     )
                 };
