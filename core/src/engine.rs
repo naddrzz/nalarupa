@@ -340,7 +340,7 @@ impl Engine {
 
     /// Record `before` as an undo step and mark the document changed.
     pub fn commit(&mut self, before: Value) {
-        if before == self.doc.root {
+        if same(&before, &self.doc.root) {
             return;
         }
         self.coalesce = None;
@@ -809,9 +809,34 @@ pub fn tool_specs() -> Value {
     ])
 }
 
+/// Equal as documents: a whole number written back as a float (`10` vs `10.0`) is not a change.
+fn same(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => x == y || x.as_f64() == y.as_f64(),
+        (Value::Array(x), Value::Array(y)) => x.len() == y.len() && x.iter().zip(y).all(|(x, y)| same(x, y)),
+        (Value::Object(x), Value::Object(y)) => x.len() == y.len() && x.iter().all(|(k, v)| y.get(k).is_some_and(|w| same(v, w))),
+        _ => a == b,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drag_that_ends_where_it_started_leaves_no_undo_step() {
+        let mut e = Engine::new(std::env::temp_dir().join(format!("nalarupa-test-drag-noop-{}", std::process::id())));
+        e.doc.root = json!({"children": [{"id": "a", "type": "rectangle", "x": 10, "y": 10}]});
+        e.drag_before = Some(e.doc.root.clone());
+        e.doc.root["children"][0]["x"] = json!(40.0);
+        e.doc.root["children"][0]["x"] = json!(10.0);
+        let before = e.drag_before.take().unwrap();
+        e.commit(before);
+        assert!(e.undo.is_empty(), "10 written back as 10.0 is not a change");
+        e.doc.root["children"][0]["x"] = json!(10.5);
+        e.commit(json!({"children": [{"id": "a", "type": "rectangle", "x": 10, "y": 10}]}));
+        assert_eq!(e.undo.len(), 1);
+    }
 
     #[test]
     fn blank_key_is_none() {

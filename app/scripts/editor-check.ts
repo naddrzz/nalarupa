@@ -189,5 +189,22 @@ call('update', { ids: [bar], props: { height: 0 } })
 assert(marquee(1200, 190, 20, 20), 'marquee on a zero-height 45° line selects it')
 assert(!marquee(1110, 90, 30, 30), "marquee in the empty corner of a zero-height 45° line's bounds misses it")
 
+// A drag that ends where it started adds no undo step, even though move_by writes 10 back as 10.0.
+const D1 = call('insert', { parent: 'document', node: { type: 'rectangle', name: 'D1', x: 10, y: 10, width: 50, height: 50 } }).id
+const D2 = call('insert', { parent: 'document', node: { type: 'rectangle', name: 'D2', x: 100, y: 10, width: 50, height: 50 } }).id
+call('update', { ids: [D2], props: { x: 200 } })
+call('drag_begin')
+call('move_by', { ids: [D1], dx: 30, dy: 0 })
+call('move_by', { ids: [D1], dx: -30, dy: 0 })
+call('drag_end')
+call('undo')
+assert(node(D2).node.x === 100, 'a drag back to the start leaves no undo step')
+call('update', { ids: [D2], props: { x: 200 } })
+call('drag_begin')
+call('move_by', { ids: [D1], dx: 0, dy: 0 })
+call('drag_end')
+call('undo')
+assert(node(D2).node.x === 100, 'a zero-distance drag leaves no undo step')
+
 console.log('editor-check ok')
 process.exit(0)
