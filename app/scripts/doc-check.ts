@@ -127,6 +127,17 @@ const [pdf] = call('export', { format: 'pdf', path: join(out, 'deck.pdf') })
 assert(readFileSync(pdf, 'latin1').startsWith('%PDF-') && readFileSync(pdf, 'latin1').match(/\/Type ?\/Page\b(?!s)/g)?.length === 3, 'deck pdf has one page per slide')
 const [html] = call('export', { ids: ['sld02'], format: 'html-css', path: join(out, 'slide.html') })
 assert(/<html[\s>]/i.test(readFileSync(html, 'utf8')) && readFileSync(html, 'utf8').includes('Hello'), 'html export contains the text')
+// HTML paints follow the canvas: bottom fill last in CSS, blur as sigma, angular as conic, gradient stroke as a ring.
+const htmlOf = (node: any) => {
+  const id = call('insert', { parent: 'document', node: { type: 'rectangle', x: 0, y: 0, width: 160, height: 100, ...node } }).id
+  return readFileSync(call('export', { ids: [id], format: 'html-css', path: join(out, `${id}.html`) })[0], 'utf8')
+}
+const grad = (extra: any = {}) => ({ type: 'gradient', rotation: 90, colors: [{ color: '#ff0000', position: 0 }, { color: '#0000ff', position: 1 }], ...extra })
+assert(htmlOf({ fill: ['#ff0000', '#0000ff80'] }).includes('background:linear-gradient(rgba(0, 0, 255, 0.502),rgba(0, 0, 255, 0.502)),linear-gradient(#ff0000,#ff0000)'), 'html lists the topmost fill first')
+assert(htmlOf({ fill: grad({ opacity: 0.4 }) }).includes('rgba(255, 0, 0, 0.400) 0%'), 'html applies gradient fill opacity')
+assert(htmlOf({ fill: grad({ gradientType: 'angular' }) }).includes('conic-gradient(from -90deg at 50% 50%'), 'html exports an angular gradient as conic')
+assert(htmlOf({ fill: '#ff0000', effect: { type: 'blur', radius: 4 } }).includes('filter:blur(2px)'), 'html exports layer blur')
+assert(/padding:12px;background:linear-gradient/.test(htmlOf({ fill: '#ffff00', stroke: grad(), strokeWidth: 12 })), 'html exports a gradient stroke')
 assert(Buffer.from(call('png', { id: 'sld01', scale: 0.1 }), 'base64').subarray(0, 4).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47])), 'png command returns a PNG')
 throws(() => call('export', { ids: ['sld02'], format: 'bmp', path: out }), /unknown export format/, 'unknown export format')
 throws(() => call('export', { ids: ['nope'], format: 'png', path: out }), /node not found: nope/, 'exporting a missing node')
