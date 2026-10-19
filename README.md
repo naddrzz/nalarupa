@@ -170,6 +170,10 @@ cd app && bun run script-check && bun run chat-check && bun run mcp-install-chec
 ```
 
 ```bash
+cd app && bun run drag-check && bun run viewport-check && bun run issues-check
+```
+
+```bash
 cd app && bun run a11y-check && bun run motion-check && bun run window-check
 ```
 
@@ -185,6 +189,11 @@ cd app && bun run a11y-check && bun run motion-check && bun run window-check
   clear, the 20-day expiry and the running-agent guards); `mcp-install-check` covers "connect an agent" (Cursor,
   Codex and Claude Code config) against a throwaway home. All three run without a window; `mcp-install-check`
   is skipped on Windows.
+- `drag-check` covers the canvas drag gestures (`drag_begin` / `drag_end`: a move, resize, rotate or pen drag is one
+  undo step, an unchanged drag none); `viewport-check` covers the camera the agent is told about (`[user visible]` /
+  `[outside viewport]` marks and visible-first order in the editor state); `issues-check` covers the feedback after an
+  `execute` call (the "Issues detected" warnings, `Generate` errors, `Export` and `TakeScreenshot` lines). All three run
+  without a window.
 - `a11y-check` reads the Windows UI Automation tree and fails on any unnamed control; `motion-check` makes
   sure animations stop under *reduced motion*; `window-check` makes sure the window fits the screen and its
   frame carries the Nalarupa icon (`bun run window-check dist/nalarupa.exe` for the built exe).

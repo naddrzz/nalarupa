@@ -191,6 +191,8 @@ fn size_css(v: Option<&Value>, prop: &str, parent_dir: Option<&str>, horiz_axis:
     let main_axis = match parent_dir {
         Some("horizontal") => horiz_axis,
         Some("vertical") => !horiz_axis,
+        // Like the layout engine, any other layout value on a frame (e.g. an imported one) is a row.
+        Some(dir) if dir != "none" => horiz_axis,
         _ => false,
     };
     match v {
@@ -202,7 +204,8 @@ fn size_css(v: Option<&Value>, prop: &str, parent_dir: Option<&str>, horiz_axis:
             }
         }
         Some(Value::String(s)) if s.starts_with("fit_content") => format!("{prop}:fit-content;"),
-        Some(v) => num(v).map(|n| format!("{prop}:{n}px;")).unwrap_or_default(),
+        // Fixed main-axis sizes do not shrink (the canvas lets them overflow); CSS flex items would.
+        Some(v) => num(v).map(|n| format!("{prop}:{n}px;{}", if main_axis { "flex-shrink:0;" } else { "" })).unwrap_or_default(),
         None => {
             let _ = measured;
             String::new()
@@ -227,10 +230,10 @@ impl Html<'_> {
             css += &size_css(n.p.get("height"), "height", parent_dir, false, n.h);
             if matches!(n.ty.as_str(), "rectangle" | "ellipse" | "icon" | "polygon" | "line" | "path") {
                 if n.p.get("width").is_none() {
-                    let _ = write!(css, "width:{}px;", n.w);
+                    css += &size_css(Some(&Value::from(n.w)), "width", parent_dir, true, n.w);
                 }
                 if n.p.get("height").is_none() {
-                    let _ = write!(css, "height:{}px;", n.h);
+                    css += &size_css(Some(&Value::from(n.h)), "height", parent_dir, false, n.h);
                 }
             }
         }
@@ -271,9 +274,9 @@ impl Html<'_> {
                 let _ = writeln!(self.out, "<span{attrs} style=\"display:inline-flex;{css}\">{svg}</span>");
             }
             _ if as_svg => {
-                // The div's CSS transform already rotates/flips it.
+                // The div's CSS already rotates, flips and fades it.
                 let mut p = n.p.clone();
-                for k in ["rotation", "flipX", "flipY"] {
+                for k in ["rotation", "flipX", "flipY", "opacity"] {
                     p.remove(k);
                 }
                 let mut shape = RNode::leaf(n.id.clone(), &n.ty, p, None);
@@ -318,7 +321,9 @@ impl Html<'_> {
                         css += "overflow:hidden;";
                     }
                 } else if n.ty == "group" {
-                    let _ = write!(css, "position:relative;width:{}px;height:{}px;", n.w, n.h);
+                    css += "position:relative;";
+                    css += &size_css(Some(&Value::from(n.w)), "width", parent_dir, true, n.w);
+                    css += &size_css(Some(&Value::from(n.h)), "height", parent_dir, false, n.h);
                 } else if n.ty == "ellipse" {
                     css += "border-radius:50%;";
                 }
@@ -559,6 +564,56 @@ mod tests {
         // An unparseable stop colour stays as transparent black, like the canvas.
         let (s, _) = rect_html(json!({"fill": grad(json!({"colors": [{"color": "#ff0000", "position": 0}, {"color": "transparent", "position": 1}]}))}));
         assert!(s.contains("linear-gradient(-90deg,#ff0000 0%,rgba(0, 0, 0, 0) 100%)"), "{s}");
+    }
+
+    /// Fixed-size children keep their main-axis size in an overflowing auto layout, as on the canvas.
+    #[test]
+    fn fixed_size_children_do_not_shrink() {
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        e.load_template("empty");
+        let kid = |ty: &str| json!({"type": ty, "width": 60, "height": 20, "fill": "#ff0000"});
+        let row = |layout: &str| {
+            json!({"type": "frame", "width": 100, "height": 60, "layout": layout, "children": [kid("rectangle"), kid("ellipse"), {"type": "rectangle", "width": "fill_container", "height": 20, "fill": "#0000ff"}]})
+        };
+        let html = |e: &mut Engine, layout: &str| {
+            let id = e.insert_root(row(layout)).unwrap();
+            super::html_document(e, &[id], &json!({"includeHtmlScaffold": false})).unwrap()
+        };
+        let h = html(&mut e, "horizontal");
+        assert_eq!(h.matches("width:60px;flex-shrink:0;").count(), 2, "{h}");
+        assert!(h.contains("flex:1 1 0;") && !h.contains("height:20px;flex-shrink:0;"), "{h}");
+        let v = html(&mut e, "vertical");
+        assert_eq!(v.matches("height:20px;flex-shrink:0;").count(), 3, "{v}");
+        assert!(!v.contains("width:60px;flex-shrink:0;"), "{v}");
+        let u = html(&mut e, "diagonal");
+        assert_eq!(u.matches("width:60px;flex-shrink:0;").count(), 2, "{u}");
+        // Groups take their size from their children and must not shrink either.
+        let id = e.insert_root(json!({"type": "frame", "width": 100, "height": 60, "layout": "horizontal", "children": [{"type": "group", "children": [{"type": "rectangle", "width": 80, "height": 20, "fill": "#ff0000"}]}]})).unwrap();
+        let g = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
+        assert!(g.contains("width:80px;flex-shrink:0;"), "{g}");
+    }
+
+    #[test]
+    fn html_opacity_is_applied_once() {
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        e.load_template("empty");
+        for node in [
+            json!({"type": "polygon", "polygonCount": 5, "fill": "#ff0000"}),
+            json!({"type": "path", "geometry": "M0 0 L10 0 L10 10 Z", "fill": "#ff0000"}),
+            json!({"type": "line", "stroke": "#ff0000", "strokeWidth": 3}),
+            json!({"type": "ellipse", "innerRadius": 0.5, "fill": "#ff0000"}),
+        ] {
+            let ty = node["type"].as_str().unwrap().to_string();
+            let mut node = node;
+            node.as_object_mut().unwrap().extend(json!({"x": 0, "y": 0, "width": 50, "height": 50, "opacity": 0.5}).as_object().unwrap().clone());
+            let id = e.insert_root(node).unwrap();
+            let html = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
+            // `fill-opacity` is paint alpha; only the node's own opacity must not repeat.
+            assert_eq!(html.matches("opacity:0.5;").count() + html.matches(" opacity=").count(), 1, "{ty}: {html}");
+            assert!(html.contains("opacity:0.5;"), "{ty}: {html}");
+        }
     }
 
     #[test]

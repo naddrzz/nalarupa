@@ -3,7 +3,7 @@ import type { EventModifiers, EventPayload } from '@gpuix/native'
 import type { CursorValue } from '@gpuix/native/host'
 import type { ImgInstance, PublicInstance } from '@gpuix/react'
 import { call, renderPixels, tryCall, type Box } from './core'
-import { CANVAS_BG, C, DPR, FONT, LEFT_W, TOP_H } from './theme'
+import { CANVAS_BG, C, DPR, FONT, FRAME_LABEL_TEXT, LEFT_W, TOP_H } from './theme'
 import { FocusRing, setKeyboardFocus, SvgOverlay, T, useRing, type Toast } from './ui'
 import { AgentLayer } from './AgentLayer'
 import {
@@ -1205,7 +1205,13 @@ export function Canvas(props: {
     const parent = parentBox?.id ?? 'document'
     // Keep drawn layers where they were drawn, even inside auto-layout frames.
     const parentLayout = parentBox ? tryCall('node', { id: parentBox.id })?.node?.layout ?? 'horizontal' : 'none'
-    const rel = { x: x0 - (parentBox?.x ?? 0), y: y0 - (parentBox?.y ?? 0), ...(parentLayout !== 'none' ? { layoutPosition: 'absolute' } : {}) }
+    // A rotated or flipped parent paints through its matrix: map the drag's center into the parent's own space and
+    // centre the new box there (an upright parent keeps the plain top-left offset). Text has no drawn height, so a
+    // dragged text box is centred along its top edge and clicked text keeps its top-left corner.
+    const [sw, sh] = tool === 'text' ? (clicked ? [0, 0] : [bw, 0]) : [bw, bh]
+    const [cx, cy] = unapply(parentBox?.m, x0 + sw / 2, y0 + sh / 2)
+    const at = (v: number) => Math.round(v * 100) / 100
+    const rel = { x: at(cx - sw / 2 - (parentBox?.x ?? 0)), y: at(cy - sh / 2 - (parentBox?.y ?? 0)), ...(parentLayout !== 'none' ? { layoutPosition: 'absolute' } : {}) }
     const base = { ...rel, width: bw, height: bh }
     const node =
       tool === 'frame' ? { type: 'frame', name: 'Frame', ...base, fill: '#FFFFFF', layout: 'none', clip: parent === 'document' }
@@ -1329,8 +1335,8 @@ export function Canvas(props: {
           )
         }
         return (
-          <div key={f.id} testId="frame-label" style={{ position: 'absolute', left: x, top: y - 18, height: 16, maxWidth: Math.max(40, f.w * cam.zoom), overflow: 'hidden', pointerEvents: 'none' }}>
-            <T size={11} color={active ? C.select : C.muted} style={{ whiteSpace: 'nowrap' }}>{f.name}</T>
+          <div key={f.id} testId="frame-label" style={{ position: 'absolute', left: x, top: y - 18, height: 16, display: 'flex', maxWidth: Math.max(40, f.w * cam.zoom), pointerEvents: 'none' }}>
+            <T size={11} color={active ? C.select : C.muted} style={FRAME_LABEL_TEXT}>{f.name}</T>
           </div>
         )
       })}

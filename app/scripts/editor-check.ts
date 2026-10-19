@@ -1,5 +1,6 @@
 // Core checks for the canvas editing commands (no window): `bun scripts/editor-check.ts`
 import { call } from '../src/core'
+import { nodeIcon } from '../src/icons'
 
 const assert = (ok: unknown, msg: string) => {
   if (!ok) throw new Error(`editor-check failed: ${msg}`)
@@ -189,6 +190,32 @@ call('update', { ids: [bar], props: { height: 0 } })
 assert(marquee(1200, 190, 20, 20), 'marquee on a zero-height 45° line selects it')
 assert(!marquee(1110, 90, 30, 30), "marquee in the empty corner of a zero-height 45° line's bounds misses it")
 
+// A drag that ends where it started adds no undo step, even though move_by writes 10 back as 10.0.
+const D1 = call('insert', { parent: 'document', node: { type: 'rectangle', name: 'D1', x: 10, y: 10, width: 50, height: 50 } }).id
+const D2 = call('insert', { parent: 'document', node: { type: 'rectangle', name: 'D2', x: 100, y: 10, width: 50, height: 50 } }).id
+call('update', { ids: [D2], props: { x: 200 } })
+call('drag_begin')
+call('move_by', { ids: [D1], dx: 30, dy: 0 })
+assert(node(D1).node.x === 40, 'move_by moves D1 during the drag')
+call('move_by', { ids: [D1], dx: -30, dy: 0 })
+call('drag_end')
+assert(node(D1).node.x === 10, 'the drag back ends at the start')
+call('undo')
+assert(node(D2).node.x === 100, 'a drag back to the start leaves no undo step')
+call('update', { ids: [D2], props: { x: 200 } })
+call('drag_begin')
+call('move_by', { ids: [D1], dx: 30, dy: 0 })
+call('drag_end')
+call('undo')
+assert(node(D1).node.x === 10 && node(D2).node.x === 200, 'a drag that ends away from the start is one undo step')
+call('undo')
+call('update', { ids: [D2], props: { x: 200 } })
+call('drag_begin')
+call('move_by', { ids: [D1], dx: 0, dy: 0 })
+call('drag_end')
+call('undo')
+assert(node(D2).node.x === 100, 'a zero-distance drag leaves no undo step')
+
 // Drop targets follow the frame's painted box: a rotated row is entered where it is painted (its
 // insertion line runs along the turned axis), the empty spot of the unrotated box is the document.
 const R = call('insert', { parent: 'document', node: { type: 'frame', name: 'R', x: 2000, y: 2000, width: 300, height: 100, fill: '#fff', layout: 'horizontal', gap: 10, padding: 10, rotation: 90 } }).id
@@ -211,6 +238,21 @@ assert(call('drop_target', { x: 2250, y: 2050, w: 10, h: 10, ignore: [] }).id ==
 const free = call('insert', { parent: 'document', node: { type: 'frame', name: 'Free', x: 3000, y: 2000, width: 300, height: 200, fill: '#fff', layout: 'none', rotation: 30 } }).id
 assert(call('drop_target', { x: 3150, y: 2100, w: 10, h: 10, ignore: [] }).id === free, 'drop into a rotated free frame at its centre')
 assert(call('drop_target', { x: 3001, y: 2199, w: 10, h: 10, ignore: [] }).id === 'document', 'the unrotated corner of a rotated free frame is the document')
+
+// drop_target runs on every mouse move of a drag: it must stay linear in the layer count (it used to look up every layer's type in the tree first, ~80 ms at 1,500 layers).
+const BF = call('insert', { parent: 'document', node: { type: 'frame', name: 'BF', x: 5000, y: 0, width: 4000, height: 4000, layout: 'none', fill: '#fff' } }).id
+for (let i = 0; i < 1500; i++) call('insert', { parent: BF, node: { type: 'rectangle', x: 5000 + (i % 50) * 70, y: Math.floor(i / 50) * 70, width: 60, height: 60, fill: '#f00' } })
+call('drop_target', { x: 5500, y: 500, w: 10, h: 10, ignore: [] }) // warm-up: the first call syncs the pending document
+const t0 = performance.now()
+for (let i = 0; i < 5; i++) call('drop_target', { x: 5500, y: 500, w: 10, h: 10, ignore: [] })
+const per = (performance.now() - t0) / 5
+assert(call<{ id: string }>('drop_target', { x: 5500, y: 500, w: 10, h: 10, ignore: [] }).id === BF, 'drop_target finds the big frame among 1,500 layers')
+assert(per < 25, `drop_target with 1,500 layers took ${per.toFixed(1)} ms per call`)
+
+// Every layer type that has its own look gets its own Layers/Inspector icon (only rectangle uses the square).
+const icons = Object.fromEntries(['frame', 'group', 'rectangle', 'ellipse', 'text', 'icon', 'line', 'note', 'prompt', 'context', 'script', 'browser'].map((t) => [t, nodeIcon(t)]))
+assert(new Set(Object.values(icons)).size === Object.keys(icons).length, `layer types share an icon ${JSON.stringify(icons)}`)
+assert(nodeIcon('path') === nodeIcon('polygon') && nodeIcon('frame', true) === 'component', 'path/polygon and reusable icons')
 
 console.log('editor-check ok')
 process.exit(0)

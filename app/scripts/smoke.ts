@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { call, renderPixels } from '../src/core'
 import { applyEvents, barAgents, changing, cursorFaded, imageSrc, lastContentId, needsFrame, poke, resetChat, restoreChat, spinning, store } from '../src/agents'
-import { INDICATOR_TICK_MS, ellipsisAt, ellipsisPadAt, pulseAt } from '../src/theme'
+import { FRAME_LABEL_TEXT, INDICATOR_TICK_MS, ellipsisAt, ellipsisPadAt, pulseAt } from '../src/theme'
 
 const assert = (ok: unknown, msg: string) => {
   if (!ok) throw new Error(`smoke failed: ${msg}`)
@@ -74,6 +74,9 @@ call('tool', { name: 'execute', args: { input: 'Insert("sld01", {type:"rectangle
 assert(!call('state').animating, 'no slide-in under reduced motion')
 call('undo')
 call('reduce_motion', { on: false })
+// Constants check only (style is unreadable under automation): the frame label style Canvas.tsx applies ellipsizes instead of slicing.
+assert(FRAME_LABEL_TEXT.textOverflow === 'ellipsis' && FRAME_LABEL_TEXT.overflow === 'hidden' && FRAME_LABEL_TEXT.whiteSpace === 'nowrap', 'canvas frame labels must ellipsize')
+
 // Chat indicators sampled on the panel's tick (even with a late first tick): ellipsis steps stay near 400 ms, the pulse never jumps.
 {
   const steps: number[] = []
@@ -118,6 +121,30 @@ resetChat()
   assert(store.items.filter(spinning).map((i) => i.kind).join() === 'tool,thinking', 'the ellipsis animates on the running tool and the live thinking only')
   applyEvents([{ type: 'agent', kind: 'done', agent: ag }, { type: 'agent', kind: 'done', agent: { id: 'a1', name: 'Agent 1', color: '#ffffff' } }, { type: 'agent', kind: 'done', agent: { id: 'a2', name: 'Agent 2', color: '#ffffff' } }], 0)
   assert(!store.items.some(changing), 'a finished chat has no live row')
+}
+// A stopped or failed run settles its plan: unfinished steps become cancelled, none stays in progress.
+{
+  const agent = { id: 'ag1', name: 'Surya', color: '#38B2AC' }
+  const ev = (kind: string, o: object = {}) => ({ type: 'agent', kind, agent, ...o })
+  const plan = ev('todos', { todos: [{ content: 'Build hero', status: 'completed' }, { content: 'Build pricing', status: 'in_progress', activeForm: 'Building pricing' }, { content: 'Build footer', status: 'pending' }] })
+  const settled = (end: object[]) => {
+    resetChat()
+    applyEvents([ev('user', { text: 'go' }), ev('start'), plan, ...end], 0)
+    return store.todos.map((t) => t.status).join(',')
+  }
+  const end = (stopped: boolean) => ev('done', { durationMs: 1, usage: {}, stopped })
+  assert(settled([end(true)]) === 'completed,cancelled,cancelled', 'a stopped run cancels its unfinished steps')
+  assert(settled([ev('error', { text: 'Claude API error 529: Overloaded' }), end(false)]) === 'completed,cancelled,cancelled', 'a failed run cancels its unfinished steps')
+  assert(settled([end(false)]) === 'completed,in_progress,pending', 'a run that ended cleanly leaves its plan alone')
+  // An earlier failed run does not cancel the plan of the next run.
+  settled([ev('error', { text: 'boom' }), end(false)])
+  applyEvents([ev('start'), plan, end(false)], 0)
+  assert(store.todos.map((t) => t.status).join(',') === 'completed,in_progress,pending', 'an earlier failure does not cancel a later run')
+  // A failing helper agent does not cancel the plan another agent is still working through.
+  resetChat()
+  const helper = { id: 'ag2', name: 'Chandra', color: '#ED8936' }
+  applyEvents([ev('user', { text: 'go' }), ev('start'), plan, { type: 'agent', kind: 'start', agent: helper }, { type: 'agent', kind: 'error', text: 'boom', agent: helper }, { type: 'agent', kind: 'done', durationMs: 1, usage: {}, agent: helper }], 0)
+  assert(store.todos.map((t) => t.status).join(',') === 'completed,in_progress,pending', "a helper's failure leaves the plan owner's steps alone")
 }
 // A long chat keeps every item, the first prompt included, live and when reopened from history.
 {

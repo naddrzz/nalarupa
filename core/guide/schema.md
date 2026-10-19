@@ -94,7 +94,7 @@ interface Ellipse extends Base, Graphics { type: "ellipse"; width: Size; height:
   innerRadius?: Num          // 0 solid … 1 hollow ring (donuts!)
   startAngle?: Num; sweepAngle?: Num }    // degrees, counter-clockwise from 3 o'clock
 interface Polygon extends Base, Graphics { type: "polygon"; width: Size; height: Size
-  polygonCount: Num          // required (>= 3), first vertex top-center
+  polygonCount: Num          // required (3..1000), first vertex top-center
   cornerRadius?: Num }       // rounds every corner
 interface Line extends Base, Graphics { type: "line"; width: Size; height: Size }   // stroke from top-left to bottom-right
 interface Path extends Base, Graphics { type: "path"; width: Size; height: Size

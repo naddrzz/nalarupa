@@ -35,12 +35,39 @@ fn header(name: &str, value: &str) -> tiny_http::Header {
     tiny_http::Header::from_bytes(name.as_bytes(), value.as_bytes()).unwrap()
 }
 
+/// True for `http://<localhost|127.0.0.1|[::1]>[:port]` exactly; `null`, other schemes and lookalike hosts are not local.
+fn local_origin(origin: &str) -> bool {
+    let Some(authority) = origin.strip_prefix("http://") else { return false };
+    let (host, port) = match authority.strip_prefix('[') {
+        Some(_) => authority.split_at(authority.find(']').map_or(authority.len(), |i| i + 1)),
+        None => authority.split_at(authority.find(':').unwrap_or(authority.len())),
+    };
+    let port_ok = port.is_empty() || port.strip_prefix(':').is_some_and(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
+    port_ok && matches!(host, "localhost" | "127.0.0.1" | "[::1]")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::local_origin;
+
+    #[test]
+    fn origin_guard_matches_exact_local_hosts() {
+        for ok in ["http://localhost", "http://localhost:5173", "http://127.0.0.1:47700", "http://[::1]", "http://[::1]:3000"] {
+            assert!(local_origin(ok), "{ok}");
+        }
+        for bad in [
+            "null", "", "https://localhost", "http://localhost.evil.com", "http://localhostevil.com", "http://127.0.0.1.evil.com",
+            "http://127.0.0.10", "http://localhost:", "http://localhost:80a", "http://localhost/x", "http://localhost@evil.com",
+            "http://[::1]x", "http://[::1", "http://evil.com", "http://localhost:80:80",
+        ] {
+            assert!(!local_origin(bad), "{bad}");
+        }
+    }
+}
+
 fn handle(mut req: tiny_http::Request) {
     // DNS-rebinding guard: browsers send Origin; only local pages may talk to us.
-    let origin_ok = req.headers().iter().find(|h| h.field.equiv("Origin")).map_or(true, |h| {
-        let o = h.value.as_str();
-        o.starts_with("http://localhost") || o.starts_with("http://127.0.0.1") || o == "null"
-    });
+    let origin_ok = req.headers().iter().find(|h| h.field.equiv("Origin")).map_or(true, |h| local_origin(h.value.as_str()));
     if !origin_ok {
         let _ = req.respond(tiny_http::Response::from_string("forbidden origin").with_status_code(403));
         return;

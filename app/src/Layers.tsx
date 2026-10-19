@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import { tryCall, type Box, type Layer } from './core'
 import type { Mods } from './Canvas'
@@ -324,15 +324,28 @@ function Layers({ version, selection, select, focus, hover, onShortcut }: { vers
 
 function Slides({ version, selection, select, focus, present, toast, onShortcut }: { version: number; selection: string[]; select: (ids: string[]) => void; focus: (id: string) => void; present: (id?: string) => void; toast: Toast; onShortcut: (key: string, mods: Mods) => boolean }) {
   const frames = useMemo(() => (tryCall<Box[]>('frames') ?? []).filter((f) => f.type === 'frame'), [version])
-  // Thumbnails are rendered by the core (PNG) at a small scale and cached per document version.
-  const thumbs = useMemo(() => {
-    const m = new Map<string, string>()
-    for (const f of frames.slice(0, 60)) {
-      const scale = Math.min(1, THUMB_W / Math.max(f.w, 1))
-      const b64 = tryCall<string>('png', { id: f.id, scale })
-      if (b64) m.set(f.id, `data:image/png;base64,${b64}`)
+  // Thumbnails are rendered by the core (PNG) at a small scale, a few per tick so a long deck neither
+  // freezes the UI nor stops at a cap; a row shows a placeholder until its thumbnail is ready.
+  const [thumbs, setThumbs] = useState<Map<string, string>>(new Map())
+  useEffect(() => {
+    let stop = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const next = new Map<string, string>()
+    const live = new Set(frames.map((f) => f.id))
+    const step = (from: number) => {
+      if (stop) return
+      for (const f of frames.slice(from, from + 8)) {
+        const scale = Math.min(1, THUMB_W / Math.max(f.w, 1))
+        const b64 = tryCall<string>('png', { id: f.id, scale })
+        if (b64) next.set(f.id, `data:image/png;base64,${b64}`)
+      }
+      // Rows keep their old thumbnail until the new one replaces it, so an edit does not flash them blank;
+      // thumbnails of deleted slides are dropped so create/delete cycles do not grow the map.
+      setThumbs((old) => new Map([...old].filter(([id]) => live.has(id)).concat([...next])))
+      if (from + 8 < frames.length) timer = setTimeout(() => step(from + 8), 0)
     }
-    return m
+    step(0)
+    return () => { stop = true; clearTimeout(timer) }
   }, [frames])
   // Empty ids = every top-level frame, in document order; saved next to the document as <title>.pdf.
   const exportPdf = () => {
@@ -366,7 +379,11 @@ function Slides({ version, selection, select, focus, present, toast, onShortcut 
                 <T size={11} color={C.ghost} style={{ width: 14, flexShrink: 0 }}>{String(i + 1)}</T>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flexGrow: 1, minWidth: 0 }}>
                   <div style={{ borderRadius: 6, borderWidth: 2, borderColor: active ? C.select : C.border, overflow: 'hidden', width: THUMB_W + 4, height: th + 4 }}>
-                    <img src={thumbs.get(f.id) ?? ''} objectFit="contain" style={{ width: THUMB_W, height: th, borderRadius: 4 }} />
+                    {thumbs.has(f.id) ? (
+                      <img testId={`slide-thumb-${i + 1}`} src={thumbs.get(f.id)} objectFit="contain" style={{ width: THUMB_W, height: th, borderRadius: 4 }} />
+                    ) : (
+                      <div testId={`slide-thumb-pending-${i + 1}`} style={{ width: THUMB_W, height: th, borderRadius: 4, backgroundColor: C.raised }} />
+                    )}
                   </div>
                   <T size={11} color={active ? C.text : C.muted} style={{ minWidth: 0, whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>{f.name}</T>
                 </div>

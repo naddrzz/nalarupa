@@ -148,6 +148,7 @@ try {
   await canvas.press('escape')
   await sleep(200)
   assert(!(await count('size-label')), 'escape clears the selection')
+  assert(await app.getByText('P pen').count(), 'the nothing-selected help lists the Pen tool')
   await app.mouse.click(at(125, 300))
   await sleep(300)
   assert((await size()).join() === [wf, hf].join(), 'clicking where the flipped rectangle paints selects it')
@@ -620,6 +621,31 @@ try {
   await shot('16-rotated-parent-drag')
   await canvas.press('delete')
   await sleep(300)
+
+  // A layer drawn inside a flipped or rotated frame lands where it was dragged (its center, as the ghost showed).
+  const drawn = async (name: string, ox: number, turn: () => Promise<void>) => {
+    await app.getByTestId('tool-frame').click()
+    await app.mouse.drag(at(ox, 200), at(ox + 200, 380), { steps: 5 })
+    await sleep(400)
+    await turn()
+    await app.getByTestId('tool-rectangle').click()
+    const [dx, dy] = [at(ox + 40, 230), at(ox + 80, 260)]
+    await app.mouse.drag(dx, dy, { steps: 5 })
+    await sleep(400)
+    const f = await frame()
+    assert(await until(async () => { const g = await frame(); return Math.abs(g.cx - (dx.x + dy.x) / 2) <= 3 && Math.abs(g.cy - (dx.y + dy.y) / 2) <= 3 }), `a rectangle drawn in a ${name} frame lands where it was dragged (center ${f.cx},${f.cy} vs ${(dx.x + dy.x) / 2},${(dx.y + dy.y) / 2})`)
+    await canvas.press('escape')
+  }
+  await drawn('flipped', 520, async () => { await canvas.press('shift-h'); await sleep(400) })
+  await drawn('rotated', 250, async () => {
+    const r = await app.getByTestId('inspector-rotation').bounds()
+    await app.mouse.click({ x: r.x + r.width - 10, y: r.y + r.height / 2 })
+    await sleep(500)
+    await app.call('keystrokes', { keys: 'ctrl-a 3 0' })
+    await sleep(300)
+    await app.call('keystrokes', { keys: 'enter' })
+    await sleep(600)
+  })
 
   // Clipboard pastes: only Windows has a system clipboard (src/clipboard.ts); elsewhere it is per process,
   // so this script can't put data on the app's clipboard.

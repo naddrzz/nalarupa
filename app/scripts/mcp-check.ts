@@ -37,6 +37,9 @@ const text = (r: any) => r.content.map((c: any) => c.text ?? '').join('')
   assert(get.status === 405 && get.headers.get('allow') === 'POST', `GET is 405 with Allow: POST (got ${get.status})`)
   // DNS-rebinding guard: a page on another origin must not drive the editor; local pages may.
   assert((await post('{}', '/mcp', { origin: 'https://evil.example' })).status === 403, 'foreign Origin is 403')
+  for (const origin of ['http://localhost.evil.com', 'http://localhostevil.com', 'http://127.0.0.1.evil.com', 'http://127.0.0.10', 'null'])
+    assert((await post('{}', '/mcp', { origin })).status === 403, `lookalike Origin ${origin} is 403`)
+  assert((await post('{}', '/mcp', { origin: 'http://127.0.0.1:5173' })).status === 202, '127.0.0.1 Origin is allowed')
   assert((await post('{}', '/mcp', { origin: 'http://localhost:5173' })).status === 202, 'localhost Origin is allowed (an empty request is acknowledged with 202)')
   // JSON-RPC: notifications get 202, bad JSON and unknown methods get JSON-RPC errors (HTTP 200).
   assert((await post(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }))).status === 202, 'notification is 202')

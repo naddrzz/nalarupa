@@ -3,7 +3,7 @@ import { tryCall } from './core'
 import { nodeIcon, type IconName } from './icons'
 import { turnAroundCenter } from './geometry'
 import { C } from './theme'
-import { Button, Field, Icon, IconButton, NumField, Row, Section, Segmented, Swatch, T, Toggle, type Toast } from './ui'
+import { Button, Field, FocusRing, Icon, IconButton, NumField, Row, Section, Segmented, Swatch, T, Toggle, useFieldRing, type Toast } from './ui'
 
 type Props = { version: number; selection: string[]; select: (ids: string[]) => void; toast: Toast }
 type Info = { id: string; node: any; box: { w: number; h: number } | null; local: { bx: number; by: number } | null; parentLayout: string; variables: Record<string, any> }
@@ -115,6 +115,27 @@ function effectOf(v: string, vars: Record<string, any>): unknown {
   return Array.isArray(p) ? (p.length > 0 && p.every(one) ? p : undefined) : one(p) ? p : undefined
 }
 
+function TextContent({ value, onSubmit }: { value: string; onSubmit: (v: string) => void }) {
+  const field = useFieldRing()
+  return (
+    <div onMouseDown={field.onMouseDown} style={{ position: 'relative', borderRadius: 6, backgroundColor: C.panel2, borderWidth: 1, borderColor: C.border, padding: 6 }}>
+      <textarea
+        ref={field.ref}
+        aria-label="Text content"
+        value={value}
+        minRows={2}
+        maxRows={8}
+        onChange={() => {}}
+        onFocus={field.onFocus}
+        onBlur={field.onBlur}
+        onSubmit={(e) => onSubmit(e.value ?? '')}
+        style={{ fontSize: 12, color: C.text, width: '100%' }}
+      />
+      {field.ring ? <FocusRing /> : null}
+    </div>
+  )
+}
+
 export function Inspector({ version, selection, select, toast }: Props) {
   const infos = useMemo(() => selection.map((id) => ({ id, ...tryCall('node', { id }) }) as Info).filter((i) => i.node), [selection, version])
   const update = (props: Record<string, unknown>, coalesce?: string) => {
@@ -153,7 +174,7 @@ export function Inspector({ version, selection, select, toast }: Props) {
       <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
         <T color={C.muted}>Nothing selected</T>
         <T size={11} color={C.ghost}>Click a layer on the canvas or drag a marquee. Double-click drills into groups or edits text. Ctrl+click selects the deepest layer.</T>
-        <T size={11} color={C.ghost}>Tools: V move · F/A frame · R rectangle · O ellipse · T text · H hand · Space+drag pan · Ctrl+wheel zoom · Shift+1 fit</T>
+        <T size={11} color={C.ghost}>Tools: V move · F/A frame · R rectangle · O ellipse · T text · P pen · H hand · Space+drag pan · Ctrl+wheel zoom · Shift+1 fit</T>
         <T size={11} color={C.ghost}>Ctrl+G group · Ctrl+Alt+G frame · Ctrl+Shift+G ungroup · Shift+A auto layout · Alt+W/A/S/D/H/V align · [ ] order · Alt-drag duplicates · Ctrl holds off snapping</T>
       </div>
     )
@@ -306,18 +327,7 @@ export function Inspector({ version, selection, select, toast }: Props) {
 
       {!multi && n.type === 'text' ? (
         <Section title="Text">
-          <div style={{ borderRadius: 6, backgroundColor: C.panel2, borderWidth: 1, borderColor: C.border, padding: 6 }}>
-            <textarea
-              aria-label="Text content"
-              value={str(n.content)}
-              minRows={2}
-              maxRows={8}
-              onChange={() => {}}
-              onBlur={() => {}}
-              onSubmit={(e) => update({ content: e.value ?? '' })}
-              style={{ fontSize: 12, color: C.text, width: '100%' }}
-            />
-          </div>
+          <TextContent value={str(n.content)} onSubmit={(v) => update({ content: v })} />
           <T size={10} color={C.ghost}>Enter applies · Shift+Enter new line</T>
           <Field name="Font family" value={str(n.fontFamily ?? 'Inter')} onCommit={(v) => update({ fontFamily: v })} />
           <Row>

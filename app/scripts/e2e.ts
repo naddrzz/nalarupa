@@ -153,6 +153,46 @@ try {
   await sleep(500)
   await shot('04-drawn-rectangle')
 
+  // A text field clicked into draws a focus ring. Linux only: grim.
+  if (process.platform === 'linux') {
+    const grab = async () => {
+      const buf = Buffer.from(await Bun.$`grim -t ppm -`.quiet().arrayBuffer())
+      let p = 0
+      const head: string[] = []
+      while (head.length < 4) {
+        let t = ''
+        while (buf[p] > 32) t += String.fromCharCode(buf[p++])
+        p++
+        head.push(t)
+      }
+      return { w: +head[1], px: buf.subarray(p) }
+    }
+    // The box around everything that changed on screen (the output, not the window, is what grim grabs). A
+    // caret or the swap of a field's text stays within the input; its ring is 4+ px bigger on every side.
+    const changedBox = async (before: Awaited<ReturnType<typeof grab>>) => {
+      const after = await grab()
+      let [x0, y0, x1, y1] = [Infinity, Infinity, -1, -1]
+      for (let i = 0; i < after.px.length; i += 3) {
+        if (after.px[i] === before.px[i] && after.px[i + 1] === before.px[i + 1] && after.px[i + 2] === before.px[i + 2]) continue
+        const [x, y] = [(i / 3) % after.w, Math.floor(i / 3 / after.w)]
+        ;[x0, y0, x1, y1] = [Math.min(x0, x), Math.min(y0, y), Math.max(x1, x), Math.max(y1, y)]
+      }
+      return { w: x1 - x0 + 1, h: y1 - y0 + 1 }
+    }
+    for (const id of ['inspector-x', 'agent-input']) {
+      if (id === 'agent-input') {
+        await app.getByTestId('tab-agent').click()
+        await app.getByTestId('agent-input').waitFor()
+        await sleep(500)
+      }
+      const b = (await app.getByTestId(id).bounds())!
+      const before = await grab()
+      await app.mouse.click({ x: b.x + b.width / 2, y: b.y + b.height / 2 })
+      await until(async () => { const c = await changedBox(before); return c.w >= b.width + 8 && c.h >= b.height + 8 }, `${id} to draw a focus ring when clicked into`)
+    }
+    await app.getByTestId('tab-design').click()
+  }
+
   // An external agent edits the open document over MCP (what Claude Code/Cursor would do).
   console.log((await mcp('get_editor_state', {})).split('\n').slice(0, 6).join('\n'))
   const result = await mcp('execute', {
@@ -240,6 +280,18 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
   const [s5, s6] = [await label('slide-5', 'Short'), await label('slide-6', LONG)]
   if (Math.abs(s5.x - s6.x) > 0.5 || s6.x + s6.width > PANEL_W) throw new Error(`slide labels start at x=${s5.x} and x=${s6.x} (should match) and the long one ends at ${s6.x + s6.width} (panel is ${PANEL_W} wide)`)
   if (s5.x < 12 + 14) throw new Error(`the slide number column hugs the panel edge (label at x=${s5.x})`)
+  // Every slide gets a thumbnail, not just the first 60 (a row without one shows the renderer's "img: no
+  // src" debug text). Scroll the list to the last of 66 slides: its thumbnail must arrive, no row waits.
+  await mcp('execute', { input: `for (let i = 1; i <= 60; i++) Insert(document, {type:"frame", name:"Bulk " + i, x: 24000 + i * 2000, y: 0, width:1920, height:1080, fill: i % 2 ? "#223344" : "#442233"})` })
+  await app.getByTestId('slide-66').waitFor({ timeoutMs: 20000 })
+  await until(async () => {
+    await app!.mouse.wheel({ x: 120, y: 500 }, 0, -20000)
+    return (await app!.getByTestId('slide-thumb-66').count()) > 0
+  }, 'the thumbnail of slide 66', 20000)
+  await sleep(500)
+  const waiting = await app.getByTestId('slide-thumb-pending-66').count()
+  if (waiting) throw new Error('slide 66 still shows a placeholder instead of its thumbnail')
+  await mcp('execute', { input: `Get(n => n.name.startsWith("Bulk ") ? n.id : undefined).filter(Boolean).forEach(id => Delete(id))` })
   await app.getByText('Layers').click()
   await app.getByTestId('layers').getByText(LONG).waitFor({ timeoutMs: 10000 })
   const [l1, l2] = [await label('layers', 'Short'), await label('layers', LONG)]

@@ -163,6 +163,7 @@ jobs:
             - GPUIX limits (AGENTS.md): waitFor needs exactly one match, chords use hyphens, input values can't be read.
               A problem caused only by the automation or the headless compositor is not a product bug.
             - The MCP port is whatever `init` returns (another instance may hold 47700).
+            - Never kill processes by name (pkill, killall, kill $(pgrep ...)): this job itself runs on bun and node, so that ends the whole run. Stop only PIDs you started yourself.
 
             ## Filing
             For each real, reproducible product bug:
@@ -212,7 +213,7 @@ jobs:
           claude_args: --model claude-sonnet-5-5 --effort high --max-turns 300 --allowedTools "Bash,Read,Glob,Grep,Write,Edit,Skill"
           prompt: |
             Run the bmad-qa-generate-e2e-tests skill for Nalarupa (repo ${{ github.repository }}, branch dev), unattended.
-            Read AGENTS.md first. The core is built (core/target/release, found by default) and app deps are installed.
+            Read AGENTS.md first. Never kill processes by name (pkill, killall, kill $(pgrep ...)): this job itself runs on bun and node, so that ends the whole run. Stop only PIDs you started yourself. The core is built (core/target/release, found by default) and app deps are installed.
             - Nobody is there to answer the skill's questions. At "what to test", choose auto-discover. Pick at most 3
               features that no check in app/scripts/ exercises. Compare the commands in core/src/lib.rs `dispatch`, the
               MCP tools, and the UI flows in app/src against the existing checks, and prefer what breaks most often.
