@@ -94,6 +94,8 @@ jobs:
             3. Run the checks: (cd core && cargo test --release) && (cd app && bun run typecheck && bun run smoke &&
                bun run editor-check && bun run mcp-check && bun run doc-check && bash scripts/wl-run.sh bun run e2e &&
                bash scripts/wl-run.sh bun run file-e2e && bash scripts/wl-run.sh bun run editor-e2e). Everything must pass before you push.
+               Run them in the foreground and wait. Never kill processes by name (pkill, killall, kill by pgrep): this job itself
+               runs on bun and node, so that ends the whole run. Stop only PIDs you started yourself.
             4. Commit with a subject starting `Address review: ` (no Co-authored-by trailer) and `git push`.
             5. Reply on every thread you handled (gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments/<databaseId>/replies -f body=...)
                saying what you changed or why not, then resolve it:
