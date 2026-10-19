@@ -214,7 +214,7 @@ assert(call('drop_target', { x: 3150, y: 2100, w: 10, h: 10, ignore: [] }).id ==
 assert(call('drop_target', { x: 3001, y: 2199, w: 10, h: 10, ignore: [] }).id === 'document', 'the unrotated corner of a rotated free frame is the document')
 
 // Every layer type that has its own look gets its own Layers/Inspector icon (only rectangle uses the square).
-const icons = Object.fromEntries(['frame', 'group', 'rectangle', 'ellipse', 'text', 'icon', 'line', 'note', 'prompt'].map((t) => [t, nodeIcon(t)]))
+const icons = Object.fromEntries(['frame', 'group', 'rectangle', 'ellipse', 'text', 'icon', 'line', 'note', 'prompt', 'context', 'script', 'browser'].map((t) => [t, nodeIcon(t)]))
 assert(new Set(Object.values(icons)).size === Object.keys(icons).length, `layer types share an icon ${JSON.stringify(icons)}`)
 assert(nodeIcon('path') === nodeIcon('polygon') && nodeIcon('frame', true) === 'component', 'path/polygon and reusable icons')
 
