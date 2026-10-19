@@ -155,6 +155,19 @@ try {
   await sleep(300)
   assert((await size()).join() === [rw0, rh0].join(), 'one undo step reverts the flip')
 
+  // A hidden layer has no render box: the Inspector still reports its own size, not 0 × 0. Hiding drops the
+  // selection (no box to select), so pick the layer from the Layers panel again.
+  const rectRow = app.getByTestId('layers').getByText('Rectangle')
+  await app.getByTestId('inspector-visibility').click()
+  assert(await until(async () => !(await count('inspector-visibility'))), 'hiding the layer clears the selection')
+  await rectRow.click()
+  assert(await until(async () => (await app.getByText(`Hidden ${rw0} × ${rh0}`).count()) > 0), `a hidden layer still shows its ${rw0} × ${rh0} size in the Inspector`)
+  assert(!(await app.getByText('× 0 ·').count()), 'a hidden layer is not reported as 0 tall')
+  await canvas.press('ctrl-z')
+  await sleep(600) // past the double-click window, or the second row click would start a rename
+  await rectRow.click()
+  assert(await until(async () => (await app.getByText(`Rendered ${rw0} × ${rh0}`).count()) > 0), 'one undo step shows the layer again at its rendered size')
+
   await app.getByTestId('tool-rectangle').click()
   await app.mouse.drag(at(420, 260), at(520, 340), { steps: 5 })
   await sleep(300)
