@@ -87,13 +87,35 @@ impl<'a> View<'a> {
     /// Bounds of what the node paints (its box through its rotation/flip matrix), on the canvas
     /// or, with `frame` (a container's matrix), in that container's own coordinates.
     fn painted(&self, id: &str, frame: Option<[f64; 6]>) -> Option<Rect> {
+        let pts = self.corners(id, frame)?;
+        union(pts.into_iter().map(|p| (p.0, p.1, 0.0, 0.0)))
+    }
+
+    /// Corners of the painted box (top-left, top-right, bottom-left, bottom-right), see `painted`.
+    fn corners(&self, id: &str, frame: Option<[f64; 6]>) -> Option<[(f64, f64); 4]> {
         let f = self.flat(id)?;
-        let pts = [(0.0, 0.0), (f.w, 0.0), (0.0, f.h), (f.w, f.h)].map(|(dx, dy)| {
+        Some([(0.0, 0.0), (f.w, 0.0), (0.0, f.h), (f.w, f.h)].map(|(dx, dy)| {
             let (x, y) = (f.x + dx, f.y + dy);
             let (x, y) = f.m.map_or((x, y), |m| (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]));
             frame.map_or((x, y), |m| unapply(m, x, y))
-        });
-        union(pts.into_iter().map(|p| (p.0, p.1, 0.0, 0.0)))
+        }))
+    }
+
+    /// Whether the painted box touches `r` (separating-axis test, so a turned box does not
+    /// count through the corners of its bounds).
+    fn touches(&self, id: &str, r: Rect) -> bool {
+        let Some(c) = self.corners(id, None) else { return false };
+        let rc = [(r.0, r.1), (r.0 + r.2, r.1), (r.0, r.1 + r.3), (r.0 + r.2, r.1 + r.3)];
+        let b = union(c.into_iter().map(|p| (p.0, p.1, 0.0, 0.0))).unwrap();
+        if !overlaps(b, r) {
+            return false;
+        }
+        [(c[1].0 - c[0].0, c[1].1 - c[0].1), (c[2].0 - c[0].0, c[2].1 - c[0].1)].into_iter().filter(|a| a.0 != 0.0 || a.1 != 0.0).all(|a| {
+            let span = |pts: &[(f64, f64); 4]| pts.iter().map(|p| p.0 * a.0 + p.1 * a.1).fold((f64::MAX, f64::MIN), |s, d| (s.0.min(d), s.1.max(d)));
+            let (q, w) = (span(&c), span(&rc));
+            // Tolerance for rounding in the rotation matrix (an exact touch counts).
+            q.0 <= w.1 + 1e-9 && w.0 <= q.1 + 1e-9
+        })
     }
 
     fn ty(&self, id: &str) -> &'a str {
@@ -196,14 +218,20 @@ pub fn snap_targets(e: &Engine, ids: &[String], view: Option<Rect>) -> Vec<Value
         .collect()
 }
 
+/// Union of what `ids` paint on the canvas (their boxes through rotation/flip).
+pub fn painted_bounds(e: &Engine, ids: &[String]) -> Option<Rect> {
+    let v = View::new(e);
+    union(ids.iter().filter_map(|id| v.painted(id, None)))
+}
+
 /// Marquee hits (touching counts). Containers fully inside the rectangle are picked whole;
 /// top-level frames are entered (artboards); `deep` (Ctrl) picks leaves everywhere.
 pub fn nodes_in_rect(e: &Engine, r: Rect, deep: bool) -> Vec<String> {
     fn rec(v: &View, nodes: &[Value], top: bool, r: Rect, deep: bool, out: &mut Vec<String>) {
         for n in nodes {
             let Some(id) = n["id"].as_str() else { continue };
-            let Some(b) = v.rect(id) else { continue };
-            if !overlaps(b, r) {
+            let Some(b) = v.painted(id, None) else { continue };
+            if !v.touches(id, r) {
                 continue;
             }
             let ty = n["type"].as_str().unwrap_or("");

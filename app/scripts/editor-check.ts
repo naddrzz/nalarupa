@@ -149,5 +149,18 @@ call('update', { ids: [A], props: { x: 13 }, coalesce: 'k1' })
 call('undo')
 assert(node(A).node.x === 10, 'coalesced edits undo together')
 
+// A turned layer is selected and framed where it paints (rotation is about its own x/y): this 300×40 bar paints at x 100..140, y 0..300.
+const RF = call('insert', { parent: 'document', node: { type: 'frame', name: 'RF', x: 1000, y: 0, width: 800, height: 800, layout: 'none' } }).id
+const bar = call('insert', { parent: RF, node: { type: 'rectangle', name: 'bar', x: 100, y: 300, width: 300, height: 40, rotation: 90 } }).id
+const marquee = (x: number, y: number, w: number, h: number) => call<string[]>('nodes_in_rect', { x, y, w, h, deep: false }).includes(bar)
+assert(marquee(1105, 120, 30, 40), 'marquee over the painted bar selects it')
+assert(!marquee(1300, 305, 80, 30), 'marquee over the unrotated box selects nothing')
+const pb = call<B>('bounds', { ids: [bar] })
+assert(same({ ...pb, id: bar }, { id: bar, x: 1100, y: 0, w: 40, h: 300 }), `bounds of a turned layer ${JSON.stringify(pb)}`)
+// At 45° the strip runs from (1100, 300) up to the right: its bounds' empty corner is not a hit.
+call('update', { ids: [bar], props: { rotation: 45 } })
+assert(marquee(1200, 190, 20, 20), 'marquee on the 45° bar selects it')
+assert(!marquee(1110, 90, 30, 30), "marquee in the empty corner of a 45° bar's bounds misses it")
+
 console.log('editor-check ok')
 process.exit(0)
