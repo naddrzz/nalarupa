@@ -3,7 +3,7 @@
 use crate::engine::Engine;
 use crate::render::find_rnode;
 use crate::resolve::{num, RNode};
-use crate::svg::{color, esc, fills};
+use crate::svg::{blend_mode, color, esc, fills};
 use serde_json::Value;
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
@@ -161,25 +161,22 @@ fn gradient_css(o: &serde_json::Map<String, Value>) -> Option<String> {
     })
 }
 
-/// A gradient stroke: the gradient fills a box inset by `inset` px, masked down to its `pad` px ring.
+/// A gradient stroke: the gradient fills a box moved out by `reach` of each side width, masked down to its per-side ring.
 fn stroke_overlay(grad: &str, w: &Value, alignment: Option<&str>) -> Option<String> {
-    let (inset, pad) = match w {
-        Value::Object(s) => {
-            let side = |k: &str| s.get(k).and_then(num).unwrap_or(0.0).max(0.0);
-            (0.0, format!("{}px {}px {}px {}px", side("top"), side("right"), side("bottom"), side("left")))
-        }
-        v => {
-            let w = num(v).filter(|w| *w > 0.0)?;
-            let inset = match alignment {
-                Some("inner" | "inside") => 0.0,
-                Some("outer" | "outside") => -w,
-                _ => -w / 2.0,
-            };
-            (inset, format!("{w}px"))
-        }
+    let sides = match w {
+        Value::Object(s) => ["top", "right", "bottom", "left"].map(|k| s.get(k).and_then(num).unwrap_or(0.0).max(0.0)),
+        v => [num(v).filter(|w| *w > 0.0)?; 4],
     };
+    // The box reaches out by the whole width (outer), half of it (centered) or not at all (inner), per side.
+    let reach = match alignment {
+        Some("inner" | "inside") => 0.0,
+        Some("outer" | "outside") => 1.0,
+        _ => 0.5,
+    };
+    let px = |f: f64| if sides.iter().all(|w| *w == sides[0]) { format!("{}px", sides[0] * f + 0.0) } else { sides.map(|w| format!("{}px", w * f + 0.0)).join(" ") };
+    let (inset, pad) = (px(-reach), px(1.0));
     Some(format!(
-        "<div style=\"{}inset:{inset}px;padding:{pad};background:{grad};-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);mask-composite:exclude;\"></div>\n",
+        "<div style=\"{}inset:{inset};padding:{pad};background:{grad};-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);mask-composite:exclude;\"></div>\n",
         OVERLAY
     ))
 }
@@ -361,14 +358,15 @@ impl Html<'_> {
         let mut shadows: Vec<String> = Vec::new();
         let mut under = String::new();
         if n.ty != "text" && n.ty != "icon" {
-            // Bottom to top, with the paint's opacity where CSS cannot fold it into the layer.
-            let mut layers: Vec<(String, f64)> = Vec::new();
+            // Bottom to top, with the paint's opacity where CSS cannot fold it into the layer, and its blend mode.
+            let mut layers: Vec<(String, f64, Option<&str>)> = Vec::new();
             for f in fills(n.p.get("fill")) {
+                let first = layers.len();
                 match f {
-                    Value::String(s) => layers.extend(css_color(s).map(|c| (format!("linear-gradient({c},{c})"), 1.0))),
+                    Value::String(s) => layers.extend(css_color(s).map(|c| (format!("linear-gradient({c},{c})"), 1.0, None))),
                     Value::Object(o) => match o.get("type").and_then(Value::as_str).unwrap_or("color") {
-                        "color" => layers.extend(o.get("color").and_then(Value::as_str).and_then(css_color).map(|c| (format!("linear-gradient({c},{c})"), 1.0))),
-                        "gradient" => layers.extend(gradient_css(o).map(|g| (g, 1.0))),
+                        "color" => layers.extend(o.get("color").and_then(Value::as_str).and_then(css_color).map(|c| (format!("linear-gradient({c},{c})"), 1.0, None))),
+                        "gradient" => layers.extend(gradient_css(o).map(|g| (g, 1.0, None))),
                         "image" => {
                             let url = o.get("url").and_then(Value::as_str).unwrap_or("");
                             if !url.is_empty() {
@@ -378,12 +376,16 @@ impl Html<'_> {
                                     _ => "100% 100%",
                                 };
                                 let opacity = o.get("opacity").and_then(num).unwrap_or(1.0).clamp(0.0, 1.0);
-                                layers.push((format!("url('{}') center/{size} no-repeat", esc(url)), opacity));
+                                layers.push((format!("url('{}') center/{size} no-repeat", esc(url)), opacity, None));
                             }
                         }
                         _ => {}
                     },
                     _ => {}
+                }
+                // The paint just pushed (if any) blends with what is under it.
+                if let Some(l) = layers.get_mut(first) {
+                    l.2 = blend_mode(f["blendMode"].as_str());
                 }
             }
             // CSS lists the topmost background first. A translucent image cannot be a background layer: it and
@@ -391,37 +393,47 @@ impl Html<'_> {
             let split = layers.iter().position(|l| l.1 < 1.0).unwrap_or(layers.len());
             if split > 0 {
                 let _ = write!(css, "background:{};", layers[..split].iter().rev().map(|l| l.0.as_str()).collect::<Vec<_>>().join(","));
+                if layers[..split].iter().any(|l| l.2.is_some()) {
+                    let _ = write!(css, "background-blend-mode:{};", layers[..split].iter().rev().map(|l| l.2.unwrap_or("normal")).collect::<Vec<_>>().join(","));
+                }
             }
-            for (l, a) in &layers[split..] {
-                let _ = writeln!(under, "<div style=\"{OVERLAY}inset:0;background:{l};opacity:{a};\"></div>");
+            for (l, a, b) in &layers[split..] {
+                let blend = b.map(|b| format!("mix-blend-mode:{b};")).unwrap_or_default();
+                let _ = writeln!(under, "<div style=\"{OVERLAY}inset:0;background:{l};opacity:{a};{blend}\"></div>");
             }
             let r = crate::svg::radii(n);
             if r.iter().any(|v| *v > 0.0) {
                 let _ = write!(css, "border-radius:{}px {}px {}px {}px;", r[0], r[1], r[2], r[3]);
             }
-            // No stroke without a width; alignment defaults to center.
-            let paint = fills(n.p.get("stroke")).first().copied();
-            let stroke = paint.and_then(|f| f.as_str().map(str::to_string).or_else(|| f["color"].as_str().map(str::to_string))).and_then(|c| css_color(&c));
-            let gradient = paint.and_then(Value::as_object).filter(|o| o.get("type").and_then(Value::as_str) == Some("gradient")).and_then(gradient_css);
-            match (stroke, gradient, n.p.get("strokeWidth")) {
-                (Some(c), _, Some(Value::Object(s))) => {
-                    for side in ["top", "right", "bottom", "left"] {
-                        if let Some(w) = s.get(side).and_then(num).filter(|w| *w > 0.0) {
-                            let _ = write!(css, "border-{side}:{w}px solid {c};");
+            // No stroke without a width; alignment defaults to center. Every stroke is painted, bottom to top.
+            let strokes = fills(n.p.get("stroke"));
+            for paint in &strokes {
+                let stroke = paint.as_str().map(str::to_string).or_else(|| paint["color"].as_str().map(str::to_string)).and_then(|c| css_color(&c));
+                let gradient = paint.as_object().filter(|o| o.get("type").and_then(Value::as_str) == Some("gradient")).and_then(gradient_css);
+                match (stroke, gradient, n.p.get("strokeWidth")) {
+                    // A border has one colour: only a lone stroke can use it, a stack becomes masked rings.
+                    (Some(c), _, Some(Value::Object(s))) if strokes.len() == 1 => {
+                        for side in ["top", "right", "bottom", "left"] {
+                            if let Some(w) = s.get(side).and_then(num).filter(|w| *w > 0.0) {
+                                let _ = write!(css, "border-{side}:{w}px solid {c};");
+                            }
                         }
                     }
-                }
-                (Some(c), _, Some(v)) => {
-                    if let Some(w) = num(v).filter(|w| *w > 0.0) {
-                        match n.s("strokeAlignment") {
-                            Some("inner" | "inside") => shadows.push(format!("inset 0 0 0 {w}px {c}")),
-                            Some("outer" | "outside") => shadows.push(format!("0 0 0 {w}px {c}")),
-                            _ => shadows.extend([format!("inset 0 0 0 {}px {c}", w / 2.0), format!("0 0 0 {}px {c}", w / 2.0)]),
+                    (Some(c), _, Some(w @ Value::Object(_))) => under += &stroke_overlay(&format!("linear-gradient({c},{c})"), w, n.s("strokeAlignment")).unwrap_or_default(),
+                    (Some(c), _, Some(v)) => {
+                        if let Some(w) = num(v).filter(|w| *w > 0.0) {
+                            // The first box-shadow is the topmost, so each stroke goes in front of the ones below it.
+                            let own = match n.s("strokeAlignment") {
+                                Some("inner" | "inside") => vec![format!("inset 0 0 0 {w}px {c}")],
+                                Some("outer" | "outside") => vec![format!("0 0 0 {w}px {c}")],
+                                _ => vec![format!("inset 0 0 0 {}px {c}", w / 2.0), format!("0 0 0 {}px {c}", w / 2.0)],
+                            };
+                            shadows.splice(0..0, own);
                         }
                     }
+                    (None, Some(g), Some(w)) => under += &stroke_overlay(&g, w, n.s("strokeAlignment")).unwrap_or_default(),
+                    _ => {}
                 }
-                (None, Some(g), Some(w)) => under += &stroke_overlay(&g, w, n.s("strokeAlignment")).unwrap_or_default(),
-                _ => {}
             }
         }
         let effects = match n.p.get("effect") {
@@ -559,6 +571,22 @@ mod tests {
         let (s, h) = rect_html(json!({"fill": "#ffff00", "stroke": grad(json!({})), "strokeWidth": 12}));
         assert!(s.contains("isolation:isolate") && !s.contains("border"), "{s}");
         assert!(h.contains("padding:12px;background:linear-gradient(-90deg,#ff0000 0%,#0000ff 100%);") && h.contains("mask-composite:exclude"), "{h}");
+        // A fill blend mode blends with the fills under it; a translucent image's overlay uses mix-blend-mode.
+        let (s, _) = rect_html(json!({"fill": ["#ffee00", {"type": "color", "color": "#00ffff", "blendMode": "multiply"}]}));
+        assert!(s.contains("background:linear-gradient(#00ffff,#00ffff),linear-gradient(#ffee00,#ffee00);background-blend-mode:multiply,normal;"), "{s}");
+        let (_, h) = rect_html(json!({"fill": ["#ffee00", img.clone(), {"type": "color", "color": "#00ffff", "blendMode": "screen"}]}));
+        assert!(h.contains("mix-blend-mode:screen;"), "{h}");
+        // Every stroke is painted, the topmost first in the box-shadow list.
+        let (s, _) = rect_html(json!({"fill": "#ffffff", "stroke": ["#ff0000", "#0000ff80"], "strokeWidth": 10, "strokeAlignment": "inner"}));
+        assert!(s.contains("box-shadow:inset 0 0 0 10px rgba(0, 0, 255, 0.502),inset 0 0 0 10px #ff0000;"), "{s}");
+        // Per-side widths of a stroke stack are masked rings, one per stroke.
+        let (s, h) = rect_html(json!({"fill": "#ffffff", "stroke": ["#ff0000", "#0000ff80"], "strokeWidth": {"top": 4, "left": 2}}));
+        assert!(!s.contains("border") && h.matches("mask-composite:exclude").count() == 2 && h.find("#ff0000") < h.find("rgba(0, 0, 255"), "{h}");
+        // Per-side rings follow the stroke alignment: inner stays inside, outer reaches out by each side's width, centered by half.
+        for (align, inset) in [("inner", "0px 0px 0px 0px"), ("outer", "-4px 0px 0px -2px"), ("center", "-2px 0px 0px -1px")] {
+            let (_, h) = rect_html(json!({"fill": "#ffffff", "stroke": ["#ff0000", "#0000ff80"], "strokeWidth": {"top": 4, "left": 2}, "strokeAlignment": align}));
+            assert!(h.contains(&format!("inset:{inset};padding:4px 0px 0px 2px;")), "{align}: {h}");
+        }
         // Layer blur: CSS takes the standard deviation, half the radius.
         let (s, _) = rect_html(json!({"fill": "#ff0000", "effect": {"type": "blur", "radius": 4}}));
         assert!(s.contains("filter:blur(2px);"), "{s}");
