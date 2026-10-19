@@ -1607,7 +1607,7 @@ mod tests {
         let frame = |x: u32, clip: bool, child: &str| {
             format!(r##"{{"type":"frame","id":"f{x}","x":{x},"y":0,"width":100,"height":60,"layout":"none","fill":"#ffff00","clip":{clip},"stroke":"#ff0000","strokeWidth":4,"strokeAlignment":"inner","children":[{child}]}}"##)
         };
-        let rect = r##"{"type":"rectangle","x":20,"y":10,"width":60,"height":40,"fill":{"type":"color","color":"#00ffff","blendMode":"multiply"}}"##;
+        let rect = r##"{"type":"rectangle","x":0,"y":10,"width":60,"height":40,"fill":{"type":"color","color":"#00ffff","blendMode":"multiply"}}"##;
         let nested = format!(r##"{{"type":"group","x":0,"y":0,"children":[{rect}]}}"##);
         let json = format!(
             r#"{{"version":"2.19","children":[{},{},{}]}}"#,
