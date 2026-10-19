@@ -46,17 +46,19 @@ done <<<"$runs"
 # per issue. Failed runs are left to the rerun pass above.
 issues=$(gh api "repos/$R/issues?state=open&labels=claude&per_page=100" --paginate --jq '.[]|select(.pull_request|not)|.number')   || { echo "cannot list claude issues"; exit 0; }
 week=$(date -u -d '-7 days' +%Y-%m-%dT%H:%M:%SZ)
-issue_runs=$(gh api "repos/$R/actions/workflows/claude.yml/runs?event=issues&created=>$week&per_page=100" --paginate   --jq '.workflow_runs[]|select(.conclusion!="skipped")|[(.display_title|capture("^#(?<n>[0-9]+) ").n // ""), .status, (.conclusion // ""), .updated_at]|@tsv')   || { echo "cannot list claude runs"; exit 0; }
+issue_runs=$(gh api "repos/$R/actions/workflows/claude.yml/runs?created=>$week&per_page=100" --paginate   --jq '.workflow_runs[]|select(.conclusion!="skipped")|[(.display_title|capture("^#(?<n>[0-9]+) ").n // ""), .status, (.conclusion // ""), .updated_at, .event]|@tsv')   || { echo "cannot list claude runs"; exit 0; }
 # At most 3 issues per pass (twice an hour), so a backlog does not use up the Claude usage limit at once.
 started=0
 for n in $issues; do
   if [ "$started" -ge 3 ]; then echo "later #$n (3 issues restarted this pass)"; continue; fi
-  mine=$(awk -F'	' -v n="$n" '$1==n' <<<"$issue_runs")
+  all=$(awk -F'	' -v n="$n" '$1==n' <<<"$issue_runs")
+  # An @claude comment run is active work too, but only the runs the label started count as tries.
+  mine=$(awk -F'	' '$5=="issues"' <<<"$all")
   # No run this week (runs from before claude.yml had a run-name carry no number) counts as never tried.
+  if [ -n "$all" ] && awk -F'	' '$2!="completed"' <<<"$all" | grep -q .; then echo "wait #$n (a claude run is active)"; continue; fi
   if [ -n "$mine" ]; then
-    if awk -F'	' '$2!="completed"' <<<"$mine" | grep -q .; then echo "wait #$n (a claude run is active)"; continue; fi
     last=$(sort -t$'	' -k4,4r <<<"$mine" | head -1)
-    IFS=$'	' read -r _ _ conclusion updated <<<"$last"
+    IFS=$'	' read -r _ _ conclusion updated _ <<<"$last"
     if [ "$conclusion" != success ]; then echo "skip #$n (last run: $conclusion)"; continue; fi
     if [[ ! "$updated" < "$cutoff" ]]; then echo "wait #$n (last run ended under an hour ago)"; continue; fi
   fi
@@ -70,8 +72,10 @@ for n in $issues; do
   if [ "$tries" -ge 3 ]; then echo "give up #$n ($tries runs and no PR: needs a person)"; continue; fi
   started=$((started + 1))
   if [ "${DRY_RUN:-}" = 1 ]; then echo "would relabel #$n ($why)"
-  elif gh issue edit "$n" -R "$R" --remove-label claude >/dev/null && gh issue edit "$n" -R "$R" --add-label claude >/dev/null; then
-    echo "relabeled #$n ($why)"
+  elif gh issue edit "$n" -R "$R" --remove-label claude >/dev/null; then
+    # Without the label the next pass cannot find the issue, so retry the add before giving up.
+    for try in 1 2 3; do gh issue edit "$n" -R "$R" --add-label claude >/dev/null && break; try=; sleep 5; done
+    if [ -n "${try:-}" ]; then echo "relabeled #$n ($why)"; else echo "relabel failed #$n: claude label is removed, add it by hand"; fi
   else echo "relabel failed #$n"; fi
 done
 exit 0
