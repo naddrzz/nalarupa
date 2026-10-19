@@ -365,6 +365,20 @@ impl<'a> Svg<'a> {
         format!(r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" {head}><defs>{}</defs>{}</svg>"#, self.defs, self.out)
     }
 
+    /// Wrap what was emitted so far in an ancestor's painted matrix and opacity.
+    pub fn wrap(&mut self, m: Option<[f64; 6]>, opacity: f64) {
+        let mut g = String::new();
+        if opacity < 1.0 {
+            let _ = write!(g, r#" opacity="{opacity}""#);
+        }
+        if let Some([a, b, c, d, e, f]) = m {
+            let _ = write!(g, r#" transform="matrix({a} {b} {c} {d} {e} {f})""#);
+        }
+        if !g.is_empty() {
+            self.out = format!("<g{g}>{}</g>", self.out);
+        }
+    }
+
     fn id(&mut self, prefix: &str) -> String {
         self.uid += 1;
         format!("{prefix}{}", self.uid)
