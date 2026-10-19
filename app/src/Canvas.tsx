@@ -198,6 +198,8 @@ export function Canvas(props: {
   const [ghost, setGhost] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
   const [hover, setHover] = useState<Box | null>(null)
   const [editing, setEditing] = useState<{ id: string; box: Box; value: string; size: number } | null>(null)
+  const editLive = useRef(editing)
+  editLive.current = editing
   const [renaming, setRenaming] = useState<{ id: string; draft: string } | null>(null)
   const renameLive = useRef(renaming)
   renameLive.current = renaming
@@ -339,8 +341,10 @@ export function Canvas(props: {
   }
 
   function commitEdit(value: string) {
-    if (!editing) return
-    if (value !== '' && value !== undefined) tryCall('update', { ids: [editing.id], props: { content: value } })
+    const e = editLive.current
+    if (!e) return
+    editLive.current = null
+    if (value !== '' && value !== undefined) tryCall('update', { ids: [e.id], props: { content: value } })
     setEditing(null)
   }
 
@@ -1486,7 +1490,7 @@ export function Canvas(props: {
               onChange={(ev) => setEditing((s) => (s ? { ...s, value: ev.value ?? '' } : s))}
               onSubmit={(ev) => { commitEdit(ev.value ?? editing.value); refocus() }}
               onBlur={() => commitEdit(editing.value)}
-              onKeyDown={(ev) => { if ((ev.key ?? '').toLowerCase() === 'escape') { setEditing(null); refocus() } }}
+              onKeyDown={(ev) => { if ((ev.key ?? '').toLowerCase() === 'escape') { editLive.current = null; setEditing(null); refocus() } }}
               style={{ fontSize: Math.max(10, Math.min(72, editing.size * cam.zoom)), color: '#111111', fontFamily: FONT, width: '100%' }}
             />
           </div>
