@@ -125,6 +125,11 @@ assert(lastContentId(store.items) !== reply.id, 'a later reply does')
   settled([ev('error', { text: 'boom' }), end(false)])
   applyEvents([ev('start'), plan, end(false)], 0)
   assert(store.todos.map((t) => t.status).join(',') === 'completed,in_progress,pending', 'an earlier failure does not cancel a later run')
+  // A failing helper agent does not cancel the plan another agent is still working through.
+  resetChat()
+  const helper = { id: 'ag2', name: 'Chandra', color: '#ED8936' }
+  applyEvents([ev('user', { text: 'go' }), ev('start'), plan, { type: 'agent', kind: 'start', agent: helper }, { type: 'agent', kind: 'error', text: 'boom', agent: helper }, { type: 'agent', kind: 'done', durationMs: 1, usage: {}, agent: helper }], 0)
+  assert(store.todos.map((t) => t.status).join(',') === 'completed,in_progress,pending', "a helper's failure leaves the plan owner's steps alone")
 }
 // Agent bar: running agents come first and survive the cap; a new conversation forgets every agent.
 resetChat()

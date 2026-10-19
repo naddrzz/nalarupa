@@ -46,6 +46,8 @@ export const store = {
   /** Backend and model of each agent's current turn, from its `start` event. */
   authors: new Map<string, Author>(),
   todos: [] as Todo[],
+  /** The agent that last wrote `todos`; only its run ending settles the plan. */
+  todosOwner: '',
   cursors: new Map<string, CursorState>(),
   /** AI Pen cursors by the frame they draw into. */
   pens: new Map<string, PenState>(),
@@ -226,6 +228,7 @@ export function applyEvents(events: any[], now: number): boolean {
         break
       case 'todos':
         store.todos = Array.isArray(ev.todos) ? ev.todos : []
+        store.todosOwner = aid
         break
       case 'note':
         store.items.push({ kind: 'note', id: nextId++, text: ev.text })
@@ -248,7 +251,7 @@ export function applyEvents(events: any[], now: number): boolean {
         store.running.delete(aid)
         for (const it of store.items) if (it.kind === 'tool' && it.agent.id === aid && it.running) Object.assign(it, { running: false, error: true, output: 'Tool call cancelled' })
         // A failed run ends the agent as a Stop does: its unfinished plan must not keep reading as live.
-        if (ev.stopped || failedRun(aid)) store.todos = store.todos.map((t) => (t.status === 'completed' ? t : { ...t, status: 'cancelled' }))
+        if (store.todosOwner === aid && (ev.stopped || failedRun(aid))) store.todos = store.todos.map((t) => (t.status === 'completed' ? t : { ...t, status: 'cancelled' }))
         store.items.push({ kind: 'usage', id: nextId++, agent: p ?? FALLBACK, durationMs: ev.durationMs ?? 0, usage: ev.usage ?? {}, stopped: !!ev.stopped })
         const c = store.cursors.get(aid)
         if (c) c.lastActivity = now
@@ -274,6 +277,7 @@ function failedRun(aid: string): boolean {
 export function resetChat() {
   store.items = []
   store.todos = []
+  store.todosOwner = ''
   store.pills.clear()
   store.profiles.clear()
   store.running.clear()
