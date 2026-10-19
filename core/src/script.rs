@@ -548,10 +548,12 @@ fn unhandled_rejection(ctx: &Ctx<'_>) -> Result<(), String> {
 /// same deadline, then fail the call on an unhandled rejection.
 ///
 /// Running out of memory inside a job can drop the job without a usable error (the queue just
-/// ends and the call looks finished), so the heap is checked as the queue drains. The jobs run
-/// outside `with` because the heap walk takes the runtime lock `with` holds.
+/// ends and the call looks finished), so the heap is checked every `HEAP_CHECK_JOBS` jobs and once
+/// more when the queue drains. The jobs run outside `with` because the heap walk takes the
+/// runtime lock `with` holds.
 fn settle(js: &Context) -> Result<(), String> {
     let rt = js.runtime();
+    let near_cap = || rt.memory_usage().malloc_size >= (MEMORY_LIMIT - OOM_SLACK) as i64;
     let mut jobs = 0u32;
     loop {
         match rt.execute_pending_job() {
@@ -563,11 +565,18 @@ fn settle(js: &Context) -> Result<(), String> {
         if over_time() {
             return Err(js.with(|ctx| describe(&ctx, rquickjs::Error::Exception)));
         }
-        if jobs % HEAP_CHECK_JOBS == 0 && rt.memory_usage().malloc_size >= (MEMORY_LIMIT - OOM_SLACK) as i64 {
-            return Err(limit_stop(format!("InternalError: out of memory: the snippet used more than {} MB", MEMORY_LIMIT >> 20)));
+        if jobs % HEAP_CHECK_JOBS == 0 && near_cap() {
+            return Err(oom_stop());
         }
     }
+    if near_cap() {
+        return Err(oom_stop());
+    }
     js.with(|ctx| unhandled_rejection(&ctx))
+}
+
+fn oom_stop() -> String {
+    limit_stop(format!("InternalError: out of memory: the snippet used more than {} MB", MEMORY_LIMIT >> 20))
 }
 
 /// Time or memory limit: flag it so a streamed call stops re-running.
