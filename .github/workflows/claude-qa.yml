@@ -175,7 +175,7 @@ jobs:
       # The scripts and screenshots behind the filed issues.
       - if: always() && steps.pick.outputs.run == 'true'
         uses: actions/upload-artifact@v4
-        with: { name: "qa-${{ matrix.area }}", path: app/.qa/, retention-days: 14, if-no-files-found: ignore }
+        with: { name: "qa-${{ matrix.area }}", path: app/.qa/, retention-days: 14, if-no-files-found: ignore, include-hidden-files: true }
 
   # New automated checks for features nothing covers yet, written with the bmad-qa-generate-e2e-tests skill
   # (.github/claude-skills, from BMAD-METHOD; _bmad/custom/bmad-qa-generate-e2e-tests.toml holds this repo's conventions).
