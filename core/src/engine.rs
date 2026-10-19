@@ -90,8 +90,8 @@ pub fn engine() -> MutexGuard<'static, Engine> {
     ENGINE.get_or_init(|| Mutex::new(Engine::new(crate::render::data_dir()))).lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// An environment value as a key: blank or whitespace-only is none.
-fn env_key(v: Option<String>) -> Option<String> {
+/// A key as typed or set: surrounding whitespace is dropped and a blank key is none.
+fn nonblank(v: Option<String>) -> Option<String> {
     v.map(|k| k.trim().to_string()).filter(|k| !k.is_empty())
 }
 
@@ -484,10 +484,10 @@ impl Engine {
         self.settings.get(key).and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string)
     }
 
-    /// The Anthropic API key: the setting, else `ANTHROPIC_API_KEY`. A blank variable is no key
+    /// The Anthropic API key: the setting, else `ANTHROPIC_API_KEY`. A blank one of either is no key
     /// (`ANTHROPIC_API_KEY=` is common in CI and devcontainers).
     pub fn api_key(&self) -> Option<String> {
-        self.setting("anthropic_api_key").or_else(|| env_key(std::env::var("ANTHROPIC_API_KEY").ok()))
+        nonblank(self.setting("anthropic_api_key")).or_else(|| nonblank(std::env::var("ANTHROPIC_API_KEY").ok()))
     }
 
     /// The agent backend: the setting, else the API when a key is available, else the Claude Code CLI.
@@ -689,10 +689,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn blank_env_key_is_none() {
-        assert_eq!(env_key(None), None);
-        assert_eq!(env_key(Some(String::new())), None);
-        assert_eq!(env_key(Some("  \t".into())), None);
-        assert_eq!(env_key(Some(" sk-ant-x\n".into())), Some("sk-ant-x".into()));
+    fn blank_key_is_none() {
+        assert_eq!(nonblank(None), None);
+        assert_eq!(nonblank(Some(String::new())), None);
+        assert_eq!(nonblank(Some("  \t".into())), None);
+        assert_eq!(nonblank(Some(" sk-ant-x\n".into())), Some("sk-ant-x".into()));
     }
 }

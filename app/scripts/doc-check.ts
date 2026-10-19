@@ -189,6 +189,9 @@ assert(!('anthropic_api_key' in call('settings_get')), 'a null value removes the
 // A blank ANTHROPIC_API_KEY is no key: the core and the settings panel both fall back to Claude Code.
 call('settings_set', { key: 'agent_backend', value: null })
 assert(call<{ hasApiKey: boolean }>('init').hasApiKey === false && call<Record<string, unknown>>('settings_get').backend === 'claude-code', 'a blank ANTHROPIC_API_KEY does not select the API backend')
+call('settings_set', { key: 'anthropic_api_key', value: ' \t' })
+assert(call<{ hasApiKey: boolean }>('init').hasApiKey === false && call<Record<string, unknown>>('settings_get').backend === 'claude-code', 'a blank saved API key is no key either')
+call('settings_set', { key: 'anthropic_api_key', value: null })
 throws(() => call('settings_set', { value: 1 }), /key required/, 'settings_set without a key')
 
 // While an agent runs, a new conversation and a document switch are both refused: the run keeps its chat and
