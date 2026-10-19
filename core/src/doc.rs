@@ -208,6 +208,7 @@ impl Doc {
         let mut node = if source["reusable"] == true {
             json!({"type": "ref", "ref": source["id"]})
         } else {
+            validate_node(source).map_err(|e| format!("source: {e}"))?;
             source.clone()
         };
         let mut remap = Vec::new();
@@ -664,5 +665,14 @@ mod tests {
         let err = e.copy(&json!({"type":"frame","children":[{"type":"text","name":"t"}]}), ROOT, Some(&bad)).unwrap_err();
         assert!(err.contains("descendant 't'"), "{err}");
         assert_eq!(e.children().len(), 1);
+    }
+
+    /// A loaded frame can hold a non-object child; copying it errors instead of panicking in `assign_ids`.
+    #[test]
+    fn copy_validates_source() {
+        let mut e = Doc::new();
+        let err = e.copy(&json!({"type":"frame","children":["str"]}), ROOT, None).unwrap_err();
+        assert!(err.contains("source") && err.contains("children[0]"), "{err}");
+        assert_eq!(e.children().len(), 0);
     }
 }
