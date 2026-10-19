@@ -3,10 +3,10 @@
 // usage rows, queued prompts, parallel agents.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { call, tryCall } from './core'
-import { imageSrc, profileOf, resetChat, restoreChat, store, type ChatItem } from './agents'
+import { barAgents, imageSrc, profileOf, resetChat, restoreChat, store, type ChatItem } from './agents'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import * as SelectPrimitive from '@gpuix/react/select'
-import { C, FONT, MONO, REDUCED_MOTION } from './theme'
+import { C, FONT, INDICATOR_TICK_MS, MONO, REDUCED_MOTION, ellipsisAt, pulseAt } from './theme'
 import { Button, Field, FocusRing, Icon, IconButton, Pressable, Row, Segmented, setKeyboardFocus, T, Toggle, useKeyboardFocusId, useRing, useTrigger, type Toast } from './ui'
 
 // Suggestion set; the empty chat shows 6 random picks of these 12.
@@ -59,7 +59,7 @@ function useTick(ms: number, active: boolean) {
 }
 
 // Under reduced motion the ellipsis stays still and replies appear whole (no typewriter).
-const dots = () => (REDUCED_MOTION ? '…' : '.'.repeat(1 + (Math.floor(performance.now() / 400) % 3)))
+const dots = () => (REDUCED_MOTION ? '…' : ellipsisAt(performance.now()))
 
 // Typewriter: ~5 words per 16 ms frame, instant once a later message exists.
 const revealed = new Map<number, number>()
@@ -93,7 +93,7 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
   const lastId = items[items.length - 1]?.id
   const typing = items.some((i) => i.kind === 'assistant' && i.id === lastId && (revealed.get(i.id) ?? 0) < i.text.split(/(\s+)/).length)
   useTick(16, typing)
-  useTick(400, running)
+  useTick(REDUCED_MOTION ? 400 : INDICATOR_TICK_MS, running)
 
   const send = (text: string) => {
     const t = text.trim()
@@ -111,6 +111,7 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
       return toast((e as Error).message, true)
     }
     resetChat()
+    setChatVersion((n) => n + 1)
     toast('New conversation')
   }
   const toggle = (id: number) => setOpen((s) => {
@@ -120,8 +121,7 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
     return n
   })
 
-  const agents = [...store.profiles.values()]
-  const runningAgents = agents.filter((a) => store.running.has(a.id))
+  const { all: agents, running: runningAgents, shown: shownAgents, more: moreAgents } = barAgents()
   const planning = running && (() => {
     const last = items[items.length - 1]
     return !!last && ((last.kind === 'tool' && !last.running) || (last.kind === 'assistant' && !last.streaming) || last.kind === 'user')
@@ -140,17 +140,20 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
       </div>
       {settings ? <AgentSettings mcpUrl={mcpUrl} toast={toast} /> : null}
       {agents.length > 1 && (running || agents.some((a) => a.parent)) ? (
-        <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8, paddingLeft: 14, paddingRight: 8, height: 34, borderBottomWidth: 1, borderColor: C.border, backgroundColor: C.panel2 }}>
-          <T size={11} color={C.muted}>{running ? `${runningAgents.length}/${agents.length} agents running` : 'Finished'}</T>
-          <div style={{ flexGrow: 1, display: 'flex', flexDirection: 'row', gap: 4, overflow: 'hidden' }}>
-            {agents.slice(0, 6).map((a) => (
-              <div key={a.id} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 4, paddingLeft: 6, paddingRight: 6, height: 20, borderRadius: 10, backgroundColor: C.raised, opacity: store.running.has(a.id) ? 1 : 0.6 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 14, paddingRight: 8, paddingTop: 5, paddingBottom: 6, borderBottomWidth: 1, borderColor: C.border, backgroundColor: C.panel2 }}>
+          <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8, height: 24 }}>
+            <T size={11} color={C.muted} grow>{running ? `${runningAgents.length}/${agents.length} agents running` : 'Finished'}</T>
+            {running ? <IconButton icon="stop" title="Stop all agents" color={C.danger} onClick={() => tryCall('agent_stop')} size={24} /> : null}
+          </div>
+          <div testId="agent-bar" style={{ display: 'flex', flexDirection: 'row', flexWrap: 'wrap', gap: 4 }}>
+            {shownAgents.map((a) => (
+              <div key={a.id} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 4, paddingLeft: 6, paddingRight: 6, height: 20, flexShrink: 0, borderRadius: 10, backgroundColor: C.raised, opacity: store.running.has(a.id) ? 1 : 0.6 }}>
                 <div style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: a.color }} />
                 <T size={10} color={C.text}>{a.name}</T>
               </div>
             ))}
+            {moreAgents ? <T size={10} color={C.muted}>{`+${moreAgents}`}</T> : null}
           </div>
-          {running ? <IconButton icon="stop" title="Stop all agents" color={C.danger} onClick={() => tryCall('agent_stop')} size={24} /> : null}
         </div>
       ) : null}
 
@@ -186,12 +189,16 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
             <T size={11} weight="600" color={C.muted} grow>Plan</T>
             <T size={11} color={C.ghost}>{`${doneTodos}/${todos.length}`}</T>
           </Pressable>
-          {planOpen ? todos.map((t, i) => (
-            <div key={i} style={{ display: 'flex', flexDirection: 'row', gap: 6, alignItems: 'center' }}>
-              <T size={11} color={t.status === 'completed' ? C.ok : t.status === 'in_progress' ? C.accent : C.ghost} mono>{t.status === 'completed' ? '✓' : t.status === 'in_progress' ? '◐' : t.status === 'cancelled' ? '✕' : '○'}</T>
-              <T size={11} color={t.status === 'completed' ? C.ghost : C.text} grow>{t.status === 'in_progress' && t.activeForm ? t.activeForm : t.content}</T>
+          {planOpen ? (
+            <div testId="plan-todos" style={{ display: 'flex', flexDirection: 'column', gap: 4, flexShrink: 1, minHeight: 0, maxHeight: 240, overflowY: 'scroll' }}>
+              {todos.map((t, i) => (
+                <div key={i} style={{ display: 'flex', flexDirection: 'row', gap: 6, alignItems: 'flex-start' }}>
+                  <T size={11} color={t.status === 'completed' ? C.ok : t.status === 'in_progress' ? C.accent : C.ghost} mono>{t.status === 'completed' ? '✓' : t.status === 'in_progress' ? '◐' : t.status === 'cancelled' ? '✕' : '○'}</T>
+                  <T size={11} color={t.status === 'completed' ? C.ghost : C.text} grow style={{ minWidth: 0 }}>{t.status === 'in_progress' && t.activeForm ? t.activeForm : t.content}</T>
+                </div>
+              ))}
             </div>
-          )) : null}
+          ) : null}
         </div>
       ) : null}
 
@@ -353,7 +360,11 @@ function ChatHistory({ running, toast, changed }: { running: boolean; toast: Toa
   useEffect(() => {
     if (armed && kbChat === armed) focusKeys(els.current.get(`confirm:${armed}`))
   }, [armed])
-  const refresh = () => setList(tryCall<ChatList>('chat_list') ?? { current: null, chats: [] })
+  // Titles saved from a multi-line prompt hold line breaks; a row is one line, so collapse them.
+  const refresh = () => {
+    const l = tryCall<ChatList>('chat_list') ?? { current: null, chats: [] }
+    setList({ ...l, chats: l.chats.map((c) => ({ ...c, title: (c.title ?? '').split(/\s+/).filter(Boolean).join(' ') })) })
+  }
   const close = () => {
     setList(null)
     setConfirm(false)
@@ -505,7 +516,7 @@ let cachedModel: string | null = null
 function tryModel() {
   if (cachedModel === null) {
     const s = tryCall<Record<string, string>>('settings_get') ?? {}
-    const cli = s.agent_backend === 'claude-code' || !s.anthropic_api_key
+    const cli = s.backend === 'claude-code'
     const model = MODELS.find((m) => m.value === s.agent_model)?.label
     cachedModel = cli ? (model ? `Claude Code · ${model}` : 'Claude Code') : model ?? 'Opus 5.5'
   }
@@ -526,7 +537,7 @@ const FAST_MODELS = ['claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8']
 function ModelPicker({ settingsOpen }: { settingsOpen: boolean }) {
   // Re-read when the settings panel closes: the backend may have changed.
   const s = useMemo(() => tryCall<Record<string, unknown>>('settings_get') ?? {}, [settingsOpen])
-  const cli = (s.agent_backend ?? (s.anthropic_api_key ? 'api' : 'claude-code')) === 'claude-code'
+  const cli = s.backend === 'claude-code'
   const items = cli ? [{ value: 'default', label: 'Default' }, ...MODELS] : MODELS
   const stored = typeof s.agent_model === 'string' ? s.agent_model : null
   const current = stored ?? (cli ? 'default' : 'claude-opus-5-5')
@@ -646,7 +657,7 @@ function Item({ m, isLast, expanded, toggle }: { m: ChatItem; isLast: boolean; e
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 3, paddingBottom: 3 }}>
           <Pressable label={m.running ? `${label}, running` : `${label}, ${m.error ? 'failed' : 'done'}`} expanded={expanded} onClick={toggle} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 24, borderRadius: 4 }}>
-            <div style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: m.agent.color, opacity: m.running && !REDUCED_MOTION ? 0.5 + 0.5 * Math.sin(performance.now() / 200) : 1 }} />
+            <div style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: m.agent.color, opacity: m.running && !REDUCED_MOTION ? pulseAt(performance.now()) : 1 }} />
             <T size={12} color={m.running ? C.text : C.muted}>{m.running ? `${label}${dots()}` : label}</T>
             {m.running && m.lines ? <T size={11} color={C.ghost}>{`${m.lines} lines`}</T> : null}
             {!m.running ? <T size={12} color={m.error ? C.ghost : C.ok}>{m.error ? '✕' : '✓'}</T> : null}
@@ -754,7 +765,7 @@ function PermissionCard({ m }: { m: Extract<ChatItem, { kind: 'permission' }> })
 
 function AgentSettings({ mcpUrl, toast }: { mcpUrl: string; toast: Toast }) {
   const s = useMemo(() => tryCall<Record<string, string>>('settings_get') ?? {}, [])
-  const [backend, setBackend] = useState(s.agent_backend ?? (s.anthropic_api_key ? 'api' : 'claude-code'))
+  const [backend, setBackend] = useState(s.backend ?? 'claude-code')
   const [perms, setPerms] = useState<'ask' | 'auto'>((s as Record<string, unknown>).agent_auto_permissions === true ? 'auto' : 'ask')
   const set = (key: string, value: unknown) => {
     tryCall('settings_set', { key, value })

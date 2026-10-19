@@ -105,7 +105,7 @@ fn generate(ask: &str, cancel: &AtomicBool, on: &mut dyn FnMut(&str) -> bool) ->
     }
     let (key, model) = {
         let e = engine();
-        let key = e.setting("anthropic_api_key").or_else(|| std::env::var("ANTHROPIC_API_KEY").ok()).ok_or("no Anthropic API key")?;
+        let key = e.api_key().ok_or("no Anthropic API key")?;
         (key, e.setting("agent_model").unwrap_or_else(|| crate::agent::DEFAULT_MODEL.into()))
     };
     let body = json!({"model": model, "max_tokens": 16000, "system": SYSTEM, "messages": [{"role": "user", "content": ask}]});
