@@ -14,7 +14,12 @@ on:
 # never drops the nightly scheduled QA.
 concurrency: { group: "claude-qa-${{ github.event_name }}", cancel-in-progress: false }
 
+# Claude Code ends its session while a background command still runs; keep commands in the foreground, with room
+# for long checks.
 env:
+  CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
+  BASH_DEFAULT_TIMEOUT_MS: "3600000"
+  BASH_MAX_TIMEOUT_MS: "3600000"
   # The in-app agent runs the `claude` CLI (Claude Code backend); this logs it in.
   CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 

@@ -6,6 +6,13 @@ on:
     workflows: [ci]
     types: [completed]
 
+# Claude Code ends its session while a background command still runs, so a check suite started in the background
+# never reached the push. Keep every command in the foreground, with room for the full suite (cargo test + e2e).
+env:
+  CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
+  BASH_DEFAULT_TIMEOUT_MS: "3600000"
+  BASH_MAX_TIMEOUT_MS: "3600000"
+
 jobs:
   fix:
     if: |
