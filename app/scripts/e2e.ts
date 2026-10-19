@@ -75,6 +75,19 @@ try {
   await sleep(250)
   if ((await rows()) !== rows0 || (await app.getByTestId('layer-rename').count())) throw new Error('a quick second chevron click did not collapse (or opened rename)')
 
+  // Present starts at the slide holding the selection, also when a layer inside it is selected.
+  await app.getByTestId('layer-toggle-sld03').click()
+  await app.getByTestId('layers').getByText('Thanks').click()
+  await sleep(500)
+  await app.getByTestId('present').click()
+  await sleep(1500)
+  if (!(await app.getByText('3 / 3 · Esc to exit').count())) throw new Error('Present from a layer inside slide 3 did not open on slide 3')
+  await app.getByTestId('presentation').press('escape')
+  await sleep(500)
+  await app.getByTestId('layer-toggle-sld03').click()
+  await app.getByTestId('canvas').press('escape')
+  await sleep(250)
+
   // Layers as a keyboard tree (rows topmost first: sld03, sld02, sld01). Keys without an element id go
   // to whatever has focus, so each step also proves the previous one moved focus.
   const key = async (k: string) => {
