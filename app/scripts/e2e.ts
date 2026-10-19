@@ -447,6 +447,29 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
   await app.getByTestId('agent-settings').click()
   await sleep(300)
 
+  // The Design tab unmounts the agent panel: the draft and the Agents option are still there on return.
+  await app.getByTestId('tab-agent').click()
+  await app.getByTestId('agent-input').click()
+  await app.getByTestId('agent-input').fill('make the title bigger')
+  await app.getByText('2×').click()
+  await app.getByText('Side by side').waitFor()
+  await app.getByTestId('tab-design').click()
+  await until(async () => !(await app.getByTestId('agent-input').count()), 'the agent panel to close')
+  await app.getByTestId('tab-agent').click()
+  await app.getByTestId('agent-input').waitFor()
+  if (!(await app.getByText('Side by side').count())) throw new Error('switching to the Design tab and back reset the Agents option')
+  // A textarea's value cannot be read, so send it: the prompt bubble shows what the composer held (the stand-in
+  // replies; on Windows a send would start the real CLI).
+  if (standIn) {
+    await app.getByTestId('agent-send').click()
+    await until(async () => (await app!.getByText('make the title bigger').count()) > 0, 'the composer draft to survive the Design tab and be sent')
+    await until(async () => !(await app!.getByTestId('agent-stop').count()), 'the stand-in agent to finish', 20000)
+  }
+  // "1×" also appears in the agent cook button, so click the narrowest match: the segment.
+  const one = (await app.getByText('1×').all()).map((n) => n.bounds!).sort((a, b) => a.width - b.width)[0]
+  await app.mouse.click({ x: one.x + one.width / 2, y: one.y + one.height / 2 })
+  await app.getByTestId('agent-input').fill('')
+
   // The agent message pill: a reply long enough to fill the pill must not squash its status dot.
   if (standIn) {
     await app.getByTestId('tab-agent').click()
