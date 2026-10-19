@@ -145,12 +145,14 @@ TakeScreenshot([s])`,
   const chatId = `e2e${Date.now().toString(36)}`
   const chatFile = join(sessions, `${chatId}.json`)
   const agent = { id: 'ag0e2e', name: 'Arunika', color: '#7C9CFF', parent: null }
+  const todos = Array.from({ length: 32 }, (_, i) => ({ content: `Step ${i + 1}: lay out the menu grid with product cards, prices and tasting notes for the roastery`, status: i < 3 ? 'completed' : 'pending' }))
   mkdirSync(sessions, { recursive: true })
   writeFileSync(chatFile, JSON.stringify({
     version: 1, id: chatId, title: 'E2E saved chat', updatedAt: Date.now(), agent, messages: [], session: null,
     events: [
       { type: 'agent', kind: 'user', agent, text: 'E2E saved chat', at: Date.now() - 3000 },
       { type: 'agent', kind: 'text_delta', agent, text: 'Restored from disk.', at: Date.now() - 2000 },
+      { type: 'agent', kind: 'todos', todos, at: Date.now() - 1500 },
       { type: 'agent', kind: 'done', agent, durationMs: 1000, usage: {}, stopped: false, at: Date.now() - 1000 },
     ],
   }))
@@ -164,6 +166,15 @@ TakeScreenshot([s])`,
   const reply = (await app.getByType('markdown').all()).filter((n) => (n.bounds?.height ?? 0) > 0)
   if (!(await app.getByText('E2E saved chat').count()) || reply.length !== 1) throw new Error('the saved chat did not reopen')
   await shot('08-restored-chat')
+
+  // The Plan block: a long todo wraps inside the panel (it used to run past the window edge) and 32 of
+  // them scroll in a capped block, so the composer stays on screen (it used to be pushed out of the window).
+  const planField = (await app.getByTestId('agent-input').bounds())!
+  const count = (await app.getByText('3/32').bounds())!
+  const step = (await app.getByText('Step 1: lay out').bounds())!
+  if (step.x + step.width > count.x + count.width) throw new Error(`a long todo ends at ${step.x + step.width}, past the Plan block's right edge ${count.x + count.width}`)
+  const canvasBox = (await app.getByTestId('canvas').bounds())!
+  if (planField.y + planField.height > canvasBox.y + canvasBox.height) throw new Error(`32 todos pushed the composer to ${planField.y + planField.height}, below the window's bottom ${canvasBox.y + canvasBox.height}`)
 
   // Per-tool permission: Claude Code asks through the MCP permission tool (as the restored chat's
   // agent); the card in the chat answers it.
