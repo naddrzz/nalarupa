@@ -319,9 +319,10 @@ fn n_generate(a: &[String]) -> Result<String, String> {
             // shimmer skeleton) and the real image replaces it when the download finishes.
             // ponytail: no image-generation backend; a seeded photo from picsum.photos stands in.
             let seed = format!("{:x}", crate::svg::fxhash(prompt));
-            let pending = format!("nalarupa:pending-image-{seed}-{:x}", crate::doc::random_u64() & 0xffff);
+            let pending = format!("nalarupa:pending-image-{seed}-{:x}", crate::doc::random_u64());
             e.doc.update(target, &json!({"fill": {"type": "image", "url": pending, "mode": "fill"}}))?;
             e.version += 1;
+            e.inflight.insert(pending.clone());
             let dir = e.doc.dir().map(|d| d.join("images")).unwrap_or_else(|| e.data_dir.join("images"));
             let relative = e.doc.dir().is_some();
             std::thread::spawn(move || {
