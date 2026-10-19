@@ -271,9 +271,9 @@ impl Html<'_> {
                 let _ = writeln!(self.out, "<span{attrs} style=\"display:inline-flex;{css}\">{svg}</span>");
             }
             _ if as_svg => {
-                // The div's CSS transform already rotates/flips it.
+                // The div's CSS already rotates, flips and fades it.
                 let mut p = n.p.clone();
-                for k in ["rotation", "flipX", "flipY"] {
+                for k in ["rotation", "flipX", "flipY", "opacity"] {
                     p.remove(k);
                 }
                 let mut shape = RNode::leaf(n.id.clone(), &n.ty, p, None);
@@ -559,6 +559,28 @@ mod tests {
         // An unparseable stop colour stays as transparent black, like the canvas.
         let (s, _) = rect_html(json!({"fill": grad(json!({"colors": [{"color": "#ff0000", "position": 0}, {"color": "transparent", "position": 1}]}))}));
         assert!(s.contains("linear-gradient(-90deg,#ff0000 0%,rgba(0, 0, 0, 0) 100%)"), "{s}");
+    }
+
+    #[test]
+    fn html_opacity_is_applied_once() {
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        e.load_template("empty");
+        for node in [
+            json!({"type": "polygon", "polygonCount": 5, "fill": "#ff0000"}),
+            json!({"type": "path", "geometry": "M0 0 L10 0 L10 10 Z", "fill": "#ff0000"}),
+            json!({"type": "line", "stroke": "#ff0000", "strokeWidth": 3}),
+            json!({"type": "ellipse", "innerRadius": 0.5, "fill": "#ff0000"}),
+        ] {
+            let ty = node["type"].as_str().unwrap().to_string();
+            let mut node = node;
+            node.as_object_mut().unwrap().extend(json!({"x": 0, "y": 0, "width": 50, "height": 50, "opacity": 0.5}).as_object().unwrap().clone());
+            let id = e.insert_root(node).unwrap();
+            let html = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
+            // `fill-opacity` is paint alpha; only the node's own opacity must not repeat.
+            assert_eq!(html.matches("opacity:0.5;").count() + html.matches(" opacity=").count(), 1, "{ty}: {html}");
+            assert!(html.contains("opacity:0.5;"), "{ty}: {html}");
+        }
     }
 
     #[test]
