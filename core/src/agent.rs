@@ -15,7 +15,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub const DEFAULT_MODEL: &str = "claude-opus-5-5";
@@ -233,6 +233,8 @@ fn chat_title(shown: &str) -> String {
 /// Send `prompt` to the main agent (same conversation), showing `shown` as the user's message.
 /// A `resume` turn continues a finished run: it is dropped when Stop came in since that run ended.
 fn start_turn(shown: &str, prompt: String, resume: bool) {
+    // Held until the run is marked running: a clear that sweeps the chat files must not interleave with a new chat's first save.
+    let ops = chat_ops();
     let main = {
         let mut e = engine();
         if resume && e.agent.cancel.load(Ordering::SeqCst) {
@@ -245,6 +247,7 @@ fn start_turn(shown: &str, prompt: String, resume: bool) {
             }
             let (n, mode) = e.agent.parallel.clone();
             drop(e);
+            drop(ops);
             begin(queued.join("\n\n"), n, &mode, 1, "", false);
             return;
         }
@@ -498,23 +501,97 @@ fn chat_path(data_dir: &Path, id: &str) -> Result<PathBuf, String> {
     Ok(data_dir.join("sessions").join(format!("{id}.json")))
 }
 
-/// Save the current chat atomically: write a temp file, then rename it over the old one.
-pub fn save_chat(data_dir: &Path, a: &AgentState) -> Result<(), String> {
-    let Some(chat) = &a.chat else { return Ok(()) };
+/// A chat snapshot on its way to disk: cloned under the engine lock, serialized and written outside it.
+struct ChatSave {
+    data_dir: PathBuf,
+    path: PathBuf,
+    doc: Value,
+}
+
+impl ChatSave {
+    /// Write atomically: a temp file, then a rename over the old one.
+    fn write(&self) -> Result<(), String> {
+        let tmp = self.path.with_extension("json.tmp");
+        let write = || -> std::io::Result<()> {
+            std::fs::create_dir_all(self.data_dir.join("sessions"))?;
+            let mut f = std::fs::File::create(&tmp)?;
+            f.write_all(self.doc.to_string().as_bytes())?;
+            f.sync_all()?;
+            std::fs::rename(&tmp, &self.path)
+        };
+        write().map_err(|e| e.to_string())
+    }
+}
+
+fn snapshot_chat(data_dir: &Path, a: &AgentState) -> Result<Option<ChatSave>, String> {
+    let Some(chat) = &a.chat else { return Ok(None) };
     let path = chat_path(data_dir, &chat.id)?;
     let main = a.main.as_deref().and_then(|id| a.profile(id)).map(Profile::json);
     // ponytail: rewrites the whole file at every message end; switch to an append-only log if long chats get slow.
-    let text = json!({"version": 1, "id": chat.id, "title": chat.title, "updatedAt": now_ms(), "agent": main,
-                      "events": chat.events, "messages": a.messages, "session": a.session}).to_string();
-    let tmp = path.with_extension("json.tmp");
-    let write = || -> std::io::Result<()> {
-        std::fs::create_dir_all(data_dir.join("sessions"))?;
-        let mut f = std::fs::File::create(&tmp)?;
-        f.write_all(text.as_bytes())?;
-        f.sync_all()?;
-        std::fs::rename(&tmp, &path)
-    };
-    write().map_err(|e| e.to_string())
+    let doc = json!({"version": 1, "id": chat.id, "title": chat.title, "updatedAt": now_ms(), "agent": main,
+                     "events": chat.events, "messages": a.messages, "session": a.session});
+    Ok(Some(ChatSave { data_dir: data_dir.to_path_buf(), path, doc }))
+}
+
+/// The chat writer: the newest snapshot waits in `pending` (older ones are superseded), `busy` while one is written;
+/// `failed` holds the error of the last write, cleared by the next one that succeeds.
+#[derive(Default)]
+struct ChatWriter {
+    state: Mutex<(Option<ChatSave>, bool, Option<String>)>,
+    changed: Condvar,
+}
+
+fn chat_writer() -> &'static ChatWriter {
+    static WRITER: OnceLock<&'static ChatWriter> = OnceLock::new();
+    WRITER.get_or_init(|| {
+        let w: &'static ChatWriter = Box::leak(Box::default());
+        std::thread::spawn(move || loop {
+            let job = {
+                let mut s = w.state.lock().unwrap_or_else(|e| e.into_inner());
+                while s.0.is_none() {
+                    s = w.changed.wait(s).unwrap_or_else(|e| e.into_inner());
+                }
+                s.1 = true;
+                s.0.take()
+            };
+            let result = job.map_or(Ok(()), |j| j.write());
+            {
+                let mut s = w.state.lock().unwrap_or_else(|e| e.into_inner());
+                s.1 = false;
+                s.2 = result.clone().err();
+            }
+            w.changed.notify_all();
+            if let Err(err) = result {
+                engine().emit(json!({"type": "toast", "text": format!("Could not save the chat: {err}")}));
+            }
+        });
+        w
+    })
+}
+
+/// Save the current chat in the background. Only the clone happens here, under the engine lock.
+pub fn save_chat(data_dir: &Path, a: &AgentState) -> Result<(), String> {
+    let Some(job) = snapshot_chat(data_dir, a)? else { return Ok(()) };
+    let w = chat_writer();
+    w.state.lock().unwrap_or_else(|e| e.into_inner()).0 = Some(job);
+    w.changed.notify_all();
+    Ok(())
+}
+
+/// Wait until every queued chat save is on disk, and return the error of the last write if it failed.
+/// Safe with the engine locked: the writer is idle again before it toasts a failure.
+fn flush_chat_saves() -> Option<String> {
+    let w = chat_writer();
+    let mut s = w.state.lock().unwrap_or_else(|e| e.into_inner());
+    while s.0.is_some() || s.1 {
+        s = w.changed.wait(s).unwrap_or_else(|e| e.into_inner());
+    }
+    s.2.clone()
+}
+
+/// `chat_flush`: called as the app exits, since the writer is a detached thread the process does not wait for.
+pub fn shutdown() -> Result<(), String> {
+    flush_chat_saves().map_or(Ok(()), Err)
 }
 
 fn read_chat(data_dir: &Path, id: &str) -> Result<Value, String> {
@@ -545,6 +622,7 @@ fn list_chats(data_dir: &Path) -> Vec<Value> {
 
 /// `chat_list`: the saved chats plus the id of the current one.
 pub fn chats() -> Value {
+    flush_chat_saves();
     let (dir, current) = {
         let e = engine();
         (e.data_dir.clone(), e.agent.chat.as_ref().map(|c| c.id.clone()))
@@ -552,8 +630,17 @@ pub fn chats() -> Value {
     json!({"current": current, "chats": list_chats(&dir)})
 }
 
+/// Serializes load, delete and clear: each touches the chat files and the current chat in separate steps, so one must not interleave with another.
+/// Always taken before the engine lock.
+fn chat_ops() -> std::sync::MutexGuard<'static, ()> {
+    static OPS: Mutex<()> = Mutex::new(());
+    OPS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// `chat_load`: make a saved chat the current conversation; returns its events for the UI to replay.
 pub fn load_chat(id: &str) -> Result<Value, String> {
+    let _ops = chat_ops();
+    flush_chat_saves();
     let mut e = engine();
     if e.agent.running {
         return Err("Stop the agent before opening another chat.".into());
@@ -565,14 +652,20 @@ pub fn load_chat(id: &str) -> Result<Value, String> {
 
 /// `chat_delete`: remove a saved chat. Removing the current one starts a new conversation.
 pub fn delete_chat(id: &str) -> Result<(), String> {
-    let mut e = engine();
-    let path = chat_path(&e.data_dir, id)?;
-    if e.agent.chat.as_ref().is_some_and(|c| c.id == id) {
-        if e.agent.running {
-            return Err("Stop the agent before removing the running chat.".into());
+    let _ops = chat_ops();
+    let path = {
+        let mut e = engine();
+        let path = chat_path(&e.data_dir, id)?;
+        if e.agent.chat.as_ref().is_some_and(|c| c.id == id) {
+            if e.agent.running {
+                return Err("Stop the agent before removing the running chat.".into());
+            }
+            e.agent.clear();
         }
-        e.agent.clear();
-    }
+        path
+    };
+    // Flushed after the lock drops: the chat is no longer current, so no later snapshot can bring the file back.
+    flush_chat_saves();
     match std::fs::remove_file(path) {
         Err(err) if err.kind() != std::io::ErrorKind::NotFound => Err(err.to_string()),
         _ => Ok(()),
@@ -581,14 +674,21 @@ pub fn delete_chat(id: &str) -> Result<(), String> {
 
 /// `chat_clear`: delete every saved chat but a running one. True when the current chat went too.
 pub fn clear_chats() -> Result<bool, String> {
-    let mut e = engine();
-    let running = e.agent.running;
-    let keep = running.then(|| e.agent.chat.as_ref().map(|c| format!("{}.json", c.id))).flatten();
-    if !running {
-        e.agent.clear();
-    }
-    for entry in std::fs::read_dir(e.data_dir.join("sessions")).into_iter().flatten().flatten() {
-        if keep.as_deref() != entry.file_name().to_str() {
+    let _ops = chat_ops();
+    let (dir, running, keep) = {
+        let mut e = engine();
+        let running = e.agent.running;
+        // Both the file and the temp file its writer renames over it: removing the temp file fails the next save.
+        let keep = running.then(|| e.agent.chat.as_ref().map(|c| [format!("{}.json", c.id), format!("{}.json.tmp", c.id)])).flatten();
+        if !running {
+            e.agent.clear();
+        }
+        (e.data_dir.clone(), running, keep)
+    };
+    // Flushed after the lock drops: only a running chat can still queue snapshots, and its file is kept.
+    flush_chat_saves();
+    for entry in std::fs::read_dir(dir.join("sessions")).into_iter().flatten().flatten() {
+        if !keep.as_ref().is_some_and(|k| k.iter().any(|f| entry.file_name().to_str() == Some(f.as_str()))) {
             std::fs::remove_file(entry.path()).map_err(|err| err.to_string())?;
         }
     }
@@ -1075,6 +1175,7 @@ mod tests {
         let helper = a.new_profile(Some(p.id.clone()));
         assert!(a.record(&json!({"type": "agent", "kind": "done", "agent": helper.json()})));
         save_chat(&dir, &a).unwrap();
+        flush_chat_saves();
 
         let listed = list_chats(&dir);
         assert_eq!(listed.len(), 1);
@@ -1137,7 +1238,10 @@ mod tests {
     fn stop_announces_dropped_queue() {
         let kinds = || engine().events.iter().filter(|e| e["type"] == "agent").filter_map(|e| e["kind"].as_str().map(str::to_string)).collect::<Vec<_>>();
         let dir = std::env::temp_dir().join(format!("nalarupa-test-stop-{:x}", crate::doc::random_u64()));
-        let saved = |kind: &str| read_chat(&dir, "5709e5").unwrap()["events"].as_array().unwrap().iter().filter(|e| e["kind"] == kind).count();
+        let saved = |kind: &str| {
+            flush_chat_saves();
+            read_chat(&dir, "5709e5").unwrap()["events"].as_array().unwrap().iter().filter(|e| e["kind"] == kind).count()
+        };
         let data_dir = {
             let mut e = engine();
             let old = std::mem::replace(&mut e.data_dir, dir.clone());

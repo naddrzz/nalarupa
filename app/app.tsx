@@ -4,6 +4,7 @@
  *   bun run build   standalone binary in dist/ (ship nalarupa_core.dll next to it)
  */
 import { render } from '@gpuix/react'
+import { call } from './src/core'
 import { App } from './src/App'
 import { decorateWindow, windowSize } from './src/theme'
 import { setKeyboardFocus } from './src/ui'
@@ -30,3 +31,11 @@ render(
 // Native frame: Nalarupa icon, caption and border in the app colours (the border is the OS's, so it hides
 // when maximised).
 decorateWindow()
+// The core writes chats on a background thread: let the last save reach the disk before the process ends.
+process.on('exit', () => {
+  try {
+    call('chat_flush')
+  } catch (err) {
+    console.error(`Could not save the chat: ${err instanceof Error ? err.message : err}`)
+  }
+})

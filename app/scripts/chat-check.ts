@@ -1,7 +1,8 @@
 // Saved chat history through the core (no window): `bun scripts/chat-check.ts`
 // The chat list, loading, deleting and clearing the Agent panel's history menu relies on.
-import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
+import { randomBytes } from 'node:crypto'
 import { delimiter, join } from 'node:path'
 import { call } from '../src/core'
 
@@ -22,9 +23,12 @@ const windows = process.platform === 'win32'
 if (!process.argv.includes('--child')) {
   const data = mkdtempSync(join(tmpdir(), 'nalarupa-chat-'))
   // A stand-in `claude` that runs long and prints nothing: a running agent without a login (a shell script, so not on Windows).
+  // When `replay.txt` exists next to it, it prints those lines first (`sleep <s>` pauses) and exits.
   const bin = join(data, 'bin')
   mkdirSync(bin)
-  if (!windows) writeFileSync(join(bin, 'claude'), '#!/bin/sh\nexec sleep 60\n', { mode: 0o755 })
+  const stub = '#!/bin/bash\nf="$(dirname "$0")/replay.txt"\n' +
+    'if [ -f "$f" ]; then while IFS= read -r l; do case "$l" in sleep*) sleep "${l#sleep }";; *) printf \'%s\\n\' "$l";; esac; done < "$f"; exit 0; fi\nexec sleep 60\n'
+  if (!windows) writeFileSync(join(bin, 'claude'), stub, { mode: 0o755 })
   const PATH = `${bin}${delimiter}${process.env.PATH ?? ''}`
   const run = Bun.spawnSync([process.execPath, import.meta.path, '--child'], { env: { ...process.env, PATH, NALARUPA_DATA: data }, stdio: ['inherit', 'inherit', 'inherit'] })
   rmSync(data, { recursive: true, force: true })
@@ -101,11 +105,63 @@ if (!windows) {
     call('chat_delete', { id: 'ddd444' })
     assert(ids() === run, 'another chat can be deleted while the agent runs')
     save('eee555', 'Spare', 6000)
+    // A save in flight has its temp file next to the chat: clearing must not delete it from under the writer.
+    const tmp = join(sessions, `${run}.json.tmp`)
+    writeFileSync(tmp, '{}')
     assert(call('chat_clear') === false && call('chat_list').current === run && ids() === run, 'clear keeps the running chat and reports it')
+    assert(existsSync(tmp), 'clear keeps the running chat\'s temp file')
   } finally {
     call('agent_stop')
   }
   await until(() => !call('state').agentRunning, 'the agent stops')
+}
+
+// Saving a long chat full of screenshots must not stall the engine: a worker times a cheap core call (it needs the
+// same lock as render and poll) while a replayed agent run saves the chat after every tool call.
+if (!windows) {
+  call('chat_clear')
+  const shot = randomBytes(520_000).toString('base64')
+  const lines: string[] = []
+  const calls = 96
+  for (let i = 0; i < calls; i++) {
+    const line = (o: object) => lines.push(JSON.stringify(o))
+    line({ type: 'stream_event', session_id: 's', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: `step ${i}` } } })
+    line({ type: 'stream_event', event: { type: 'message_stop' } })
+    line({ type: 'assistant', message: { content: [{ type: 'tool_use', id: `t${i}`, name: 'mcp__nalarupa__execute', input: { input: 'return 1' } }] } })
+    line({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: `t${i}`, content: [{ type: 'text', text: 'ok' }, { type: 'image', source: { type: 'base64', media_type: 'image/png', data: shot } }] }] } })
+    lines.push('sleep 0.1')
+  }
+  writeFileSync(join(data, 'bin', 'replay.txt'), lines.join('\n') + '\n')
+  const worker = join(data, 'stall.ts')
+  writeFileSync(worker, `import { call } from ${JSON.stringify(join(import.meta.dir, '../src/core'))}
+let stop = false
+self.onmessage = async (e) => {
+  if (e.data === 'stop') return void (stop = true)
+  let max = 0
+  while (!stop) { const t = performance.now(); call('frames'); max = Math.max(max, performance.now() - t); await Bun.sleep(3) }
+  postMessage(max)
+}`)
+  const w = new Worker(worker)
+  const stall = new Promise<number>((r, fail) => {
+    w.onmessage = (e) => r(e.data)
+    w.onerror = (e) => fail(new Error(`the stall worker failed: ${e.message}`))
+  })
+  stall.catch(() => {})
+  w.postMessage('go')
+  await sleep(300)
+  call('agent_send', { text: 'Take many screenshots' })
+  await until(() => call('state').agentRunning, 'the replayed agent starts')
+  for (let i = 0; i < 600 && call('poll').state.agentRunning; i++) await sleep(100)
+  w.postMessage('stop')
+  const max = await stall.finally(() => w.terminate())
+  assert(!call('state').agentRunning, 'the replayed agent finishes')
+  // Before the writer moved off the engine lock the stall grew with the chat (130+ ms at this size); the clone alone stays far below.
+  assert(max < 60, `saving a ${calls * 0.7} MB chat stalled the engine for ${max.toFixed(0)} ms`)
+  const id = list().current!
+  const text = readFileSync(join(sessions, `${id}.json`), 'utf8')
+  assert(text.includes(`step ${calls - 1}`) && text.length > calls * 600_000, 'the last save holds the whole chat')
+  call('chat_load', { id })
+  assert(call('chat_clear') === true, 'the chat is cleared again')
 }
 
 // Once stopped, clear removes everything, including the current chat.
