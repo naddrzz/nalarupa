@@ -74,7 +74,7 @@ call('tool', { name: 'execute', args: { input: 'Insert("sld01", {type:"rectangle
 assert(!call('state').animating, 'no slide-in under reduced motion')
 call('undo')
 call('reduce_motion', { on: false })
-// A frame's canvas label ends in an ellipsis instead of being sliced by its box.
+// Constants check only (style is unreadable under automation): the frame label style Canvas.tsx applies ellipsizes instead of slicing.
 assert(FRAME_LABEL_TEXT.textOverflow === 'ellipsis' && FRAME_LABEL_TEXT.overflow === 'hidden' && FRAME_LABEL_TEXT.whiteSpace === 'nowrap', 'canvas frame labels must ellipsize')
 
 // Chat indicators sampled on the panel's tick (even with a late first tick): ellipsis steps stay near 400 ms, the pulse never jumps.
