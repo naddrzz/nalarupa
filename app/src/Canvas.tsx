@@ -246,12 +246,19 @@ export function Canvas(props: {
     settle.current = setTimeout(() => { settle.current = null; draw(true) }, 200)
   }
   useLayoutEffect(schedule, [w, h, cam, version])
+  const animated = useRef(false)
   useEffect(() => {
-    if (!props.animating) return
+    if (!props.animating) {
+      // The poll can end the slide between two redraws: paint the settled view once more, or the
+      // bitmap keeps the last slide frame (neither the camera nor `version` changed to repaint it).
+      // Only when the slide ends, not on mount or unmount (that frame would be thrown away).
+      if (animated.current) draw(false)
+      animated.current = false
+      return
+    }
+    animated.current = true
     const t = setInterval(() => draw(false), 16)
-    // The poll can end the slide between two redraws: paint the settled view once more, or the
-    // bitmap keeps the last slide frame (neither the camera nor `version` changed to repaint it).
-    return () => { clearInterval(t); draw(false) }
+    return () => clearInterval(t)
   }, [props.animating])
   useEffect(() => () => {
     if (pending.current) clearTimeout(pending.current)
