@@ -192,6 +192,7 @@ assert(!marquee(1110, 90, 30, 30), "marquee in the empty corner of a zero-height
 // drop_target runs on every mouse move of a drag: it must stay linear in the layer count (it used to look up every layer's type in the tree first, ~80 ms at 1,500 layers).
 const BF = call('insert', { parent: 'document', node: { type: 'frame', name: 'BF', x: 5000, y: 0, width: 4000, height: 4000, layout: 'none', fill: '#fff' } }).id
 for (let i = 0; i < 1500; i++) call('insert', { parent: BF, node: { type: 'rectangle', x: 5000 + (i % 50) * 70, y: Math.floor(i / 50) * 70, width: 60, height: 60, fill: '#f00' } })
+call('drop_target', { x: 5500, y: 500, w: 10, h: 10, ignore: [] }) // warm-up: the first call syncs the pending document
 const t0 = performance.now()
 for (let i = 0; i < 5; i++) call('drop_target', { x: 5500, y: 500, w: 10, h: 10, ignore: [] })
 const per = (performance.now() - t0) / 5
