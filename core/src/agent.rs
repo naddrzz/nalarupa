@@ -867,23 +867,22 @@ fn run_api(p: &Profile, prompt: &str, child: bool, model: Option<String>) -> Res
         // Append unchanged so thinking blocks stay valid for the next request.
         messages.push(json!({"role": "assistant", "content": content}));
         let calls: Vec<&Value> = blocks.iter().filter(|b| b["type"] == "tool_use").collect();
-        if stop == "max_tokens" && !calls.is_empty() {
+        let cut = cut_off_call(&stop, &blocks).map(|b| b["id"].as_str().unwrap_or(""));
+        if let Some(id) = cut {
             // A truncated tool input must not run.
-            for b in &calls {
-                engine().stream_end(b["id"].as_str().unwrap_or(""));
-            }
-            // The API rejects every later request while a tool_use has no tool_result after it.
-            messages.push(truncated_results(&calls));
-            emit(p, "note", json!({"text": "The reply hit the output limit mid-tool-call; ask the agent to continue."}));
-            break;
+            engine().stream_end(id);
+            emit(p, "note", json!({"text": "The reply hit the output limit mid-tool-call; the agent was told to continue in smaller steps."}));
         }
-        if stop != "tool_use" {
+        // Every tool_use needs a tool_result after it, or the API rejects all later requests.
+        if calls.is_empty() || !(stop == "tool_use" || stop == "max_tokens") {
             break;
         }
         let mut results = Vec::new();
         for b in calls {
             let (id, name) = (b["id"].as_str().unwrap_or(""), b["name"].as_str().unwrap_or(""));
-            let out = if let Some(raw) = b["input"]["__invalid_json"].as_str() {
+            let out = if cut == Some(id) {
+                crate::engine::ToolOut::err("The reply was cut off by the output limit; this call did not run. Continue in smaller steps.")
+            } else if let Some(raw) = b["input"]["__invalid_json"].as_str() {
                 engine().stream_end(id);
                 crate::engine::ToolOut::err(json!({"INVALID_JSON": raw}).to_string())
             } else if name == "spawn_agents" {
@@ -914,11 +913,9 @@ fn run_api(p: &Profile, prompt: &str, child: bool, model: Option<String>) -> Res
     Ok(usage)
 }
 
-/// The user message answering tool calls that were cut off by the output limit, so the history stays valid.
-fn truncated_results(calls: &[&Value]) -> Value {
-    let results: Vec<Value> = calls.iter().map(|b| json!({"type": "tool_result", "tool_use_id": b["id"], "is_error": true,
-        "content": [{"type": "text", "text": "The reply was cut off by the output limit; this call did not run. Continue in smaller steps."}]})).collect();
-    json!({"role": "user", "content": results})
+/// The tool call the output limit cut off. Only the last block can be unfinished; earlier calls completed.
+fn cut_off_call<'a>(stop: &str, blocks: &'a [Value]) -> Option<&'a Value> {
+    blocks.last().filter(|b| stop == "max_tokens" && b["type"] == "tool_use")
 }
 
 fn truncate(s: &str, n: usize) -> String {
@@ -1180,14 +1177,14 @@ mod tests {
     }
 
     #[test]
-    fn a_reply_cut_off_inside_tool_calls_leaves_none_unanswered() {
-        let calls = [json!({"type": "tool_use", "id": "toolu_a", "name": "execute", "input": {}}), json!({"type": "tool_use", "id": "toolu_b", "name": "execute", "input": {}})];
-        let msg = truncated_results(&[&calls[0], &calls[1]]);
-        assert_eq!(msg["role"], "user");
-        let results = msg["content"].as_array().unwrap();
-        let ids: Vec<&str> = results.iter().map(|r| r["tool_use_id"].as_str().unwrap()).collect();
-        assert_eq!(ids, ["toolu_a", "toolu_b"], "every truncated tool_use gets a tool_result");
-        assert!(results.iter().all(|r| r["type"] == "tool_result" && r["is_error"] == true));
+    fn only_the_last_tool_call_of_a_max_tokens_reply_is_cut_off() {
+        let call = |id: &str| json!({"type": "tool_use", "id": id, "name": "execute", "input": {}});
+        let blocks = [call("toolu_a"), call("toolu_b")];
+        assert_eq!(cut_off_call("max_tokens", &blocks).map(|b| b["id"].as_str().unwrap()), Some("toolu_b"));
+        assert!(cut_off_call("tool_use", &blocks).is_none());
+        let text_last = [call("toolu_a"), json!({"type": "text", "text": "done"})];
+        assert!(cut_off_call("max_tokens", &text_last).is_none(), "calls that finished before the text still run");
+        assert!(cut_off_call("max_tokens", &[]).is_none());
     }
 
     #[test]
