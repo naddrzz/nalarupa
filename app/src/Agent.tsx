@@ -753,6 +753,9 @@ function PermissionCard({ m }: { m: Extract<ChatItem, { kind: 'permission' }> })
   const auto = useMemo(() => (tryCall<Record<string, unknown>>('settings_get') ?? {}).agent_auto_permissions === true, [])
   const target = m.input.file_path ?? m.input.command ?? m.input.url ?? m.input.path ?? m.input.pattern
   const desc = typeof m.input.description === 'string' ? m.input.description : null
+  // Allow runs the whole input, so the card shows all of it (Edit's new text, Write's content, ...), never a cut.
+  const fields = Object.entries(m.input).filter(([k, v]) => k !== 'description' && v !== undefined && v !== null)
+  const shown = fields.map(([k, v]) => { const s = typeof v === 'string' ? v : JSON.stringify(v); return fields.length > 1 ? `${k}: ${s}` : s }).join('\n')
   const answer = (a: 'auto' | 'allow' | 'deny') => {
     if (tryCall('agent_permission', { id: m.reqId, answer: a }) !== null) setAnswered(a)
   }
@@ -763,7 +766,11 @@ function PermissionCard({ m }: { m: Extract<ChatItem, { kind: 'permission' }> })
         <T size={12} weight="600" color={WARN}>Permission request</T>
       </Row>
       <T size={12} color={C.text}>{desc ?? `${m.agent.name} wants to use ${m.tool}${target ? ' on' : ''}`}</T>
-      {target ? <text style={{ fontSize: 11, color: C.muted, fontFamily: MONO }}>{String(target).slice(0, 400)}</text> : null}
+      {shown ? (
+        <div testId="permission-input" style={{ display: 'flex', flexDirection: 'column', flexShrink: 1, minHeight: 0, maxHeight: 240, overflowY: 'scroll' }}>
+          <text style={{ fontSize: 11, color: C.muted, fontFamily: MONO }}>{shown}</text>
+        </div>
+      ) : null}
       {answered ? (
         <T size={11} color={C.ghost}>{answered === 'deny' ? 'Denied' : answered === 'auto' ? 'Allowed · auto mode from the next message' : 'Allowed'}</T>
       ) : (
