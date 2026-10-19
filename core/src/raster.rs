@@ -1630,6 +1630,48 @@ mod tests {
         }
     }
 
+    /// An inner stroke with a blend mode blends against the fill under it, as a centered one does.
+    #[test]
+    fn blend_inner_stroke() {
+        let node = |ty: &str, x: u32, align: &str| {
+            format!(r##"{{"type":"{ty}","id":"n{x}","x":{x},"y":10,"width":100,"height":100,"fill":"#ffee00","stroke":{{"type":"color","color":"#00ffff","blendMode":"multiply"}},"strokeWidth":20,"strokeAlignment":"{align}"}}"##)
+        };
+        let json = format!(
+            r#"{{"version":"2.19","children":[{},{},{},{}]}}"#,
+            node("rectangle", 0, "inner"),
+            node("ellipse", 120, "inner"),
+            node("frame", 240, "inner"),
+            node("rectangle", 360, "center")
+        );
+        let doc = Doc::from_json(&json).unwrap();
+        let (w, h) = (480u32, 120u32);
+        for (raster, px) in [Raster::Vello, Raster::Resvg].into_iter().zip(both(&doc, w, h, (0.0, 0.0), 1.0)) {
+            for x in [50, 170, 290, 410] {
+                let i = (15 * w + x) as usize * 4;
+                let c = [px[i], px[i + 1], px[i + 2]];
+                // multiply of #00ffff over #ffee00 is #00ee00; an unblended stroke would be #00ffff
+                assert!(c[0] < 8 && c[1].abs_diff(0xee) < 8 && c[2] < 8, "{raster:?} stroke multiply at x={x}: {c:?}");
+            }
+        }
+    }
+
+    /// A blended inner text stroke blends against the glyph fill under it, not against transparent.
+    #[test]
+    fn blend_inner_text_stroke() {
+        let json = r##"{"version":"2.19","children":[{"type":"text","id":"t","x":10,"y":10,"content":"III","fontSize":100,"fontFamily":"Inter","fontWeight":"900","fill":"#ffee00","stroke":{"type":"color","color":"#00ffff","blendMode":"multiply"},"strokeWidth":30,"strokeAlignment":"inner"}]}"##;
+        let doc = Doc::from_json(json).unwrap();
+        let (w, h) = (200u32, 140u32);
+        for (raster, px) in [Raster::Vello, Raster::Resvg].into_iter().zip(both(&doc, w, h, (0.0, 0.0), 1.0)) {
+            let (mut blended, mut plain) = (0, 0);
+            for p in px.chunks(4) {
+                // multiply of #00ffff over #ffee00 is #00ee00; an unblended stroke would be #00ffff
+                blended += (p[0] < 8 && p[1].abs_diff(0xee) < 8 && p[2] < 8) as u32;
+                plain += (p[0] < 8 && p[1] > 0xf8 && p[2] > 0xf8) as u32;
+            }
+            assert!(blended > 100 && plain == 0, "{raster:?} text stroke multiply: {blended} blended, {plain} unblended");
+        }
+    }
+
     /// Colour emoji are images inside the flattened text; they are culled by where they land, at any depth or offset.
     #[test]
     fn emoji_far_from_the_origin_are_not_culled() {
