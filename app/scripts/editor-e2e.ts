@@ -1,7 +1,7 @@
 // Canvas interactions against the real window: `bun scripts/editor-e2e.ts`
 // Rotated selection frame, flip by negative resize, snapping guides, Alt measurement, marquee, Ctrl+G /
 // Ctrl+Shift+G, Shift+A, drag into an auto layout, layer rename, inspector scrubbing, copy/paste, corner
-// radius handles, frame title rename. Screenshots: app/screenshots/editor-*.png
+// radius handles, frame title rename, dragging a child of a rotated or flipped frame. Screenshots: app/screenshots/editor-*.png
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { launch } from '@gpuix/react/automation'
@@ -588,6 +588,38 @@ try {
   )
   await app.call('keystrokes', { keys: 'escape' })
   assert(await until(async () => !(await count('text-editor'))), 'Escape ends the text edit')
+
+  // A child of a rotated or flipped frame follows the pointer: the drag delta is turned into the frame's space first.
+  await app.getByTestId('tool-frame').click()
+  await app.mouse.drag(at(560, 80), at(800, 250), { steps: 5 })
+  await sleep(300)
+  await app.getByTestId('tool-rectangle').click()
+  await app.mouse.drag(at(580, 100), at(640, 150), { steps: 5 })
+  await sleep(300)
+  await canvas.press('shift-enter')
+  await typeInto('inspector-rotation', 'ctrl-a 3 0')
+  assert(await until(async () => (await count('rotated-overlay')) > 0, 6000), 'the frame is rotated 30°')
+  const center = async () => {
+    const n = (await app.getByTestId('selection-box').all()).concat(await app.getByTestId('rotated-overlay').all())[0]?.bounds
+    return n ? [n.x + n.width / 2, n.y + n.height / 2] : [NaN, NaN]
+  }
+  const dragRight = async (what: string) => {
+    await canvas.press('enter')
+    await sleep(400)
+    const [x0, y0] = await center()
+    await app.mouse.drag({ x: x0, y: y0 }, { x: x0 + 60, y: y0 }, { steps: 8 })
+    await sleep(400)
+    const [x1, y1] = await center()
+    assert(Math.abs(x1 - x0 - 60) <= 2 && Math.abs(y1 - y0) <= 2, `a child of a ${what} frame follows the pointer (${x0},${y0} → ${x1},${y1})`)
+    await canvas.press('shift-enter')
+  }
+  await dragRight('rotated')
+  await canvas.press('shift-h')
+  await sleep(400)
+  await dragRight('flipped')
+  await shot('16-rotated-parent-drag')
+  await canvas.press('delete')
+  await sleep(300)
 
   // Clipboard pastes: only Windows has a system clipboard (src/clipboard.ts); elsewhere it is per process,
   // so this script can't put data on the app's clipboard.

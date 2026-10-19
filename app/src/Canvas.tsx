@@ -45,7 +45,7 @@ type Drag =
   | { mode: 'pan'; sx: number; sy: number; cam: Cam }
   | {
       mode: 'move'; sx: number; sy: number; dx0: number; dy0: number; ids: string[]; narrow?: string; moved: boolean
-      start: Rect; sentX: number; sentY: number; anchors: Pt[]; parent: string; groupOf?: string; flow: boolean
+      start: Rect; sentX: number; sentY: number; anchors: Pt[]; parent: string; pm: M | null; groupOf?: string; flow: boolean
       container: Drop | null; index?: number; deferred?: Drop; dup?: { originals: string[]; offAt?: number }
     }
   // `box` and the start point `f0` are in the selection frame's coordinates; `m` maps them to the canvas.
@@ -436,10 +436,20 @@ export function Canvas(props: {
     drag.current = { mode: 'radius', id: selection[0], corner, f0: unapply(frame.m, dx, dy), m: frame.m, r0: radiiOf(selNode?.node) }
   }
 
+  /** A parent's painted transform: its children's x / y (and so `move_by`) live in its space. */
+  const parentM = (id: string): M | null => (id === 'document' ? null : tryCall('node', { id })?.box?.m ?? null)
+
+  /** `move_by` for a canvas-space delta, turned into the parent's space (rotated or flipped frames). */
+  function moveBy(ids: string[], d: Extract<Drag, { mode: 'move' }>, dx: number, dy: number) {
+    const [px, py] = unapply(d.pm, dx, dy, true)
+    tryCall('move_by', { ids, dx: px, dy: py })
+  }
+
   /** Move the dragged nodes under `parent` (keeping their canvas position) and re-sync the drag offsets. */
   function toParent(d: Extract<Drag, { mode: 'move' }>, parent: string) {
     tryCall('reparent', { ids: d.ids, parent })
     d.parent = parent
+    d.pm = parentM(parent)
     d.flow = false
     d.groupOf = undefined
     const b = unionRect((tryCall<Box[]>('boxes', { ids: d.ids }) ?? []).map(painted))
@@ -453,7 +463,7 @@ export function Canvas(props: {
     else if (alt) {
       const r = tryCall<{ ids: string[] }>('duplicate', { ids: d.ids, inPlace: true })
       if (!r?.ids?.length) return
-      if (d.sentX || d.sentY) tryCall('move_by', { ids: d.ids, dx: -d.sentX, dy: -d.sentY })
+      if (d.sentX || d.sentY) moveBy(d.ids, d, -d.sentX, -d.sentY)
       d.dup = { originals: d.ids }
       d.ids = r.ids
       d.anchors = anchorsFor(d.ids)
@@ -463,7 +473,7 @@ export function Canvas(props: {
       d.dup.offAt ??= now
       if (now - d.dup.offAt < 700) return
       tryCall('delete', { ids: d.ids })
-      if (d.sentX || d.sentY) tryCall('move_by', { ids: d.dup.originals, dx: d.sentX, dy: d.sentY })
+      if (d.sentX || d.sentY) moveBy(d.dup.originals, d, d.sentX, d.sentY)
       d.ids = d.dup.originals
       d.dup = undefined
       d.anchors = anchorsFor(d.ids)
@@ -476,6 +486,7 @@ export function Canvas(props: {
     d.start = unionRect((tryCall<Box[]>('boxes', { ids: d.ids }) ?? []).map(painted)) ?? { x: d.dx0, y: d.dy0, w: 0, h: 0 }
     const infos = d.ids.map((id) => tryCall('node', { id }))
     d.parent = infos[0]?.parent ?? 'document'
+    d.pm = parentM(d.parent)
     d.flow = infos.every((i) => inFlow(i) && i.parent === d.parent)
     const p = d.parent !== 'document' ? tryCall('node', { id: d.parent }) : null
     d.groupOf = p?.node?.type === 'group' ? p.parent : undefined
@@ -526,7 +537,7 @@ export function Canvas(props: {
     setGuides(found)
     const [fx, fy] = [tx + ox, ty + oy]
     if (fx !== d.sentX || fy !== d.sentY) {
-      tryCall('move_by', { ids: d.ids, dx: fx - d.sentX, dy: fy - d.sentY })
+      moveBy(d.ids, d, fx - d.sentX, fy - d.sentY)
       ;[d.sentX, d.sentY] = [fx, fy]
     }
     refresh()
@@ -1070,7 +1081,7 @@ export function Canvas(props: {
     const narrow = !target || isArtboard(chain, target) ? '' : target
     drag.current = {
       mode: 'move', sx, sy, dx0: dx, dy0: dy, ids: ids.filter((id) => !id.includes('/')), narrow: inside ? narrow : undefined, moved: false,
-      start: { x: dx, y: dy, w: 0, h: 0 }, sentX: 0, sentY: 0, anchors: [], parent: 'document', flow: false, container: null,
+      start: { x: dx, y: dy, w: 0, h: 0 }, sentX: 0, sentY: 0, anchors: [], parent: 'document', pm: null, flow: false, container: null,
     }
   }
 
