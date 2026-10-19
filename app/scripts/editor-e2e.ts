@@ -155,6 +155,19 @@ try {
   await sleep(300)
   assert((await size()).join() === [rw0, rh0].join(), 'one undo step reverts the flip')
 
+  // A hidden layer has no render box: the Inspector still reports its own size, not 0 × 0. Hiding drops the
+  // selection (no box to select), so pick the layer from the Layers panel again.
+  const rectRow = app.getByTestId('layers').getByText('Rectangle')
+  await app.getByTestId('inspector-visibility').click()
+  assert(await until(async () => !(await count('inspector-visibility'))), 'hiding the layer clears the selection')
+  await rectRow.click()
+  assert(await until(async () => (await app.getByText(`Hidden ${rw0} × ${rh0}`).count()) > 0), `a hidden layer still shows its ${rw0} × ${rh0} size in the Inspector`)
+  assert(!(await app.getByText('× 0 ·').count()), 'a hidden layer is not reported as 0 tall')
+  await canvas.press('ctrl-z')
+  await sleep(600) // past the double-click window, or the second row click would start a rename
+  await rectRow.click()
+  assert(await until(async () => (await app.getByText(`Rendered ${rw0} × ${rh0}`).count()) > 0), 'one undo step shows the layer again at its rendered size')
+
   await app.getByTestId('tool-rectangle').click()
   await app.mouse.drag(at(420, 260), at(520, 340), { steps: 5 })
   await sleep(300)
@@ -190,11 +203,46 @@ try {
   await shot('02-alt-measure')
   assert(measures > 0, 'Alt+hover measures to the hovered layer')
 
+  // Shift+H / Shift+V flip the selected layer about its center: the origin moves across the box (X + width, Y + height)
+  // and one undo step puts it back.
+  const [fx0, fy0, fw, fh] = await Promise.all(['inspector-x', 'inspector-y', 'inspector-w', 'inspector-h'].map(async (id) => Number(await val(id))))
+  for (const [key, field, want] of [['shift-h', 'inspector-x', fx0 + fw], ['shift-v', 'inspector-y', fy0 + fh]] as const) {
+    await canvas.press(key)
+    assert(await until(async () => Number(await val(field)) === want), `${key} moves the origin across the box (${field} → ${want}, got ${await val(field)})`)
+    assert(Number(await val(field === 'inspector-x' ? 'inspector-y' : 'inspector-x')) === (field === 'inspector-x' ? fy0 : fx0), `${key} leaves the other axis alone`)
+    await canvas.press('ctrl-z')
+    assert(await until(async () => Number(await val(field)) === (field === 'inspector-x' ? fx0 : fy0)), `one undo step restores the origin after ${key}`)
+  }
+
   // Marquee from the artboard's empty area selects both rectangles (touch semantics).
   await app.mouse.drag(at(120, 420), at(430, 300), { steps: 6 })
   await sleep(300)
   await shot('03-marquee')
   assert(await app.getByText('2 layers selected').count(), 'marquee selects both rectangles')
+
+  // Shift+H / Shift+V mirror every selected layer in place; one undo step reverts the whole flip.
+  const boxes = async () => JSON.stringify((await app.getByTestId('selection-box').all()).map((n: any) => n.bounds))
+  const still = async (a: string) => until(async () => (await boxes()) === a)
+  const placed = await boxes()
+  const flipKey = async (key: string) => {
+    await canvas.press(key)
+    await sleep(500)
+  }
+  for (const key of ['shift-h', 'shift-v']) {
+    await flipKey(key)
+    assert(await still(placed), `${key} keeps both layers where they were painted (${placed} → ${await boxes()})`)
+    await canvas.press('ctrl-z')
+    await sleep(500)
+    assert(await still(placed), `one undo step reverts the ${key} flip of both layers`)
+  }
+  // Flipped twice (a second Shift+H) the layers are back to unflipped and still in place.
+  await flipKey('shift-h')
+  await flipKey('shift-h')
+  assert(await still(placed), 'flipping twice returns the layers to where they started')
+  await canvas.press('ctrl-z')
+  await canvas.press('ctrl-z')
+  await sleep(500)
+  assert(await still(placed), 'two undo steps revert the two flips')
 
   // Ctrl+G groups, Ctrl+Shift+G ungroups.
   await canvas.press('ctrl-g')
@@ -277,6 +325,27 @@ try {
   assert(await app.getByText('Cards').count(), 'layer renamed from the layers panel')
   await shot('08-renamed')
 
+  // An unfocused Inspector field shows the start of a value wider than itself (GPUIX scrolls a set input to
+  // its end): rename to a long name and look for the painted text at the field's left edge.
+  const long = `Zebra${'q'.repeat(70)}`
+  const row = app.getByTestId('layers').getByText('Cards')
+  await row.click()
+  await row.click()
+  await app.getByTestId('layer-rename').waitFor({ timeoutMs: 3000 })
+  const rn2 = (await app.getByTestId('layer-rename').bounds())!
+  await sleep(600)
+  await app.mouse.click({ x: rn2.x + rn2.width - 8, y: rn2.y + rn2.height / 2 })
+  await app.call('keystrokes', { keys: `ctrl-a ${[...long].join(' ')} enter` })
+  const field = (await app.getByTestId('inspector-name').bounds())!
+  const painted = async () => (await app.getByText(long).all()).filter((n) => n.bounds && n.bounds.x >= field.x && n.bounds.x < field.x + field.width && Math.abs(n.bounds.y - field.y) < field.height)
+  assert(await until(async () => (await painted()).length === 1), 'the Inspector name field paints the long name')
+  const text = (await painted())[0].bounds!
+  assert(text.x - field.x < 12 && text.x + text.width <= field.x + field.width, `the long name starts at the field's left edge and is clipped to it (${JSON.stringify({ field, text })})`)
+  await shot('08b-long-name')
+  await canvas.press('ctrl-z')
+  await sleep(400)
+  assert(await until(async () => (await app.getByText('Cards').count()) > 0), 'undo restored the layer name')
+
   // Inspector: scrub the gap label (2 px per step): 20 px = +10 per gap, the hugging row grows by 20; one undo step.
   const width = async () => Number((await app.getByTestId('size-label').textContent()).split(' ')[0])
   const w0 = await width()
@@ -309,7 +378,7 @@ try {
   await canvas.press('ctrl-c')
   await canvas.press('ctrl-v')
   await sleep(400)
-  assert((await app.getByText('Cards').count()) >= 2, 'Ctrl+V pastes a copy')
+  assert((await app.getByTestId('layers').getByText('Cards').count()) >= 2, 'Ctrl+V pastes a copy')
   await canvas.press('ctrl-z')
   await sleep(400)
 

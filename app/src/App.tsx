@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { useGpuixRequired, useWindowSize, type PublicInstance } from '@gpuix/react'
 import { call, tryCall, type Box, type State } from './core'
 import { applyEvents, store } from './agents'
-import { Canvas, fitCam, type Cam, type Mods, type Tool } from './Canvas'
+import { Canvas, fitCam, isMovable, type Cam, type Mods, type Tool } from './Canvas'
 import { readClipboard, writeClipboard } from './clipboard'
 import { LeftPanel } from './Layers'
 import { Inspector } from './Inspector'
@@ -14,7 +14,10 @@ import { Home } from './Home'
 import { Present } from './Present'
 import { C, LEFT_W, REDUCED_MOTION, RIGHT_W, TOP_H } from './theme'
 import { Icon, IconButton, Pressable, Segmented, T, type Toast } from './ui'
+import { centerOffset } from './geometry'
 import type { IconName } from './icons'
+
+let flips = 0
 
 const TOOLS: { tool: Tool; icon: IconName; key: string; label: string }[] = [
   { tool: 'move', icon: 'cursor', key: 'v', label: 'Move (V)' },
@@ -175,7 +178,31 @@ export function App() {
     if (m.alt && !m.mod && !m.shift && ALIGN[key] && has) return run('align', { ids: sel, dir: ALIGN[key] })
     if (m.shift && !m.mod && !m.alt && (key === 'h' || key === 'v') && has) {
       const k = key === 'h' ? 'flipX' : 'flipY'
-      for (const id of sel) tryCall('update', { ids: [id], props: { [k]: nodeOf(id)?.node?.[k] ? null : true } })
+      const undoKey = `flip:${++flips}`
+      // A flipped layer mirrors its descendants too, so a selected descendant of a selected layer is left to it.
+      const inside = (id: string, of: string) => {
+        if (id.startsWith(`${of}/`)) return true
+        for (let p = parentOf(id); p !== 'document'; p = parentOf(p)) if (p === of) return true
+        return false
+      }
+      for (const id of sel.filter((id) => !sel.some((o) => o !== id && inside(id, o)))) {
+        const info = nodeOf(id)
+        const l = info?.local
+        if (!l) continue
+        const slash = id.includes('/')
+        // Instances and their descendants inherit the component's flip: write it explicitly, `null` would fall back to it.
+        const props: Record<string, unknown> = { [k]: l[k] ? (slash || info.node?.type === 'ref' ? false : null) : true }
+        if (info.box && !slash && (isMovable(info) || info.parent === 'document')) {
+          // The flip mirrors about the origin: move the origin so the center stays put.
+          const [rot, fx, fy] = [Number(l.rotation), !!l.flipX, !!l.flipY]
+          const n = info.node
+          const [ox0, oy0] = centerOffset(info.box.w, info.box.h, rot, fx, fy, l.bx, l.by)
+          const [ox, oy] = centerOffset(info.box.w, info.box.h, rot, k === 'flipX' ? !fx : fx, k === 'flipY' ? !fy : fy, l.bx, l.by)
+          props.x = Math.round((Number(n.x ?? 0) + ox0 - ox) * 100) / 100
+          props.y = Math.round((Number(n.y ?? 0) + oy0 - oy) * 100) / 100
+        }
+        tryCall('update', { ids: [id], props, coalesce: undoKey })
+      }
       return true
     }
     const t = TOOLS.find((x) => x.key === key) ?? (key === 'a' ? TOOLS[1] : undefined)

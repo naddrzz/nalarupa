@@ -252,6 +252,17 @@ export function resetChat() {
   store.items = []
   store.todos = []
   store.pills.clear()
+  store.profiles.clear()
+  store.running.clear()
+  store.cursors.clear()
+}
+
+/** Agent bar pills: the running agents first, then the finished ones, at most `max`; `more` counts the rest. */
+export function barAgents(max = 8) {
+  const all = [...store.profiles.values()]
+  const running = all.filter((a) => store.running.has(a.id))
+  const shown = [...running, ...all.filter((a) => !store.running.has(a.id))]
+  return { all, running, shown: shown.slice(0, max), more: Math.max(0, shown.length - max) }
 }
 
 /** Rebuild a saved chat (core `chat_load`): replay its events at their recorded times. */

@@ -73,8 +73,6 @@ pub struct Flat {
     pub y: f64,
     pub w: f64,
     pub h: f64,
-    /// The node's own origin on the canvas (rotation turns around it); a group's sits before its box.
-    pub origin: (f64, f64),
     pub depth: usize,
     pub parent: Option<String>,
     pub problem: Option<&'static str>,
@@ -85,6 +83,8 @@ pub struct Flat {
     /// Painted transform `[a, b, c, d, e, f]` (x' = a·x + c·y + e, y' = b·x + d·y + f) from this box's
     /// coordinates to the canvas: own and ancestors' rotations/flips. `None` = identity.
     pub m: Option<[f64; 6]>,
+    /// Local bounds' offset from the origin (non-zero for groups) and the node's own effective rotation and flips.
+    pub local: ([f64; 2], f64, bool, bool),
     /// Own props, box, parent and sibling index: a change means this node must repaint.
     sig: u64,
     /// How far shadows, blurs and strokes paint outside the box; infinite when the node or an
@@ -860,13 +860,13 @@ fn prepare_layer(cx: &mut Ctx, index: usize, hash: u64, hidden: &HashSet<String>
             y: n.y,
             w: n.w,
             h: n.h,
-            origin: (n.x - n.bx, n.y - n.by),
             depth,
             parent: stack.last().cloned(),
             problem: n.problem,
             placeholder: n.ty == "frame" && n.b("placeholder"),
             pending: crate::svg::fills(n.p.get("fill")).iter().any(|f| f["url"].as_str().is_some_and(is_pending_url)),
             m: mats[depth],
+            local: ([n.bx, n.by], n.f("rotation").unwrap_or(0.0), n.b("flipX"), n.b("flipY")),
             sig: fxhash(&sig),
             reach: if turned[depth] { f64::INFINITY } else { reach(&n.p) },
         });
@@ -1107,6 +1107,79 @@ pub(crate) mod tests {
         assert!(missing.is_empty(), "hairline pixels missing: {missing:?}");
     }
 
+    /// Text takes a stroke like a shape: stroke-only text is visible, and a stroke paints around filled glyphs.
+    #[test]
+    fn text_stroke_is_painted() {
+        let text = |x: u32, extra: &str| format!(r##"{{"type":"text","x":{x},"y":10,"content":"Out","fontSize":50,"fontWeight":"700"{extra}}}"##);
+        let json = format!(
+            r##"{{"version":"2.19","children":[{{"type":"frame","id":"f","x":0,"y":0,"width":580,"height":80,"layout":"none","fill":"#ffffff","children":[{},{},{},{},{}]}}]}}"##,
+            text(10, r##","fill":"#ffff00""##),
+            text(150, r##","fill":"#ffff00","stroke":"#000000","strokeWidth":4"##),
+            text(290, r##","stroke":"#000000","strokeWidth":4"##),
+            text(430, r##","fill":"#ffff00","stroke":"#000000","strokeWidth":4,"strokeAlignment":"outer""##),
+            text(570, r##","fill":"#ffff00","stroke":"#000000","strokeWidth":4,"strokeAlignment":"inner""##),
+        );
+        let doc = Doc::from_json(&json).unwrap();
+        for raster in [Raster::Resvg, Raster::Vello] {
+            let mut r = Renderer { raster, ..Renderer::default() };
+            sync(&mut r, &doc);
+            let px = r.render(720, 80, 0.0, 0.0, 1.0, [255, 255, 255], None, true).to_vec();
+            let dark = |x0: usize, x1: usize| (0..80).flat_map(|y| (x0..x1).map(move |x| (x, y))).filter(|&(x, y)| px[(y * 720 + x) * 4] < 80).count();
+            let counts = [dark(0, 140), dark(140, 280), dark(280, 420), dark(420, 560), dark(560, 720)];
+            assert_eq!(counts[0], 0, "{raster:?}: fill-only text has no dark pixels");
+            assert!(counts[1] > 100 && counts[2] > 100 && counts[3] > 100 && counts[4] > 100, "{raster:?}: stroke pixels {counts:?}");
+            // An outer stroke grows past the glyphs, an inner one stays inside them.
+            assert!(counts[3] > counts[1] && counts[4] < counts[1], "{raster:?}: outer > center > inner expected, got {counts:?}");
+        }
+    }
+
+    /// A text shadow follows what paints: stroke-only text casts its stroke, not solid glyphs.
+    #[test]
+    fn stroke_only_text_casts_a_hollow_shadow() {
+        let text = |y: u32, extra: &str| {
+            format!(r##"{{"type":"text","x":10,"y":{y},"content":"Out","fontSize":50,"fontWeight":"700","stroke":"#000000","strokeWidth":2,"effect":{{"type":"shadow","offset":{{"x":150,"y":0}},"color":"#ff0000"}}{extra}}}"##)
+        };
+        let json = format!(
+            r##"{{"version":"2.19","children":[{{"type":"frame","id":"f","x":0,"y":0,"width":300,"height":180,"layout":"none","fill":"#ffffff","children":[{},{}]}}]}}"##,
+            text(10, r##","fill":"#ffff00""##),
+            text(100, ""),
+        );
+        let doc = Doc::from_json(&json).unwrap();
+        for raster in [Raster::Resvg, Raster::Vello] {
+            let mut r = Renderer { raster, ..Renderer::default() };
+            sync(&mut r, &doc);
+            let px = r.render(300, 180, 0.0, 0.0, 1.0, [255, 255, 255], None, true).to_vec();
+            let red = |y0: usize, y1: usize| (y0..y1).flat_map(|y| (150..300).map(move |x| (y * 300 + x) * 4)).filter(|&o| px[o] > 200 && px[o + 1] < 80).count();
+            let (solid, hollow) = (red(0, 95), red(95, 180));
+            assert!(hollow > 100 && hollow * 3 < solid * 2, "{raster:?}: shadow pixels filled {solid}, stroke-only {hollow}");
+        }
+    }
+
+    /// Text paints like a shape: fill, then inner shadows, then the stroke, so the stroke covers an inner shadow.
+    #[test]
+    fn text_stroke_covers_inner_shadow() {
+        let text = |x: u32, extra: &str| {
+            format!(r##"{{"type":"text","x":{x},"y":10,"content":"Out","fontSize":50,"fontWeight":"700","fill":"#ffff00","stroke":"#000000","strokeWidth":4{extra}}}"##)
+        };
+        let json = format!(
+            r##"{{"version":"2.19","children":[{{"type":"frame","id":"f","x":0,"y":0,"width":300,"height":80,"layout":"none","fill":"#ffffff","children":[{},{}]}}]}}"##,
+            text(10, ""),
+            text(150, r##","effect":{"type":"shadow","shadowType":"inner","offset":{"x":8,"y":8},"color":"#ff0000"}"##),
+        );
+        let doc = Doc::from_json(&json).unwrap();
+        for raster in [Raster::Resvg, Raster::Vello] {
+            let mut r = Renderer { raster, ..Renderer::default() };
+            sync(&mut r, &doc);
+            let px = r.render(300, 80, 0.0, 0.0, 1.0, [255, 255, 255], None, true).to_vec();
+            let count = |x0: usize, keep: &dyn Fn(&[u8]) -> bool| (0..80).flat_map(|y| (x0..x0 + 140).map(move |x| (y * 300 + x) * 4)).filter(|&o| keep(&px[o..o + 3])).count();
+            // White, yellow and red all have full red, so only the stroke darkens the red channel.
+            let (plain, shadowed) = (count(0, &|p| p[0] < 80), count(140, &|p| p[0] < 80));
+            let red = count(140, &|p| p[0] > 200 && p[1] < 80);
+            assert!(red > 50, "{raster:?}: the inner shadow shows inside the fill, got {red} red pixels");
+            assert!(plain > 100 && shadowed + plain / 50 >= plain, "{raster:?}: stroke pixels without shadow {plain}, with inner shadow {shadowed}");
+        }
+    }
+
     /// An agent-inserted node is left out of the cached view, painted 50 units low and
     /// transparent at its first frame, part way there 100 ms later, and back in the
     /// cached view (at its real place) once it settles.
@@ -1162,6 +1235,9 @@ pub(crate) mod tests {
         let rebuilt = r.sync(&mut cx);
         r.refresh_slides(&mut cx, &rebuilt, roots);
         let green = |px: &[u8], x: usize, y: usize| px[(y * 400 + x) * 4 + 1];
+        // Paint the cached view first: the slide must be read within ~40 ms of its start below
+        // (offset 50·e^-20t > 3), and a cold first paint on a loaded machine can take longer.
+        r.render(400, 400, 0.0, 0.0, 1.0, [30, 30, 30], Some("f"), true);
         // 100 ms in the node is part way there; only the presented frame's node paints.
         for s in &mut r.slides {
             s.start = Some(Instant::now() - Duration::from_millis(100));

@@ -6,7 +6,7 @@ import { C } from './theme'
 import { Button, Field, Icon, IconButton, NumField, Row, Section, Segmented, Swatch, T, Toggle, type Toast } from './ui'
 
 type Props = { version: number; selection: string[]; select: (ids: string[]) => void; toast: Toast }
-type Info = { id: string; node: any; box: { x: number; y: number; w: number; h: number; origin: [number, number] } | null; parentLayout: string; variables: Record<string, any> }
+type Info = { id: string; node: any; box: { w: number; h: number } | null; local: { bx: number; by: number } | null; parentLayout: string; variables: Record<string, any> }
 
 const str = (v: unknown) => (v === undefined || v === null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v))
 const isMode = (v: unknown, mode: string) => typeof v === 'string' && v.startsWith(mode)
@@ -106,7 +106,9 @@ export function Inspector({ version, selection, select, toast }: Props) {
 
   const multi = infos.length > 1
   const n = infos[0].node
-  const box = infos[0].box ?? { w: 0, h: 0 }
+  /** A hidden layer has no render box; its own numeric size stands in. */
+  const dimOf = (i: Info, axis: 'width' | 'height') => i.box?.[axis === 'width' ? 'w' : 'h'] ?? (typeof i.node[axis] === 'number' ? i.node[axis] : 0)
+  const box = { w: dimOf(infos[0], 'width'), h: dimOf(infos[0], 'height') }
   const vars = infos[0].variables ?? {}
   /** Shared numeric value, flagged as mixed when the selection disagrees. */
   const numOf = (get: (i: Info) => unknown) => {
@@ -122,13 +124,12 @@ export function Inspector({ version, selection, select, toast }: Props) {
   const stroke = solidColor(n.stroke, vars)
 
   // Rotation turns around the center like the canvas handle: a free layer's origin moves so the center stays put.
-  // A group's box starts (dx, dy) past its origin, so its center is that far off a plain box's.
+  // A group's box starts (bx, by) past its origin.
   const setRotation = (v: number, key: string) => perNode((i) => {
     const props: Record<string, unknown> = { rotation: v || null }
     if (!inFlow(i) && i.box) {
       const [fx, fy] = [!!i.node.flipX, !!i.node.flipY]
-      const [dx, dy] = [i.box.x - i.box.origin[0], i.box.y - i.box.origin[1]]
-      ;[props.x, props.y] = turnAroundCenter(Number(i.node.x ?? 0), Number(i.node.y ?? 0), i.box.w + 2 * dx, i.box.h + 2 * dy, Number(i.node.rotation ?? 0), v, fx, fy)
+      ;[props.x, props.y] = turnAroundCenter(Number(i.node.x ?? 0), Number(i.node.y ?? 0), i.box.w, i.box.h, Number(i.node.rotation ?? 0), v, fx, fy, i.local?.bx, i.local?.by)
     }
     return props
   }, key)
@@ -144,7 +145,7 @@ export function Inspector({ version, selection, select, toast }: Props) {
   }, key)
   // Hug / Fill: on = that mode, off = fixed at the current size. Text leaves auto growth first.
   const sizing = (axis: 'width' | 'height', mode: string, on: boolean) => perNode((i) => {
-    const size = Math.round((axis === 'width' ? i.box?.w : i.box?.h) ?? 0)
+    const size = Math.round(dimOf(i, axis))
     const p: Record<string, unknown> = { [axis]: on ? mode : size }
     if (i.node.type === 'text' && on) {
       if (axis === 'height') Object.assign(p, { textGrowth: 'fixed-width-height', width: i.node.width ?? Math.round(i.box?.w ?? 0) })
@@ -187,8 +188,8 @@ export function Inspector({ version, selection, select, toast }: Props) {
       <Section title={!multi && inFlow(infos[0]) ? 'Size (auto layout child)' : 'Size'}>
         {all((i) => i.node.type === 'group') ? null : (
           <Row>
-            <NumField label="W" name="Width" {...numOf((i) => i.box?.w)} onCommit={(v, k) => setSize('width', v, k)} testId="inspector-w" />
-            <NumField label="H" name="Height" {...numOf((i) => i.box?.h)} onCommit={(v, k) => setSize('height', v, k)} testId="inspector-h" />
+            <NumField label="W" name="Width" {...numOf((i) => dimOf(i, 'width'))} onCommit={(v, k) => setSize('width', v, k)} testId="inspector-w" />
+            <NumField label="H" name="Height" {...numOf((i) => dimOf(i, 'height'))} onCommit={(v, k) => setSize('height', v, k)} testId="inspector-h" />
           </Row>
         )}
         {canHug || canFill ? (
@@ -199,7 +200,7 @@ export function Inspector({ version, selection, select, toast }: Props) {
             {canFill ? <Toggle label="Fill H" on={fillH} onChange={(on) => sizing('height', 'fill_container', on)} testId="fill-height" /> : null}
           </Row>
         ) : null}
-        {!multi ? <T size={10} color={C.ghost}>{`Rendered ${Math.round(box.w)} × ${Math.round(box.h)} · drag a label to scrub, ↑/↓ steps`}</T> : null}
+        {!multi ? <T size={10} color={C.ghost}>{`${infos[0].box ? 'Rendered' : 'Hidden'} ${Math.round(box.w)} × ${Math.round(box.h)} · drag a label to scrub, ↑/↓ steps`}</T> : null}
       </Section>
 
       {isFrame ? (
@@ -316,7 +317,7 @@ export function Inspector({ version, selection, select, toast }: Props) {
         {!multi ? (
           <Row gap={6}>
             <Button onClick={() => update({ reusable: !n.reusable })}>{n.reusable ? 'Detach component' : 'Make component'}</Button>
-            <Button onClick={() => update({ enabled: n.enabled === false ? null : false })}>{n.enabled === false ? 'Show' : 'Hide'}</Button>
+            <Button testId="inspector-visibility" onClick={() => update({ enabled: n.enabled === false ? null : false })}>{n.enabled === false ? 'Show' : 'Hide'}</Button>
           </Row>
         ) : null}
         <Row gap={6}>

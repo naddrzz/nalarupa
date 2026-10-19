@@ -69,7 +69,7 @@ fn rect_arg(v: &Value) -> Option<editor::Rect> {
 }
 
 fn rect(f: &render::Flat) -> Value {
-    json!({"id": f.id, "name": f.name, "type": f.ty, "x": f.x, "y": f.y, "w": f.w, "h": f.h, "origin": [f.origin.0, f.origin.1], "parent": f.parent, "depth": f.depth,
+    json!({"id": f.id, "name": f.name, "type": f.ty, "x": f.x, "y": f.y, "w": f.w, "h": f.h, "parent": f.parent, "depth": f.depth,
            "placeholder": f.placeholder, "pending": f.pending, "m": f.m})
 }
 
@@ -92,7 +92,7 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             let e = engine();
             Ok(json!({"mcpPort": e.mcp_port, "mcpUrl": mcp::url(e.mcp_port), "dataDir": e.data_dir, "state": state(&e),
                       "recent": e.settings.get("recent").cloned().unwrap_or(json!([])),
-                      "hasApiKey": e.setting("anthropic_api_key").is_some() || std::env::var("ANTHROPIC_API_KEY").is_ok()}))
+                      "hasApiKey": e.api_key().is_some()}))
         }
         "poll" => {
             let mut e = engine();
@@ -133,16 +133,8 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             let mut e = engine();
             e.sync();
             let sel = ids(&req["ids"]);
-            let boxes: Vec<(f64, f64, f64, f64)> = if sel.is_empty() {
-                e.renderer.bounds().into_iter().collect()
-            } else {
-                sel.iter().filter_map(|id| e.renderer.find(id)).map(|f| (f.x, f.y, f.w, f.h)).collect()
-            };
-            let x0 = boxes.iter().map(|b| b.0).fold(f64::MAX, f64::min);
-            let y0 = boxes.iter().map(|b| b.1).fold(f64::MAX, f64::min);
-            let x1 = boxes.iter().map(|b| b.0 + b.2).fold(f64::MIN, f64::max);
-            let y1 = boxes.iter().map(|b| b.1 + b.3).fold(f64::MIN, f64::max);
-            Ok(if boxes.is_empty() { Value::Null } else { json!({"x": x0, "y": y0, "w": x1 - x0, "h": y1 - y0}) })
+            let b = if sel.is_empty() { e.renderer.bounds() } else { editor::painted_bounds(&e, &sel) };
+            Ok(b.map_or(Value::Null, |(x, y, w, h)| json!({"x": x, "y": y, "w": w, "h": h})))
         }
         "hit" => {
             let mut e = engine();
@@ -172,8 +164,12 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             let parent_layout = parent.as_deref().and_then(|p| e.doc.find(p)).map(|p| {
                 if p["type"] == "frame" { p["layout"].as_str().unwrap_or("horizontal").to_string() } else { "none".into() }
             }).unwrap_or_else(|| "none".into());
+            let local = e.renderer.find(id).map(|f| {
+                let ([bx, by], rotation, flip_x, flip_y) = f.local;
+                json!({"bx": bx, "by": by, "rotation": rotation, "flipX": flip_x, "flipY": flip_y})
+            });
             let flat = e.renderer.find(id).map(rect);
-            Ok(json!({"node": raw, "box": flat, "parent": parent, "parentLayout": parent_layout,
+            Ok(json!({"node": raw, "box": flat, "local": local, "parent": parent, "parentLayout": parent_layout,
                       "variables": e.doc.root.get("variables").cloned().unwrap_or(json!({}))}))
         }
         "select" => {
@@ -360,6 +356,8 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             if s.contains_key("anthropic_api_key") {
                 s.insert("anthropic_api_key".into(), json!("••••••••"));
             }
+            // The backend the agent will use, so the UI never re-derives it from settings alone.
+            s.insert("backend".into(), json!(e.backend()));
             Ok(Value::Object(s))
         }
         "settings_set" => {

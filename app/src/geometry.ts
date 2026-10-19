@@ -27,12 +27,14 @@ export const own = (deg: number, flipX: boolean, flipY: boolean): M => {
   const [sx, sy] = [flipX ? -1 : 1, flipY ? -1 : 1]
   return [Math.cos(t) * sx, Math.sin(t) * sx, -Math.sin(t) * sy, Math.cos(t) * sy, 0, 0]
 }
-/** Offset from a node's origin to its center in its parent's space (rotation and flips about the origin). */
-export const centerOffset = (w: number, h: number, deg: number, flipX: boolean, flipY: boolean): Pt => lin(own(deg, flipX, flipY), w / 2, h / 2)
-/** The origin that keeps a box's center put when its rotation goes from `from` to `to` degrees. */
-export const turnAroundCenter = (x: number, y: number, w: number, h: number, from: number, to: number, flipX: boolean, flipY: boolean): Pt => {
-  const [ox0, oy0] = centerOffset(w, h, from, flipX, flipY)
-  const [ox, oy] = centerOffset(w, h, to, flipX, flipY)
+/** Offset from a node's origin to its center in its parent's space (rotation and flips about the origin); `bx`/`by` is where
+ *  its local bounds start (groups). */
+export const centerOffset = (w: number, h: number, deg: number, flipX: boolean, flipY: boolean, bx = 0, by = 0): Pt =>
+  lin(own(deg, flipX, flipY), bx + w / 2, by + h / 2)
+/** The origin that keeps a box's center put when its rotation goes from `from` to `to` degrees (`bx`/`by` as in `centerOffset`). */
+export const turnAroundCenter = (x: number, y: number, w: number, h: number, from: number, to: number, flipX: boolean, flipY: boolean, bx = 0, by = 0): Pt => {
+  const [ox0, oy0] = centerOffset(w, h, from, flipX, flipY, bx, by)
+  const [ox, oy] = centerOffset(w, h, to, flipX, flipY, bx, by)
   return [Math.round((x + ox0 - ox) * 100) / 100, Math.round((y + oy0 - oy) * 100) / 100]
 }
 /** Corners tl, tr, br, bl of `r` under `m`. */
@@ -175,7 +177,9 @@ if (import.meta.main) {
   eq(apply(m, 10, 0).map(Math.round), [0, -10], '90° turns +x to screen up (CCW)')
   eq(unapply([0, -1, 1, 0, 5, 7], ...apply([0, -1, 1, 0, 5, 7], 3, 4)).map((v) => Math.round(v * 1e9) / 1e9), [3, 4], 'unapply inverts apply')
   eq(painted({ x: 0, y: 0, w: 20, h: 10, m: [-1, 0, 0, 1, 0, 0] }), { x: -20, y: 0, w: 20, h: 10 }, 'flipX paints left of the origin')
+  eq(centerOffset(20, 10, 0, true, false), [-10, 5], 'a flip puts the center on the other side of the origin')
   eq([resizeCursor('e', null), resizeCursor('e', m), resizeCursor('ne', null), resizeCursor('ne', m)], ['ew-resize', 'ns-resize', 'nesw-resize', 'nwse-resize'], 'cursors turn with the box')
   eq(turnAroundCenter(0, 0, 100, 50, 0, 90, false, false), [25, 75], 'turning keeps the center put')
+  eq(turnAroundCenter(0, 0, 100, 50, 0, 90, false, false, 10, 20), [15, 105], 'a group turns around its box center, not its origin')
   console.log('geometry ok')
 }
