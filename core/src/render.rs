@@ -452,7 +452,7 @@ impl Renderer {
             // rotation, flips and opacity (as `prepare_layer` and `Svg::node` do).
             let mut chain = Vec::new();
             ancestors_of(root, &s.id, &mut chain);
-            let (m, alpha) = chain.iter().fold((None, 1.0), |(m, a), n| (if is_turned(n) { Some(compose(m, own_matrix(n))) } else { m }, a * n.f("opacity").unwrap_or(1.0)));
+            let (m, alpha) = chain.iter().fold((None, 1.0), |(m, a), n| (if is_turned(n) { Some(compose(m, own_matrix(n))) } else { m }, a * n.f("opacity").unwrap_or(1.0).min(1.0)));
             s.lin = m.map_or([1.0, 0.0, 0.0, 1.0], |m: [f64; 6]| [m[0], m[1], m[2], m[3]]);
             // An invisible ancestor hides the node, as it does in the layer.
             if alpha <= 0.0 {
