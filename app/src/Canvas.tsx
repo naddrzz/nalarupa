@@ -45,7 +45,7 @@ type Drag =
   | { mode: 'pan'; sx: number; sy: number; cam: Cam }
   | {
       mode: 'move'; sx: number; sy: number; dx0: number; dy0: number; ids: string[]; narrow?: string; moved: boolean
-      start: Rect; sentX: number; sentY: number; anchors: Pt[]; parent: string; pm: M | null; groupOf?: string; from?: string; flow: boolean
+      start: Rect; sentX: number; sentY: number; anchors: Pt[]; parent: string; pm: M | null; groupOf?: string; from?: string; mixed?: boolean; flow: boolean
       container: Drop | null; index?: number; deferred?: Drop; dup?: { originals: string[]; offAt?: number }
     }
   // `box` and the start point `f0` are in the selection frame's coordinates; `m` maps them to the canvas.
@@ -493,6 +493,8 @@ export function Canvas(props: {
     d.start = unionRect((tryCall<Box[]>('boxes', { ids: d.ids }) ?? []).map(painted)) ?? { x: d.dx0, y: d.dy0, w: 0, h: 0 }
     const infos = d.ids.map((id) => tryCall('node', { id }))
     d.parent = infos[0]?.parent ?? 'document'
+    // Layers from several parents cannot all go back to one, so they never enter a nested frame.
+    d.mixed = infos.some((i) => i.parent !== d.parent)
     d.pm = parentM(d.parent)
     d.flow = infos.every((i) => inFlow(i) && i.parent === d.parent)
     const p = d.parent !== 'document' ? tryCall('node', { id: d.parent }) : null
@@ -532,7 +534,7 @@ export function Canvas(props: {
       d.deferred = t
       if (d.flow || (!inC && d.parent !== 'document')) toParent(d, 'document')
       snapOn = false
-    } else if (t && t.id !== d.parent && t.id !== d.groupOf && (!inC || below(t.id, c!.id))) toParent(d, t.id, inC ? d.from ?? d.parent : undefined)
+    } else if (t && t.id !== d.parent && t.id !== d.groupOf && (!inC || (!d.mixed && below(t.id, c!.id)))) toParent(d, t.id, inC ? d.from ?? d.parent : undefined)
     else if (inC && d.from && !(t && below(t.id, c!.id))) toParent(d, d.from)
     setDrop(d.deferred ?? null)
     setFloat(null)
