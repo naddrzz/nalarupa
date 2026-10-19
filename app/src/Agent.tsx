@@ -3,7 +3,7 @@
 // usage rows, queued prompts, parallel agents.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { call, tryCall } from './core'
-import { barAgents, imageSrc, lastContentId, profileOf, resetChat, restoreChat, store, type ChatItem } from './agents'
+import { barAgents, imageSrc, lastContentId, profileOf, resetChat, restoreChat, store, type Author, type ChatItem } from './agents'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import * as SelectPrimitive from '@gpuix/react/select'
 import { C, FONT, INDICATOR_TICK_MS, MONO, REDUCED_MOTION, ellipsisAt, ellipsisPadAt, pulseAt } from './theme'
@@ -517,33 +517,27 @@ function ChatHistory({ running, toast, changed }: { running: boolean; toast: Toa
   )
 }
 
-function AgentHeader({ agentId }: { agentId: string }) {
+function AgentHeader({ agentId, by }: { agentId: string; by?: Author }) {
   const p = profileOf(agentId)
-  const model = tryModel()
+  const model = by ? modelLabel(by) : ''
   return (
     <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, paddingTop: 8 }}>
       <div style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: p.color }} />
       <T size={12} weight="600" color={C.text}>{p.name}</T>
-      {p.parent ? <T size={11} color={C.ghost}>{`· helping ${profileOf(p.parent).name}`}</T> : <T size={11} color={C.ghost}>{model}</T>}
+      {p.parent ? <T size={11} color={C.ghost}>{`· helping ${profileOf(p.parent).name}`}</T> : null}
+      {model ? <T size={11} color={C.ghost}>{model}</T> : null}
     </div>
   )
 }
 
-let cachedModel: string | null = null
-function tryModel() {
-  if (cachedModel === null) {
-    const s = tryCall<Record<string, string>>('settings_get') ?? {}
-    const cli = s.backend === 'claude-code'
-    const model = MODELS.find((m) => m.value === s.agent_model)?.label
-    cachedModel = cli ? (model ? `Claude Code · ${model}` : 'Claude Code') : model ?? 'Opus 5.5'
-  }
-  return cachedModel
+function modelLabel({ backend, model }: Author) {
+  const label = model ? MODELS.find((m) => m.value === model)?.label ?? model : null
+  return backend === 'claude-code' ? (label ? `Claude Code · ${label}` : 'Claude Code') : label ?? ''
 }
 
 /** Save one setting. A failed save leaves the core on the old value: say so and return false, so the
  *  control stays as it was. */
 function saveSetting(toast: Toast, key: string, value: unknown) {
-  cachedModel = null
   if (tryCall('settings_set', { key, value }) !== null) return true
   toast('Unable to save that setting. Check that the app data folder is writable, then try again.', true)
   return false
@@ -656,7 +650,7 @@ function Item({ m, isLast, expanded, toggle }: { m: ChatItem; isLast: boolean; e
       const { text } = visibleText(m, isLast)
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingBottom: 4 }}>
-          {m.header ? <AgentHeader agentId={m.agent.id} /> : null}
+          {m.header ? <AgentHeader agentId={m.agent.id} by={m.by} /> : null}
           <markdown source={text} style={{ fontSize: 13, color: C.text, fontFamily: FONT }} />
         </div>
       )

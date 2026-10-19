@@ -164,6 +164,25 @@ self.onmessage = async (e) => {
   assert(call('chat_clear') === true, 'the chat is cleared again')
 }
 
+// Each reply's `start` event records the model that ran it, so a chat reopened later (or after the picker
+// changed) still says which model wrote what.
+if (!windows) {
+  call('chat_clear')
+  writeFileSync(join(data, 'bin', 'replay.txt'), JSON.stringify({ type: 'stream_event', session_id: 's', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'hi' } } }) + '\n')
+  call('settings_set', { key: 'agent_backend', value: 'claude-code' })
+  for (const model of ['claude-opus-5-5', 'claude-sonnet-5-5']) {
+    call('settings_set', { key: 'agent_model', value: model })
+    call('agent_send', { text: `Reply on ${model}` })
+    await until(() => !call('state').agentRunning, 'the replayed agent finishes')
+  }
+  const id = list().current!
+  const starts = JSON.parse(readFileSync(join(sessions, `${id}.json`), 'utf8')).events.filter((e: any) => e.kind === 'start')
+  assert(JSON.stringify(starts.map((e: any) => [e.backend, e.model])) === JSON.stringify([['claude-code', 'claude-opus-5-5'], ['claude-code', 'claude-sonnet-5-5']]), `start events record the model: ${JSON.stringify(starts)}`)
+  const reopened = call('chat_load', { id }).events.filter((e: any) => e.kind === 'start')
+  assert(JSON.stringify(reopened.map((e: any) => [e.backend, e.model])) === JSON.stringify([['claude-code', 'claude-opus-5-5'], ['claude-code', 'claude-sonnet-5-5']]), `reopened chat keeps the models: ${JSON.stringify(reopened)}`)
+  assert(call('chat_clear') === true, 'the chat is cleared again')
+}
+
 // Once stopped, clear removes everything, including the current chat.
 save('fff666', 'Last', 7000)
 assert(call('chat_clear') === true && ids() === '' && list().current === null, 'clear removes every chat and the current one')
