@@ -14,7 +14,7 @@ AI design editor: a Rust core (`core/`, a cdylib loaded through `bun:ffi`) and a
 ## Where things are
 
 - `core/guide/*.md` is runtime content compiled into the in-app agent (`core/src/guide.rs`), not instructions for you; edit it only to change what that agent is told.
-- `core/vendor/resvg` is resvg 0.47 with two patches (search `Nalarupa:`); bump resvg, usvg and krilla-svg together and re-apply them.
+- `core/vendor/resvg` is resvg 0.47 with three patches (search `Nalarupa:`); bump resvg, usvg and krilla-svg together and re-apply them.
 
 ## Running and verifying
 

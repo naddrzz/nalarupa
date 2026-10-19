@@ -463,7 +463,7 @@ impl<'a> Svg<'a> {
         let mask = outline.filter(|_| visible || n.ty == "frame").map(|m| {
             let mut body = format!(r##"<path d="{}"{} fill="#000"/>"##, geo.d, geo.rule("fill-rule"));
             if let Some(s) = stroke.as_ref().filter(|s| s.align != "inner") {
-                body += &self.stroke_body(n, &geo, s, &[Paint { value: "#000".into(), alpha: 1.0, blend: None }]);
+                body += &self.stroke_body(n, &geo, s, &[Paint { value: "#000".into(), alpha: 1.0, blend: None }], "");
             }
             let _ = write!(self.defs, r#"<g id="{m}">{body}</g>"#);
             m
@@ -605,7 +605,7 @@ impl<'a> Svg<'a> {
             match &stroke {
                 Some(s) if !visible => body += &self.text_stroke(n, s, &black),
                 // Over the fill an unclipped stroke adds the same outline; an inner one adds nothing.
-                Some(s) if s.align != "inner" => body += &self.text_stroke_markup(n, s, &black),
+                Some(s) if s.align != "inner" => body += &self.text_stroke_markup(n, s, &black, ""),
                 _ => {}
             }
             let _ = write!(self.defs, r#"<g id="{m}">{body}</g>"#);
@@ -752,14 +752,14 @@ impl<'a> Svg<'a> {
     }
 
     /// Stroke outline painted with `paints`, unclipped. Rects/frames build a per-side band
-    /// (filled); other shapes use an SVG stroke of k·width.
-    fn stroke_body(&mut self, n: &RNode, geo: &Geo, s: &Stroke, paints: &[Paint]) -> String {
+    /// (filled); other shapes use an SVG stroke of k·width. `extra` is added to every path.
+    fn stroke_body(&mut self, n: &RNode, geo: &Geo, s: &Stroke, paints: &[Paint], extra: &str) -> String {
         let k = s.k();
         let mut out = String::new();
         if matches!(n.ty.as_str(), "frame" | "rectangle") {
             let d = rect_stroke_d(n, s.widths.map(|w| w * k), s.align != "outer", n.s("strokeLinejoin") == Some("round"));
             for p in paints {
-                let _ = write!(out, r#"<path d="{d}" fill-rule="evenodd"{}/>"#, p.attrs("fill"));
+                let _ = write!(out, r#"<path d="{d}" fill-rule="evenodd"{}{extra}/>"#, p.attrs("fill"));
             }
         } else {
             let mut attrs = format!(r#" fill="none" stroke-width="{}""#, s.widths[0] * k);
@@ -769,7 +769,7 @@ impl<'a> Svg<'a> {
                 }
             }
             for p in paints {
-                let _ = write!(out, r#"<path d="{}"{attrs}{}/>"#, geo.d, p.attrs("stroke"));
+                let _ = write!(out, r#"<path d="{}"{attrs}{}{extra}/>"#, geo.d, p.attrs("stroke"));
             }
         }
         out
@@ -778,12 +778,21 @@ impl<'a> Svg<'a> {
     /// Inner/outer strokes are double-width strokes clipped to inside/outside the fill.
     fn stroke(&mut self, n: &RNode, geo: &Geo, s: Option<&Stroke>) {
         let Some(s) = s else { return };
-        let body = self.stroke_body(n, geo, s, &s.paints);
-        match s.align {
+        let blended = s.paints.iter().any(|p| p.blend.is_some());
+        let clip = match s.align {
             "inner" => {
                 let id = self.id("c");
                 let _ = write!(self.defs, r#"<clipPath id="{id}"><path d="{}"{}/></clipPath>"#, geo.d, geo.rule("clip-rule"));
-                let _ = write!(self.out, r#"<g clip-path="url(#{id})">{body}</g>"#);
+                format!(r#" clip-path="url(#{id})""#)
+            }
+            _ => String::new(),
+        };
+        // A clip group is isolated, so a blended stroke would blend against transparent: clip each path instead.
+        let body = self.stroke_body(n, geo, s, &s.paints, if blended { &clip } else { "" });
+        match s.align {
+            "inner" if blended => self.out.push_str(&body),
+            "inner" => {
+                let _ = write!(self.out, r#"<g{clip}>{body}</g>"#);
             }
             "outer" => {
                 let id = self.id("k");
@@ -801,9 +810,9 @@ impl<'a> Svg<'a> {
     }
 
     /// Glyph outlines stroked with `paints`, unclipped: width k·w, so inner/outer strokes
-    /// are double width and `text_stroke` clips them.
-    fn text_stroke_markup(&mut self, n: &RNode, s: &Stroke, paints: &[Paint]) -> String {
-        let mut extra = format!(r#" fill="none" stroke-width="{}""#, s.widths[0] * s.k());
+    /// are double width and `text_stroke` clips them. `more` is added to every `<text>`.
+    fn text_stroke_markup(&mut self, n: &RNode, s: &Stroke, paints: &[Paint], more: &str) -> String {
+        let mut extra = format!(r#" fill="none" stroke-width="{}"{more}"#, s.widths[0] * s.k());
         for (prop, attr) in [("strokeLinecap", "stroke-linecap"), ("strokeLinejoin", "stroke-linejoin")] {
             if let Some(v) = n.s(prop) {
                 let _ = write!(extra, r#" {attr}="{}""#, esc(v));
@@ -815,9 +824,8 @@ impl<'a> Svg<'a> {
 
     /// Text stroke painted with `paints`; inner/outer keep the half of the double-width stroke inside/outside the glyphs.
     fn text_stroke(&mut self, n: &RNode, s: &Stroke, paints: &[Paint]) -> String {
-        let body = self.text_stroke_markup(n, s, paints);
         if s.align == "center" {
-            return body;
+            return self.text_stroke_markup(n, s, paints, "");
         }
         let id = self.id("k");
         let (x, y, w, h) = inflate((n.x, n.y, n.w, n.h), TextStyle::of(n).size / 2.0 + s.reach() + 2.0);
@@ -825,6 +833,11 @@ impl<'a> Svg<'a> {
         let glyphs = self.text_markup(n, &[Paint { value: if inner { "#fff" } else { "#000" }.into(), alpha: 1.0, blend: None }]);
         let rect = if inner { String::new() } else { format!(r##"<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="#fff"/>"##) };
         let _ = write!(self.defs, r#"<mask id="{id}" maskUnits="userSpaceOnUse" x="{x}" y="{y}" width="{w}" height="{h}">{rect}{glyphs}</mask>"#);
+        // A mask group is isolated, so a blended stroke would blend against transparent: mask each text instead.
+        if paints.iter().any(|p| p.blend.is_some()) {
+            return self.text_stroke_markup(n, s, paints, &format!(r#" mask="url(#{id})""#));
+        }
+        let body = self.text_stroke_markup(n, s, paints, "");
         format!(r#"<g mask="url(#{id})">{body}</g>"#)
     }
 
@@ -1262,7 +1275,7 @@ fn blends(n: &RNode) -> bool {
 
 /// Blend modes as CSS `mix-blend-mode`; linearBurn is multiply and
 /// linearDodge (Skia plus) is approximated by screen, since resvg has no additive mode.
-fn blend_mode(mode: Option<&str>) -> Option<&'static str> {
+pub fn blend_mode(mode: Option<&str>) -> Option<&'static str> {
     Some(match mode? {
         "darken" => "darken",
         "multiply" | "linearBurn" => "multiply",

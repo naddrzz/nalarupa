@@ -174,7 +174,7 @@ export function Inspector({ version, selection, select, toast }: Props) {
       <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
         <T color={C.muted}>Nothing selected</T>
         <T size={11} color={C.ghost}>Click a layer on the canvas or drag a marquee. Double-click drills into groups or edits text. Ctrl+click selects the deepest layer.</T>
-        <T size={11} color={C.ghost}>Tools: V move · F/A frame · R rectangle · O ellipse · T text · H hand · Space+drag pan · Ctrl+wheel zoom · Shift+1 fit</T>
+        <T size={11} color={C.ghost}>Tools: V move · F/A frame · R rectangle · O ellipse · T text · P pen · H hand · Space+drag pan · Ctrl+wheel zoom · Shift+1 fit</T>
         <T size={11} color={C.ghost}>Ctrl+G group · Ctrl+Alt+G frame · Ctrl+Shift+G ungroup · Shift+A auto layout · Alt+W/A/S/D/H/V align · [ ] order · Alt-drag duplicates · Ctrl holds off snapping</T>
       </div>
     )

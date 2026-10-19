@@ -310,7 +310,7 @@ impl Build {
             self.failed = true;
             return;
         }
-        if let Some(b) = n.abs_layer_bounding_box() {
+        if let Some(b) = painted_box(n) {
             let op = Op::Fallback { at: self.at.clone().into(), parent, blend };
             self.push(rect(b.to_rect()), Affine::IDENTITY, op);
         }
@@ -786,11 +786,23 @@ struct Frame {
     y0: i32,
 }
 
+/// Everything `n` paints: usvg's layer box of a path leaves out its stroke, which a resvg
+/// fallback (a pattern stroke, e.g. an angular gradient) would then lose outside the fill box.
+fn painted_box(n: &usvg::Node) -> Option<usvg::NonZeroRect> {
+    match n {
+        usvg::Node::Path(p) => p.abs_stroke_bounding_box().to_non_zero_rect(),
+        _ => n.abs_layer_bounding_box(),
+    }
+}
+
 /// Rasterize a subtree with resvg over its device box ∩ `view` (the band, grown inside filter
 /// layers) and draw it at that integer offset.
 fn fallback(ctx: &mut RenderContext, tree: &usvg::Tree, at: &[u32], parent: tiny_skia::Transform, blend: BlendMode, f: &Frame, view: Rect) {
     let Some(node) = node_at(tree.root(), at) else { return };
-    let Some(b) = node.abs_layer_bounding_box() else { return };
+    // resvg's render_node origin is the layer box (none for a horizontal or vertical line, which
+    // it draws unshifted); the pixmap covers everything painted.
+    let origin = node.abs_layer_bounding_box().map_or((0.0, 0.0), |o| (o.x(), o.y()));
+    let Some(b) = painted_box(node) else { return };
     let z = f.zoom;
     let x0 = (b.left() as f64).max(view.0) * z;
     let y0 = (b.top() as f64).max(view.1) * z;
@@ -807,7 +819,7 @@ fn fallback(ctx: &mut RenderContext, tree: &usvg::Tree, at: &[u32], parent: tiny
     }
     let Some(mut pm) = tiny_skia::Pixmap::new(w, h) else { return };
     let tf = tiny_skia::Transform::from_row(z as f32, 0.0, 0.0, z as f32, -(f.x0 as i64 + x0) as f32, -(f.y0 as i64 + y0) as f32).pre_concat(parent);
-    resvg::render_node(node, tf.pre_translate(b.x(), b.y()), &mut pm.as_mut());
+    resvg::render_node(node, tf.pre_translate(origin.0, origin.1), &mut pm.as_mut());
     let pix = Pixmap::from_parts(pm.take(), w as u16, h as u16, PixelMetadata::default());
     ctx.set_transform(Affine::translate((x0 as f64, y0 as f64)));
     ctx.set_blend_mode(blend);
@@ -1460,6 +1472,32 @@ mod tests {
     /// The glass (60, 60, 280, 180) without its rounded corners.
     const GLASS: (u32, u32, u32, u32) = (66, 66, 268, 168);
 
+    /// An angular-gradient stroke is a pattern stroke drawn through the resvg fallback, which must
+    /// cover the whole stroke band: the outer half lies outside the node's fill box.
+    #[test]
+    fn angular_stroke_is_not_clipped_to_the_fill_box() {
+        for kind in ["ellipse", "rectangle"] {
+            let json = format!(r##"{{"version":"2.19","children":[
+                {{"type":"frame","id":"f","x":0,"y":0,"width":140,"height":140,"fill":"#ffffff","layout":"none","children":[
+                  {{"type":"{kind}","id":"n","x":20,"y":20,"width":100,"height":100,"stroke":{{"type":"gradient","gradientType":"angular","colors":[{{"color":"#00ff00","position":0}},{{"color":"#00ff00","position":1}}]}},"strokeWidth":12,"strokeAlignment":"outer"}}]}}]}}"##);
+            let px = vello(&Doc::from_json(&json).unwrap(), 140, 140);
+            let i = (70 * 140 + 16) * 4; // 4 px outside the left edge, mid height
+            assert_eq!(px[i..i + 3], [0, 255, 0], "{kind}: the outer stroke is missing");
+        }
+    }
+
+    /// A horizontal or vertical path has no layer box, so resvg cannot draw it alone: its pattern
+    /// stroke (an angular gradient over the node box) must still show.
+    #[test]
+    fn angular_stroke_of_an_axis_aligned_path_shows() {
+        let json = r##"{"version":"2.19","children":[
+            {"type":"frame","id":"f","x":0,"y":0,"width":140,"height":140,"fill":"#ffffff","layout":"none","children":[
+              {"type":"path","id":"n","x":20,"y":60,"width":100,"height":20,"geometry":"M0 10L100 10","stroke":{"type":"gradient","gradientType":"angular","colors":[{"color":"#00ff00","position":0},{"color":"#00ff00","position":1}]},"strokeWidth":12}]}]}"##;
+        let px = vello(&Doc::from_json(json).unwrap(), 140, 140);
+        let i = (60 * 140 + 70) * 4;
+        assert_eq!(px[i..i + 3], [0, 255, 0], "the path's stroke is missing");
+    }
+
     /// A background blur blurs whatever is painted beneath it, also other top-level frames
     /// (resvg's approximation only sees its own frame, which here holds everything beneath).
     #[test]
@@ -1627,6 +1665,48 @@ mod tests {
                 assert!(c[0] < 8 && c[1] > 247 && c[2] < 8, "{raster:?} multiply at x={x}: {c:?}");
             }
             assert!(at(202, 30)[0] > 247 && at(202, 30)[1] < 8, "{raster:?} the clipped frame's stroke stays above");
+        }
+    }
+
+    /// An inner stroke with a blend mode blends against the fill under it, as a centered one does.
+    #[test]
+    fn blend_inner_stroke() {
+        let node = |ty: &str, x: u32, align: &str| {
+            format!(r##"{{"type":"{ty}","id":"n{x}","x":{x},"y":10,"width":100,"height":100,"fill":"#ffee00","stroke":{{"type":"color","color":"#00ffff","blendMode":"multiply"}},"strokeWidth":20,"strokeAlignment":"{align}"}}"##)
+        };
+        let json = format!(
+            r#"{{"version":"2.19","children":[{},{},{},{}]}}"#,
+            node("rectangle", 0, "inner"),
+            node("ellipse", 120, "inner"),
+            node("frame", 240, "inner"),
+            node("rectangle", 360, "center")
+        );
+        let doc = Doc::from_json(&json).unwrap();
+        let (w, h) = (480u32, 120u32);
+        for (raster, px) in [Raster::Vello, Raster::Resvg].into_iter().zip(both(&doc, w, h, (0.0, 0.0), 1.0)) {
+            for x in [50, 170, 290, 410] {
+                let i = (15 * w + x) as usize * 4;
+                let c = [px[i], px[i + 1], px[i + 2]];
+                // multiply of #00ffff over #ffee00 is #00ee00; an unblended stroke would be #00ffff
+                assert!(c[0] < 8 && c[1].abs_diff(0xee) < 8 && c[2] < 8, "{raster:?} stroke multiply at x={x}: {c:?}");
+            }
+        }
+    }
+
+    /// A blended inner text stroke blends against the glyph fill under it, not against transparent.
+    #[test]
+    fn blend_inner_text_stroke() {
+        let json = r##"{"version":"2.19","children":[{"type":"text","id":"t","x":10,"y":10,"content":"III","fontSize":100,"fontFamily":"Inter","fontWeight":"900","fill":"#ffee00","stroke":{"type":"color","color":"#00ffff","blendMode":"multiply"},"strokeWidth":30,"strokeAlignment":"inner"}]}"##;
+        let doc = Doc::from_json(json).unwrap();
+        let (w, h) = (200u32, 140u32);
+        for (raster, px) in [Raster::Vello, Raster::Resvg].into_iter().zip(both(&doc, w, h, (0.0, 0.0), 1.0)) {
+            let (mut blended, mut plain) = (0, 0);
+            for p in px.chunks(4) {
+                // multiply of #00ffff over #ffee00 is #00ee00; an unblended stroke would be #00ffff
+                blended += (p[0] < 8 && p[1].abs_diff(0xee) < 8 && p[2] < 8) as u32;
+                plain += (p[0] < 8 && p[1] > 0xf8 && p[2] > 0xf8) as u32;
+            }
+            assert!(blended > 100 && plain == 0, "{raster:?} text stroke multiply: {blended} blended, {plain} unblended");
         }
     }
 
