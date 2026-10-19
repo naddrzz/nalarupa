@@ -114,6 +114,7 @@ impl AgentState {
         self.messages.clear();
         self.session = None;
         self.main = None;
+        self.profiles.clear();
         self.queue.clear();
         self.chat = None;
         self.cook.0 = 1;
@@ -139,8 +140,11 @@ impl AgentState {
         let n = self.profiles.len();
         let used: Vec<&str> = self.profiles.iter().map(|p| p.name.as_str()).collect();
         let pick = (crate::doc::random_u64() as usize) % NAMES.len();
-        let name = (0..NAMES.len()).map(|i| NAMES[(pick + i) % NAMES.len()]).find(|n| !used.contains(n)).unwrap_or(NAMES[pick]);
-        let p = Profile { id: format!("ag{}{:x}", n, crate::doc::random_u64() & 0xfff), name: name.to_string(), color: COLORS[(pick + n * 5) % COLORS.len()].to_string(), parent };
+        // Names stay unique within a conversation: once all are taken, count up ("Surya 2").
+        let name = (0..NAMES.len()).map(|i| NAMES[(pick + i) % NAMES.len()].to_string()).find(|n| !used.contains(&n.as_str())).unwrap_or_else(|| {
+            (2..).map(|k| format!("{} {k}", NAMES[pick])).find(|n| !used.contains(&n.as_str())).unwrap_or_default()
+        });
+        let p = Profile { id: format!("ag{}{:x}", n, crate::doc::random_u64() & 0xfff), name, color: COLORS[(pick + n * 5) % COLORS.len()].to_string(), parent };
         self.profiles.push(p.clone());
         p
     }
@@ -1038,6 +1042,17 @@ mod tests {
         assert_eq!(events[1]["text"], "Hello");
         assert!(read_chat(&dir, "../settings").is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn profile_names_are_unique_and_a_new_conversation_starts_empty() {
+        let mut a = AgentState::default();
+        let mut names: Vec<String> = (0..40).map(|_| a.new_profile(None).name).collect();
+        names.sort();
+        names.dedup();
+        assert_eq!(names.len(), 40, "no two agents of one conversation share a name");
+        a.clear();
+        assert!(a.profiles.is_empty(), "a new conversation forgets the old agents");
     }
 
     #[test]
