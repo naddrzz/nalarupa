@@ -1461,7 +1461,9 @@ export function Canvas(props: {
       <AgentLayer cam={cam} w={w} h={h} version={version} chatOpen={!!props.chatOpen} />
       {ghost ? <div style={{ position: 'absolute', left: ghost.x, top: ghost.y, width: ghost.w, height: ghost.h, borderWidth: 1, borderColor: C.select, backgroundColor: '#3B82F622', pointerEvents: 'none' }} /> : null}
       {editing ? (() => {
-        const [x, y] = toScreen(editing.box.x, editing.box.y)
+        // The field stays upright but is centered on where the (rotated/flipped) text is painted.
+        const p = painted(editing.box)
+        const [x, y] = toScreen(p.x + p.w / 2 - editing.box.w / 2, p.y + p.h / 2 - editing.box.h / 2)
         return (
           <div style={{ position: 'absolute', left: x - 2, top: y - 2, width: Math.max(80, editing.box.w * cam.zoom + 40), borderWidth: 1.5, borderColor: C.select, backgroundColor: '#FFFFFFEE', borderRadius: 3, padding: 2 }}>
             <textarea
