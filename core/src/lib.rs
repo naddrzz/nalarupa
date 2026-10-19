@@ -69,7 +69,7 @@ fn rect_arg(v: &Value) -> Option<editor::Rect> {
 }
 
 fn rect(f: &render::Flat) -> Value {
-    json!({"id": f.id, "name": f.name, "type": f.ty, "x": f.x, "y": f.y, "w": f.w, "h": f.h, "parent": f.parent, "depth": f.depth,
+    json!({"id": f.id, "name": f.name, "type": f.ty, "x": f.x, "y": f.y, "w": f.w, "h": f.h, "origin": [f.origin.0, f.origin.1], "parent": f.parent, "depth": f.depth,
            "placeholder": f.placeholder, "pending": f.pending, "m": f.m})
 }
 

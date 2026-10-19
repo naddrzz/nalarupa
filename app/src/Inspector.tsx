@@ -6,7 +6,7 @@ import { C } from './theme'
 import { Button, Field, Icon, IconButton, NumField, Row, Section, Segmented, Swatch, T, Toggle, type Toast } from './ui'
 
 type Props = { version: number; selection: string[]; select: (ids: string[]) => void; toast: Toast }
-type Info = { id: string; node: any; box: { w: number; h: number } | null; parentLayout: string; variables: Record<string, any> }
+type Info = { id: string; node: any; box: { x: number; y: number; w: number; h: number; origin: [number, number] } | null; parentLayout: string; variables: Record<string, any> }
 
 const str = (v: unknown) => (v === undefined || v === null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v))
 const isMode = (v: unknown, mode: string) => typeof v === 'string' && v.startsWith(mode)
@@ -122,16 +122,19 @@ export function Inspector({ version, selection, select, toast }: Props) {
   const stroke = solidColor(n.stroke, vars)
 
   // Rotation turns around the center like the canvas handle: a free layer's origin moves so the center stays put.
+  // A group's box starts (dx, dy) past its origin, so its center is that far off a plain box's.
   const setRotation = (v: number, key: string) => perNode((i) => {
     const props: Record<string, unknown> = { rotation: v || null }
-    if (!inFlow(i) && i.box && i.node.type !== 'group') {
+    if (!inFlow(i) && i.box) {
       const [fx, fy] = [!!i.node.flipX, !!i.node.flipY]
-      ;[props.x, props.y] = turnAroundCenter(Number(i.node.x ?? 0), Number(i.node.y ?? 0), i.box.w, i.box.h, Number(i.node.rotation ?? 0), v, fx, fy)
+      const [dx, dy] = [i.box.x - i.box.origin[0], i.box.y - i.box.origin[1]]
+      ;[props.x, props.y] = turnAroundCenter(Number(i.node.x ?? 0), Number(i.node.y ?? 0), i.box.w + 2 * dx, i.box.h + 2 * dy, Number(i.node.rotation ?? 0), v, fx, fy)
     }
     return props
   }, key)
-  // W/H: typing a number makes that axis fixed; auto text becomes fixed width (height: fixed size).
+  // W/H: typing a number makes that axis fixed; auto text becomes fixed width (height: fixed size). A group is the union of its children and has no size to set.
   const setSize = (axis: 'width' | 'height', v: number, key: string) => perNode((i) => {
+    if (i.node.type === 'group') return null
     const p: Record<string, unknown> = { [axis]: Math.max(0, Math.round(v * 100) / 100) }
     if (i.node.type === 'text') {
       if (axis === 'height') Object.assign(p, { textGrowth: 'fixed-width-height', width: i.node.width ?? Math.round(i.box?.w ?? 0) })
@@ -182,10 +185,12 @@ export function Inspector({ version, selection, select, toast }: Props) {
       </Section>
 
       <Section title={!multi && inFlow(infos[0]) ? 'Size (auto layout child)' : 'Size'}>
-        <Row>
-          <NumField label="W" name="Width" {...numOf((i) => i.box?.w)} onCommit={(v, k) => setSize('width', v, k)} testId="inspector-w" />
-          <NumField label="H" name="Height" {...numOf((i) => i.box?.h)} onCommit={(v, k) => setSize('height', v, k)} testId="inspector-h" />
-        </Row>
+        {all((i) => i.node.type === 'group') ? null : (
+          <Row>
+            <NumField label="W" name="Width" {...numOf((i) => i.box?.w)} onCommit={(v, k) => setSize('width', v, k)} testId="inspector-w" />
+            <NumField label="H" name="Height" {...numOf((i) => i.box?.h)} onCommit={(v, k) => setSize('height', v, k)} testId="inspector-h" />
+          </Row>
+        )}
         {canHug || canFill ? (
           <Row gap={6}>
             {canHug ? <Toggle label="Hug W" on={hugW} onChange={(on) => sizing('width', 'fit_content', on)} testId="hug-width" /> : null}

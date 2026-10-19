@@ -73,6 +73,8 @@ pub struct Flat {
     pub y: f64,
     pub w: f64,
     pub h: f64,
+    /// The node's own origin on the canvas (rotation turns around it); a group's sits before its box.
+    pub origin: (f64, f64),
     pub depth: usize,
     pub parent: Option<String>,
     pub problem: Option<&'static str>,
@@ -858,6 +860,7 @@ fn prepare_layer(cx: &mut Ctx, index: usize, hash: u64, hidden: &HashSet<String>
             y: n.y,
             w: n.w,
             h: n.h,
+            origin: (n.x - n.bx, n.y - n.by),
             depth,
             parent: stack.last().cloned(),
             problem: n.problem,
