@@ -504,6 +504,10 @@ impl Renderer {
             .collect();
         let (vx, vy) = ((cam_x * zoom).round() as i32, (cam_y * zoom).round() as i32);
         let Some(mut out) = tiny_skia::PixmapMut::from_bytes(&mut self.pixels, w, h) else { return };
+        // Bottom frame first: a slide's cover pass repaints the frames above it, which hold
+        // nothing of the slides in them, so a higher frame's slide must paint after it.
+        let rank = |s: &Slide| self.order.iter().position(|id| self.layers.get(id).is_some_and(|l| l.flat.iter().any(|f| f.id == s.id)));
+        self.slides.sort_by_key(rank);
         for s in &mut self.slides {
             let Some(tree) = &s.tree else { continue };
             if shown.as_ref().is_some_and(|ids| !ids.contains(s.id.as_str())) {
@@ -537,7 +541,31 @@ impl Renderer {
             }
             let Some((_, _, pm)) = &s.cache else { continue };
             let paint = tiny_skia::PixmapPaint { opacity: alpha.clamp(0.0, 1.0) as f32, ..Default::default() };
-            out.draw_pixmap(x0 - vx + (dx * zoom).round() as i32, y0 - vy + (dy * zoom).round() as i32, pm.as_ref(), &paint, tiny_skia::Transform::identity(), None);
+            let (px, py) = (x0 - vx + (dx * zoom).round() as i32, y0 - vy + (dy * zoom).round() as i32);
+            out.draw_pixmap(px, py, pm.as_ref(), &paint, tiny_skia::Transform::identity(), None);
+            // Top-level frames stacked above the slide's own cover it, as they do once it settles.
+            let own = self.order.iter().position(|id| self.layers.get(id).is_some_and(|l| l.flat.iter().any(|f| f.id == s.id)));
+            let above = own.map_or(&[][..], |i| &self.order[i + 1..]);
+            let (cw, ch) = (pm.width() as i32, pm.height() as i32);
+            let (cx0, cy0, cx1, cy1) = (px.max(0), py.max(0), (px + cw).min(w as i32), (py + ch).min(h as i32));
+            if cx1 <= cx0 || cy1 <= cy0 {
+                continue;
+            }
+            let cover = ((cx0 + vx) as f64 / zoom, (cy0 + vy) as f64 / zoom, (cx1 - cx0) as f64 / zoom, (cy1 - cy0) as f64 / zoom);
+            let trees: Vec<&usvg::Tree> = above.iter().filter(|id| solo.is_none_or(|s| s == id.as_str())).filter_map(|id| self.layers.get(id)).filter(|l| overlaps(l.paint, cover)).filter_map(|l| l.tree.as_ref()).collect();
+            if trees.is_empty() {
+                continue;
+            }
+            let Some(mut over) = tiny_skia::Pixmap::new((cx1 - cx0) as u32, (cy1 - cy0) as u32) else { continue };
+            let tf = tiny_skia::Transform::from_row(zoom as f32, 0.0, 0.0, zoom as f32, -(cx0 + vx) as f32, -(cy0 + vy) as f32);
+            for tree in trees {
+                if has_hairline(tree.root()) {
+                    resvg::render(tree, tf, &mut over.as_mut());
+                } else {
+                    draw_culled(tree.root(), tf, cover, &mut over.as_mut());
+                }
+            }
+            out.draw_pixmap(cx0, cy0, over.as_ref(), &tiny_skia::PixmapPaint::default(), tiny_skia::Transform::identity(), None);
         }
     }
 
@@ -1279,6 +1307,60 @@ pub(crate) mod tests {
         sync(&mut r);
         let px = frame(&mut r);
         assert!(red(&px, 150, 101) && !red(&px, 150, 152), "settled in the cached view at its own place");
+    }
+
+    /// A sliding node stays in its frame's place in the stacking order: a top-level frame above
+    /// it covers it mid-slide as it does once settled, and one below it does not.
+    #[test]
+    fn slide_stays_under_frames_above_its_own() {
+        let json = r##"{"version":"2.19","children":[
+            {"type":"frame","id":"p","x":100,"y":100,"width":300,"height":200,"layout":"none","fill":"#2255ff","children":[
+                {"type":"rectangle","id":"k","x":20,"y":20,"width":100,"height":100,"fill":"#ff0000"}]},
+            {"type":"frame","id":"q","x":150,"y":100,"width":300,"height":300,"layout":"none","fill":"#ffff00"}]}"##;
+        let doc = Doc::from_json(json).unwrap();
+        let (mut fonts, mut assets) = offline();
+        let mut r = Renderer::default();
+        r.slides.push(Slide::new("k"));
+        let mut cx = Ctx { doc: &doc, libs: &[], fonts: &mut fonts, assets: &mut assets };
+        let roots = r.shift_siblings(&mut cx);
+        let rebuilt = r.sync(&mut cx);
+        r.refresh_slides(&mut cx, &rebuilt, roots);
+        let at = |px: &[u8], x: usize, y: usize| px[(y * 500 + x) * 4..(y * 500 + x) * 4 + 3].to_vec();
+        r.render(500, 500, 0.0, 0.0, 1.0, [30, 30, 30], None, true);
+        r.slides[0].start = Some(Instant::now() - Duration::from_millis(100));
+        let px = r.render(500, 500, 0.0, 0.0, 1.0, [30, 30, 30], None, true).to_vec();
+        // k sits at 120..220 x 120..220 (6.8 low mid-slide); q covers x ≥ 150.
+        assert_eq!(at(&px, 180, 150), [255, 255, 0], "the frame above covers the sliding node");
+        assert!(at(&px, 130, 150)[0] > 100, "the part outside that frame still shows the sliding node");
+    }
+
+    /// Two slides in different frames: the lower one's cover pass must not erase the higher
+    /// one, whichever was added first.
+    #[test]
+    fn slide_in_higher_frame_survives_lower_covers() {
+        let json = r##"{"version":"2.19","children":[
+            {"type":"frame","id":"p","x":0,"y":0,"width":300,"height":300,"layout":"none","fill":"#2255ff","children":[
+                {"type":"rectangle","id":"a","x":10,"y":10,"width":100,"height":240,"fill":"#ff0000"}]},
+            {"type":"frame","id":"q","x":0,"y":0,"width":300,"height":300,"layout":"none","fill":"#ffff00","children":[
+                {"type":"rectangle","id":"b","x":10,"y":150,"width":100,"height":100,"fill":"#00ff00"}]}]}"##;
+        let doc = Doc::from_json(json).unwrap();
+        let (mut fonts, mut assets) = offline();
+        let mut r = Renderer::default();
+        r.slides.push(Slide::new("b"));
+        r.slides.push(Slide::new("a"));
+        let mut cx = Ctx { doc: &doc, libs: &[], fonts: &mut fonts, assets: &mut assets };
+        let roots = r.shift_siblings(&mut cx);
+        let rebuilt = r.sync(&mut cx);
+        r.refresh_slides(&mut cx, &rebuilt, roots);
+        r.render(300, 300, 0.0, 0.0, 1.0, [30, 30, 30], None, true);
+        for s in &mut r.slides {
+            s.start = Some(Instant::now() - Duration::from_millis(100));
+        }
+        let px = r.render(300, 300, 0.0, 0.0, 1.0, [30, 30, 30], None, true).to_vec();
+        // b (y 150..250, 6.8 low) is mid-slide over the yellow frame q, which a's cover (y 10..250) repaints.
+        let g = px[(200 * 300 + 50) * 4 + 1];
+        let rb = px[(200 * 300 + 50) * 4];
+        assert!(g > 250 && rb < 230, "b still shows over q, got r {rb} g {g}");
     }
 
     /// A node sliding into a rotated or semi-transparent frame paints under that frame's rotation and
