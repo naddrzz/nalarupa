@@ -79,10 +79,11 @@ export const PILL_MS = 3000
 /**
  * Whether the agent layer must repaint now. Normally any agent presence animates every frame. Under
  * reduced motion only fades and the pill expiry change on their own; everything else moves on events,
- * which already re-render the layer.
+ * which already re-render the layer. `painted` is when the layer last rendered: a pill that was still
+ * showing then needs one more render at or after its expiry, however late the next tick lands.
  */
-export function needsFrame(now: number, reduced: boolean, liveCount: number): boolean {
-  const pills = [...store.pills.values()].some((p) => now - p.at < PILL_MS)
+export function needsFrame(now: number, reduced: boolean, liveCount: number, painted = now): boolean {
+  const pills = [...store.pills.values()].some((p) => Math.min(now, painted) - p.at < PILL_MS)
   if (store.activity.length > 0 || store.flashes.length > 0 || pills) return true
   if (!reduced) {
     return liveCount > 0 || store.pens.size > 0 || [...store.cursors.values()].some((c) => store.running.has(c.profile.id) || now - c.lastActivity < GONE)
