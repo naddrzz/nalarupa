@@ -759,6 +759,7 @@ fn execute_within(e: &mut Engine, args: &Value, budget: Duration) -> ToolOut {
         e.sync();
         for (frame, prompt) in &ex.pens {
             let size = e.renderer.find(frame).map_or((400.0, 400.0), |f| (f.w.max(1.0), f.h.max(1.0)));
+            e.agent.pens.push(frame.clone());
             crate::pen::start(frame.clone(), prompt.clone(), size, e.agent.cancel.clone());
         }
     }
