@@ -13,7 +13,8 @@ const assert = (ok: unknown, msg: string) => {
 // with a fresh data folder so settings and documents written here never touch the real ones.
 if (!process.env.NALARUPA_CHECK_CHILD) {
   const data = mkdtempSync(join(tmpdir(), 'nalarupa-mcp-'))
-  const run = Bun.spawnSync([process.execPath, import.meta.path], { env: { ...process.env, NALARUPA_DATA: data, NALARUPA_CHECK_CHILD: '1' }, stdio: ['inherit', 'inherit', 'inherit'] })
+  // PATH is the empty data folder: the Claude Code backend the spawn_agents check selects cannot find `claude`, so no agent reaches a model.
+  const run = Bun.spawnSync([process.execPath, import.meta.path], { env: { ...process.env, NALARUPA_DATA: data, NALARUPA_CHECK_CHILD: '1', PATH: data }, stdio: ['inherit', 'inherit', 'inherit'] })
   rmSync(data, { recursive: true, force: true })
   process.exit(run.exitCode ?? 1)
 }
@@ -102,6 +103,7 @@ const text = (r: any) => r.content.map((c: any) => c.text ?? '').join('')
 
   // spawn_agents cuts the container JSON at 12000 bytes: that must not panic inside a multi-byte character
   // (a panic drops the connection, so the call would get no JSON-RPC reply at all).
+  call('settings_set', { key: 'agent_backend', value: 'claude-code' })
   const jp = '日本語のテキスト'.repeat(10)
   await as('agD', `box = Insert(document, {type:"frame", name:"Box", x:900, width:600, height:400, layout:"vertical"}); for (let i = 0; i < 61; i++) Insert(box, {type:"text", content:"${jp}", fontSize:12, fill:"#111"}); Print(box.id)`)
   const box = (call('layers') as any[]).find((x) => x.name === 'Box').id
