@@ -1,6 +1,6 @@
 // FFI smoke check: `bun scripts/smoke.ts` — exercises the core without opening a window.
 import { call, renderPixels } from '../src/core'
-import { applyEvents, barAgents, imageSrc, resetChat, store } from '../src/agents'
+import { applyEvents, barAgents, imageSrc, needsFrame, resetChat, store } from '../src/agents'
 
 const assert = (ok: unknown, msg: string) => {
   if (!ok) throw new Error(`smoke failed: ${msg}`)
@@ -27,6 +27,31 @@ await Bun.sleep(700)
 renderPixels(320, 180, 0, 0, 1920 / 320 / 6, 0x1c1c1f)
 assert(!call('state').animating, 'slide settled after ~0.6 s')
 call('undo')
+// Present renders one frame alone (solo): the sliding node and its reflowed siblings must still show, not blank the slide.
+const lit = () => {
+  const p = renderPixels(480, 270, 0, 0, 0.25, 0x000000, 'sld01', true)!
+  let n = 0
+  for (let i = 0; i < p.length; i += 4) if (p[i] > 120) n++
+  return n
+}
+const greens = () => {
+  const p = renderPixels(480, 270, 0, 0, 0.25, 0x000000, 'sld01', true)!
+  let n = 0
+  for (let i = 0; i < p.length; i += 4) if (p[i + 1] > 180 && p[i] < 100 && p[i + 2] < 130) n++
+  return n
+}
+const before = lit()
+const greenBefore = greens()
+assert(before > 0, 'presented slide shows its content')
+call('tool', { name: 'execute', args: { input: 'Insert("sld01", {type:"rectangle", name:"BigGreen", x:100, y:100, width:900, height:500, fill:"#22ff55"})' } })
+assert(call('state').animating, 'insert into a presented slide is animating')
+assert(lit() > 0, 'presented slide keeps its content while the insert glides in')
+await Bun.sleep(700)
+renderPixels(480, 270, 0, 0, 0.25, 0x000000, 'sld01', true)
+assert(!call('state').animating, 'presented slide settled after ~0.6 s')
+assert(lit() >= before, 'presented slide keeps its existing content')
+assert(greens() > greenBefore, 'presented slide shows its inserted content')
+call('undo')
 // Reduced motion (an OS preference the app passes in): agent inserts appear in place.
 call('reduce_motion', { on: true })
 call('tool', { name: 'execute', args: { input: 'Insert("sld01", {type:"rectangle", name:"Still", width:100, height:100, fill:"#0000ff"})' } })
@@ -50,6 +75,25 @@ assert(bar.shown.slice(0, 3).every((a) => store.running.has(a.id)), 'running age
 resetChat()
 assert(store.profiles.size === 0 && store.running.size === 0 && barAgents().shown.length === 0, 'a new conversation clears the agent bar')
 resetChat()
+// Reduced motion: a running agent repaints the canvas layer only for fades, not every frame of the run.
+{
+  const cursor = { profile: { id: 'a', name: 'A', color: '#f00' }, x: 0, y: 0, tx: 0, ty: 0, appearAt: 0, lastActivity: 0, wobble: 0, phase: 0 }
+  store.running.add('a')
+  store.cursors.set('a', cursor)
+  assert(needsFrame(100, true, 0), 'reduced motion: a cursor fading in repaints')
+  assert(!needsFrame(1000, true, 0) && needsFrame(1000, false, 0), 'reduced motion: a settled running cursor is idle, normal motion animates it')
+  assert(!needsFrame(1000, true, 3), 'reduced motion: generating placeholders are static')
+  store.pens.set('p', { x: 0, y: 0, tx: 0, ty: 0, appearAt: 0 })
+  assert(!needsFrame(1000, true, 0), 'reduced motion: a settled AI Pen is idle')
+  store.pens.clear()
+  store.running.clear()
+  cursor.lastActivity = 0
+  assert(!needsFrame(3000, true, 0) && needsFrame(6000, true, 0) && !needsFrame(7000, true, 0), 'reduced motion: a finished cursor repaints only while it fades out')
+  store.pills.set('a', { text: 'hi', at: 5000 })
+  assert(needsFrame(6000, true, 0) && !needsFrame(8500, true, 0), 'reduced motion: a pill repaints until it expires')
+  store.pills.clear()
+  store.cursors.clear()
+}
 const mcp = await fetch(`http://127.0.0.1:${init.mcpPort}/mcp`, {
   method: 'POST',
   headers: { 'content-type': 'application/json' },

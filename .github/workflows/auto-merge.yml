@@ -15,7 +15,8 @@ permissions: { contents: read }
 
 jobs:
   auto-merge:
-    runs-on: [self-hosted, nalarupa]
+    # Its own small runner on the VPS: on the Claude runners it waited hours behind QA and fix jobs.
+    runs-on: [self-hosted, nalarupa-light]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
