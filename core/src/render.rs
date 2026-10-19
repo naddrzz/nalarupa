@@ -45,8 +45,11 @@ pub struct Slide {
     fade: bool,
     /// Inserted since the last sync: its layout siblings are still to be checked for moves.
     fresh: bool,
-    /// The node alone in absolute doc coordinates, without descendants that slide themselves.
+    /// The node alone in absolute doc coordinates (under its ancestors' rotation, flips and
+    /// opacity), without descendants that slide themselves.
     tree: Option<usvg::Tree>,
+    /// Linear part of the ancestors' painted matrix: carries the offset into the parent's frame.
+    lin: [f64; 4],
     /// Sliding ancestors: their offset and fade carry this node along.
     ancestors: Vec<String>,
     /// Raster of `tree` at (zoom, device rect).
@@ -55,7 +58,7 @@ pub struct Slide {
 
 impl Slide {
     pub fn new(id: &str) -> Slide {
-        Slide { id: id.to_string(), added: Instant::now(), start: None, from: (0.0, SLIDE_OFFSET), fade: true, fresh: true, tree: None, ancestors: Vec::new(), cache: None }
+        Slide { id: id.to_string(), added: Instant::now(), start: None, from: (0.0, SLIDE_OFFSET), fade: true, fresh: true, tree: None, lin: [1.0, 0.0, 0.0, 1.0], ancestors: Vec::new(), cache: None }
     }
 
     /// (offset x, offset y, opacity) now.
@@ -445,9 +448,21 @@ impl Renderer {
                 s.tree = None;
                 continue;
             };
+            // The settled layer paints the node inside its ancestors' groups: carry their
+            // rotation, flips and opacity (as `prepare_layer` and `Svg::node` do).
+            let mut chain = Vec::new();
+            ancestors_of(root, &s.id, &mut chain);
+            let (m, alpha) = chain.iter().fold((None, 1.0), |(m, a), n| (if is_turned(n) { Some(compose(m, own_matrix(n))) } else { m }, a * n.f("opacity").unwrap_or(1.0).min(1.0)));
+            s.lin = m.map_or([1.0, 0.0, 0.0, 1.0], |m: [f64; 6]| [m[0], m[1], m[2], m[3]]);
+            // An invisible ancestor hides the node, as it does in the layer.
+            if alpha <= 0.0 {
+                s.tree = None;
+                continue;
+            }
             let mut svg = Svg::new(cx.fonts, cx.assets, cx.doc.dir());
             svg.skip = ids.iter().filter(|i| **i != s.id).cloned().collect();
             svg.node(node);
+            svg.wrap(m, alpha);
             let text = svg.finish(None);
             s.tree = usvg::Tree::from_str(&text, &cx.tree_options()).ok();
             s.ancestors = ids.iter().filter(|a| **a != s.id && find_rnode(root, a).is_some_and(|an| find_rnode(an, &s.id).is_some())).cloned().collect();
@@ -478,7 +493,15 @@ impl Renderer {
                 s.start.get_or_insert(now);
             }
         }
-        let states: HashMap<String, (f64, f64, f64)> = self.slides.iter().map(|s| (s.id.clone(), s.state(now))).collect();
+        // Offsets are in the parent's frame: turn them with its rotation and flips.
+        let states: HashMap<String, (f64, f64, f64)> = self
+            .slides
+            .iter()
+            .map(|s| {
+                let (dx, dy, alpha) = s.state(now);
+                (s.id.clone(), (s.lin[0] * dx + s.lin[2] * dy, s.lin[1] * dx + s.lin[3] * dy, alpha))
+            })
+            .collect();
         let (vx, vy) = ((cam_x * zoom).round() as i32, (cam_y * zoom).round() as i32);
         let Some(mut out) = tiny_skia::PixmapMut::from_bytes(&mut self.pixels, w, h) else { return };
         // Bottom frame first: a slide's cover pass repaints the frames above it, which hold
@@ -1338,6 +1361,40 @@ pub(crate) mod tests {
         let g = px[(200 * 300 + 50) * 4 + 1];
         let rb = px[(200 * 300 + 50) * 4];
         assert!(g > 250 && rb < 230, "b still shows over q, got r {rb} g {g}");
+    }
+
+    /// A node sliding into a rotated or semi-transparent frame paints under that frame's rotation and
+    /// opacity, so the end of the slide does not jump to the settled view.
+    #[test]
+    fn slide_follows_parent_rotation_and_opacity() {
+        for extra in [r#""rotation":20"#, r#""opacity":0.5"#] {
+            let json = format!(
+                r##"{{"version":"2.19","children":[{{"type":"frame","id":"p","x":100,"y":100,"width":300,"height":200,"layout":"none","fill":"#2255ff",{extra},
+                "children":[{{"type":"rectangle","id":"k","x":120,"y":120,"width":100,"height":100,"fill":"#ff0000"}}]}}]}}"##
+            );
+            let doc = Doc::from_json(&json).unwrap();
+            let (mut fonts, mut assets) = offline();
+            let mut r = Renderer::default();
+            r.slides.push(Slide::new("k"));
+            let mut sync = |r: &mut Renderer| {
+                let mut cx = Ctx { doc: &doc, libs: &[], fonts: &mut fonts, assets: &mut assets };
+                let roots = r.shift_siblings(&mut cx);
+                let rebuilt = r.sync(&mut cx);
+                r.refresh_slides(&mut cx, &rebuilt, roots);
+            };
+            sync(&mut r);
+            let frame = |r: &mut Renderer| r.render(500, 400, 0.0, 0.0, 1.0, [30, 30, 30], None, true).to_vec();
+            frame(&mut r);
+            // Near the end: the offset is gone and the opacity is 0.95.
+            r.slides[0].start = Some(Instant::now() - Duration::from_millis(590));
+            let late = frame(&mut r);
+            r.slides[0].start = Some(Instant::now() - SLIDE_TIME);
+            assert!(r.expire_slides());
+            sync(&mut r);
+            let done = frame(&mut r);
+            let jumped = late.chunks(4).zip(done.chunks(4)).filter(|(a, b)| a[0].abs_diff(b[0]) as u32 + a[1].abs_diff(b[1]) as u32 > 40).count();
+            assert!(jumped < 100, "{extra}: {jumped} pixels change when the slide ends");
+        }
     }
 
     /// Present mode renders one frame alone; a node sliding into it must still paint there (the
