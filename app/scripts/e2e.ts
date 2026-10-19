@@ -188,6 +188,24 @@ TakeScreenshot([s])`,
   }
   console.log('deck PDF:', pdfPath, `${pages} pages`)
 
+  // A long frame name must not move its row: layer names and slide labels start at the same x as the
+  // others, and a slide label ends inside the panel (ellipsized, not clipped by it).
+  const PANEL_W = 248 // LEFT_W in src/theme.ts
+  const LONG = 'A slide with an extremely long name that should be truncated in the slides panel'
+  await mcp('execute', { input: `Insert(document, {type:"frame", name:"Short", x: 20000, y: 0, width:1920, height:1080, fill:"#1A1D24"})
+Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, height:1080, fill:"#1A1D24"})` })
+  const label = (testId: string, text: string) => app!.getByTestId(testId).getByText(text).bounds()
+  await app.getByTestId('slide-5').getByText('Short').waitFor({ timeoutMs: 10000 })
+  await app.getByTestId('slide-6').getByText(LONG).waitFor({ timeoutMs: 10000 })
+  const [s5, s6] = [await label('slide-5', 'Short'), await label('slide-6', LONG)]
+  if (Math.abs(s5.x - s6.x) > 0.5 || s6.x + s6.width > PANEL_W) throw new Error(`slide labels start at x=${s5.x} and x=${s6.x} (should match) and the long one ends at ${s6.x + s6.width} (panel is ${PANEL_W} wide)`)
+  if (s5.x < 12 + 14) throw new Error(`the slide number column hugs the panel edge (label at x=${s5.x})`)
+  await app.getByText('Layers').click()
+  await app.getByTestId('layers').getByText(LONG).waitFor({ timeoutMs: 10000 })
+  const [l1, l2] = [await label('layers', 'Short'), await label('layers', LONG)]
+  if (Math.abs(l1.x - l2.x) > 0.5) throw new Error(`a long layer name moved its row: x=${l2.x}, other rows x=${l1.x}`)
+  await app.getByText('Slides').click()
+
   // Saved chats: a session file on disk is listed in the history dropdown, reopens, and can be removed.
   const sessions = join(data, 'sessions')
   const chatId = `e2e${Date.now().toString(36)}`
