@@ -327,7 +327,7 @@ function CookMenu({ designs, mode, set }: { designs: number; mode: CookMode; set
             tabIndex={0}
             autoFocus
             onMouseDownOutside={(e) => { if (!trigger.hit(e)) setOpen(false) }}
-            onKeyDown={(e) => { if (e.key === 'escape') setOpen(false) }}
+            onKeyDown={(e) => { if (e.key === 'escape') { setOpen(false); trigger.restore() } }}
             style={{
               width: 260, padding: 12, display: 'flex', flexDirection: 'column', gap: 12, borderRadius: 12, borderWidth: 1, borderColor: C.border, backgroundColor: C.panel2,
               boxShadow: { offsetX: 0, offsetY: 8, blurRadius: 24, spreadRadius: 0, color: '#00000080' },
@@ -443,8 +443,8 @@ function ChatHistory({ running, toast, changed }: { running: boolean; toast: Toa
 
   const chats = list?.chats ?? []
   return (
-    <div ref={trigger.ref} style={{ position: 'relative', display: 'flex' }}>
-      <IconButton icon="history" title="Chat history" testId="agent-history" active={!!list} onClick={() => (list ? close() : refresh())} />
+    <div style={{ position: 'relative', display: 'flex' }}>
+      <IconButton ref={trigger.ref} icon="history" title="Chat history" testId="agent-history" active={!!list} onClick={() => (list ? close() : refresh())} />
       {list ? (
         <anchored side="bottom" align="end" gap={4} fit="snap" snapMargin={8} deferred priority={1} occlude>
           <div
@@ -455,7 +455,7 @@ function ChatHistory({ running, toast, changed }: { running: boolean; toast: Toa
             tabIndex={0}
             autoFocus
             onMouseDownOutside={(e) => { if (!trigger.hit(e)) close() }}
-            onKeyDown={(e) => { if (e.key === 'escape') close() }}
+            onKeyDown={(e) => { if (e.key === 'escape') { close(); trigger.restore() } }}
             style={{
               width: 280, maxHeight: 440, display: 'flex', flexDirection: 'column', paddingTop: 6, paddingBottom: 6, borderRadius: 10,
               borderWidth: 1, borderColor: C.border, backgroundColor: C.panel2,

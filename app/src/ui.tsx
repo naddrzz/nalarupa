@@ -352,7 +352,8 @@ export function NumField({ label, name = label, value, mixed, onCommit, step = 1
 /**
  * A dropdown's trigger. A press outside the open dropdown that lands on the trigger is left to the
  * trigger's own click (which closes it): closing in `onMouseDownOutside` too made that click reopen
- * it, and the old workaround (ignore clicks for 500 ms) swallowed a quick reopen.
+ * it, and the old workaround (ignore clicks for 500 ms) swallowed a quick reopen. `restore` hands keyboard
+ * focus back to the trigger when the dropdown closes from the keyboard (its panel unmounts with the focus).
  */
 export function useTrigger() {
   const renderer = useGpuixRequired()
@@ -362,7 +363,12 @@ export function useTrigger() {
     const [x, y] = [e.x ?? -1, e.y ?? -1]
     return !!b && x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height
   }
-  return { ref, hit }
+  const restore = () => {
+    if (!ref.current) return
+    renderer.focusElement?.(ref.current.id)
+    setKeyboardFocus(ref.current.id)
+  }
+  return { ref, hit, restore }
 }
 
 /** Small toggle chip (checkbox semantics). */
