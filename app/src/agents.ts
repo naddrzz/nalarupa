@@ -260,7 +260,6 @@ export function applyEvents(events: any[], now: number): boolean {
       }
     }
   }
-  if (store.items.length > 800) store.items = store.items.slice(-600)
   return changed
 }
 

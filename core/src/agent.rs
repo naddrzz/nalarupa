@@ -64,6 +64,8 @@ pub struct AgentState {
     pub main: Option<String>,
     /// Prompts sent while agents were busy; flushed as one message afterwards.
     pub queue: Vec<String>,
+    /// Options of the latest queued prompt: (parallel, mode, designs, iterate), as `send` takes them.
+    queue_opts: (usize, String, usize, String),
     /// Parallel agent setting of the current turn: (count, mode "split" | "side").
     pub parallel: (usize, String),
     /// The conversation being saved to `<data_dir>/sessions/<id>.json`; None until the first prompt.
@@ -203,6 +205,8 @@ pub fn send(prompt: String, parallel: usize, mode: &str, designs: usize, iterate
         let mut e = engine();
         if e.agent.running {
             e.agent.queue.push(prompt.clone());
+            // Several queued prompts run as one turn: the latest one's options win.
+            e.agent.queue_opts = (parallel, mode.into(), designs, iterate.into());
             e.emit(json!({"type": "agent", "kind": "queued", "text": prompt}));
             return Ok(());
         }
@@ -240,15 +244,13 @@ fn start_turn(shown: &str, prompt: String, resume: bool) {
         if resume && e.agent.cancel.load(Ordering::SeqCst) {
             // Prompts sent after Stop queued behind this continuation: run them now as a fresh turn,
             // keeping the agent busy so nothing else slips in, instead of leaving them stranded.
-            let queued = std::mem::take(&mut e.agent.queue);
-            if queued.is_empty() {
+            let Some((queued, (n, mode, designs, iterate))) = take_queue(&mut e) else {
                 e.agent.running = false;
                 return;
-            }
-            let (n, mode) = e.agent.parallel.clone();
+            };
             drop(e);
             drop(ops);
-            begin(queued.join("\n\n"), n, &mode, 1, "", false);
+            begin(queued, n, &mode, designs, &iterate, false);
             return;
         }
         if e.agent.chat.is_none() {
@@ -340,7 +342,7 @@ fn start_thread(p: Profile, prompt: String, child: Option<String>) {
         emit(&p, "done", json!({"durationMs": started.elapsed().as_millis() as u64, "usage": usage, "stopped": stopped}));
         enum Next {
             Iterate(&'static str),
-            Queued(String),
+            Queued(String, (usize, String, usize, String)),
         }
         let next = {
             let mut e = engine();
@@ -359,7 +361,7 @@ fn start_thread(p: Profile, prompt: String, child: Option<String>) {
                     drop_queue(&mut e);
                     None
                 } else {
-                    (!e.agent.queue.is_empty()).then(|| Next::Queued(std::mem::take(&mut e.agent.queue).join("\n\n")))
+                    take_queue(&mut e).map(|(q, opts)| Next::Queued(q, opts))
                 };
                 // A continuation keeps the agent busy until its thread starts, so a reset cannot slip in between.
                 e.agent.running = next.is_some();
@@ -368,10 +370,7 @@ fn start_thread(p: Profile, prompt: String, child: Option<String>) {
         };
         match next {
             Some(Next::Iterate(prompt)) => start_turn(ITERATING, wrap_parallel(prompt), true),
-            Some(Next::Queued(q)) => {
-                let (n, mode) = engine().agent.parallel.clone();
-                begin(q, n, &mode, 1, "", true);
-            }
+            Some(Next::Queued(q, (n, mode, designs, iterate))) => begin(q, n, &mode, designs, &iterate, true),
             None => {}
         }
     });
@@ -390,6 +389,12 @@ fn clear_generating(e: &mut Engine) {
     for id in stale {
         e.apply_generated(&id, &off, true);
     }
+}
+
+/// The queued prompts as one message, with the options they were sent with.
+fn take_queue(e: &mut Engine) -> Option<(String, (usize, String, usize, String))> {
+    let queued = std::mem::take(&mut e.agent.queue);
+    (!queued.is_empty()).then(|| (queued.join("\n\n"), std::mem::take(&mut e.agent.queue_opts)))
 }
 
 /// Drop the queued prompts and tell the UI, so their bubbles stop promising to send them.
@@ -619,6 +624,10 @@ fn list_chats(data_dir: &Path) -> Vec<Value> {
             continue;
         }
         let Some(id) = path.file_stem().and_then(|s| s.to_str()).filter(|_| path.extension().is_some_and(|x| x == "json")) else { continue };
+        // Only ids `chat_path` accepts are listed: a row that load and delete reject could never be opened or removed.
+        if chat_path(data_dir, id).is_err() {
+            continue;
+        }
         // ponytail: parses every file for its title; keep an index file if the history gets large.
         let Some(v) = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()) else { continue };
         chats.push(json!({"id": id, "title": v["title"], "updatedAt": v["updatedAt"]}));
@@ -867,21 +876,22 @@ fn run_api(p: &Profile, prompt: &str, child: bool, model: Option<String>) -> Res
         // Append unchanged so thinking blocks stay valid for the next request.
         messages.push(json!({"role": "assistant", "content": content}));
         let calls: Vec<&Value> = blocks.iter().filter(|b| b["type"] == "tool_use").collect();
-        if stop == "max_tokens" && !calls.is_empty() {
+        let cut = cut_off_call(&stop, &blocks).map(|b| b["id"].as_str().unwrap_or(""));
+        if let Some(id) = cut {
             // A truncated tool input must not run.
-            for b in &calls {
-                engine().stream_end(b["id"].as_str().unwrap_or(""));
-            }
-            emit(p, "note", json!({"text": "The reply hit the output limit mid-tool-call; ask the agent to continue."}));
-            break;
+            engine().stream_end(id);
+            emit(p, "note", json!({"text": "The reply hit the output limit mid-tool-call; the agent was told to continue in smaller steps."}));
         }
-        if stop != "tool_use" {
+        // Every tool_use needs a tool_result after it, or the API rejects all later requests.
+        if calls.is_empty() || !(stop == "tool_use" || stop == "max_tokens") {
             break;
         }
         let mut results = Vec::new();
         for b in calls {
             let (id, name) = (b["id"].as_str().unwrap_or(""), b["name"].as_str().unwrap_or(""));
-            let out = if let Some(raw) = b["input"]["__invalid_json"].as_str() {
+            let out = if cut == Some(id) {
+                crate::engine::ToolOut::err("The reply was cut off by the output limit; this call did not run. Continue in smaller steps.")
+            } else if let Some(raw) = b["input"]["__invalid_json"].as_str() {
                 engine().stream_end(id);
                 crate::engine::ToolOut::err(json!({"INVALID_JSON": raw}).to_string())
             } else if name == "spawn_agents" {
@@ -912,6 +922,11 @@ fn run_api(p: &Profile, prompt: &str, child: bool, model: Option<String>) -> Res
     Ok(usage)
 }
 
+/// The tool call the output limit cut off. Only the last block can be unfinished; earlier calls completed.
+fn cut_off_call<'a>(stop: &str, blocks: &'a [Value]) -> Option<&'a Value> {
+    blocks.last().filter(|b| stop == "max_tokens" && b["type"] == "tool_use")
+}
+
 fn truncate(s: &str, n: usize) -> String {
     if s.len() <= n {
         return s.to_string();
@@ -921,6 +936,24 @@ fn truncate(s: &str, n: usize) -> String {
         cut -= 1;
     }
     format!("{}…", &s[..cut])
+}
+
+/// `s` unchanged when it fits `n` bytes, else its first and last bytes around an ellipsis, at most `n`
+/// in all (a stack trace names the error first, a debug log ends with it).
+fn clip_ends(s: &str, n: usize) -> String {
+    if s.len() <= n {
+        return s.to_string();
+    }
+    let half = n.saturating_sub("\n…\n".len()) / 2;
+    let mut head = half;
+    while !s.is_char_boundary(head) {
+        head -= 1;
+    }
+    let mut tail = s.len() - half;
+    while !s.is_char_boundary(tail) {
+        tail += 1;
+    }
+    format!("{}\n…\n{}", s[..head].trim_end(), s[tail..].trim_start())
 }
 
 /// MCP client config for one agent's Claude Code process (per-agent URL = attribution).
@@ -937,6 +970,9 @@ fn claude_mcp_config(agent: &str) -> Result<std::path::PathBuf, String> {
     std::fs::write(&path, cfg.to_string()).map_err(|e| e.to_string())?;
     Ok(path)
 }
+
+/// What the CLI reports for a `--resume` id it has no session for.
+const NO_SESSION: &str = "No conversation found with session ID";
 
 fn run_claude_code(p: &Profile, prompt: &str, child: bool, model: Option<String>) -> Result<Value, String> {
     let cfg = claude_mcp_config(&p.id)?;
@@ -1019,6 +1055,7 @@ fn run_claude_code(p: &Profile, prompt: &str, child: bool, model: Option<String>
     let mut usage = json!({});
     let mut reported = false;
     let mut textless_error = false;
+    let mut stale = false;
     for line in BufReader::new(stdout).lines() {
         let Ok(line) = line else { break };
         let Ok(ev) = serde_json::from_str::<Value>(&line) else { continue };
@@ -1092,6 +1129,7 @@ fn run_claude_code(p: &Profile, prompt: &str, child: bool, model: Option<String>
                 if ev["is_error"] == true {
                     // Without text the card would hide the real cause; leave that to the exit error (stderr).
                     match error_cause(&ev) {
+                        Some(text) if session.is_some() && text.contains(NO_SESSION) => stale = true,
                         Some(text) => {
                             emit(p, "error", json!({"text": text}));
                             reported = true;
@@ -1107,6 +1145,15 @@ fn run_claude_code(p: &Profile, prompt: &str, child: bool, model: Option<String>
     let _ = watcher.join();
     let status = proc.lock().unwrap_or_else(|e| e.into_inner()).wait().map_err(|e| e.to_string())?;
     let err = err_reader.join().unwrap_or_default();
+    // The CLI no longer knows the saved session (another working directory, a cleaned `~/.claude`): the
+    // id would fail every later message too, so forget it and run this prompt again as a fresh session.
+    if session.is_some() && (stale || err.contains(NO_SESSION)) {
+        engine().agent.session = None;
+        if !cancel.load(Ordering::SeqCst) {
+            emit(p, "note", json!({"text": "Claude Code could no longer find this chat's earlier session, so the earlier context is gone. Continuing in a new session."}));
+            return run_claude_code(p, prompt, child, model);
+        }
+    }
     let sent = stdin_writer.map_or(Ok(()), |w| w.join().unwrap_or_else(|_| Err(std::io::Error::other("writer thread panicked"))));
     if !cancel.load(Ordering::SeqCst) && !status.success() {
         return Err(exit_error(&status.to_string(), &err, reported));
@@ -1125,19 +1172,23 @@ fn run_claude_code(p: &Profile, prompt: &str, child: bool, model: Option<String>
 fn error_cause(ev: &Value) -> Option<String> {
     let result = ev["result"].as_str().map(str::trim).filter(|t| !t.is_empty());
     let errors: Vec<&str> = ev["errors"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::trim).filter(|t| !t.is_empty()).collect();
-    result.map(str::to_string).or_else(|| (!errors.is_empty()).then(|| errors.join("\n")))
+    result.map(str::to_string).or_else(|| (!errors.is_empty()).then(|| errors.join("\n"))).map(|t| clip_ends(&t, ERROR_MAX))
 }
+
+/// Longest error text kept in the chat card and the saved chat (tool output is capped at 6000).
+const ERROR_MAX: usize = 2000;
 
 /// The failure for a non-zero exit. Empty when an error result already showed the cause, so
 /// `start_thread` ends the run without a second card; never ends in a bare colon.
 fn exit_error(status: &str, stderr: &str, reported: bool) -> String {
     let stderr = stderr.trim();
+    let prefix = format!("claude exited with {status}");
     if reported {
         String::new()
     } else if stderr.is_empty() {
-        format!("claude exited with {status}")
+        prefix
     } else {
-        format!("claude exited with {status}: {stderr}")
+        format!("{prefix}: {}", clip_ends(stderr, ERROR_MAX.saturating_sub(prefix.len() + 2)))
     }
 }
 
@@ -1168,6 +1219,17 @@ mod tests {
         // Byte 4 is inside the second 3-byte char; a plain `String::truncate(4)` would panic.
         assert_eq!(truncate("日本語", 4), "日…");
         assert_eq!(truncate("日本語", 9), "日本語");
+    }
+
+    #[test]
+    fn only_the_last_tool_call_of_a_max_tokens_reply_is_cut_off() {
+        let call = |id: &str| json!({"type": "tool_use", "id": id, "name": "execute", "input": {}});
+        let blocks = [call("toolu_a"), call("toolu_b")];
+        assert_eq!(cut_off_call("max_tokens", &blocks).map(|b| b["id"].as_str().unwrap()), Some("toolu_b"));
+        assert!(cut_off_call("tool_use", &blocks).is_none());
+        let text_last = [call("toolu_a"), json!({"type": "text", "text": "done"})];
+        assert!(cut_off_call("max_tokens", &text_last).is_none(), "calls that finished before the text still run");
+        assert!(cut_off_call("max_tokens", &[]).is_none());
     }
 
     #[test]
@@ -1239,6 +1301,19 @@ mod tests {
     }
 
     #[test]
+    fn long_error_text_is_clipped_to_both_ends() {
+        let trace: String = (1..=2000).map(|i| format!("    at frame {i} (node:internal/modules/cjs/loader:1234:5)\n")).collect();
+        let e = exit_error("exit status: 1", &trace, false);
+        assert!(e.len() <= ERROR_MAX, "{} bytes", e.len());
+        assert!(e.starts_with("claude exited with exit status: 1: at frame 1 ") && e.contains("\n…\n") && e.ends_with("at frame 2000 (node:internal/modules/cjs/loader:1234:5)"));
+        let cause = error_cause(&json!({"result": "日本語".repeat(2000)})).unwrap();
+        assert!(cause.len() <= ERROR_MAX && cause.contains('…'), "multi-byte text is cut on a char boundary");
+        let ascii = error_cause(&json!({"result": "x".repeat(ERROR_MAX + 1)})).unwrap();
+        assert!(ascii.len() <= ERROR_MAX, "{} bytes", ascii.len());
+        assert_eq!(clip_ends("short", ERROR_MAX), "short");
+    }
+
+    #[test]
     fn exit_error_has_no_duplicate_or_empty_tail() {
         assert_eq!(exit_error("exit status: 1", "", true), "", "the error result already showed the cause");
         assert_eq!(exit_error("exit status: 1", "boom\n", true), "");
@@ -1280,6 +1355,19 @@ mod tests {
         e.agent.chat = None;
         e.data_dir = data_dir;
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A prompt queued behind a running agent keeps the Agents and Let it cook choices it was sent with (the latest wins).
+    #[test]
+    fn queued_prompt_keeps_its_options() {
+        engine().agent.running = true;
+        send("first".into(), 2, "side", 1, "layout").unwrap();
+        send("second".into(), 3, "split", 3, "style").unwrap();
+        let (text, opts) = take_queue(&mut engine()).unwrap();
+        engine().agent.running = false;
+        assert_eq!(text, "first\n\nsecond");
+        assert_eq!(opts, (3, "split".to_string(), 3, "style".to_string()));
+        assert!(take_queue(&mut engine()).is_none(), "the queue is empty after it is taken");
     }
 
     /// A run that ends before the call that clears `placeholder` must not leave frames "Generating", except

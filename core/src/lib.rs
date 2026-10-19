@@ -81,6 +81,12 @@ fn state(e: &Engine) -> Value {
 /// Execute one UI command.
 pub fn dispatch(req: &Value) -> Result<Value, String> {
     let cmd = req["cmd"].as_str().unwrap_or("");
+    let _gate = matches!(
+        cmd,
+        "update" | "move_by" | "insert" | "delete" | "duplicate" | "reorder" | "reparent" | "wrap" | "unwrap" | "add_layout" | "set_layout" | "remove_layout" | "align" | "paste" | "path_write"
+            | "drag_begin" | "drag_end" | "undo" | "redo" | "set_variable" | "save"
+    )
+    .then(engine::edit_gate);
     match cmd {
         "init" => {
             let need_mcp = engine().mcp_port == 0;
