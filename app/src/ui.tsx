@@ -168,14 +168,15 @@ export function Button({ children, onClick, primary, icon, testId, grow, danger 
  * `<input>` that shows the start of a long value while unfocused. GPUIX leaves a value set from outside
  * scrolled to its end (caret there) and has no API to scroll it back, so the input's own text is made
  * transparent until it has focus and a clipped `<text>` paints the value beneath it. Mouse focus comes
- * from `onFocus`; GPUIX sends none for Tab, which `useRing` covers.
+ * from `onFocus`; GPUIX sends none for Tab, which `useRing` covers. A mouse focus clears the keyboard
+ * focus id, or a field reached by Tab and then left by a click would keep showing its own text.
  */
 function TextInput({ value, mono, onFocus, onBlur, ...rest }: {
   value: string; mono?: boolean; testId?: string; placeholder?: string; onFocus?: Handler; onBlur?: Handler
   'aria-label'?: string; onChange?: Handler; onSubmit?: Handler; onKeyDown?: Handler; theme?: Record<string, unknown>
 }) {
   const [focus, setFocus] = useState(false)
-  const { ref, on } = useRing()
+  const { ref, on, clear } = useRing()
   const shown = !focus && !on && value !== ''
   const fontFamily = mono ? MONO : FONT
   return (
@@ -189,7 +190,7 @@ function TextInput({ value, mono, onFocus, onBlur, ...rest }: {
         {...rest}
         ref={ref}
         value={value}
-        onFocus={(e) => { setFocus(true); onFocus?.(e) }}
+        onFocus={(e) => { setFocus(true); clear(); onFocus?.(e) }}
         onBlur={(e) => { setFocus(false); onBlur?.(e) }}
         style={{ flexGrow: 1, minWidth: 0, fontSize: 12, color: shown ? '#00000000' : C.text, fontFamily }}
       />
