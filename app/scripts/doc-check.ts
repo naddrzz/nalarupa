@@ -29,7 +29,8 @@ if (!process.env.NALARUPA_CHECK_CHILD) {
   const run = spawn('1', ' ')
   const keyed = spawn('keyed', 'sk-ant-env')
   rmSync(data, { recursive: true, force: true })
-  process.exit(run.exitCode || keyed.exitCode || 0)
+  // A child killed by a signal has a null exitCode: count it as a failure, never as a pass.
+  process.exit((run.exitCode ?? 1) || (keyed.exitCode ?? 1))
 }
 if (process.env.NALARUPA_CHECK_CHILD === 'keyed') {
   const s = call<Record<string, unknown>>('settings_get')
