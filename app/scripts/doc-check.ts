@@ -221,10 +221,13 @@ if (process.platform !== 'win32') {
     const doc = call('tool', { name: 'open_document', args: { path: a } })
     assert(doc.error && /Stop the agent/.test(doc.text), 'open_document while the agent runs')
     assert(call('frames').length === 0 && call('state').path === null, 'a refused switch keeps the document')
+    exec('Insert(document, {type:"frame", name:"Pricing", x:0, y:0, width:400, height:200, placeholder:true})')
+    assert(call('frames')[0].placeholder === true, 'the agent left a frame generating')
   } finally {
     call('agent_stop')
   }
   await until(() => !call('state').agentRunning, 'the agent stops')
+  assert(call('frames')[0].placeholder === false && call('live').length === 0, 'Stop ends the "Generating" state of the frames the agent left')
   assert(call('agent_reset') === true && call('chat_list').current === null, 'new conversation once the agent has stopped')
   call('new', { template: 'slides' })
   assert(ids() === 'sld01,sld02,sld03', 'switching works again once the agent stopped')

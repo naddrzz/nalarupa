@@ -39,6 +39,7 @@ pub fn start(frame: String, prompt: String, size: (f64, f64), cancel: Arc<Atomic
             engine().emit(json!({"type": "toast", "text": format!("AI Pen: {err}")}));
         }
         pen.feed("", true);
+        engine().agent.pens.retain(|f| *f != pen.frame);
     });
 }
 
