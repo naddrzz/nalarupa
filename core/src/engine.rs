@@ -126,6 +126,8 @@ fn nonblank(v: Option<String>) -> Option<String> {
 const UNDO_LIMIT: usize = 100;
 /// The agent edits whatever document is open, so a document switch waits for it to stop.
 pub const SWITCH_BUSY: &str = "Stop the agent before opening another document.";
+/// An external agent has no Save / Don't save prompt, so it must not replace unsaved work.
+pub const SWITCH_DIRTY: &str = "The open document has unsaved changes; ask the user to save it first.";
 
 impl Engine {
     pub fn new(data_dir: PathBuf) -> Engine {
@@ -382,6 +384,7 @@ impl Engine {
             return f(self);
         }
         let before = self.doc.root.clone();
+        let was_clean = !self.dirty();
         self.drag_before = Some(before.clone());
         let r = f(self);
         self.drag_before = None;
@@ -390,9 +393,18 @@ impl Engine {
             Err(_) => {
                 self.doc.root = before;
                 self.touch();
+                self.keep_clean(was_clean);
             }
         }
         r
+    }
+
+    /// After a rolled-back edit the document is as it was: if it was clean before the edit, it stays
+    /// clean (a document switch is refused while it is dirty), however far the version moved.
+    pub fn keep_clean(&mut self, was_clean: bool) {
+        if was_clean {
+            self.saved = self.version;
+        }
     }
 
     /// Apply a document mutation as one undoable step.
@@ -637,6 +649,9 @@ impl Engine {
             "open_document" => {
                 if self.agent.running || self.executing {
                     return ToolOut::err(SWITCH_BUSY);
+                }
+                if self.dirty() {
+                    return ToolOut::err(SWITCH_DIRTY);
                 }
                 let Some(path) = args["path"].as_str() else { return ToolOut::err("path is required") };
                 let p = Path::new(path);

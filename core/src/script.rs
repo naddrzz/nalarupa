@@ -740,6 +740,7 @@ struct Prepared {
     before: Value,
     agent: String,
     globals: Map<String, Value>,
+    was_clean: bool,
 }
 
 fn prepare(e: &mut Engine, args: &Value) -> Result<Prepared, ToolOut> {
@@ -762,12 +763,13 @@ fn prepare(e: &mut Engine, args: &Value) -> Result<Prepared, ToolOut> {
     };
 
     let before = e.doc.root.clone();
+    let was_clean = !e.dirty();
     let agent = args["__agent"].as_str().unwrap_or("agent").to_string();
     let globals = e.script.globals.get(&agent).cloned().unwrap_or_default();
     if let Some(seed) = args["__seed"].as_u64() {
         crate::doc::reseed(seed);
     }
-    Ok(Prepared { source, edit_id, before, agent, globals })
+    Ok(Prepared { source, edit_id, before, agent, globals, was_clean })
 }
 
 fn execute_within(e: &mut Engine, args: &Value, budget: Duration) -> ToolOut {
@@ -800,13 +802,14 @@ pub fn execute_shared(mut e: MutexGuard<'static, Engine>, args: &Value, cancel: 
 }
 
 fn finish(e: &mut Engine, prep: Prepared, result: Result<Map<String, Value>, String>, ex: Exec) -> ToolOut {
-    let Prepared { source, edit_id, before, agent, .. } = prep;
+    let Prepared { source, edit_id, before, agent, was_clean, .. } = prep;
 
     let new_globals = match result {
         Ok(g) => g,
         Err(err) => {
             e.doc.root = before;
             e.touch();
+            e.keep_clean(was_clean);
             let id = edit_id.unwrap_or_else(|| format!("e{:x}", crate::doc::random_u64() & 0xffffff));
             e.script.failed.insert(id.clone(), source);
             return ToolOut::err(format!(
@@ -826,6 +829,7 @@ fn finish(e: &mut Engine, prep: Prepared, result: Result<Map<String, Value>, Str
         e.sync();
         for (frame, prompt) in &ex.pens {
             let size = e.renderer.find(frame).map_or((400.0, 400.0), |f| (f.w.max(1.0), f.h.max(1.0)));
+            e.agent.pens.push(frame.clone());
             crate::pen::start(frame.clone(), prompt.clone(), size, e.agent.cancel.clone());
         }
     }
@@ -1477,6 +1481,10 @@ mod tests {
         let bad = execute(&mut e, &json!({"input": "Insert(document,{type:'frame',name:'X'}); Update('nope', {x:1});"}));
         assert!(bad.error);
         assert_eq!(e.doc.children().len(), 1, "rolled back");
+        e.saved = e.version;
+        let bad_again = execute(&mut e, &json!({"input": "Insert(document,{type:'frame',name:'Y'}); Update('nope', {x:1});"}));
+        assert!(bad_again.error, "{}", bad_again.text);
+        assert!(!e.dirty(), "a rolled-back call leaves a clean document clean");
         let edit_id = bad.text.split("editId: \"").nth(1).unwrap().split('"').next().unwrap().to_string();
         let fixed = execute(&mut e, &json!({"editId": edit_id, "edits": [{"find": "Update('nope', {x:1});", "replace": "Update(card, {x:5});"}]}));
         assert!(!fixed.error, "{}", fixed.text);
