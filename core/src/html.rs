@@ -288,7 +288,12 @@ impl Html<'_> {
             _ => {
                 if n.ty == "frame" {
                     match n.s("layout").unwrap_or("horizontal") {
-                        "none" => css += "position:relative;",
+                        // An absolute frame already contains its children; a later position:relative would override it.
+                        "none" => {
+                            if !absolute {
+                                css += "position:relative;";
+                            }
+                        }
                         dir => {
                             let _ = write!(css, "display:flex;flex-direction:{};", if dir == "vertical" { "column" } else { "row" });
                             // space_between/space_around ignore the gap.
@@ -321,7 +326,9 @@ impl Html<'_> {
                         css += "overflow:hidden;";
                     }
                 } else if n.ty == "group" {
-                    css += "position:relative;";
+                    if !absolute {
+                        css += "position:relative;";
+                    }
                     css += &size_css(Some(&Value::from(n.w)), "width", parent_dir, true, n.w);
                     css += &size_css(Some(&Value::from(n.h)), "height", parent_dir, false, n.h);
                 } else if n.ty == "ellipse" {

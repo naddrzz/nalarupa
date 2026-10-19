@@ -165,6 +165,14 @@ assert(htmlOf({ fill: grad({ opacity: 0.4 }) }).includes('rgba(255, 0, 0, 0.400)
 assert(htmlOf({ fill: grad({ gradientType: 'angular' }) }).includes('conic-gradient(from -90deg at 50% 50%'), 'html exports an angular gradient as conic')
 assert(htmlOf({ fill: '#ff0000', effect: { type: 'blur', radius: 4 } }).includes('filter:blur(2px)'), 'html exports layer blur')
 assert(/padding:12px;background:linear-gradient/.test(htmlOf({ fill: '#ffff00', stroke: grad(), strokeWidth: 12 })), 'html exports a gradient stroke')
+// A no-layout frame or group inside a no-layout frame stays absolute (a later position:relative would shift it).
+const nested = (type: string, name: string, y: number) => ({ type, name, ...(type === 'frame' ? { layout: 'none' } : {}), x: 20, y, width: 100, height: 50, children: [{ type: 'rectangle', x: 5, y: 5, width: 20, height: 20, fill: '#ff0000' }] })
+const nestRoot = call('insert', { parent: 'document', node: { type: 'frame', layout: 'none', x: 0, y: 0, width: 300, height: 300, children: [nested('frame', 'NA', 20), nested('frame', 'NB', 150), nested('group', 'NG', 250)] } }).id
+const nestHtml = readFileSync(call('export', { ids: [nestRoot], format: 'html-css', path: join(out, 'nested.html') })[0], 'utf8')
+for (const name of ['NA', 'NB', 'NG']) {
+  const line = nestHtml.split('\n').find((l) => l.includes(`data-name="${name}"`)) ?? ''
+  assert(line.includes('position:absolute;') && !line.includes('position:relative'), `html keeps nested ${name} absolute: ${line}`)
+}
 assert(Buffer.from(call('png', { id: 'sld01', scale: 0.1 }), 'base64').subarray(0, 4).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47])), 'png command returns a PNG')
 throws(() => call('export', { ids: ['sld02'], format: 'bmp', path: out }), /unknown export format/, 'unknown export format')
 throws(() => call('export', { ids: ['nope'], format: 'png', path: out }), /node not found: nope/, 'exporting a missing node')
