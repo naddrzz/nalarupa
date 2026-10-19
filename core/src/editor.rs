@@ -270,7 +270,7 @@ pub fn nodes_in_rect(e: &Engine, r: Rect, deep: bool) -> Vec<String> {
 /// deepest frame under the pointer (not one being dragged) that is big enough for it (`any`
 /// skips the size rule), else the document. Auto-layout targets also get the insertion
 /// `index` (children minus the dragged ones) and the indicator `line` [x1, y1, x2, y2] on the
-/// canvas. `x`/`y`/`w`/`h` is the frame's box before its turn `m` (null when upright).
+/// canvas. The returned `x`/`y`/`w`/`h` is the frame's box before its turn `m` (null when upright).
 #[allow(clippy::too_many_arguments)]
 pub fn drop_target(e: &Engine, x: f64, y: f64, w: f64, h: f64, ignore: &[String], any: bool, parent: Option<&str>) -> Value {
     let v = View::new(e);

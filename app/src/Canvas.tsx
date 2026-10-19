@@ -1337,7 +1337,6 @@ export function Canvas(props: {
         const [x, y] = frameScreen(hx, hy)
         return <div key={hnd} style={{ position: 'absolute', left: x - 4, top: y - 4, width: 8, height: 8, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: C.select, pointerEvents: 'none' }} />
       }) : null}
-      {quads.length ? <Quads quads={quads} testId="rotated-overlay" /> : null}
       {!float ? radiusHandles().map(({ i, x, y }) => (
         <div key={`radius-${i}`} testId="radius-handle" style={{ position: 'absolute', left: x - 5.5, top: y - 5.5, width: 11, height: 11, borderRadius: 5.5, borderWidth: 1, borderColor: C.select, backgroundColor: i === activeCorner ? C.select : '#FFFFFF', display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
           {/* Corners that differ show a dot (they move one at a time). */}
@@ -1367,6 +1366,7 @@ export function Canvas(props: {
           </>
         )
       })() : null}
+      {quads.length ? <Quads quads={quads} testId="rotated-overlay" /> : null}
       {guides.map((g, i) => {
         const [a1, b1] = g.axis === 0 ? pt(g.pos, g.from) : pt(g.from, g.pos)
         const [a2, b2] = g.axis === 0 ? pt(g.pos, g.to) : pt(g.to, g.pos)

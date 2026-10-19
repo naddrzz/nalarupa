@@ -202,7 +202,9 @@ const [gx, gy] = [(c0[0] + c1[0]) / 2, (c0[1] + c1[1]) / 2]
 const rd = call('drop_target', { x: gx, y: gy, w: 10, h: 10, ignore: [] })
 assert(rd.id === R && rd.layout === 'horizontal' && rd.index === 1, `drop over a rotated row ${JSON.stringify(rd)}`)
 const [lx1, ly1, lx2, ly2] = rd.line
-assert(Math.abs((lx2 - lx1) * (gy - ly1) - (ly2 - ly1) * (gx - lx1)) < 0.01 && Math.abs(Math.hypot(lx2 - lx1, ly2 - ly1) - 100) < 0.01, `the line crosses the turned row at the gap ${JSON.stringify(rd.line)}`)
+const [dx, dy] = [lx2 - lx1, ly2 - ly1]
+const along = (gx - lx1) * dx + (gy - ly1) * dy
+assert(Math.abs(dx * (gy - ly1) - dy * (gx - lx1)) < 0.01 && along >= -0.01 && along <= dx * dx + dy * dy + 0.01 && Math.abs(Math.hypot(dx, dy) - 100) < 0.01, `the line crosses the turned row at the gap ${JSON.stringify(rd.line)}`)
 const [e0, e1] = [centre(rk[0]), centre(rk[2])]
 assert(call('drop_target', { x: e0[0] + (e0[0] - e1[0]) / 4, y: e0[1] + (e0[1] - e1[1]) / 4, w: 10, h: 10, ignore: [] }).index === 0, 'before the first child of a rotated row')
 assert(call('drop_target', { x: 2250, y: 2050, w: 10, h: 10, ignore: [] }).id === 'document', 'the empty spot of the unrotated row is the document')
