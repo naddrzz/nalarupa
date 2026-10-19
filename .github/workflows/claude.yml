@@ -38,13 +38,15 @@ jobs:
           branch_prefix: claude/
           bot_id: "129574549"
           bot_name: naddrzz
-          settings: '{"includeCoAuthoredBy": false, "fastMode": false}'
+          # Claude Code ends its session while a background command still runs: keep commands in the foreground, with
+          # room for long checks. These must sit in settings.env to reach Claude Code.
+          settings: '{"includeCoAuthoredBy": false, "fastMode": false, "env": {"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1", "BASH_DEFAULT_TIMEOUT_MS": "3600000", "BASH_MAX_TIMEOUT_MS": "3600000"}}'
           additional_permissions: |
             actions: read
           claude_args: |
             --model claude-sonnet-5-5 --effort high --max-turns 150
             --allowedTools "Bash,Read,Edit,Write,Glob,Grep"
-            --append-system-prompt "Nalarupa repo; follow AGENTS.md. Fix bugs at the root cause; keep diffs small and in the style of the surrounding code. Before finishing, run: (cd core && cargo test --release) && (cd app && bun run typecheck && bun run smoke && bun run editor-check && bun run mcp-check && bun run doc-check && bash scripts/wl-run.sh bun run e2e && bash scripts/wl-run.sh bun run file-e2e && bash scripts/wl-run.sh bun run editor-e2e). Add or extend a check for every bug fix. Windows-only checks (a11y-check, window-check, exe-check) cannot run here; say so in the PR. When working from an issue: push your branch and open the PR yourself with `gh pr create --base dev`, and put `Fixes #<issue number>` in its body. When working on an existing PR, push to its branch and do not open another PR; reference an issue only if the PR already relates to one. Never add Co-authored-by trailers or 'Generated with Claude Code' lines."
+            --append-system-prompt "Nalarupa repo; follow AGENTS.md. Fix bugs at the root cause; keep diffs small and in the style of the surrounding code. Before finishing, run: (cd core && cargo test --release) && (cd app && bun run typecheck && bun run smoke && bun run editor-check && bun run mcp-check && bun run doc-check && bash scripts/wl-run.sh bun run e2e && bash scripts/wl-run.sh bun run file-e2e && bash scripts/wl-run.sh bun run editor-e2e). Run the checks in the foreground and wait for them; never end before you have pushed (and opened the PR when working from an issue), or explained why not. Add or extend a check for every bug fix. Windows-only checks (a11y-check, window-check, exe-check) cannot run here; say so in the PR. When working from an issue: push your branch and open the PR yourself with `gh pr create --base dev`, and put `Fixes #<issue number>` in its body. When working on an existing PR, push to its branch and do not open another PR; reference an issue only if the PR already relates to one. Never add Co-authored-by trailers or 'Generated with Claude Code' lines."
 
   review-fix:
     # cubic and CodeRabbit review once per push with all their findings; fix them, at most 4 rounds per PR.
@@ -75,7 +77,7 @@ jobs:
           allowed_bots: cubic-dev-ai,coderabbitai
           bot_id: "129574549"
           bot_name: naddrzz
-          settings: '{"includeCoAuthoredBy": false, "fastMode": false}'
+          settings: '{"includeCoAuthoredBy": false, "fastMode": false, "env": {"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1", "BASH_DEFAULT_TIMEOUT_MS": "3600000", "BASH_MAX_TIMEOUT_MS": "3600000"}}'
           claude_args: --model claude-sonnet-5-5 --effort high --max-turns 150 --allowedTools "Bash,Read,Edit,Write,Glob,Grep"
           prompt: |
             Nalarupa repo; follow AGENTS.md. ${{ github.event.review.user.login }} reviewed PR #${{ github.event.pull_request.number }} (${{ github.repository }}),

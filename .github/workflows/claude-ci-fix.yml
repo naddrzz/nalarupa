@@ -37,7 +37,9 @@ jobs:
           github_token: ${{ secrets.GH_PAT }}
           bot_id: "129574549"
           bot_name: naddrzz
-          settings: '{"includeCoAuthoredBy": false, "fastMode": false}'
+          # Claude Code ends its session while a background command still runs: keep commands in the foreground, with
+          # room for long checks. These must sit in settings.env to reach Claude Code.
+          settings: '{"includeCoAuthoredBy": false, "fastMode": false, "env": {"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1", "BASH_DEFAULT_TIMEOUT_MS": "3600000", "BASH_MAX_TIMEOUT_MS": "3600000"}}'
           additional_permissions: |
             actions: read
           claude_args: --model claude-sonnet-5-5 --effort high --max-turns 150 --allowedTools "Bash,Read,Edit,Write,Glob,Grep"
