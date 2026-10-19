@@ -184,10 +184,6 @@ impl<'a> View<'a> {
         v
     }
 
-    fn union(&self, ids: &[String]) -> Option<Rect> {
-        union(ids.iter().filter_map(|id| self.rect(id)))
-    }
-
     /// `fill_container` collapses outside auto layout: freeze it at the current size.
     fn freeze_fill(&self, id: &str) -> Map<String, Value> {
         let mut m = Map::new();
@@ -388,8 +384,13 @@ pub fn wrap(e: &mut Engine, ids: &[String], kind: &str) -> Result<String, String
         let ids: Vec<String> = v.paint_order(&top_only(&e.doc, ids)).into_iter().filter(|id| !id.contains('/') && v.rect(id).is_some()).collect();
         let last = ids.last().ok_or("select layers to wrap")?;
         let (parent, at) = e.doc.parent_of(last).ok_or("node not found")?;
-        let u = v.union(&ids).ok_or("nothing visible to wrap")?;
         let po = v.origin(&parent).unwrap_or((0.0, 0.0));
+        // Each member's origin in the parent's space (the members may sit in differently turned frames).
+        let placed: Vec<_> = ids.iter().filter_map(|id| {
+            let (o, turn) = v.placed(id, &parent)?;
+            Some((id, (po.0 + o.0, po.1 + o.1), turn, v.flat(id)?))
+        }).collect();
+        let u = union(placed.iter().map(|(_, o, _, f)| (o.0 + f.local.0[0], o.1 + f.local.0[1], f.w, f.h))).ok_or("nothing visible to wrap")?;
         let mut node = if kind == "frame" {
             json!({"type": "frame", "name": "Frame", "width": num(u.2), "height": num(u.3), "layout": "none"})
         } else {
@@ -397,12 +398,12 @@ pub fn wrap(e: &mut Engine, ids: &[String], kind: &str) -> Result<String, String
         };
         node["x"] = num(u.0 - po.0);
         node["y"] = num(u.1 - po.1);
-        let moves: Vec<(String, Map<String, Value>)> = ids.iter().map(|id| {
+        let moves: Vec<(String, Map<String, Value>)> = placed.iter().map(|(id, o, turn, _)| {
             let mut props = v.freeze_fill(id);
-            let o = v.origin(id).unwrap_or((u.0, u.1));
             props.insert("x".into(), num(o.0 - u.0));
             props.insert("y".into(), num(o.1 - u.1));
-            (id.clone(), props)
+            set_turn(&mut props, *turn);
+            ((*id).clone(), props)
         }).collect();
         (parent, at, node, moves)
     };
@@ -1296,6 +1297,36 @@ mod tests {
             reparent(&mut e, std::slice::from_ref(&rect), ROOT, None).unwrap();
             assert_same(before, footprint(&mut e, &rect), &format!("out of {turn}"));
             assert_eq!(e.doc.find(&rect).unwrap()["rotation"].as_f64(), Some(10.0), "back to the original rotation");
+        }
+    }
+
+    #[test]
+    fn wrap_keeps_layers_from_different_turned_frames() {
+        for turn in [json!({"rotation": 90}), json!({"rotation": 30}), json!({"flipX": true}), json!({"flipY": true, "rotation": -50})] {
+            for kind in ["group", "frame"] {
+                let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+                e.offline();
+                e.load_template("empty");
+                let frame = |x: i32, y: i32, turn: Value| {
+                    let mut f = json!({"type": "frame", "x": x, "y": y, "width": 300, "height": 300, "layout": "none"});
+                    f.as_object_mut().unwrap().extend(turn.as_object().unwrap().clone());
+                    f
+                };
+                let f = e.edit(|d| d.insert(ROOT, frame(0, 0, json!({})), None)).unwrap();
+                let g = e.edit(|d| d.insert(ROOT, frame(500, 100, turn.clone()), None)).unwrap();
+                let a = e.edit(|d| d.insert(&f, json!({"type": "rectangle", "x": 20, "y": 20, "width": 60, "height": 50}), None)).unwrap();
+                let b = e.edit(|d| d.insert(&g, json!({"type": "rectangle", "x": 20, "y": 120, "width": 60, "height": 50, "rotation": 15}), None)).unwrap();
+                let ids = [a.clone(), b.clone()];
+                // Each parent in turn takes the wrapper (the topmost member decides).
+                for ids in [ids.to_vec(), ids.iter().rev().cloned().collect()] {
+                    let before: Vec<[f64; 4]> = ids.iter().map(|i| footprint(&mut e, i)).collect();
+                    let w = wrap(&mut e, &ids, kind).unwrap();
+                    for (i, b) in ids.iter().zip(before) {
+                        assert_same(b, footprint(&mut e, i), &format!("{kind} in {turn}"));
+                    }
+                    unwrap(&mut e, &[w]).unwrap();
+                }
+            }
         }
     }
 
