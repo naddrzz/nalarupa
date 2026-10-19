@@ -63,6 +63,9 @@ const dots = () => (REDUCED_MOTION ? '…' : ellipsisAt(performance.now()))
 
 // Typewriter: ~5 words per 16 ms frame, instant once a later message exists.
 const revealed = new Map<number, number>()
+function revealAll(items: ChatItem[]) {
+  for (const it of items) if (it.kind === 'assistant') revealed.set(it.id, it.text.split(/(\s+)/).length)
+}
 function visibleText(it: Extract<ChatItem, { kind: 'assistant' }>, isLast: boolean) {
   const words = it.text.split(/(\s+)/)
   const shown = REDUCED_MOTION ? words.length : Math.min(words.length, (revealed.get(it.id) ?? 0) + 10)
@@ -383,6 +386,7 @@ function ChatHistory({ running, toast, changed }: { running: boolean; toast: Toa
     // A chat whose file vanished stays listed until the list is read again: drop it now.
     if (!r) return refresh()
     restoreChat(r.events ?? [])
+    revealAll(store.items) // a saved reply shows whole, the typewriter is for live ones
     close()
     changed()
   }
