@@ -938,6 +938,24 @@ fn truncate(s: &str, n: usize) -> String {
     format!("{}…", &s[..cut])
 }
 
+/// `s` unchanged when it fits `n` bytes, else its first and last bytes around an ellipsis, at most `n`
+/// in all (a stack trace names the error first, a debug log ends with it).
+fn clip_ends(s: &str, n: usize) -> String {
+    if s.len() <= n {
+        return s.to_string();
+    }
+    let half = n.saturating_sub("\n…\n".len()) / 2;
+    let mut head = half;
+    while !s.is_char_boundary(head) {
+        head -= 1;
+    }
+    let mut tail = s.len() - half;
+    while !s.is_char_boundary(tail) {
+        tail += 1;
+    }
+    format!("{}\n…\n{}", s[..head].trim_end(), s[tail..].trim_start())
+}
+
 /// MCP client config for one agent's Claude Code process (per-agent URL = attribution).
 fn claude_mcp_config(agent: &str) -> Result<std::path::PathBuf, String> {
     let (port, dir) = {
@@ -1140,19 +1158,23 @@ fn run_claude_code(p: &Profile, prompt: &str, child: bool, model: Option<String>
 fn error_cause(ev: &Value) -> Option<String> {
     let result = ev["result"].as_str().map(str::trim).filter(|t| !t.is_empty());
     let errors: Vec<&str> = ev["errors"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::trim).filter(|t| !t.is_empty()).collect();
-    result.map(str::to_string).or_else(|| (!errors.is_empty()).then(|| errors.join("\n")))
+    result.map(str::to_string).or_else(|| (!errors.is_empty()).then(|| errors.join("\n"))).map(|t| clip_ends(&t, ERROR_MAX))
 }
+
+/// Longest error text kept in the chat card and the saved chat (tool output is capped at 6000).
+const ERROR_MAX: usize = 2000;
 
 /// The failure for a non-zero exit. Empty when an error result already showed the cause, so
 /// `start_thread` ends the run without a second card; never ends in a bare colon.
 fn exit_error(status: &str, stderr: &str, reported: bool) -> String {
     let stderr = stderr.trim();
+    let prefix = format!("claude exited with {status}");
     if reported {
         String::new()
     } else if stderr.is_empty() {
-        format!("claude exited with {status}")
+        prefix
     } else {
-        format!("claude exited with {status}: {stderr}")
+        format!("{prefix}: {}", clip_ends(stderr, ERROR_MAX.saturating_sub(prefix.len() + 2)))
     }
 }
 
@@ -1262,6 +1284,19 @@ mod tests {
         assert_eq!(error_cause(&json!({"result": "", "errors": ["", "Not logged in", " Run /login "]})).as_deref(), Some("Not logged in\nRun /login"));
         assert_eq!(error_cause(&json!({"result": "  ", "errors": []})), None, "no cause: the exit error shows stderr instead");
         assert_eq!(error_cause(&json!({})), None);
+    }
+
+    #[test]
+    fn long_error_text_is_clipped_to_both_ends() {
+        let trace: String = (1..=2000).map(|i| format!("    at frame {i} (node:internal/modules/cjs/loader:1234:5)\n")).collect();
+        let e = exit_error("exit status: 1", &trace, false);
+        assert!(e.len() <= ERROR_MAX, "{} bytes", e.len());
+        assert!(e.starts_with("claude exited with exit status: 1: at frame 1 ") && e.contains("\n…\n") && e.ends_with("at frame 2000 (node:internal/modules/cjs/loader:1234:5)"));
+        let cause = error_cause(&json!({"result": "日本語".repeat(2000)})).unwrap();
+        assert!(cause.len() <= ERROR_MAX && cause.contains('…'), "multi-byte text is cut on a char boundary");
+        let ascii = error_cause(&json!({"result": "x".repeat(ERROR_MAX + 1)})).unwrap();
+        assert!(ascii.len() <= ERROR_MAX, "{} bytes", ascii.len());
+        assert_eq!(clip_ends("short", ERROR_MAX), "short");
     }
 
     #[test]
