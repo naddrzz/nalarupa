@@ -1193,7 +1193,12 @@ export function Canvas(props: {
     const parent = parentBox?.id ?? 'document'
     // Keep drawn layers where they were drawn, even inside auto-layout frames.
     const parentLayout = parentBox ? tryCall('node', { id: parentBox.id })?.node?.layout ?? 'horizontal' : 'none'
-    const rel = { x: x0 - (parentBox?.x ?? 0), y: y0 - (parentBox?.y ?? 0), ...(parentLayout !== 'none' ? { layoutPosition: 'absolute' } : {}) }
+    // A rotated or flipped parent paints through its matrix: map the drag's center into the parent's own space and
+    // centre the new box there (an upright parent keeps the plain top-left offset).
+    const [sw, sh] = tool === 'text' && clicked ? [0, 0] : [bw, bh]
+    const [cx, cy] = unapply(parentBox?.m, x0 + sw / 2, y0 + sh / 2)
+    const at = (v: number) => Math.round(v * 100) / 100
+    const rel = { x: at(cx - sw / 2 - (parentBox?.x ?? 0)), y: at(cy - sh / 2 - (parentBox?.y ?? 0)), ...(parentLayout !== 'none' ? { layoutPosition: 'absolute' } : {}) }
     const base = { ...rel, width: bw, height: bh }
     const node =
       tool === 'frame' ? { type: 'frame', name: 'Frame', ...base, fill: '#FFFFFF', layout: 'none', clip: parent === 'document' }
