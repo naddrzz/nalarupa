@@ -7,7 +7,7 @@ import { render } from '@gpuix/react'
 import { call } from './src/core'
 import { App } from './src/App'
 import { decorateWindow, windowSize } from './src/theme'
-import { setKeyboardFocus } from './src/ui'
+import { backStopOf, setKeyboardFocus } from './src/ui'
 
 render(
   <App />,
@@ -22,9 +22,16 @@ render(
     // focused element gets its keyboard focus ring.
     onKeyDown(event, renderer) {
       if ((event.key ?? '').toLowerCase() !== 'tab') return
-      if (event.modifiers?.shift) renderer.focusPrevious?.()
+      let settle = 30
+      const back = event.modifiers?.shift ? backStopOf(renderer.getFocusedElementId?.()) : undefined
+      if (back !== undefined) {
+        // Out of a text field backwards: see `backStops` in ui.tsx. The focus request lands with the next frame.
+        renderer.focusElement?.(back)
+        setTimeout(() => renderer.focusPrevious?.(), 40)
+        settle = 90
+      } else if (event.modifiers?.shift) renderer.focusPrevious?.()
       else renderer.focusNext?.()
-      setTimeout(() => setKeyboardFocus(renderer.getFocusedElementId?.() ?? null), 30)
+      setTimeout(() => setKeyboardFocus(renderer.getFocusedElementId?.() ?? null), settle)
     },
   },
 )

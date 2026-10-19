@@ -237,6 +237,7 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
         <div style={{ position: 'relative', borderRadius: 10, borderWidth: 1, borderColor: C.border, backgroundColor: C.panel2, padding: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
           {input.ring ? <FocusRing radius={10} /> : null}
           <div onMouseDown={input.onMouseDown}>
+            {input.back}
             <textarea
               ref={input.ref}
               onFocus={input.onFocus}
