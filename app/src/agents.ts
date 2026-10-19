@@ -113,7 +113,7 @@ function lastOf(agent: string, kinds: ChatItem['kind'][]): ChatItem | undefined 
 function endStreaming(agent: string, now: number) {
   for (const it of store.items) {
     if (it.kind === 'assistant' && it.agent.id === agent) it.streaming = false
-    if (it.kind === 'thinking' && it.agent.id === agent && !it.endedAt) it.endedAt = now
+    if (it.kind === 'thinking' && it.agent.id === agent && it.endedAt === undefined) it.endedAt = now
   }
 }
 
@@ -194,7 +194,7 @@ export function applyEvents(events: any[], now: number): boolean {
       }
       case 'thinking_delta': {
         const last = lastOf(aid, ['thinking', 'assistant', 'tool'])
-        if (last?.kind === 'thinking' && !last.endedAt) last.text += ev.text
+        if (last?.kind === 'thinking' && last.endedAt === undefined) last.text += ev.text
         else {
           endStreaming(aid, now)
           store.items.push({ kind: 'thinking', id: nextId++, agent: p ?? FALLBACK, text: ev.text, startedAt: now })
@@ -287,6 +287,16 @@ export function resetChat() {
 /** The newest item that is real chat content: a usage row or a note is not a "later message" for the typewriter. */
 export function lastContentId(items: ChatItem[]): number | undefined {
   for (let i = items.length - 1; i >= 0; i--) if (items[i].kind !== 'usage' && items[i].kind !== 'note') return items[i].id
+}
+
+/** A card with an animated ellipsis (running tool, live thinking). */
+export function spinning(it: ChatItem): boolean {
+  return (it.kind === 'tool' && it.running) || (it.kind === 'thinking' && it.endedAt === undefined)
+}
+
+/** An item that still changes in place while the agent works, so its row must re-render on a store change. */
+export function changing(it: ChatItem): boolean {
+  return spinning(it) || (it.kind === 'assistant' && it.streaming)
 }
 
 /** Agent bar pills: the running agents first, then the finished ones, at most `max`; `more` counts the rest. */
