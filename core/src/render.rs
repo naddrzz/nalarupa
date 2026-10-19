@@ -1210,6 +1210,9 @@ pub(crate) mod tests {
         let rebuilt = r.sync(&mut cx);
         r.refresh_slides(&mut cx, &rebuilt, roots);
         let green = |px: &[u8], x: usize, y: usize| px[(y * 400 + x) * 4 + 1];
+        // Paint the cached view first: the slide must be read within ~40 ms of its start below
+        // (offset 50·e^-20t > 3), and a cold first paint on a loaded machine can take longer.
+        r.render(400, 400, 0.0, 0.0, 1.0, [30, 30, 30], Some("f"), true);
         // 100 ms in the node is part way there; only the presented frame's node paints.
         for s in &mut r.slides {
             s.start = Some(Instant::now() - Duration::from_millis(100));
