@@ -793,7 +793,7 @@ function AgentSettings({ mcpUrl, toast }: { mcpUrl: string; toast: Toast }) {
           <Row gap={6}>
             <Field key={keyBox} name="Anthropic API key" value="" placeholder={hasKey ? 'Key saved. Paste a new key to replace it' : 'sk-ant-…'} onCommit={(v) => {
               const key = v.trim() // a blank key is no key (Engine::api_key), so it must not replace a saved one
-              if (!key) return
+              if (!key) return false // Field reverts the box to empty, so the saved-key placeholder shows again
               set('anthropic_api_key', key)
               setHasKey(true)
               setKeyBox((n) => n + 1) // remount: the new key must not stay readable in the box

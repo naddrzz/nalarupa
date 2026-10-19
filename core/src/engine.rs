@@ -474,9 +474,13 @@ impl Engine {
         self.save_settings();
     }
 
+    /// Atomic like `Doc::save`: a crash or a reader mid-save never sees a truncated file (which would drop
+    /// every setting, the API key included, at the next start).
     pub fn save_settings(&self) {
         if let Ok(text) = serde_json::to_string_pretty(&self.settings) {
-            let _ = std::fs::write(self.data_dir.join("settings.json"), text);
+            let path = self.data_dir.join("settings.json");
+            let tmp = path.with_extension("json.tmp");
+            let _ = std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, &path));
         }
     }
 
