@@ -72,6 +72,8 @@ export const ellipsisAt = (now: number) => '.'.repeat(1 + (Math.floor(now / 400)
 /** The dots `ellipsisAt` leaves out, painted transparent so a label after it keeps its x. */
 export const ellipsisPadAt = (now: number) => '.'.repeat(3 - ellipsisAt(now).length)
 export const pulseAt =(now: number) => 0.5 + 0.5 * Math.sin(now / 200)
+/** The name above a canvas frame: one line that ends in `…` where its label box is too narrow. */
+export const FRAME_LABEL_TEXT = { minWidth: 0, whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' } as const
 
 /** The primary monitor's work area (screen minus taskbar) in logical px, or null where unknown. */
 function workArea(): { w: number; h: number } | null {

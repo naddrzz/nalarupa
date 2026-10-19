@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { call, renderPixels } from '../src/core'
 import { applyEvents, barAgents, cursorFaded, imageSrc, lastContentId, needsFrame, poke, resetChat, restoreChat, store } from '../src/agents'
-import { INDICATOR_TICK_MS, ellipsisAt, ellipsisPadAt, pulseAt } from '../src/theme'
+import { FRAME_LABEL_TEXT, INDICATOR_TICK_MS, ellipsisAt, ellipsisPadAt, pulseAt } from '../src/theme'
 
 const assert = (ok: unknown, msg: string) => {
   if (!ok) throw new Error(`smoke failed: ${msg}`)
@@ -74,6 +74,9 @@ call('tool', { name: 'execute', args: { input: 'Insert("sld01", {type:"rectangle
 assert(!call('state').animating, 'no slide-in under reduced motion')
 call('undo')
 call('reduce_motion', { on: false })
+// Constants check only (style is unreadable under automation): the frame label style Canvas.tsx applies ellipsizes instead of slicing.
+assert(FRAME_LABEL_TEXT.textOverflow === 'ellipsis' && FRAME_LABEL_TEXT.overflow === 'hidden' && FRAME_LABEL_TEXT.whiteSpace === 'nowrap', 'canvas frame labels must ellipsize')
+
 // Chat indicators sampled on the panel's tick (even with a late first tick): ellipsis steps stay near 400 ms, the pulse never jumps.
 {
   const steps: number[] = []

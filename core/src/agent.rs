@@ -1212,6 +1212,13 @@ fn tool_result_parts(content: &Value) -> (String, Vec<String>) {
 mod tests {
     use super::*;
 
+    /// Held by the tests that make the shared engine's agent "running" and queue prompts: run in parallel,
+    /// one finishing flips `running` back under the other, whose prompt then starts a turn instead of queueing.
+    fn agent_busy() -> std::sync::MutexGuard<'static, ()> {
+        static BUSY: Mutex<()> = Mutex::new(());
+        BUSY.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     #[test]
     fn truncate_cuts_at_a_char_boundary() {
         assert_eq!(truncate("abc", 5), "abc");
@@ -1324,6 +1331,7 @@ mod tests {
     /// Stop drops the queued prompts and says so, so the chat does not keep promising to send them.
     #[test]
     fn stop_announces_dropped_queue() {
+        let _busy = agent_busy();
         let kinds = || engine().events.iter().filter(|e| e["type"] == "agent").filter_map(|e| e["kind"].as_str().map(str::to_string)).collect::<Vec<_>>();
         let dir = std::env::temp_dir().join(format!("nalarupa-test-stop-{:x}", crate::doc::random_u64()));
         let saved = |kind: &str| {
@@ -1360,6 +1368,7 @@ mod tests {
     /// A prompt queued behind a running agent keeps the Agents and Let it cook choices it was sent with (the latest wins).
     #[test]
     fn queued_prompt_keeps_its_options() {
+        let _busy = agent_busy();
         engine().agent.running = true;
         send("first".into(), 2, "side", 1, "layout").unwrap();
         send("second".into(), 3, "split", 3, "style").unwrap();

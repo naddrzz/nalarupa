@@ -3,7 +3,7 @@ import type { EventModifiers, EventPayload } from '@gpuix/native'
 import type { CursorValue } from '@gpuix/native/host'
 import type { ImgInstance, PublicInstance } from '@gpuix/react'
 import { call, renderPixels, tryCall, type Box } from './core'
-import { CANVAS_BG, C, DPR, FONT, LEFT_W, TOP_H } from './theme'
+import { CANVAS_BG, C, DPR, FONT, FRAME_LABEL_TEXT, LEFT_W, TOP_H } from './theme'
 import { FocusRing, setKeyboardFocus, SvgOverlay, T, useRing, type Toast } from './ui'
 import { AgentLayer } from './AgentLayer'
 import {
@@ -1335,8 +1335,8 @@ export function Canvas(props: {
           )
         }
         return (
-          <div key={f.id} testId="frame-label" style={{ position: 'absolute', left: x, top: y - 18, height: 16, maxWidth: Math.max(40, f.w * cam.zoom), overflow: 'hidden', pointerEvents: 'none' }}>
-            <T size={11} color={active ? C.select : C.muted} style={{ whiteSpace: 'nowrap' }}>{f.name}</T>
+          <div key={f.id} testId="frame-label" style={{ position: 'absolute', left: x, top: y - 18, height: 16, display: 'flex', maxWidth: Math.max(40, f.w * cam.zoom), pointerEvents: 'none' }}>
+            <T size={11} color={active ? C.select : C.muted} style={FRAME_LABEL_TEXT}>{f.name}</T>
           </div>
         )
       })}
