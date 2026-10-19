@@ -493,7 +493,7 @@ impl Build {
         if !p.rendering_mode().use_shape_antialiasing() || pattern_stroke {
             return self.fallback(n, abs, BlendMode::default());
         }
-        let bbox = rect(p.abs_stroke_bounding_box());
+        let bbox = rect(p.stroke_bounding_box().transform(abs).unwrap_or(p.abs_stroke_bounding_box()));
         let (items, paths) = (self.s.items.len(), self.s.paths.len());
         let path = self.add(bez(p.data()));
         let ts = aff(abs);
@@ -572,7 +572,7 @@ impl Build {
             usvg::ImageRendering::Smooth => ImageQuality::Medium,
             _ => ImageQuality::High,
         };
-        self.push(rect(img.abs_bounding_box()), aff(abs), Op::Image { pix, quality });
+        self.push(rect(img.bounding_box().transform(abs).unwrap_or(img.abs_bounding_box())), aff(abs), Op::Image { pix, quality });
     }
 }
 
@@ -1555,5 +1555,24 @@ mod tests {
                 pm.save_png(format!("{dir}/mesh-{name}.png")).unwrap();
             }
         }
+    }
+
+    /// Rotated text is culled by where it lands, not by usvg's flattened-path boxes (those ignore the node's transform).
+    #[test]
+    fn rotated_text_is_not_cut() {
+        let json = r##"{"version":"2.19","children":[{"type":"text","id":"t","x":20,"y":150,"content":"Rotated text sample","fontSize":24,"fontFamily":"Inter","fill":"#ff5500","rotation":30}]}"##;
+        let doc = Doc::from_json(json).unwrap();
+        let (w, h) = (400u32, 260u32);
+        let reach = |px: &[u8]| {
+            let orange = |x: u32, y: u32| {
+                let i = (y * w + x) as usize * 4;
+                px[i] > 200 && px[i + 1] < 160 && px[i + 2] < 100
+            };
+            (0..h).flat_map(|y| (0..w).map(move |x| (x, y))).filter(|&(x, y)| orange(x, y)).fold((h, 0), |(t, r), (x, y)| (t.min(y), r.max(x)))
+        };
+        let [v, s] = both(&doc, w, h, (0.0, 0.0), 1.0);
+        let (vello, resvg) = (reach(&v), reach(&s));
+        assert!(resvg.1 > 200, "the reference draws the whole text: {resvg:?}");
+        assert!(vello.0.abs_diff(resvg.0) <= 2 && vello.1.abs_diff(resvg.1) <= 2, "vello {vello:?} vs resvg {resvg:?}");
     }
 }
