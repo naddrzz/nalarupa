@@ -164,7 +164,8 @@ export function applyEvents(events: any[], now: number): boolean {
     switch (ev.kind) {
       case 'user':
         store.items.push({ kind: 'user', id: nextId++, text: ev.text })
-        store.items = store.items.filter((i) => i.kind !== 'queued' || !ev.text.includes(i.text))
+        // The core runs the whole queue as one turn, its texts joined by a blank line; any other user message (the cook's "Iterating…") leaves it queued.
+        if (ev.text === store.items.flatMap((i) => (i.kind === 'queued' ? [i.text] : [])).join('\n\n')) store.items = store.items.filter((i) => i.kind !== 'queued')
         break
       case 'queued':
         store.items.push({ kind: 'queued', id: nextId++, text: ev.text })
