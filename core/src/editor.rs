@@ -281,13 +281,14 @@ pub fn drop_target(e: &Engine, x: f64, y: f64, w: f64, h: f64, ignore: &[String]
             });
         }
     }
+    // `ty` walks the tree, so it comes last (callers test `inside` first to keep the scan linear).
     let frame_ok = |f: &Flat| !f.id.contains('/') && !ign.contains(f.id.as_str()) && v.ty(&f.id) == "frame";
     let inside = |f: &Flat| x >= f.x && y >= f.y && x <= f.x + f.w && y <= f.y + f.h;
     let target = match parent {
         Some(p) => v.flat(p),
         None => {
             // Pre-order is paint order: the last frame under the pointer is the topmost, deepest one.
-            let mut best = v.flats.iter().copied().rev().find(|f| frame_ok(f) && inside(f));
+            let mut best = v.flats.iter().copied().rev().find(|f| inside(f) && frame_ok(f));
             while let Some(f) = best.filter(|f| !any && f.parent.is_some() && (f.w < w || f.h < h)) {
                 let mut up = f.parent.as_deref().and_then(|p| v.flat(p));
                 while let Some(p) = up.filter(|p| !frame_ok(p)) {
