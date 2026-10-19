@@ -514,7 +514,31 @@ impl Renderer {
             }
             let Some((_, _, pm)) = &s.cache else { continue };
             let paint = tiny_skia::PixmapPaint { opacity: alpha.clamp(0.0, 1.0) as f32, ..Default::default() };
-            out.draw_pixmap(x0 - vx + (dx * zoom).round() as i32, y0 - vy + (dy * zoom).round() as i32, pm.as_ref(), &paint, tiny_skia::Transform::identity(), None);
+            let (px, py) = (x0 - vx + (dx * zoom).round() as i32, y0 - vy + (dy * zoom).round() as i32);
+            out.draw_pixmap(px, py, pm.as_ref(), &paint, tiny_skia::Transform::identity(), None);
+            // Top-level frames stacked above the slide's own cover it, as they do once it settles.
+            let own = self.order.iter().position(|id| self.layers.get(id).is_some_and(|l| l.flat.iter().any(|f| f.id == s.id)));
+            let above = own.map_or(&[][..], |i| &self.order[i + 1..]);
+            let (cw, ch) = (pm.width() as i32, pm.height() as i32);
+            let (cx0, cy0, cx1, cy1) = (px.max(0), py.max(0), (px + cw).min(w as i32), (py + ch).min(h as i32));
+            if cx1 <= cx0 || cy1 <= cy0 {
+                continue;
+            }
+            let cover = ((cx0 + vx) as f64 / zoom, (cy0 + vy) as f64 / zoom, (cx1 - cx0) as f64 / zoom, (cy1 - cy0) as f64 / zoom);
+            let trees: Vec<&usvg::Tree> = above.iter().filter(|id| solo.is_none_or(|s| s == id.as_str())).filter_map(|id| self.layers.get(id)).filter(|l| overlaps(l.paint, cover)).filter_map(|l| l.tree.as_ref()).collect();
+            if trees.is_empty() {
+                continue;
+            }
+            let Some(mut over) = tiny_skia::Pixmap::new((cx1 - cx0) as u32, (cy1 - cy0) as u32) else { continue };
+            let tf = tiny_skia::Transform::from_row(zoom as f32, 0.0, 0.0, zoom as f32, -(cx0 + vx) as f32, -(cy0 + vy) as f32);
+            for tree in trees {
+                if has_hairline(tree.root()) {
+                    resvg::render(tree, tf, &mut over.as_mut());
+                } else {
+                    draw_culled(tree.root(), tf, cover, &mut over.as_mut());
+                }
+            }
+            out.draw_pixmap(cx0, cy0, over.as_ref(), &tiny_skia::PixmapPaint::default(), tiny_skia::Transform::identity(), None);
         }
     }
 
@@ -1256,6 +1280,31 @@ pub(crate) mod tests {
         sync(&mut r);
         let px = frame(&mut r);
         assert!(red(&px, 150, 101) && !red(&px, 150, 152), "settled in the cached view at its own place");
+    }
+
+    /// A sliding node stays in its frame's place in the stacking order: a top-level frame above
+    /// it covers it mid-slide as it does once settled, and one below it does not.
+    #[test]
+    fn slide_stays_under_frames_above_its_own() {
+        let json = r##"{"version":"2.19","children":[
+            {"type":"frame","id":"p","x":100,"y":100,"width":300,"height":200,"layout":"none","fill":"#2255ff","children":[
+                {"type":"rectangle","id":"k","x":20,"y":20,"width":100,"height":100,"fill":"#ff0000"}]},
+            {"type":"frame","id":"q","x":150,"y":100,"width":300,"height":300,"layout":"none","fill":"#ffff00"}]}"##;
+        let doc = Doc::from_json(json).unwrap();
+        let (mut fonts, mut assets) = offline();
+        let mut r = Renderer::default();
+        r.slides.push(Slide::new("k"));
+        let mut cx = Ctx { doc: &doc, libs: &[], fonts: &mut fonts, assets: &mut assets };
+        let roots = r.shift_siblings(&mut cx);
+        let rebuilt = r.sync(&mut cx);
+        r.refresh_slides(&mut cx, &rebuilt, roots);
+        let at = |px: &[u8], x: usize, y: usize| px[(y * 500 + x) * 4..(y * 500 + x) * 4 + 3].to_vec();
+        r.render(500, 500, 0.0, 0.0, 1.0, [30, 30, 30], None, true);
+        r.slides[0].start = Some(Instant::now() - Duration::from_millis(100));
+        let px = r.render(500, 500, 0.0, 0.0, 1.0, [30, 30, 30], None, true).to_vec();
+        // k sits at 120..220 x 120..220 (6.8 low mid-slide); q covers x ≥ 150.
+        assert_eq!(at(&px, 180, 150), [255, 255, 0], "the frame above covers the sliding node");
+        assert_ne!(at(&px, 130, 150), [34, 85, 255], "the part outside that frame still shows it");
     }
 
     /// Present mode renders one frame alone; a node sliding into it must still paint there (the
