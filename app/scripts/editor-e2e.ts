@@ -309,6 +309,27 @@ try {
   assert(await app.getByText('Cards').count(), 'layer renamed from the layers panel')
   await shot('08-renamed')
 
+  // An unfocused Inspector field shows the start of a value wider than itself (GPUIX scrolls a set input to
+  // its end): rename to a long name and look for the painted text at the field's left edge.
+  const long = `Zebra${'q'.repeat(70)}`
+  const row = app.getByTestId('layers').getByText('Cards')
+  await row.click()
+  await row.click()
+  await app.getByTestId('layer-rename').waitFor({ timeoutMs: 3000 })
+  const rn2 = (await app.getByTestId('layer-rename').bounds())!
+  await sleep(600)
+  await app.mouse.click({ x: rn2.x + rn2.width - 8, y: rn2.y + rn2.height / 2 })
+  await app.call('keystrokes', { keys: `ctrl-a ${[...long].join(' ')} enter` })
+  const field = (await app.getByTestId('inspector-name').bounds())!
+  const painted = async () => (await app.getByText(long).all()).filter((n) => n.bounds && n.bounds.x >= field.x && n.bounds.x < field.x + field.width && Math.abs(n.bounds.y - field.y) < field.height)
+  assert(await until(async () => (await painted()).length === 1), 'the Inspector name field paints the long name')
+  const text = (await painted())[0].bounds!
+  assert(text.x - field.x < 12 && text.x + text.width <= field.x + field.width, `the long name starts at the field's left edge and is clipped to it (${JSON.stringify({ field, text })})`)
+  await shot('08b-long-name')
+  await canvas.press('ctrl-z')
+  await sleep(400)
+  assert(await until(async () => (await app.getByText('Cards').count()) > 0), 'undo restored the layer name')
+
   // Inspector: scrub the gap label (2 px per step): 20 px = +10 per gap, the hugging row grows by 20; one undo step.
   const width = async () => Number((await app.getByTestId('size-label').textContent()).split(' ')[0])
   const w0 = await width()
@@ -341,7 +362,7 @@ try {
   await canvas.press('ctrl-c')
   await canvas.press('ctrl-v')
   await sleep(400)
-  assert((await app.getByText('Cards').count()) >= 2, 'Ctrl+V pastes a copy')
+  assert((await app.getByTestId('layers').getByText('Cards').count()) >= 2, 'Ctrl+V pastes a copy')
   await canvas.press('ctrl-z')
   await sleep(400)
 
