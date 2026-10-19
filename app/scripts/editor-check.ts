@@ -74,6 +74,23 @@ call('align', { ids: [A, Bid], dir: 'left' })
 assert(box(Bid).x === a0.x && box(A).x === a0.x, 'align left')
 call('undo')
 
+// Align works on painted bounds: a flipped and a rotated layer line up with a plain one.
+const T = call('insert', { parent: 'document', node: { type: 'frame', name: 'T', x: 600, y: 0, width: 400, height: 400, layout: 'none' } }).id
+const turned = [{ x: 100, y: 50 }, { x: 200, y: 150, flipX: true }, { x: 300, y: 250, rotation: 90 }].map(
+  (p) => call('insert', { parent: T, node: { type: 'rectangle', width: 40, height: 40, ...p } }).id,
+)
+const painted = () => call<(B & { m?: number[] })[]>('boxes', { ids: turned }).map((b) => {
+  const m = b.m ?? [1, 0, 0, 1, 0, 0]
+  const pts = [[0, 0], [b.w, 0], [0, b.h], [b.w, b.h]].map(([x, y]) => [m[0] * (b.x + x) + m[2] * (b.y + y) + m[4], m[1] * (b.x + x) + m[3] * (b.y + y) + m[5]])
+  return { l: Math.min(...pts.map((p) => p[0])), t: Math.min(...pts.map((p) => p[1])) }
+})
+call('align', { ids: turned, dir: 'left' })
+const ls = painted()
+assert(ls.every((p) => Math.abs(p.l - ls[0].l) < 0.01), `align left of flipped/rotated ${JSON.stringify(ls)}`)
+call('align', { ids: turned, dir: 'top' })
+const ts = painted()
+assert(ts.every((p) => Math.abs(p.t - ts[0].t) < 0.01), `align top of flipped/rotated ${JSON.stringify(ts)}`)
+
 // Duplicate: same position, right above the source.
 const d = call('duplicate', { ids: [A] }).ids[0]
 assert(same(box(d), a0) && node(d).parent === F, 'duplicate in place')
@@ -104,6 +121,15 @@ const card = call('paste', { html: fig, text: '', targets: [], view }).ids
 const figKids = node(card[0]).node.children
 assert(card.length === 1 && box(card[0]).x === 40 && figKids.map((k: any) => k.name).join() === 'Title,Body,Row', 'Figma paste')
 assert(figKids[2].children[1].children[0].content === 'Buy now', 'the instance keeps its text override')
+
+// A line (documented in the agent guide) can be inserted, created by execute and copied → pasted.
+const LN = call('insert', { parent: F, node: { type: 'line', name: 'Ln', x: 20, y: 200, width: 100, height: 60, stroke: '#000000', strokeWidth: 6 } }).id
+assert(node(LN).node.type === 'line', 'insert accepts a line')
+const lineOut = call('tool', { name: 'execute', args: { input: 'Insert(document, {type:"line", name:"x", width:100, height:50, stroke:"#000", strokeWidth:4})' } })
+assert(!lineOut.error, `execute Insert accepts a line: ${lineOut.text}`)
+const lineClip = call('copy', { ids: [LN] })
+const lp = call('paste', { html: lineClip.html, text: lineClip.text, targets: [], view }).ids
+assert(lp.length === 1 && node(lp[0]).node.type === 'line' && same(box(lp[0]), box(LN)), 'a copied line pastes in place')
 
 // Pen: points drawn on the canvas become a path in F; reading them back gives the same canvas points.
 const drawn = [{ closed: false, anchors: [{ x: 10, y: 120 }, { x: 60, y: 120, out: [80, 140] }, { x: 60, y: 170 }] }]

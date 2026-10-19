@@ -183,7 +183,12 @@ pub fn install(client: &str, port: u16) -> Result<String, String> {
 }
 
 fn merge_json(path: PathBuf, key: &str, entry: Value) -> Result<String, String> {
-    let mut root: Value = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(json!({}));
+    // A missing file starts empty; one that cannot be read or parsed (a trailing comma, comments) is left alone, not replaced.
+    let mut root: Value = match std::fs::read_to_string(&path) {
+        Ok(t) => serde_json::from_str(&t).map_err(|e| format!("{} is not valid JSON ({e}); not touching it", path.display()))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => json!({}),
+        Err(e) => return Err(format!("could not read {}: {e}", path.display())),
+    };
     if !root.is_object() {
         return Err(format!("{} is not a JSON object; not touching it", path.display()));
     }
