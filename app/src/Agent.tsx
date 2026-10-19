@@ -174,7 +174,7 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
       ) : null}
 
       {items.length === 0 ? (
-        <div style={{ flexGrow: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 8, padding: 14 }}>
+        <div testId="agent-empty" style={{ flexGrow: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 8, padding: 14, overflowY: 'scroll' }}>
           <T size={15} weight="600" color={C.text}>Ask me to design anything</T>
           {picks.current.map((s) => (
             <Pressable key={s} testId={`suggestion-${s.slice(0, 12)}`} label={`Design ${s}`} onClick={() => send(`Design ${s}`)} style={{ padding: 10, borderRadius: 8, borderWidth: 1, borderColor: C.border, hover: { backgroundColor: C.panel2 } }}>
