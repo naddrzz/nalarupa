@@ -202,7 +202,8 @@ fn size_css(v: Option<&Value>, prop: &str, parent_dir: Option<&str>, horiz_axis:
             }
         }
         Some(Value::String(s)) if s.starts_with("fit_content") => format!("{prop}:fit-content;"),
-        Some(v) => num(v).map(|n| format!("{prop}:{n}px;")).unwrap_or_default(),
+        // Fixed main-axis sizes do not shrink (the canvas lets them overflow); CSS flex items would.
+        Some(v) => num(v).map(|n| format!("{prop}:{n}px;{}", if main_axis { "flex-shrink:0;" } else { "" })).unwrap_or_default(),
         None => {
             let _ = measured;
             String::new()
@@ -227,10 +228,10 @@ impl Html<'_> {
             css += &size_css(n.p.get("height"), "height", parent_dir, false, n.h);
             if matches!(n.ty.as_str(), "rectangle" | "ellipse" | "icon" | "polygon" | "line" | "path") {
                 if n.p.get("width").is_none() {
-                    let _ = write!(css, "width:{}px;", n.w);
+                    css += &size_css(Some(&Value::from(n.w)), "width", parent_dir, true, n.w);
                 }
                 if n.p.get("height").is_none() {
-                    let _ = write!(css, "height:{}px;", n.h);
+                    css += &size_css(Some(&Value::from(n.h)), "height", parent_dir, false, n.h);
                 }
             }
         }
@@ -559,6 +560,28 @@ mod tests {
         // An unparseable stop colour stays as transparent black, like the canvas.
         let (s, _) = rect_html(json!({"fill": grad(json!({"colors": [{"color": "#ff0000", "position": 0}, {"color": "transparent", "position": 1}]}))}));
         assert!(s.contains("linear-gradient(-90deg,#ff0000 0%,rgba(0, 0, 0, 0) 100%)"), "{s}");
+    }
+
+    /// Fixed-size children keep their main-axis size in an overflowing auto layout, as on the canvas.
+    #[test]
+    fn fixed_size_children_do_not_shrink() {
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        e.load_template("empty");
+        let kid = |ty: &str| json!({"type": ty, "width": 60, "height": 20, "fill": "#ff0000"});
+        let row = |layout: &str| {
+            json!({"type": "frame", "width": 100, "height": 60, "layout": layout, "children": [kid("rectangle"), kid("ellipse"), {"type": "rectangle", "width": "fill_container", "height": 20, "fill": "#0000ff"}]})
+        };
+        let html = |e: &mut Engine, layout: &str| {
+            let id = e.insert_root(row(layout)).unwrap();
+            super::html_document(e, &[id], &json!({"includeHtmlScaffold": false})).unwrap()
+        };
+        let h = html(&mut e, "horizontal");
+        assert_eq!(h.matches("width:60px;flex-shrink:0;").count(), 2, "{h}");
+        assert!(h.contains("flex:1 1 0;") && !h.contains("height:20px;flex-shrink:0;"), "{h}");
+        let v = html(&mut e, "vertical");
+        assert_eq!(v.matches("height:20px;flex-shrink:0;").count(), 3, "{v}");
+        assert!(!v.contains("width:60px;flex-shrink:0;"), "{v}");
     }
 
     #[test]
