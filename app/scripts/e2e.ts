@@ -81,13 +81,8 @@ try {
 
   // The eye icon hides and shows its layer (the row's press capture used to swallow the click). A hidden
   // layer keeps its eye while the pointer is away; the click does not select the row.
-  // (`until` is shadowed further down in this function, so poll with a plain loop.)
   const eyeShown = async (want: boolean) => {
-    for (let i = 0; i < 40; i++) {
-      if (((await app!.getByTestId('layer-eye-sld02').count()) > 0) === want) return
-      await sleep(200)
-    }
-    throw new Error(`the eye of slide 2 did not ${want ? 'show' : 'go away'}`)
+    await until(async () => ((await app!.getByTestId('layer-eye-sld02').count()) > 0) === want, `the eye of slide 2 to ${want ? 'show' : 'go away'}`)
   }
   const eyeBox = async () => { const b = await app!.getByTestId('layer-eye-sld02').bounds(); return { x: b.x + b.width / 2, y: b.y + b.height / 2 } }
   const rowBox = await app.getByTestId('layer-sld02').bounds()
@@ -294,12 +289,12 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
 
   // The Plan block: a long todo wraps inside the panel (it used to run past the window edge) and 32 of
   // them scroll in a capped block, so the composer stays on screen (it used to be pushed out of the window).
-  const until = async (ok: () => Promise<boolean>, ms = 5000) => {
+  const untilVisible = async (ok: () => Promise<boolean>, ms = 5000) => {
     for (const end = Date.now() + ms; Date.now() < end; await sleep(100)) if (await ok()) return true
     return false
   }
   const laidOut = async () => !!((await app!.getByText('Step 1: lay out').bounds())?.height && (await app!.getByTestId('plan-todos').bounds())?.height && (await app!.getByTestId('agent-input').bounds())?.height)
-  if (!(await until(laidOut))) throw new Error('the Plan block did not lay out')
+  if (!(await untilVisible(laidOut))) throw new Error('the Plan block did not lay out')
   const planField = (await app.getByTestId('agent-input').bounds())!
   const count = (await app.getByText('3/32').bounds())!
   const step = (await app.getByText('Step 1: lay out').bounds())!
