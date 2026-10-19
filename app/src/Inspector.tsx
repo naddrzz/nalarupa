@@ -60,8 +60,11 @@ function validPaint(v: string, vars: Record<string, any>): boolean {
 
 const BAD_VALUE = 'Unable to apply that value. Check its format, for example #FF6A3D or 24, and try again.'
 const EFFECT_TYPES = ['shadow', 'blur', 'background_blur']
-const isVar = (t: string, vars: Record<string, any>) => t.startsWith('$') && Object.prototype.hasOwnProperty.call(vars, t.slice(1))
+/** A `$variable` that exists and has one of `types`. */
+const isVar = (t: unknown, vars: Record<string, any>, types: string[] = ['number']) =>
+  typeof t === 'string' && t.startsWith('$') && Object.prototype.hasOwnProperty.call(vars, t.slice(1)) && types.includes(vars[t.slice(1)]?.type)
 const length = (v: unknown) => typeof v === 'number' && Number.isFinite(v) && v >= 0
+const lengthVar = (vars: Record<string, any>) => (v: unknown) => length(v) || isVar(v, vars)
 
 /** Per-side lengths as a number, [v, h] or [t, r, b, l]: typed CSS-style ("10 20", "1,2,3,4") or as a JSON array. `null` clears it, `undefined` rejects it. */
 function sides(v: string, vars: Record<string, any>, counts: number[]): unknown {
@@ -69,7 +72,7 @@ function sides(v: string, vars: Record<string, any>, counts: number[]): unknown 
   if (t === '') return null
   if (isVar(t, vars)) return t
   let p: unknown = t.startsWith('[') ? parse(t) : t.split(/[\s,]+/).filter(Boolean).map((x) => (/^\d+(\.\d+)?$/.test(x) ? Number(x) : NaN))
-  if (!Array.isArray(p) || !p.every(length) || !counts.includes(p.length)) return undefined
+  if (!Array.isArray(p) || !p.every(lengthVar(vars)) || !counts.includes(p.length)) return undefined
   return p.length === 1 ? p[0] : p
 }
 
@@ -84,22 +87,32 @@ function strokeWidthOf(v: string, vars: Record<string, any>): unknown {
   const p = lengthOf(v, vars)
   if (p !== undefined) return p
   const o = parse(v)
-  return o && typeof o === 'object' && !Array.isArray(o) && Object.keys(o).every((k) => ['top', 'right', 'bottom', 'left'].includes(k)) && Object.values(o).every(length) ? o : undefined
+  return o && typeof o === 'object' && !Array.isArray(o) && Object.keys(o).every((k) => ['top', 'right', 'bottom', 'left'].includes(k)) && Object.values(o).every(lengthVar(vars)) ? o : undefined
 }
 
 /** Font weight: normal, bold, a number from 1 to 1000, a $variable that exists, or empty for the default. */
 function fontWeightOf(v: string, vars: Record<string, any>): unknown {
   const t = v.trim()
-  return t === '' ? null : isVar(t, vars) || t === 'normal' || t === 'bold' || (/^\d+$/.test(t) && Number(t) >= 1 && Number(t) <= 1000) ? t : undefined
+  return t === '' ? null : isVar(t, vars, ['number', 'string']) || t === 'normal' || t === 'bold' || (/^\d+$/.test(t) && Number(t) >= 1 && Number(t) <= 1000) ? t : undefined
 }
 
-/** An effect object (or list of them) of a type the renderer knows. */
-function effectOf(v: string): unknown {
+/** An effect object (or non-empty list of them) of a type the renderer knows, with fields it can read: lengths for blur / radius / offset, a hex or $color for the shadow color. */
+function effectOf(v: string, vars: Record<string, any>): unknown {
   const t = v.trim()
   if (t === '') return null
   const p = parse(t)
-  const one = (e: any) => !!e && typeof e === 'object' && !Array.isArray(e) && EFFECT_TYPES.includes(e.type)
-  return Array.isArray(p) ? (p.length && p.every(one) ? p : undefined) : one(p) ? p : undefined
+  const optional = (x: unknown, ok: (x: unknown) => boolean) => x === undefined || ok(x)
+  const len = (x: unknown) => lengthVar(vars)(x)
+  const coord = (x: unknown) => (typeof x === 'number' && Number.isFinite(x)) || isVar(x, vars)
+  const hue = (x: unknown) => typeof x === 'string' && (/^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(x.trim()) || isVar(x.trim(), vars, ['color']))
+  const one = (e: any) => {
+    if (!e || typeof e !== 'object' || Array.isArray(e) || !EFFECT_TYPES.includes(e.type)) return false
+    if (e.type !== 'shadow') return optional(e.radius, len)
+    const o = e.offset
+    const offset = o === undefined || (!!o && typeof o === 'object' && !Array.isArray(o) && optional(o.x, coord) && optional(o.y, coord))
+    return optional(e.blur, len) && optional(e.color, hue) && offset
+  }
+  return Array.isArray(p) ? (p.length > 0 && p.every(one) ? p : undefined) : one(p) ? p : undefined
 }
 
 export function Inspector({ version, selection, select, toast }: Props) {
@@ -363,7 +376,7 @@ export function Inspector({ version, selection, select, toast }: Props) {
 
       {!multi ? (
         <Section title="Effect">
-          <Field name="Effect" value={str(n.effect)} mono onCommit={setChecked('effect', effectOf)} testId="inspector-effect" placeholder='{"type":"shadow","blur":12,"offset":{"x":0,"y":4},"color":"#00000033"}' />
+          <Field name="Effect" value={str(n.effect)} mono onCommit={setChecked('effect', (v) => effectOf(v, vars))} testId="inspector-effect" placeholder='{"type":"shadow","blur":12,"offset":{"x":0,"y":4},"color":"#00000033"}' />
         </Section>
       ) : null}
 

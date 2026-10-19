@@ -385,10 +385,18 @@ try {
     await app.call('keystrokes', { keys: 'enter' })
     await sleep(1500)
   }
+  // A focused field paints its draft and an <input> value cannot be read, so move focus to the gap field before reading the padding back.
+  const unfocus = async () => {
+    const b = (await app.getByTestId('inspector-gap').bounds())!
+    await app.mouse.click({ x: b.x + b.width - 10, y: b.y + b.height / 2 })
+    await sleep(700)
+  }
   await typeInto('inspector-padding', 'ctrl-a 4 0 space 8 0')
+  await unfocus()
   assert(await until(async () => (await app.getByText('[40,80]').count()) > 0), 'CSS-style padding "40 80" is stored as [40, 80]')
   assert(!(await count('toast')), 'a valid padding raises no error')
   await canvas.press('ctrl-z')
+  await unfocus()
   assert(await until(async () => !(await app.getByText('[40,80]').count())), 'one undo step reverts the padding')
   await typeInto('inspector-padding', 'ctrl-a a b c')
   assert(await until(async () => (await count('toast')) > 0), 'padding text that is not lengths raises an error toast')
