@@ -971,7 +971,8 @@ pub fn unapply(m: [f64; 6], x: f64, y: f64) -> (f64, f64) {
 
 /// Topmost-first chain of nodes under a document point: [top-level, child, ..., deepest].
 /// The deepest node is the last-painted one whose box holds the point; a child can be hit outside
-/// its parent's box unless an ancestor clips it.
+/// its parent's box unless an ancestor clips it. A group paints nothing itself, so only its children
+/// can be hit: a point inside its box but on none of them falls through to the layers below.
 pub fn hit_chain(r: &Renderer, x: f64, y: f64) -> Vec<String> {
     for id in r.order.iter().rev() {
         let Some(layer) = r.layers.get(id) else { continue };
@@ -990,7 +991,7 @@ pub fn hit_chain(r: &Renderer, x: f64, y: f64) -> Vec<String> {
                 (open && (!p.clip || inside(p)), scripted || p.ty == "script")
             });
             path.push((i, open, scripted));
-            if open && !scripted && (f.depth == 0 || f.w > 0.0 && f.h > 0.0) && inside(f) {
+            if open && !scripted && f.ty != "group" && (f.depth == 0 || f.w > 0.0 && f.h > 0.0) && inside(f) {
                 hit = Some(i);
             }
         }
@@ -1184,6 +1185,28 @@ pub(crate) mod tests {
         assert_eq!(hit_chain(&r, 860.0, 50.0), ["c"]);
         assert_eq!(hit_chain(&r, 880.0, 80.0), ["c", "h"]);
         assert!(hit_chain(&r, 950.0, 150.0).is_empty(), "clipped overflow is invisible");
+    }
+
+    /// A group paints nothing of its own: a point in its box but on none of its children hits the layer below.
+    #[test]
+    fn group_box_does_not_swallow_hits() {
+        let json = r##"{"version":"2.19","children":[
+            {"type":"frame","id":"f","x":0,"y":0,"width":400,"height":400,"layout":"none","children":[
+                {"type":"rectangle","id":"u","x":100,"y":100,"width":150,"height":150},
+                {"type":"group","id":"g","children":[
+                    {"type":"rectangle","id":"a","x":20,"y":20,"width":40,"height":40},
+                    {"type":"rectangle","id":"b","x":300,"y":300,"width":40,"height":40}]}]},
+            {"type":"group","id":"t","children":[
+                {"type":"rectangle","id":"c","x":500,"y":0,"width":20,"height":20},
+                {"type":"rectangle","id":"d","x":700,"y":200,"width":20,"height":20}]}]}"##;
+        let doc = Doc::from_json(json).unwrap();
+        let mut r = Renderer::default();
+        sync(&mut r, &doc);
+        assert_eq!(hit_chain(&r, 40.0, 40.0), ["f", "g", "a"]);
+        assert_eq!(hit_chain(&r, 150.0, 150.0), ["f", "u"], "inside the group's box, on none of its children");
+        assert_eq!(hit_chain(&r, 320.0, 320.0), ["f", "g", "b"]);
+        assert_eq!(hit_chain(&r, 510.0, 10.0), ["t", "c"]);
+        assert!(hit_chain(&r, 600.0, 100.0).is_empty(), "inside a top-level group's box only");
     }
 
     /// Horizontal/vertical stroked lines have no layer box; both rasterizers must still draw them
