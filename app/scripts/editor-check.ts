@@ -69,6 +69,29 @@ call('undo')
 call('undo')
 assert(node(A).parent === F, 'undo add_layout in one step')
 
+// Row -> Column: the cross-axis fill (height) becomes the main axis and must not collapse the children.
+const M = call('insert', { parent: 'document', node: { type: 'frame', name: 'M', x: 0, y: 700, width: 400, height: 300, layout: 'none' } }).id
+const [M1, M2] = [10, 100].map((x) => call('insert', { parent: M, node: { type: 'rectangle', x, y: 10, width: 50, height: 50 } }).id)
+const ML = call('add_layout', { ids: [M1, M2] }).id
+assert(node(M1).node.height === 'fill_container', `row children fill the cross axis, got ${node(M1).node.height}`)
+call('set_layout', { ids: [ML], layout: 'vertical' })
+assert(node(ML).node.layout === 'vertical', 'switched to column')
+assert([M1, M2].every((k) => box(k).h >= 49.99 && node(k).node.height === 50), `column keeps child heights, got ${box(M1).h} ${box(M2).h}`)
+call('undo')
+assert(node(ML).node.layout === 'horizontal' && node(M1).node.height === 'fill_container', 'undo column in one step')
+const rejects = (args: Record<string, unknown>) => {
+  try {
+    call('set_layout', args)
+  } catch {
+    return true
+  }
+  return false
+}
+assert(rejects({ ids: [ML], layout: 'diagonal' }) && node(ML).node.layout === 'horizontal', 'set_layout rejects unknown directions')
+assert(rejects({ ids: [M1], layout: 'vertical' }) && node(M1).node.layout === undefined, 'set_layout rejects non-layout nodes')
+call('undo')
+call('undo')
+
 // Align left: B moves to A's left edge.
 call('align', { ids: [A, Bid], dir: 'left' })
 assert(box(Bid).x === a0.x && box(A).x === a0.x, 'align left')
