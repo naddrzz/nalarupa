@@ -9,7 +9,7 @@ pub const FORMAT_VERSION: &str = "2.19";
 pub const ROOT: &str = "document";
 
 const NODE_TYPES: &[&str] = &[
-    "frame", "group", "rectangle", "ellipse", "polygon", "path", "text", "note", "prompt",
+    "frame", "group", "rectangle", "ellipse", "polygon", "line", "path", "text", "note", "prompt",
     "context", "icon", "script", "browser", "ref",
 ];
 
@@ -275,14 +275,23 @@ impl Doc {
             root.insert("variables".into(), json!({}));
         }
         let mut axes: Vec<(String, String)> = Vec::new();
+        // Axes where some variable has an un-themed entry: that entry is the default, so the axis needs a base theme.
+        let mut based: Vec<String> = Vec::new();
         let target = root["variables"].as_object_mut().unwrap();
         for (name, def) in vars {
             if let Some(list) = def["value"].as_array() {
+                let mut seen: Vec<&String> = Vec::new();
                 for entry in list {
                     if let Some(theme) = entry["theme"].as_object() {
                         for (axis, val) in theme {
                             axes.push((axis.clone(), val.as_str().unwrap_or_default().to_string()));
+                            seen.push(axis);
                         }
+                    }
+                }
+                for axis in seen {
+                    if list.iter().any(|e| e["theme"].get(axis).is_none()) && !based.contains(axis) {
+                        based.push(axis.clone());
                     }
                 }
             }
@@ -290,6 +299,12 @@ impl Doc {
         }
         if !axes.is_empty() {
             let themes = ensure_obj(root.entry("themes").or_insert_with(|| json!({})));
+            for axis in based {
+                let list = themes.entry(axis).or_insert_with(|| json!([]));
+                if list.as_array().is_some_and(Vec::is_empty) {
+                    list.as_array_mut().unwrap().push(json!("default"));
+                }
+            }
             for (axis, val) in axes {
                 let list = themes.entry(axis).or_insert_with(|| json!([]));
                 let arr = list.as_array_mut().unwrap();
@@ -508,5 +523,12 @@ mod tests {
         assert!(d.find(&c).is_none());
         d.set_variables(&json!({"bg":{"type":"color","value":[{"value":"#fff","theme":{"mode":"light"}},{"value":"#000","theme":{"mode":"dark"}}]}}), false).unwrap();
         assert_eq!(d.root["themes"]["mode"], json!(["light","dark"]));
+    }
+
+    #[test]
+    fn base_value_with_one_override_keeps_a_default_theme() {
+        let mut d = Doc::new();
+        d.set_variables(&json!({"bg":{"type":"color","value":[{"value":"#fff"},{"value":"#111","theme":{"mode":"dark"}}]}}), false).unwrap();
+        assert_eq!(d.root["themes"]["mode"], json!(["default","dark"]));
     }
 }
