@@ -51,9 +51,14 @@ impl Client {
             req = req.header("anthropic-beta", b);
         }
         // The blocking socket work (headers and body reads) lives on its own thread so a silent
-        // connection cannot hold this one: we poll `cancel` and the idle limit between lines. A
-        // thread abandoned on Stop ends at its next send or at the 900 s global timeout.
-        let (tx, rx) = channel::<Result<String, String>>();
+        // connection cannot hold this one: we poll `cancel` and the idle limit between lines. The
+        // header phases are bounded by the stall limit; once streaming, a thread abandoned on Stop
+        // ends at its next line (the API pings every few seconds) or at the 900 s global timeout.
+        // The worker sends `Ok(None)` when the stream ends, so a dropped sender without it is an error.
+        let (tx, rx) = channel::<Result<Option<String>, String>>();
+        // Slightly past the stall limit, so the reader below reports the stall first.
+        let hdr = Some(self.stall + POLL * 2);
+        let req = req.config().timeout_connect(hdr).timeout_send_request(hdr).timeout_recv_response(hdr).build();
         std::thread::spawn(move || {
             let res = match req.send_json(&body) {
                 Ok(res) => res,
@@ -67,12 +72,13 @@ impl Client {
                 return drop(tx.send(Err(format!("Claude API error {status}: {msg}"))));
             }
             for line in BufReader::new(body.into_reader()).lines() {
-                let line = line.map_err(|e| format!("stream interrupted: {e}"));
+                let line = line.map(Some).map_err(|e| format!("stream interrupted: {e}"));
                 let failed = line.is_err();
                 if tx.send(line).is_err() || failed {
                     return;
                 }
             }
+            let _ = tx.send(Ok(None));
         });
 
         let mut blocks: Vec<Value> = Vec::new();
@@ -86,10 +92,12 @@ impl Client {
                 return Err("stopped".into());
             }
             let line = match rx.recv_timeout(POLL) {
-                Ok(line) => line?,
+                Ok(Ok(Some(line))) => line,
+                Ok(Ok(None)) => break,
+                Ok(Err(e)) => return Err(e),
                 Err(RecvTimeoutError::Timeout) if last.elapsed() < self.stall => continue,
                 Err(RecvTimeoutError::Timeout) => return Err(format!("connection stalled: no data from the Claude API for {} s", self.stall.as_secs())),
-                Err(RecvTimeoutError::Disconnected) => break,
+                Err(RecvTimeoutError::Disconnected) => return Err("stream interrupted: network worker ended unexpectedly".into()),
             };
             last = Instant::now();
             if let Some(d) = line.strip_prefix("data:") {
@@ -217,5 +225,22 @@ mod tests {
         let c = client(silent_server(true), Duration::from_millis(600));
         let r = c.stream(json!({}), None, &|| false, &mut |_| {});
         assert!(r.unwrap_err().starts_with("connection stalled"));
+    }
+
+    #[test]
+    fn a_cleanly_closed_stream_returns_its_content() {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/v1/messages", l.local_addr().unwrap());
+        std::thread::spawn(move || {
+            let (mut s, _) = l.accept().unwrap();
+            // Drain the whole request first: closing with unread data would reset the connection.
+            let mut buf = [0u8; 8192];
+            s.set_read_timeout(Some(Duration::from_millis(200))).unwrap();
+            while s.read(&mut buf).map_or(false, |n| n > 0) {}
+            let ev = r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":"hi"}}"#;
+            let _ = write!(s, "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\ndata: {ev}\n\n");
+        });
+        let r = client(url, STALL).stream(json!({}), None, &|| false, &mut |_| {}).unwrap();
+        assert_eq!(r["content"][0]["text"], "hi", "{r}");
     }
 }
