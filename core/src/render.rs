@@ -481,6 +481,10 @@ impl Renderer {
         let states: HashMap<String, (f64, f64, f64)> = self.slides.iter().map(|s| (s.id.clone(), s.state(now))).collect();
         let (vx, vy) = ((cam_x * zoom).round() as i32, (cam_y * zoom).round() as i32);
         let Some(mut out) = tiny_skia::PixmapMut::from_bytes(&mut self.pixels, w, h) else { return };
+        // Bottom frame first: a slide's cover pass repaints the frames above it, which hold
+        // nothing of the slides in them, so a higher frame's slide must paint after it.
+        let rank = |s: &Slide| self.order.iter().position(|id| self.layers.get(id).is_some_and(|l| l.flat.iter().any(|f| f.id == s.id)));
+        self.slides.sort_by_key(rank);
         for s in &mut self.slides {
             let Some(tree) = &s.tree else { continue };
             if shown.as_ref().is_some_and(|ids| !ids.contains(s.id.as_str())) {
@@ -1304,7 +1308,36 @@ pub(crate) mod tests {
         let px = r.render(500, 500, 0.0, 0.0, 1.0, [30, 30, 30], None, true).to_vec();
         // k sits at 120..220 x 120..220 (6.8 low mid-slide); q covers x ≥ 150.
         assert_eq!(at(&px, 180, 150), [255, 255, 0], "the frame above covers the sliding node");
-        assert_ne!(at(&px, 130, 150), [34, 85, 255], "the part outside that frame still shows it");
+        assert!(at(&px, 130, 150)[0] > 100, "the part outside that frame still shows the sliding node");
+    }
+
+    /// Two slides in different frames: the lower one's cover pass must not erase the higher
+    /// one, whichever was added first.
+    #[test]
+    fn slide_in_higher_frame_survives_lower_covers() {
+        let json = r##"{"version":"2.19","children":[
+            {"type":"frame","id":"p","x":0,"y":0,"width":300,"height":300,"layout":"none","fill":"#2255ff","children":[
+                {"type":"rectangle","id":"a","x":10,"y":10,"width":100,"height":240,"fill":"#ff0000"}]},
+            {"type":"frame","id":"q","x":0,"y":0,"width":300,"height":300,"layout":"none","fill":"#ffff00","children":[
+                {"type":"rectangle","id":"b","x":10,"y":150,"width":100,"height":100,"fill":"#00ff00"}]}]}"##;
+        let doc = Doc::from_json(json).unwrap();
+        let (mut fonts, mut assets) = offline();
+        let mut r = Renderer::default();
+        r.slides.push(Slide::new("b"));
+        r.slides.push(Slide::new("a"));
+        let mut cx = Ctx { doc: &doc, libs: &[], fonts: &mut fonts, assets: &mut assets };
+        let roots = r.shift_siblings(&mut cx);
+        let rebuilt = r.sync(&mut cx);
+        r.refresh_slides(&mut cx, &rebuilt, roots);
+        r.render(300, 300, 0.0, 0.0, 1.0, [30, 30, 30], None, true);
+        for s in &mut r.slides {
+            s.start = Some(Instant::now() - Duration::from_millis(100));
+        }
+        let px = r.render(300, 300, 0.0, 0.0, 1.0, [30, 30, 30], None, true).to_vec();
+        // b (y 150..250, 6.8 low) is mid-slide over the yellow frame q, which a's cover (y 10..250) repaints.
+        let g = px[(200 * 300 + 50) * 4 + 1];
+        let rb = px[(200 * 300 + 50) * 4];
+        assert!(g > 250 && rb < 230, "b still shows over q, got r {rb} g {g}");
     }
 
     /// Present mode renders one frame alone; a node sliding into it must still paint there (the
