@@ -168,7 +168,9 @@ TakeScreenshot([s])`,
   await app.getByTestId(`chat-${multiId}`).waitFor()
   const multiRow = (await app.getByTestId(`chat-${multiId}`).bounds())!
   const multiText = (await app.getByText('Make it dark and add a footer').bounds())!
-  if (multiText.height > multiRow.height) throw new Error(`a multi-line chat title is ${multiText.height}px tall inside a ${multiRow.height}px row`)
+  const oneText = (await app.getByText('E2E saved chat').bounds())!
+  if (multiText.height > oneText.height + 1) throw new Error(`a multi-line chat title is ${multiText.height}px tall, a one-line title ${oneText.height}px`)
+  if (multiText.y < multiRow.y || multiText.y + multiText.height > multiRow.y + multiRow.height) throw new Error('a multi-line chat title spills out of its row')
   rmSync(multiFile)
   await app.getByTestId(`chat-${chatId}`).click()
   await sleep(500)

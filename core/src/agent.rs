@@ -210,13 +210,13 @@ fn begin(prompt: String, parallel: usize, mode: &str, designs: usize, iterate: &
     start_turn(&prompt, text, resume);
 }
 
-/// Send `prompt` to the main agent (same conversation), showing `shown` as the user's message.
-/// A `resume` turn continues a finished run: it is dropped when Stop came in since that run ended.
 /// One-line chat title: the first prompt with whitespace runs (line breaks too) collapsed, capped at 100 chars.
 fn chat_title(shown: &str) -> String {
     shown.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(100).collect()
 }
 
+/// Send `prompt` to the main agent (same conversation), showing `shown` as the user's message.
+/// A `resume` turn continues a finished run: it is dropped when Stop came in since that run ended.
 fn start_turn(shown: &str, prompt: String, resume: bool) {
     let main = {
         let mut e = engine();
