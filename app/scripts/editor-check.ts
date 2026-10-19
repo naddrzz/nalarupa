@@ -1,5 +1,6 @@
 // Core checks for the canvas editing commands (no window): `bun scripts/editor-check.ts`
 import { call } from '../src/core'
+import { nodeIcon } from '../src/icons'
 
 const assert = (ok: unknown, msg: string) => {
   if (!ok) throw new Error(`editor-check failed: ${msg}`)
@@ -247,6 +248,11 @@ for (let i = 0; i < 5; i++) call('drop_target', { x: 5500, y: 500, w: 10, h: 10,
 const per = (performance.now() - t0) / 5
 assert(call<{ id: string }>('drop_target', { x: 5500, y: 500, w: 10, h: 10, ignore: [] }).id === BF, 'drop_target finds the big frame among 1,500 layers')
 assert(per < 25, `drop_target with 1,500 layers took ${per.toFixed(1)} ms per call`)
+
+// Every layer type that has its own look gets its own Layers/Inspector icon (only rectangle uses the square).
+const icons = Object.fromEntries(['frame', 'group', 'rectangle', 'ellipse', 'text', 'icon', 'line', 'note', 'prompt', 'context', 'script', 'browser'].map((t) => [t, nodeIcon(t)]))
+assert(new Set(Object.values(icons)).size === Object.keys(icons).length, `layer types share an icon ${JSON.stringify(icons)}`)
+assert(nodeIcon('path') === nodeIcon('polygon') && nodeIcon('frame', true) === 'component', 'path/polygon and reusable icons')
 
 console.log('editor-check ok')
 process.exit(0)
