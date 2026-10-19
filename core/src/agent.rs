@@ -597,8 +597,16 @@ pub fn chats() -> Value {
     json!({"current": current, "chats": list_chats(&dir)})
 }
 
+/// Serializes load, delete and clear: each touches the chat files and the current chat in separate steps, so one must not interleave with another.
+/// Always taken before the engine lock.
+fn chat_ops() -> std::sync::MutexGuard<'static, ()> {
+    static OPS: Mutex<()> = Mutex::new(());
+    OPS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// `chat_load`: make a saved chat the current conversation; returns its events for the UI to replay.
 pub fn load_chat(id: &str) -> Result<Value, String> {
+    let _ops = chat_ops();
     flush_chat_saves();
     let mut e = engine();
     if e.agent.running {
@@ -611,6 +619,7 @@ pub fn load_chat(id: &str) -> Result<Value, String> {
 
 /// `chat_delete`: remove a saved chat. Removing the current one starts a new conversation.
 pub fn delete_chat(id: &str) -> Result<(), String> {
+    let _ops = chat_ops();
     let path = {
         let mut e = engine();
         let path = chat_path(&e.data_dir, id)?;
@@ -632,6 +641,7 @@ pub fn delete_chat(id: &str) -> Result<(), String> {
 
 /// `chat_clear`: delete every saved chat but a running one. True when the current chat went too.
 pub fn clear_chats() -> Result<bool, String> {
+    let _ops = chat_ops();
     let (dir, running, keep) = {
         let mut e = engine();
         let running = e.agent.running;
