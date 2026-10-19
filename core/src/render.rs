@@ -294,8 +294,9 @@ pub fn find_rnode<'r>(n: &'r RNode, id: &str) -> Option<&'r RNode> {
     n.kids.iter().find_map(|k| find_rnode(k, id))
 }
 
-fn shared_hash(doc: &Doc, libs: &[(String, Value)]) -> u64 {
-    let mut s = String::new();
+fn shared_hash(doc: &Doc, libs: &[(String, Value)], fonts: u64) -> u64 {
+    // A downloaded font changes how text lays out.
+    let mut s = fonts.to_string();
     s.push_str(&doc.root.get("variables").map(Value::to_string).unwrap_or_default());
     s.push_str(&doc.root.get("themes").map(Value::to_string).unwrap_or_default());
     crate::doc::walk(doc.children(), &mut |n| {
@@ -317,7 +318,7 @@ fn shared_hash(doc: &Doc, libs: &[(String, Value)]) -> u64 {
 impl Renderer {
     /// Rebuild layers whose content changed since the last sync; returns their ids.
     pub fn sync(&mut self, cx: &mut Ctx) -> Vec<String> {
-        let shared = shared_hash(cx.doc, cx.libs);
+        let shared = shared_hash(cx.doc, cx.libs, cx.fonts.generation);
         let reshared = std::mem::replace(&mut self.shared, shared) != shared;
         let hidden: HashSet<String> = self.slides.iter().map(|s| s.id.clone()).collect();
         let mut order = Vec::new();

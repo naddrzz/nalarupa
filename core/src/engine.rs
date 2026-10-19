@@ -699,6 +699,18 @@ impl Engine {
         }
     }
 
+    /// A background font download finished: text that used a fallback face lays out again.
+    /// The document is unchanged, so a clean one stays clean.
+    pub fn font_ready(&mut self, family: &str, weight: u16, italic: bool) {
+        if self.fonts.downloaded(family, weight, italic) {
+            let clean = !self.dirty();
+            self.version += 1;
+            if clean {
+                self.saved = self.version;
+            }
+        }
+    }
+
     /// A background generator (the AI Pen) drew into node `id`: set `props` on it without an undo
     /// step, in the document and the live preview. When `done`,
     /// every undo/redo snapshot holding the node gets them too, so history never brings back a
@@ -795,6 +807,32 @@ mod tests {
         assert!(e.set_setting("k", json!("new")).is_err());
         assert!(!blocker.exists(), "a failed rename must not leave the new settings in the temp file");
         assert_eq!(e.setting("k"), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A font landing in the background redraws the canvas but is not an edit.
+    #[test]
+    fn downloaded_font_redraws_without_dirtying() {
+        let dir = std::env::temp_dir().join(format!("nalarupa-test-font-ready-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut e = Engine::new(dir.clone());
+        e.offline();
+        let face = e.fonts.db.faces().find(|f| f.weight.0 == 400 && f.style == resvg::usvg::fontdb::Style::Normal).expect("a system font");
+        let (family, id) = (face.families[0].0.clone(), face.id);
+        let (resvg::usvg::fontdb::Source::File(p) | resvg::usvg::fontdb::Source::SharedFile(p, _)) = &face.source else { panic!("font from a file") };
+        let bytes = std::fs::read(p).unwrap();
+        std::sync::Arc::make_mut(&mut e.fonts.db).remove_face(id);
+        let _ = std::fs::create_dir_all(dir.join("fonts"));
+        std::fs::write(dir.join("fonts").join(format!("{}-400.ttf", family.replace(' ', "_"))), bytes).unwrap();
+        let before = e.version;
+        assert!(!e.dirty());
+        e.font_ready(&family, 400, false);
+        assert!(e.version > before && !e.dirty());
+        e.touch();
+        let v = e.version;
+        e.font_ready(&family, 400, false);
+        assert_eq!(e.version, v, "nothing new loaded: no redraw");
+        assert!(e.dirty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
