@@ -1282,6 +1282,33 @@ pub(crate) mod tests {
         }
     }
 
+    /// A group's shadow follows what its children paint, strokes included: the same silhouette as
+    /// the shadow on the stroked rectangle itself, in both rasters.
+    #[test]
+    fn group_shadow_includes_children_strokes() {
+        let rect = r##""type":"rectangle","x":40,"y":40,"width":70,"height":70,"fill":"#e03030","stroke":"#102030","strokeWidth":10"##;
+        let shadow = r##""effect":{"type":"shadow","offset":{"x":12,"y":12},"blur":0,"color":"#206020"}"##;
+        let frame = |y: u32, node: String| {
+            format!(r##"{{"type":"frame","id":"f{y}","x":0,"y":{y},"width":200,"height":200,"layout":"none","fill":"#ffffff","children":[{node}]}}"##)
+        };
+        let json = format!(
+            r##"{{"version":"2.19","children":[{},{}]}}"##,
+            frame(0, format!(r##"{{"type":"group",{shadow},"children":[{{{rect}}}]}}"##)),
+            frame(300, format!(r##"{{{rect},{shadow}}}"##)),
+        );
+        let doc = Doc::from_json(&json).unwrap();
+        for raster in [Raster::Resvg, Raster::Vello] {
+            let mut r = Renderer { raster, ..Renderer::default() };
+            sync(&mut r, &doc);
+            let px = r.render(200, 500, 0.0, 0.0, 1.0, [255, 255, 255], None, true).to_vec();
+            // Shadow-coloured pixels on a row below the stroke's outer edge (115), inside the shadow (47..127).
+            let row = |y: usize| (0..200).filter(|&x| px[(y * 200 + x) * 4..][..3] == [0x20, 0x60, 0x20]).map(|x| x as i32).collect::<Vec<_>>();
+            let (group, own) = (row(118), row(418));
+            assert_eq!((group.first(), group.last()), (Some(&47), Some(&126)), "{raster:?}: group shadow spans the stroke on every side");
+            assert_eq!(group, own, "{raster:?}: group shadow matches the stroked rectangle's own");
+        }
+    }
+
     /// Text paints like a shape: fill, then inner shadows, then the stroke, so the stroke covers an inner shadow.
     #[test]
     fn text_stroke_covers_inner_shadow() {
