@@ -36,14 +36,14 @@ pub fn export(e: &mut Engine, ids: &[String], format: &str, out: &str, opts: &Va
             }
         }
         "pdf" => {
-            // No ids = the whole deck: every top-level frame, in document order.
+            // No ids = the whole deck: every visible top-level frame, in document order (hidden slides are skipped, as in Present).
             let ids: Vec<String> = if ids.is_empty() {
-                e.doc.children().iter().filter(|n| n["type"] == "frame").filter_map(|n| n["id"].as_str().map(str::to_string)).collect()
+                e.doc.children().iter().filter(|n| n["type"] == "frame" && n["enabled"] != false).filter_map(|n| n["id"].as_str().map(str::to_string)).collect()
             } else {
                 ids.to_vec()
             };
             if ids.is_empty() {
-                return Err("nothing to export: the document has no top-level frames".into());
+                return Err("nothing to export: the document has no visible top-level frames".into());
             }
             let file = out_path(e, out, &format!("{}.pdf", e.title()));
             if let Some(dir) = file.parent() {
@@ -418,6 +418,12 @@ mod tests {
         let text = String::from_utf8_lossy(&pdf).replace("/Type /", "/Type/");
         let pages = text.matches("/Type/Page").count() - text.matches("/Type/Pages").count();
         assert_eq!(pages, 3, "one page per top-level frame");
+
+        e.edit(|d| d.update("sld02", &json!({"enabled": false}))).unwrap();
+        let files = super::export(&mut e, &[], "pdf", out.join("partial.pdf").to_str().unwrap(), &json!({})).unwrap();
+        let text = String::from_utf8_lossy(&std::fs::read(&files[0]).unwrap()).replace("/Type /", "/Type/");
+        assert_eq!(text.matches("/Type/Page").count() - text.matches("/Type/Pages").count(), 2, "a hidden slide is skipped");
+        e.edit(|d| d.update("sld02", &json!({"enabled": null}))).unwrap();
 
         let ids = ["sld01".to_string()];
         let jpg = super::export(&mut e, &ids, "jpg", out.to_str().unwrap(), &json!({"scale": 0.25})).unwrap();
