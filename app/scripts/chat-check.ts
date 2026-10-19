@@ -105,7 +105,11 @@ if (!windows) {
     call('chat_delete', { id: 'ddd444' })
     assert(ids() === run, 'another chat can be deleted while the agent runs')
     save('eee555', 'Spare', 6000)
+    // A save in flight has its temp file next to the chat: clearing must not delete it from under the writer.
+    const tmp = join(sessions, `${run}.json.tmp`)
+    writeFileSync(tmp, '{}')
     assert(call('chat_clear') === false && call('chat_list').current === run && ids() === run, 'clear keeps the running chat and reports it')
+    assert(existsSync(tmp), 'clear keeps the running chat\'s temp file')
   } finally {
     call('agent_stop')
   }

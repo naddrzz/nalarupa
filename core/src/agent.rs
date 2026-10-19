@@ -660,7 +660,8 @@ pub fn clear_chats() -> Result<bool, String> {
     let (dir, running, keep) = {
         let mut e = engine();
         let running = e.agent.running;
-        let keep = running.then(|| e.agent.chat.as_ref().map(|c| format!("{}.json", c.id))).flatten();
+        // Both the file and the temp file its writer renames over it: removing the temp file fails the next save.
+        let keep = running.then(|| e.agent.chat.as_ref().map(|c| [format!("{}.json", c.id), format!("{}.json.tmp", c.id)])).flatten();
         if !running {
             e.agent.clear();
         }
@@ -669,7 +670,7 @@ pub fn clear_chats() -> Result<bool, String> {
     // Flushed after the lock drops: only a running chat can still queue snapshots, and its file is kept.
     flush_chat_saves();
     for entry in std::fs::read_dir(dir.join("sessions")).into_iter().flatten().flatten() {
-        if keep.as_deref() != entry.file_name().to_str() {
+        if !keep.as_ref().is_some_and(|k| k.iter().any(|f| entry.file_name().to_str() == Some(f.as_str()))) {
             std::fs::remove_file(entry.path()).map_err(|err| err.to_string())?;
         }
     }
