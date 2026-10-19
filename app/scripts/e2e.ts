@@ -225,6 +225,7 @@ TakeScreenshot([s])`,
   await until(async () => !!(await app.getByText('Ask me to design anything').count()), 'the empty state after + (New agent)')
   if (await app.getByType('markdown').count()) throw new Error('+ (New agent) left the old conversation on screen')
   await app.getByTestId('agent-history').click()
+  await app.getByTestId(`chat-${chatId}`).waitFor()
   await app.getByTestId(`chat-${chatId}`).click()
   await until(async () => (await app.getByType('markdown').count()) === 1, 'the saved chat to reopen')
   await app.getByTestId('agent-history').click()
