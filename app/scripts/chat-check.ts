@@ -24,9 +24,12 @@ if (!process.argv.includes('--child')) {
   const data = mkdtempSync(join(tmpdir(), 'nalarupa-chat-'))
   // A stand-in `claude` that runs long and prints nothing: a running agent without a login (a shell script, so not on Windows).
   // When `replay.txt` exists next to it, it prints those lines first (`sleep <s>` pauses) and exits.
+  // When `stale.flag` exists, it fails a `--resume` of the id saved below like the real CLI does for a session it has lost.
   const bin = join(data, 'bin')
   mkdirSync(bin)
+  const stale = '{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["No conversation found with session ID: 11111111-2222-3333-4444-555555555555"]}'
   const stub = '#!/bin/bash\nf="$(dirname "$0")/replay.txt"\n' +
+    `if [ -f "$(dirname "$0")/stale.flag" ]; then case " $* " in *" --resume 11111111-2222-3333-4444-555555555555 "*) echo '${stale}'; exit 1;; esac; fi\n` +
     'if [ -f "$f" ]; then while IFS= read -r l; do case "$l" in sleep*) sleep "${l#sleep }";; *) printf \'%s\\n\' "$l";; esac; done < "$f"; exit 0; fi\nexec sleep 60\n'
   if (!windows) writeFileSync(join(bin, 'claude'), stub, { mode: 0o755 })
   const PATH = `${bin}${delimiter}${process.env.PATH ?? ''}`
@@ -65,6 +68,9 @@ assert(list().chats[0].title === 'Newer hero section', 'titles are listed')
 writeFileSync(join(sessions, 'notes.txt'), 'not a chat')
 writeFileSync(join(sessions, 'damaged1.json'), '{not json')
 assert(ids() === 'aaa111,bbb222,ccc333', 'non-chat and damaged files are not listed')
+// A name load and delete would reject (a backup, a copy) is not listed either: its row could never be opened or removed.
+for (const name of ['pricing-backup', 'copy (1)', 'chat_old', 'a.b']) save(name, 'Ghost', 4000)
+assert(ids() === 'aaa111,bbb222,ccc333', `files with non-alphanumeric names are not listed: ${ids()}`)
 const stale = join(sessions, 'aaa111.json')
 const old = new Date(Date.now() - 30 * 86_400_000)
 utimesSync(stale, old, old)
@@ -180,6 +186,32 @@ if (!windows) {
   assert(JSON.stringify(starts.map((e: any) => [e.backend, e.model])) === JSON.stringify([['claude-code', 'claude-opus-5-5'], ['claude-code', 'claude-sonnet-5-5']]), `start events record the model: ${JSON.stringify(starts)}`)
   const reopened = call('chat_load', { id }).events.filter((e: any) => e.kind === 'start')
   assert(JSON.stringify(reopened.map((e: any) => [e.backend, e.model])) === JSON.stringify([['claude-code', 'claude-opus-5-5'], ['claude-code', 'claude-sonnet-5-5']]), `reopened chat keeps the models: ${JSON.stringify(reopened)}`)
+  assert(call('chat_clear') === true, 'the chat is cleared again')
+}
+
+// A saved session the CLI can no longer resume is dropped: the message runs again in a new session, with a
+// note, and later messages do not resume the stale id.
+if (!windows) {
+  call('chat_clear')
+  mkdirSync(sessions, { recursive: true })
+  const agent = { id: 'agfix', name: 'Fixture', color: '#ff3366' }
+  writeFileSync(join(sessions, 'stale1.json'), JSON.stringify({ version: 1, id: 'stale1', title: 'Pricing page', updatedAt: 9000, agent, events: [], messages: [], session: '11111111-2222-3333-4444-555555555555' }))
+  writeFileSync(join(data, 'bin', 'stale.flag'), '')
+  writeFileSync(join(data, 'bin', 'replay.txt'), JSON.stringify({ type: 'stream_event', session_id: 'fresh', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'hi' } } }) + '\n')
+  call('chat_load', { id: 'stale1' })
+  const kinds: string[] = []
+  for (const text of ['make it darker', 'try again']) {
+    call('agent_send', { text })
+    const evs: any[] = []
+    for (let i = 0; i < 100; i++) { await sleep(100); evs.push(...(call('poll').events ?? []).filter((e: any) => e.type === 'agent')); if (i > 3 && !call('state').agentRunning) break }
+    assert(!evs.some((e) => e.kind === 'error'), `a lost session gives no error card: ${JSON.stringify(evs)}`)
+    assert(evs.some((e) => e.kind === 'text_delta'), `the message runs in a new session: ${JSON.stringify(evs)}`)
+    kinds.push(evs.filter((e) => e.kind === 'note').length ? 'note' : 'quiet')
+  }
+  assert(kinds.join() === 'note,quiet', `only the first message notes the lost context: ${kinds}`)
+  assert(JSON.parse(readFileSync(join(sessions, 'stale1.json'), 'utf8')).session === 'fresh', 'the saved chat keeps the new session id')
+  rmSync(join(data, 'bin', 'stale.flag'))
+  rmSync(join(data, 'bin', 'replay.txt'))
   assert(call('chat_clear') === true, 'the chat is cleared again')
 }
 

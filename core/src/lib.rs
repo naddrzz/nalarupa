@@ -81,6 +81,12 @@ fn state(e: &Engine) -> Value {
 /// Execute one UI command.
 pub fn dispatch(req: &Value) -> Result<Value, String> {
     let cmd = req["cmd"].as_str().unwrap_or("");
+    let _gate = matches!(
+        cmd,
+        "update" | "move_by" | "insert" | "delete" | "duplicate" | "reorder" | "reparent" | "wrap" | "unwrap" | "add_layout" | "set_layout" | "remove_layout" | "align" | "paste" | "path_write"
+            | "drag_begin" | "drag_end" | "undo" | "redo" | "set_variable" | "save"
+    )
+    .then(engine::edit_gate);
     match cmd {
         "init" => {
             let need_mcp = engine().mcp_port == 0;
@@ -199,7 +205,7 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
                 let y = n["y"].as_f64().unwrap_or(0.0);
                 Some((id.clone(), x, y))
             }).collect();
-            e.edit_or_drag(|d| pos.iter().try_for_each(|(id, x, y)| d.update(id, &json!({"x": x + dx, "y": y + dy}))))?;
+            e.edit_or_drag(|d| pos.iter().try_for_each(|(id, x, y)| d.update(id, &json!({"x": editor::num(x + dx), "y": editor::num(y + dy)}))))?;
             Ok(state(&e))
         }
         "insert" => {

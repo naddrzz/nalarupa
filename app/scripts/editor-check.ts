@@ -213,6 +213,16 @@ const free = call('insert', { parent: 'document', node: { type: 'frame', name: '
 assert(call('drop_target', { x: 3150, y: 2100, w: 10, h: 10, ignore: [] }).id === free, 'drop into a rotated free frame at its centre')
 assert(call('drop_target', { x: 3001, y: 2199, w: 10, h: 10, ignore: [] }).id === 'document', 'the unrotated corner of a rotated free frame is the document')
 
+// drop_target runs on every mouse move of a drag: it must stay linear in the layer count (it used to look up every layer's type in the tree first, ~80 ms at 1,500 layers).
+const BF = call('insert', { parent: 'document', node: { type: 'frame', name: 'BF', x: 5000, y: 0, width: 4000, height: 4000, layout: 'none', fill: '#fff' } }).id
+for (let i = 0; i < 1500; i++) call('insert', { parent: BF, node: { type: 'rectangle', x: 5000 + (i % 50) * 70, y: Math.floor(i / 50) * 70, width: 60, height: 60, fill: '#f00' } })
+call('drop_target', { x: 5500, y: 500, w: 10, h: 10, ignore: [] }) // warm-up: the first call syncs the pending document
+const t0 = performance.now()
+for (let i = 0; i < 5; i++) call('drop_target', { x: 5500, y: 500, w: 10, h: 10, ignore: [] })
+const per = (performance.now() - t0) / 5
+assert(call<{ id: string }>('drop_target', { x: 5500, y: 500, w: 10, h: 10, ignore: [] }).id === BF, 'drop_target finds the big frame among 1,500 layers')
+assert(per < 25, `drop_target with 1,500 layers took ${per.toFixed(1)} ms per call`)
+
 // Every layer type that has its own look gets its own Layers/Inspector icon (only rectangle uses the square).
 const icons = Object.fromEntries(['frame', 'group', 'rectangle', 'ellipse', 'text', 'icon', 'line', 'note', 'prompt', 'context', 'script', 'browser'].map((t) => [t, nodeIcon(t)]))
 assert(new Set(Object.values(icons)).size === Object.keys(icons).length, `layer types share an icon ${JSON.stringify(icons)}`)

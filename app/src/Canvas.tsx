@@ -1205,7 +1205,13 @@ export function Canvas(props: {
     const parent = parentBox?.id ?? 'document'
     // Keep drawn layers where they were drawn, even inside auto-layout frames.
     const parentLayout = parentBox ? tryCall('node', { id: parentBox.id })?.node?.layout ?? 'horizontal' : 'none'
-    const rel = { x: x0 - (parentBox?.x ?? 0), y: y0 - (parentBox?.y ?? 0), ...(parentLayout !== 'none' ? { layoutPosition: 'absolute' } : {}) }
+    // A rotated or flipped parent paints through its matrix: map the drag's center into the parent's own space and
+    // centre the new box there (an upright parent keeps the plain top-left offset). Text has no drawn height, so a
+    // dragged text box is centred along its top edge and clicked text keeps its top-left corner.
+    const [sw, sh] = tool === 'text' ? (clicked ? [0, 0] : [bw, 0]) : [bw, bh]
+    const [cx, cy] = unapply(parentBox?.m, x0 + sw / 2, y0 + sh / 2)
+    const at = (v: number) => Math.round(v * 100) / 100
+    const rel = { x: at(cx - sw / 2 - (parentBox?.x ?? 0)), y: at(cy - sh / 2 - (parentBox?.y ?? 0)), ...(parentLayout !== 'none' ? { layoutPosition: 'absolute' } : {}) }
     const base = { ...rel, width: bw, height: bh }
     const node =
       tool === 'frame' ? { type: 'frame', name: 'Frame', ...base, fill: '#FFFFFF', layout: 'none', clip: parent === 'document' }
@@ -1461,7 +1467,9 @@ export function Canvas(props: {
       <AgentLayer cam={cam} w={w} h={h} version={version} chatOpen={!!props.chatOpen} />
       {ghost ? <div style={{ position: 'absolute', left: ghost.x, top: ghost.y, width: ghost.w, height: ghost.h, borderWidth: 1, borderColor: C.select, backgroundColor: '#3B82F622', pointerEvents: 'none' }} /> : null}
       {editing ? (() => {
-        const [x, y] = toScreen(editing.box.x, editing.box.y)
+        // The field stays upright but is centered on where the (rotated/flipped) text is painted.
+        const p = painted(editing.box)
+        const [x, y] = toScreen(p.x + p.w / 2 - editing.box.w / 2, p.y + p.h / 2 - editing.box.h / 2)
         return (
           <div style={{ position: 'absolute', left: x - 2, top: y - 2, width: Math.max(80, editing.box.w * cam.zoom + 40), borderWidth: 1.5, borderColor: C.select, backgroundColor: '#FFFFFFEE', borderRadius: 3, padding: 2 }}>
             <textarea

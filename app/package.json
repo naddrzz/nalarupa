@@ -23,6 +23,9 @@
     "chat-check": "bun scripts/chat-check.ts",
     "mcp-install-check": "bun scripts/mcp-install-check.ts",
     "file-e2e": "bun scripts/file-e2e.ts",
+    "drag-check": "bun scripts/drag-check.ts",
+    "viewport-check": "bun scripts/viewport-check.ts",
+    "issues-check": "bun scripts/issues-check.ts",
     "typecheck": "tsc --noEmit",
     "exe-check": "bun scripts/exe-check.ts",
     "shots": "bun scripts/shots.ts"
