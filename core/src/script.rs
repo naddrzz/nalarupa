@@ -728,6 +728,7 @@ fn execute_within(e: &mut Engine, args: &Value, budget: Duration) -> ToolOut {
     };
 
     let before = e.doc.root.clone();
+    let was_clean = !e.dirty();
     let agent = args["__agent"].as_str().unwrap_or("agent").to_string();
     let globals = e.script.globals.get(&agent).cloned().unwrap_or_default();
     if let Some(seed) = args["__seed"].as_u64() {
@@ -740,6 +741,10 @@ fn execute_within(e: &mut Engine, args: &Value, budget: Duration) -> ToolOut {
         Err(err) => {
             e.doc.root = before;
             e.version += 1;
+            // The rollback restored the saved document; only the render needed the bump.
+            if was_clean {
+                e.saved = e.version;
+            }
             let id = edit_id.unwrap_or_else(|| format!("e{:x}", crate::doc::random_u64() & 0xffffff));
             e.script.failed.insert(id.clone(), source);
             return ToolOut::err(format!(
