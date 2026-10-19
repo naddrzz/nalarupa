@@ -161,6 +161,10 @@ assert(same({ ...pb, id: bar }, { id: bar, x: 1100, y: 0, w: 40, h: 300 }), `bou
 call('update', { ids: [bar], props: { rotation: 45 } })
 assert(marquee(1200, 190, 20, 20), 'marquee on the 45° bar selects it')
 assert(!marquee(1110, 90, 30, 30), "marquee in the empty corner of a 45° bar's bounds misses it")
+// A zero-height layer paints a line: the SAT needs its normal too, or the empty corner of its bounds is a hit.
+call('update', { ids: [bar], props: { height: 0 } })
+assert(marquee(1200, 190, 20, 20), 'marquee on a zero-height 45° line selects it')
+assert(!marquee(1110, 90, 30, 30), "marquee in the empty corner of a zero-height 45° line's bounds misses it")
 
 console.log('editor-check ok')
 process.exit(0)

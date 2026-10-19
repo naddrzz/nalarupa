@@ -110,7 +110,7 @@ impl<'a> View<'a> {
         if !overlaps(b, r) {
             return false;
         }
-        [(c[1].0 - c[0].0, c[1].1 - c[0].1), (c[2].0 - c[0].0, c[2].1 - c[0].1)].into_iter().filter(|a| a.0 != 0.0 || a.1 != 0.0).all(|a| {
+        [(c[1].0 - c[0].0, c[1].1 - c[0].1), (c[2].0 - c[0].0, c[2].1 - c[0].1)].into_iter().flat_map(|a| [a, (-a.1, a.0)]).filter(|a| a.0 != 0.0 || a.1 != 0.0).all(|a| {
             let span = |pts: &[(f64, f64); 4]| pts.iter().map(|p| p.0 * a.0 + p.1 * a.1).fold((f64::MAX, f64::MIN), |s, d| (s.0.min(d), s.1.max(d)));
             let (q, w) = (span(&c), span(&rc));
             // Tolerance for rounding in the rotation matrix (an exact touch counts).
