@@ -1,8 +1,9 @@
-# Team overrides for bmad-qa-generate-e2e-tests in Nalarupa (used locally and by the nightly QA on the VPS).
+# Team overrides for bmad-qa-generate-e2e-tests in Nalarupa (used locally and by the nightly QA on GitHub Actions).
 [workflow]
 persistent_facts = [
   "Checks in this repo are Bun scripts with a small assert helper in app/scripts/, not a test runner. Headless checks drive the core through `call` from app/src/core.ts and rerun themselves in a child with a fresh NALARUPA_DATA (see app/scripts/doc-check.ts). Windowed checks use GPUIX `launch` from '@gpuix/react/automation' (see app/scripts/e2e.ts and file-e2e.ts).",
   "Register every new check in app/package.json scripts, in the `checks` job of .github/workflows/ci.yml (windowed ones as `bash scripts/wl-run.sh bun run <name>`), and in the README Checks list.",
   "On Linux, run windowed checks under `bash scripts/wl-run.sh` from app/. Poll with until() instead of fixed sleeps. Follow the GPUIX automation pitfalls in AGENTS.md.",
+  "New checks go in app/scripts/ (not tests/) and use the Bun check style above; never add a test framework or dependency. Report coverage counts you actually measured.",
   "Write the test summary to _bmad-output/test-summary-<slug>/test-summary-<slug>.md.",
 ]

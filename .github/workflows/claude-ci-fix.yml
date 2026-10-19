@@ -1,14 +1,10 @@
 name: claude-ci-fix
 # A failed ci run on a PR from this repo → Claude reads the log, fixes the cause and pushes to the PR branch
-# (at most 3 rounds per PR). Runs as the repo owner through GH_PAT, so the push re-runs ci.
+# (at most 3 rounds per PR). Runs as the repo owner through GH_PAT, so the push re-runs ci. GitHub-hosted runner.
 on:
   workflow_run:
     workflows: [ci]
     types: [completed]
-
-env:
-  CARGO_TARGET_DIR: /home/nalarupa-ci/.cache/nalarupa-target
-  NALARUPA_CORE: /home/nalarupa-ci/.cache/nalarupa-target/release/libnalarupa_core.so
 
 jobs:
   fix:
@@ -17,7 +13,7 @@ jobs:
       github.event.workflow_run.event == 'pull_request' &&
       github.event.workflow_run.head_repository.full_name == github.repository
     concurrency: { group: "ci-fix-${{ github.event.workflow_run.head_branch }}", cancel-in-progress: false }
-    runs-on: [self-hosted, nalarupa]
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     permissions: { contents: write, pull-requests: write, actions: read, id-token: write }
     steps:
@@ -30,8 +26,7 @@ jobs:
           echo "stale=$([ "$(git rev-parse HEAD)" = "${{ github.event.workflow_run.head_sha }}" ] && echo 0 || echo 1)" >> "$GITHUB_OUTPUT"
           echo "failures=$(gh run list -R ${{ github.repository }} -w ci.yml -b '${{ github.event.workflow_run.head_branch }}' -e pull_request -s failure -L 100 --json databaseId -q length)" >> "$GITHUB_OUTPUT"
       - if: steps.guard.outputs.stale == '0' && steps.guard.outputs.failures <= 3
-        run: bun install --frozen-lockfile
-        working-directory: app
+        uses: ./.github/actions/claude-setup
       - if: steps.guard.outputs.stale == '0' && steps.guard.outputs.failures <= 3
         uses: anthropics/claude-code-action@v1
         env: { GH_TOKEN: "${{ secrets.GH_PAT }}" }

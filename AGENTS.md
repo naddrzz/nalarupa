@@ -3,7 +3,7 @@
 
 ## nalarupa
 
-AI design editor: a Rust core (`core/`, a cdylib loaded through `bun:ffi`) and a GPUIX/React UI run by Bun (`app/`). Windows is the release platform. CI runs on GitHub-hosted Linux and Windows runners; nightly QA and the Claude automation run on a self-hosted Linux VPS (`.github/workflows/`). Work is tracked in GitHub issues.
+AI design editor: a Rust core (`core/`, a cdylib loaded through `bun:ffi`) and a GPUIX/React UI run by Bun (`app/`). Windows is the release platform. CI, nightly QA and the Claude automation run on GitHub-hosted runners (Linux, plus Windows for CI); only auto-merge runs on a small self-hosted VPS runner (`.github/workflows/`). Work is tracked in GitHub issues.
 
 ## Policy
 
