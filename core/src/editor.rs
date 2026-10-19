@@ -156,6 +156,28 @@ impl<'a> View<'a> {
         Some((f.x - f.local.0[0], f.y - f.local.0[1]))
     }
 
+    /// Where `id` goes under `parent` to paint where it does now: its origin relative to the
+    /// parent's origin (in the parent's own, possibly turned, space) and, when the old and new
+    /// parents are turned differently, the (rotation, flipX, flipY) that fold the difference in.
+    fn placed(&self, id: &str, parent: &str) -> Option<((f64, f64), Option<(f64, bool, bool)>)> {
+        let f = self.flat(id)?;
+        let upright = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+        let to_parent = invert(self.flat(parent).and_then(|p| p.m).unwrap_or(upright))?;
+        let n = compose(to_parent, f.m.unwrap_or(upright));
+        let (o, po) = (map(&n, self.origin(id)?), self.origin(parent)?);
+        let (_, rot, fx, fy) = f.local;
+        let (sx, sy) = (if fx { -1.0 } else { 1.0 }, if fy { -1.0 } else { 1.0 });
+        let t = -rot.to_radians();
+        let own = [t.cos() * sx, t.sin() * sx, -t.sin() * sy, t.cos() * sy];
+        if n.iter().zip(own).take(4).all(|(a, b)| (a - b).abs() < 1e-9) {
+            return Some(((o.0 - po.0, o.1 - po.1), None));
+        }
+        // Keep the node's own flips unless the mirroring changed (then flip x), and read the rotation off the first column.
+        let (sx, sy) = if (n[0] * n[3] - n[1] * n[2]).is_sign_negative() == (sx * sy < 0.0) { (sx, sy) } else { (-sx, sy) };
+        let deg = -(n[1] * sx).atan2(n[0] * sx).to_degrees();
+        Some(((o.0 - po.0, o.1 - po.1), Some((deg, sx < 0.0, sy < 0.0))))
+    }
+
     fn paint_order(&self, ids: &[String]) -> Vec<String> {
         let mut v = ids.to_vec();
         v.sort_by_key(|id| self.by_id.get(id.as_str()).map_or(usize::MAX, |x| x.0));
@@ -306,6 +328,15 @@ pub fn drop_target(e: &Engine, x: f64, y: f64, w: f64, h: f64, ignore: &[String]
     out
 }
 
+/// Store the rotation and flips from `View::placed`.
+fn set_turn(props: &mut Map<String, Value>, turn: Option<(f64, bool, bool)>) {
+    if let Some((deg, fx, fy)) = turn {
+        props.insert("rotation".into(), num(deg));
+        props.insert("flipX".into(), json!(fx));
+        props.insert("flipY".into(), json!(fy));
+    }
+}
+
 /// Move `ids` under `parent` (at `index` among its other children, else on top) keeping
 /// their position on the canvas. Same parent without an index is a no-op.
 pub fn reparent(e: &mut Engine, ids: &[String], parent: &str, index: Option<usize>) -> Result<(), String> {
@@ -315,7 +346,6 @@ pub fn reparent(e: &mut Engine, ids: &[String], parent: &str, index: Option<usiz
         if !v.accepts_children(parent) {
             return Err(format!("'{parent}' cannot contain other layers"));
         }
-        let po = v.origin(parent).unwrap_or((0.0, 0.0));
         let flow = v.layout(parent).is_some();
         v.paint_order(&top_only(&e.doc, ids))
             .into_iter()
@@ -324,9 +354,12 @@ pub fn reparent(e: &mut Engine, ids: &[String], parent: &str, index: Option<usiz
             .map(|id| {
                 let absolute = e.doc.find(&id).is_some_and(|n| n["layoutPosition"] == "absolute");
                 let mut props = if flow { Map::new() } else { v.freeze_fill(&id) };
-                if let (Some(o), false) = (v.origin(&id), flow && !absolute) {
-                    props.insert("x".into(), num(o.0 - po.0));
-                    props.insert("y".into(), num(o.1 - po.1));
+                if let Some((o, turn)) = v.placed(&id, parent) {
+                    if !flow || absolute {
+                        props.insert("x".into(), num(o.0));
+                        props.insert("y".into(), num(o.1));
+                    }
+                    set_turn(&mut props, turn);
                 }
                 (id, props)
             })
@@ -401,9 +434,10 @@ pub fn unwrap(e: &mut Engine, ids: &[String]) -> Result<Vec<String>, String> {
             let moves = kids(&e.doc, &id).iter().filter_map(|k| {
                 let kid = k["id"].as_str()?.to_string();
                 let mut props = if flow { Map::new() } else { v.freeze_fill(&kid) };
-                let o = v.origin(&kid).unwrap_or((co.0 + k["x"].as_f64().unwrap_or(0.0), co.1 + k["y"].as_f64().unwrap_or(0.0)));
-                props.insert("x".into(), num(o.0 - po.0));
-                props.insert("y".into(), num(o.1 - po.1));
+                let (o, turn) = v.placed(&kid, &parent).unwrap_or(((co.0 + k["x"].as_f64().unwrap_or(0.0) - po.0, co.1 + k["y"].as_f64().unwrap_or(0.0) - po.1), None));
+                props.insert("x".into(), num(o.0));
+                props.insert("y".into(), num(o.1));
+                set_turn(&mut props, turn);
                 Some((kid, props))
             }).collect();
             Some((id, moves))
@@ -1206,6 +1240,75 @@ mod tests {
         reparent(&mut e, std::slice::from_ref(&group), &frame, None).unwrap();
         let after = painted(&mut e);
         assert!((after.0 - before.0).abs() < 1e-6 && (after.1 - before.1).abs() < 1e-6, "{before:?} → {after:?}");
+    }
+
+    /// Centre and the canvas position of the box's top-left corner (the pair pins rotation and mirroring too).
+    fn footprint(e: &mut Engine, id: &str) -> [f64; 4] {
+        e.sync();
+        let v = View::new(e);
+        let c = v.corners(id, None).unwrap();
+        [(c[0].0 + c[3].0) / 2.0, (c[0].1 + c[3].1) / 2.0, c[0].0, c[0].1]
+    }
+
+    fn assert_same(a: [f64; 4], b: [f64; 4], what: &str) {
+        assert!(a.iter().zip(b).all(|(x, y)| (x - y).abs() < 0.05), "{what}: {a:?} → {b:?}");
+    }
+
+    #[test]
+    fn unwrap_keeps_children_in_a_turned_parent() {
+        for turn in [json!({"rotation": 30}), json!({"flipX": true}), json!({"flipY": true, "rotation": -50}), json!({"flipX": true, "rotation": 20})] {
+            for ty in ["frame", "group"] {
+                let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+                e.offline();
+                e.load_template("empty");
+                let mut parent = json!({"type": ty, "x": 200, "y": 200, "children": [
+                    {"type": "rectangle", "x": 50, "y": 40, "width": 80, "height": 60},
+                    {"type": "rectangle", "x": 120, "y": 10, "width": 30, "height": 30, "rotation": 15, "flipY": true}]});
+                if ty == "frame" {
+                    (parent["width"], parent["height"], parent["layout"]) = (json!(200), json!(150), json!("none"));
+                }
+                parent.as_object_mut().unwrap().extend(turn.as_object().unwrap().clone());
+                let id = e.edit(|d| d.insert(ROOT, parent.clone(), None)).unwrap();
+                let kids: Vec<String> = kids(&e.doc, &id).iter().map(|k| k["id"].as_str().unwrap().to_string()).collect();
+                let before: Vec<[f64; 4]> = kids.iter().map(|k| footprint(&mut e, k)).collect();
+                let out = unwrap(&mut e, std::slice::from_ref(&id)).unwrap();
+                assert_eq!(out, kids);
+                for (k, b) in kids.iter().zip(before) {
+                    assert_same(b, footprint(&mut e, k), &format!("{ty} {turn}"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn reparent_keeps_layers_across_turned_frames() {
+        for turn in [json!({"rotation": 30}), json!({"flipX": true}), json!({"flipY": true, "rotation": 100})] {
+            let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+            e.offline();
+            e.load_template("empty");
+            let rect = e.edit(|d| d.insert(ROOT, json!({"type": "rectangle", "x": 300, "y": 100, "width": 80, "height": 60, "rotation": 10}), None)).unwrap();
+            let mut frame = json!({"type": "frame", "x": 100, "y": 300, "width": 300, "height": 200, "layout": "none"});
+            frame.as_object_mut().unwrap().extend(turn.as_object().unwrap().clone());
+            let frame = e.edit(|d| d.insert(ROOT, frame.clone(), None)).unwrap();
+            let before = footprint(&mut e, &rect);
+            reparent(&mut e, std::slice::from_ref(&rect), &frame, None).unwrap();
+            assert_same(before, footprint(&mut e, &rect), &format!("into {turn}"));
+            reparent(&mut e, std::slice::from_ref(&rect), ROOT, None).unwrap();
+            assert_same(before, footprint(&mut e, &rect), &format!("out of {turn}"));
+            assert_eq!(e.doc.find(&rect).unwrap()["rotation"].as_f64(), Some(10.0), "back to the original rotation");
+        }
+    }
+
+    #[test]
+    fn reparent_between_upright_parents_leaves_the_turn_alone() {
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        e.load_template("empty");
+        let rect = e.edit(|d| d.insert(ROOT, json!({"type": "rectangle", "x": 300, "y": 100, "width": 80, "height": 60, "flipY": true}), None)).unwrap();
+        let frame = e.edit(|d| d.insert(ROOT, json!({"type": "frame", "x": 100, "y": 300, "width": 300, "height": 200, "layout": "none"}), None)).unwrap();
+        reparent(&mut e, std::slice::from_ref(&rect), &frame, None).unwrap();
+        let n = e.doc.find(&rect).unwrap();
+        assert!(n["flipY"] == true && n.get("rotation").is_none() && n.get("flipX").is_none(), "{n}");
     }
 
     #[test]

@@ -67,6 +67,17 @@ const b = join(data, 'b.pen')
 call('save', { path: b })
 assert(readFileSync(a, 'utf8') === readFileSync(b, 'utf8'), 'save → open → save is byte-identical')
 
+// A file saved while a generated image was still loading keeps its pending url; reopening it counts that as a failed load.
+for (const url of ['nalarupa:pending-image-1-ab', 'pencil:pending-1']) {
+  const pend = join(data, 'pending.pen')
+  const fill = JSON.stringify({ type: 'image', url, mode: 'fill' })
+  writeFileSync(pend, `{"version":"2.19","children":[{"type":"frame","id":"pf","width":400,"height":300,"children":[{"type":"rectangle","id":"pr","name":"Photo","x":10,"y":10,"width":100,"height":80,"fill":${fill}}]}]}`)
+  call('open', { path: pend })
+  assert(call('live').length === 0, `a leftover ${url} does not shimmer forever after open`)
+  assert(node('pr').node.fill.url === '', `open drops the leftover ${url}`)
+}
+call('open', { path: b })
+
 // Open failures leave the open document alone.
 throws(() => call('open', { path: join(data, 'missing.pen') }), /cannot read .*missing\.pen/, 'opening a missing file')
 writeFileSync(join(data, 'broken.pen'), '{not json')

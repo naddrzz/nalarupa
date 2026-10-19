@@ -577,10 +577,7 @@ fn apply_drop_shadow(
     ts: usvg::Transform,
     input: Image,
 ) -> Result<Image, Error> {
-    let (dx, dy) = match scale_coordinates(fe.dx(), fe.dy(), ts) {
-        Some(v) => v,
-        None => return Ok(input),
-    };
+    let (dx, dy) = offset_coordinates(fe.dx(), fe.dy(), ts);
 
     let mut pixmap = tiny_skia::Pixmap::try_create(input.width(), input.height())?;
     let input_pixmap = input.into_color_space(cs)?.take()?;
@@ -663,10 +660,7 @@ fn apply_offset(
     ts: usvg::Transform,
     input: Image,
 ) -> Result<Image, Error> {
-    let (dx, dy) = match scale_coordinates(fe.dx(), fe.dy(), ts) {
-        Some(v) => v,
-        None => return Ok(input),
-    };
+    let (dx, dy) = offset_coordinates(fe.dx(), fe.dy(), ts);
 
     if dx.approx_zero_ulps(4) && dy.approx_zero_ulps(4) {
         return Ok(input);
@@ -1132,6 +1126,13 @@ fn resolve_std_dev(std_dx: f32, std_dy: f32, ts: usvg::Transform) -> Option<(f64
     let box_blur = std_dx >= BLUR_SIGMA_THRESHOLD || std_dy >= BLUR_SIGMA_THRESHOLD;
 
     Some((std_dx as f64, std_dy as f64, box_blur))
+}
+
+/// Nalarupa: an offset is a vector in the filtered node's own axes, so it follows the whole
+/// linear part of the transform (rotation, flips, skew), not just its scale. Upstream keeps it
+/// on canvas axes, which puts the shadow of a rotated or flipped node in the wrong place.
+fn offset_coordinates(x: f32, y: f32, ts: usvg::Transform) -> (f32, f32) {
+    (x * ts.sx + y * ts.kx, x * ts.ky + y * ts.sy)
 }
 
 fn scale_coordinates(x: f32, y: f32, ts: usvg::Transform) -> Option<(f32, f32)> {

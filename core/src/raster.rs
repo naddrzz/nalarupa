@@ -1629,4 +1629,18 @@ mod tests {
             assert!(at(202, 30)[0] > 247 && at(202, 30)[1] < 8, "{raster:?} the clipped frame's stroke stays above");
         }
     }
+
+    /// Colour emoji are images inside the flattened text; they are culled by where they land, at any depth or offset.
+    #[test]
+    fn emoji_far_from_the_origin_are_not_culled() {
+        let json = r##"{"version":"2.19","children":[{"type":"text","id":"t","x":1020,"y":1500,"content":"😀😀😀","fontSize":40,"fontFamily":"Inter","fill":"#000000"}]}"##;
+        let doc = Doc::from_json(json).unwrap();
+        let (w, h) = (300u32, 100u32);
+        let ink = |px: &[u8]| px.chunks(4).filter(|p| p[..3].iter().zip(BG).any(|(a, b)| a.abs_diff(b) > 40)).count();
+        let [v, s] = both(&doc, w, h, (1000.0, 1480.0), 1.0);
+        let (vello, resvg) = (ink(&v), ink(&s));
+        assert!(count(&convert(&doc), |o| matches!(o, Op::Image { .. })) > 0, "the emoji are colour images, not monochrome glyphs");
+        assert!(resvg > 500, "the reference draws the emoji: {resvg}");
+        assert!(vello * 10 >= resvg * 9, "vello {vello} vs resvg {resvg}");
+    }
 }

@@ -73,6 +73,8 @@ pub struct Engine {
     /// Nodes that already slid in: a streamed insert committed again, undo/redo or a preview
     /// rebuild never replays the animation.
     slid: std::collections::HashSet<String>,
+    /// Pending image urls whose download thread is still running; opening a file keeps them.
+    pub inflight: std::collections::HashSet<String>,
 }
 
 pub struct Stream {
@@ -123,6 +125,24 @@ fn nonblank(v: Option<String>) -> Option<String> {
     v.map(|k| k.trim().to_string()).filter(|k| !k.is_empty())
 }
 
+/// A file saved while a background image was loading keeps its pending url, and no thread will ever
+/// resolve it: count it as a failed load (empty url, like `resolve_pending`) so the node settles.
+/// Urls in `inflight` belong to a download of this process, which still resolves them.
+fn drop_pending(v: &mut Value, inflight: &std::collections::HashSet<String>) {
+    match v {
+        Value::Array(a) => a.iter_mut().for_each(|x| drop_pending(x, inflight)),
+        Value::Object(o) => {
+            for (k, x) in o.iter_mut() {
+                match x {
+                    Value::String(s) if k == "url" && crate::render::is_pending_url(s) && !inflight.contains(s.as_str()) => s.clear(),
+                    _ => drop_pending(x, inflight),
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 const UNDO_LIMIT: usize = 100;
 /// The agent edits whatever document is open, so a document switch waits for it to stop.
 pub const SWITCH_BUSY: &str = "Stop the agent before opening another document.";
@@ -163,6 +183,7 @@ impl Engine {
             reduce_motion: false,
             coalesce: None,
             slid: Default::default(),
+            inflight: Default::default(),
         };
         e.load_template("blank");
         e.saved = e.version;
@@ -238,6 +259,7 @@ impl Engine {
                 self.streams.len() - 1
             }
         };
+        let clean = !self.dirty();
         if let Some(mut preview) = self.preview.take() {
             let seed = self.streams[i].seed;
             std::mem::swap(&mut self.doc, &mut preview);
@@ -245,7 +267,7 @@ impl Engine {
             std::mem::swap(&mut self.doc, &mut preview);
             self.preview = Some(preview);
             if let Some(touched) = touched {
-                self.version += 1;
+                self.redraw(clean);
                 let s = &mut self.streams[i];
                 let seen = std::mem::replace(&mut s.touched, touched.len());
                 if touched.len() > seen {
@@ -286,9 +308,10 @@ impl Engine {
     /// in a fresh JS context.
     fn rebuild_preview(&mut self) {
         crate::script::reset_streams(self);
+        let clean = !self.dirty();
         if self.streams.is_empty() {
             if self.preview.take().is_some() {
-                self.version += 1;
+                self.redraw(clean);
             }
             return;
         }
@@ -305,7 +328,7 @@ impl Engine {
         }
         std::mem::swap(&mut self.doc, &mut scratch);
         self.preview = Some(scratch);
-        self.version += 1;
+        self.redraw(clean);
         for a in activity {
             self.emit(a);
         }
@@ -327,6 +350,13 @@ impl Engine {
         }
         self.redo.clear();
         self.touch();
+    }
+
+    /// The preview changed, not the document: render again, and a document that was `clean` before
+    /// the preview ran (its host functions bump the version too) stays clean.
+    fn redraw(&mut self, clean: bool) {
+        self.version += 1;
+        self.keep_clean(clean);
     }
 
     pub fn touch(&mut self) {
@@ -463,6 +493,7 @@ impl Engine {
     pub fn open(&mut self, path: &Path) -> Result<(), String> {
         let mut doc = Doc::load(path)?;
         crate::resolve::migrate(&mut doc.root);
+        drop_pending(&mut doc.root, &self.inflight);
         self.doc = doc;
         self.load_libs();
         self.reset_history();
@@ -492,6 +523,7 @@ impl Engine {
             let rel = rel.replace("%20", " ");
             if let Ok(mut lib) = Doc::load(&base.join(&rel)) {
                 crate::resolve::migrate(&mut lib.root);
+                drop_pending(&mut lib.root, &self.inflight);
                 self.libs.push((alias, lib.root));
             }
         }
@@ -682,6 +714,7 @@ impl Engine {
     /// A background image finished: swap the pending url for the real one everywhere
     /// (no undo step). Empty url = failed.
     pub fn resolve_pending(&mut self, pending: &str, url: &str) {
+        self.inflight.remove(pending);
         fn walk(v: &mut Value, from: &str, to: &str) -> bool {
             match v {
                 Value::String(s) if s == from => {
@@ -694,7 +727,7 @@ impl Engine {
             }
         }
         let mut hit = walk(&mut self.doc.root, pending, url);
-        for v in self.undo.iter_mut().chain(self.redo.iter_mut()) {
+        for v in self.undo.iter_mut().chain(self.redo.iter_mut()).chain(self.libs.iter_mut().map(|(_, v)| v)) {
             hit |= walk(v, pending, url);
         }
         if hit {
@@ -710,10 +743,7 @@ impl Engine {
     pub fn font_ready(&mut self, family: &str, weight: u16, italic: bool) {
         if self.fonts.downloaded(family, weight, italic) {
             let clean = !self.dirty();
-            self.version += 1;
-            if clean {
-                self.saved = self.version;
-            }
+            self.redraw(clean);
         }
     }
 
@@ -789,6 +819,28 @@ mod tests {
         assert_eq!(nonblank(Some(String::new())), None);
         assert_eq!(nonblank(Some("  \t".into())), None);
         assert_eq!(nonblank(Some(" sk-ant-x\n".into())), Some("sk-ant-x".into()));
+    }
+
+    #[test]
+    fn open_keeps_pending_urls_of_running_downloads() {
+        let mut v = json!({"children": [
+            {"fill": {"type": "image", "url": "nalarupa:pending-image-1-a"}},
+            {"fill": {"type": "image", "url": "nalarupa:pending-image-2-b"}},
+            {"fill": {"type": "image", "url": "./images/x.jpg"}}]});
+        drop_pending(&mut v, &["nalarupa:pending-image-1-a".to_string()].into());
+        assert_eq!(v["children"][0]["fill"]["url"], "nalarupa:pending-image-1-a");
+        assert_eq!(v["children"][1]["fill"]["url"], "");
+        assert_eq!(v["children"][2]["fill"]["url"], "./images/x.jpg");
+    }
+
+    #[test]
+    fn resolve_pending_reaches_libraries() {
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test-resolve-libs"));
+        e.libs.push(("lib".into(), json!({"children": [{"fill": {"type": "image", "url": "nalarupa:pending-image-1-a"}}]})));
+        e.inflight.insert("nalarupa:pending-image-1-a".into());
+        e.resolve_pending("nalarupa:pending-image-1-a", "./images/x.jpg");
+        assert_eq!(e.libs[0].1["children"][0]["fill"]["url"], "./images/x.jpg");
+        assert!(e.inflight.is_empty());
     }
 
     #[test]

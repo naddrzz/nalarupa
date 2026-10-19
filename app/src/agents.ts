@@ -4,10 +4,13 @@
 
 export type Profile = { id: string; name: string; color: string; parent?: string | null }
 
+/** What wrote a reply: the backend and model (null = the CLI's own default) at the time the turn started. */
+export type Author = { backend: string; model: string | null }
+
 export type ChatItem =
   | { kind: 'user'; id: number; text: string }
   | { kind: 'queued'; id: number; text: string }
-  | { kind: 'assistant'; id: number; agent: Profile; text: string; streaming: boolean; header: boolean }
+  | { kind: 'assistant'; id: number; agent: Profile; text: string; streaming: boolean; header: boolean; by?: Author }
   | { kind: 'thinking'; id: number; agent: Profile; text: string; startedAt: number; endedAt?: number }
   | {
       kind: 'tool'; id: number; toolId: string; agent: Profile; name: string; input?: any; output?: string
@@ -40,6 +43,8 @@ export const store = {
   items: [] as ChatItem[],
   profiles: new Map<string, Profile>(),
   running: new Set<string>(),
+  /** Backend and model of each agent's current turn, from its `start` event. */
+  authors: new Map<string, Author>(),
   todos: [] as Todo[],
   cursors: new Map<string, CursorState>(),
   /** AI Pen cursors by the frame they draw into. */
@@ -169,6 +174,8 @@ export function applyEvents(events: any[], now: number): boolean {
       case 'start':
         if (p) poke(p, now) // before running.add: a cursor that faded while idle fades in again
         store.running.add(aid)
+        if (typeof ev.backend === 'string') store.authors.set(aid, { backend: ev.backend, model: ev.model ?? null })
+        else store.authors.delete(aid) // a chat saved before replies recorded their model
         break
       case 'text_delta': {
         const last = lastOf(aid, ['assistant', 'thinking', 'tool'])
@@ -177,7 +184,7 @@ export function applyEvents(events: any[], now: number): boolean {
           endStreaming(aid, now)
           const prev = store.items[store.items.length - 1]
           const header = !prev || prev.kind === 'user' || !('agent' in prev) || prev.agent?.id !== aid
-          store.items.push({ kind: 'assistant', id: nextId++, agent: p ?? FALLBACK, text: ev.text, streaming: true, header })
+          store.items.push({ kind: 'assistant', id: nextId++, agent: p ?? FALLBACK, text: ev.text, streaming: true, header, by: store.authors.get(aid) })
         }
         const cur = lastOf(aid, ['assistant'])
         if (cur?.kind === 'assistant') store.pills.set(aid, { text: cur.text, at: now })
@@ -259,6 +266,7 @@ export function resetChat() {
   store.pills.clear()
   store.profiles.clear()
   store.running.clear()
+  store.authors.clear()
   store.cursors.clear()
 }
 

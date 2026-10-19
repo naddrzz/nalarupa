@@ -1168,6 +1168,34 @@ pub(crate) mod tests {
         }
     }
 
+    /// A shadow offset lives in the node's own axes: it turns with a rotation and mirrors with a flip,
+    /// in the resvg raster too (it used to stay on canvas axes and vanished at 90°).
+    #[test]
+    fn shadow_offset_follows_rotation_and_flips() {
+        let shadow = r##""effect":{"type":"shadow","offset":{"x":30,"y":0},"blur":0,"color":"#ff0000"}"##;
+        let json = format!(
+            r##"{{"version":"2.19","children":[{{"type":"frame","id":"f","x":0,"y":0,"width":200,"height":200,"layout":"none","fill":"#ffffff","clip":true,"children":[
+                {{"type":"rectangle","x":80,"y":120,"width":40,"height":20,"rotation":90,"fill":"#0000ff",{shadow}}}]}},
+              {{"type":"frame","id":"g","x":0,"y":300,"width":200,"height":200,"layout":"none","fill":"#ffffff","clip":true,"children":[
+                {{"type":"rectangle","x":100,"y":50,"width":40,"height":40,"flipX":true,"fill":"#0000ff",{shadow}}}]}}]}}"##
+        );
+        let doc = Doc::from_json(&json).unwrap();
+        for raster in [Raster::Resvg, Raster::Vello] {
+            let mut r = Renderer { raster, ..Renderer::default() };
+            sync(&mut r, &doc);
+            let px = r.render(200, 500, 0.0, 0.0, 1.0, [255, 255, 255], None, true).to_vec();
+            let red = |x0: usize, x1: usize, y0: usize, y1: usize| {
+                (y0..y1).flat_map(|y| (x0..x1).map(move |x| (y * 200 + x) * 4)).filter(|&o| px[o] > 200 && px[o + 1] < 60 && px[o + 2] < 60).count()
+            };
+            // Turned 90° the rectangle covers x 80..100, y 80..120 and the shadow lands 30 above it.
+            assert_eq!(red(80, 100, 50, 80), 600, "{raster:?}: rotated shadow");
+            assert_eq!(red(0, 200, 0, 200), 600, "{raster:?}: rotated shadow stays in one place");
+            // Mirrored it covers x 60..100 (flipping runs about its right edge), so the shadow shows at x 30..60.
+            assert_eq!(red(30, 60, 350, 390), 1200, "{raster:?}: flipped shadow lands left of the rectangle");
+            assert_eq!(red(0, 200, 300, 500), 1200, "{raster:?}: flipped shadow stays in one place");
+        }
+    }
+
     /// Text paints like a shape: fill, then inner shadows, then the stroke, so the stroke covers an inner shadow.
     #[test]
     fn text_stroke_covers_inner_shadow() {

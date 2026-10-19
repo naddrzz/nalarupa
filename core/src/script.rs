@@ -319,9 +319,10 @@ fn n_generate(a: &[String]) -> Result<String, String> {
             // shimmer skeleton) and the real image replaces it when the download finishes.
             // ponytail: no image-generation backend; a seeded photo from picsum.photos stands in.
             let seed = format!("{:x}", crate::svg::fxhash(prompt));
-            let pending = format!("nalarupa:pending-image-{seed}-{:x}", crate::doc::random_u64() & 0xffff);
+            let pending = format!("nalarupa:pending-image-{seed}-{:x}", crate::doc::random_u64());
             e.doc.update(target, &json!({"fill": {"type": "image", "url": pending, "mode": "fill"}}))?;
             e.version += 1;
+            e.inflight.insert(pending.clone());
             let dir = e.doc.dir().map(|d| d.join("images")).unwrap_or_else(|| e.data_dir.join("images"));
             let relative = e.doc.dir().is_some();
             std::thread::spawn(move || {
@@ -1579,6 +1580,28 @@ Insert(card, {type:\"text\", name:\"Title\", content:\"Hi\", fill:\"#111111\"})
         assert_eq!(e.doc.children()[0]["children"].as_array().unwrap().len(), 1);
         assert!(e.undo());
         assert!(e.doc.children().is_empty(), "one undo step for the whole call");
+    }
+
+    #[test]
+    fn rolled_back_agent_edits_leave_a_clean_document_clean() {
+        let mut e = engine();
+        assert!(!e.dirty());
+        let out = e.tool("execute", &json!({"input": "Insert(document, {type:\"frame\", name:\"A\", width:10, height:10})\nUpdate(\"no-such-node\", {x:1})"}));
+        assert!(out.error && out.text.contains("rolled back"), "{}", out.text);
+        assert!(e.doc.children().is_empty() && !e.dirty(), "a failed execute is not an edit");
+        // Stop in the middle of a streamed call: the preview goes away, the document never changed.
+        let src = "Insert(document, {type:\"frame\", name:\"B\", width:10, height:10})\nInsert(";
+        e.stream_update("toolu_stop", "ag0", src);
+        assert_eq!(e.preview.as_ref().expect("preview exists").children().len(), 1);
+        assert!(!e.dirty(), "a streaming preview is not an edit");
+        e.stream_end("toolu_stop");
+        assert!(e.preview.is_none() && e.doc.children().is_empty() && !e.dirty(), "a stopped stream is not an edit");
+        // A document that really has unsaved changes stays dirty through the same paths.
+        e.tool("execute", &json!({"input": "Insert(document, {type:\"frame\", name:\"C\", width:10, height:10})"}));
+        assert!(e.dirty());
+        e.stream_update("toolu_stop", "ag0", src);
+        e.stream_end("toolu_stop");
+        assert!(e.dirty());
     }
 
     #[test]

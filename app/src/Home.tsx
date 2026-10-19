@@ -49,8 +49,9 @@ export function Home({ recent, dirty, title, save, back, onOpened, toast }: {
     if (paths?.[0]) open(paths[0])
   }
   return (
-    <div style={{ width: '100%', height: '100%', backgroundColor: C.bg, display: 'flex', flexDirection: 'column', alignItems: 'center', paddingTop: 72 }}>
-      <div style={{ width: 760, display: 'flex', flexDirection: 'column', gap: 28 }}>
+    <div testId="home-scroll" style={{ width: '100%', height: '100%', backgroundColor: C.bg, display: 'flex', flexDirection: 'column', alignItems: 'center', overflowY: 'scroll' }}>
+      {/* Scrolls when Recent runs past a short window; the column keeps its height instead of squeezing. */}
+      <div style={{ width: 760, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 28, paddingTop: 72, paddingBottom: 40 }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 12 }}>
             <img src={LOGO} style={{ width: 40, height: 40, flexShrink: 0 }} />

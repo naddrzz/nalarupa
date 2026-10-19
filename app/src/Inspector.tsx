@@ -58,10 +58,76 @@ function validPaint(v: string, vars: Record<string, any>): boolean {
   return Array.isArray(p) ? p.every(one) : typeof p === 'object' && one(p)
 }
 
+const BAD_VALUE = 'Unable to apply that value. Check its format, for example #FF6A3D or 24, and try again.'
+const EFFECT_TYPES = ['shadow', 'blur', 'background_blur']
+/** A `$variable` that exists and has one of `types`. */
+const isVar = (t: unknown, vars: Record<string, any>, types: string[] = ['number']) =>
+  typeof t === 'string' && t.startsWith('$') && Object.prototype.hasOwnProperty.call(vars, t.slice(1)) && types.includes(vars[t.slice(1)]?.type)
+const length = (v: unknown) => typeof v === 'number' && Number.isFinite(v) && v >= 0
+const lengthVar = (vars: Record<string, any>) => (v: unknown) => length(v) || isVar(v, vars)
+
+/** Per-side lengths as a number, [v, h] or [t, r, b, l]: typed CSS-style ("10 20", "1,2,3,4") or as a JSON array. `null` clears it, `undefined` rejects it. */
+function sides(v: string, vars: Record<string, any>, counts: number[]): unknown {
+  const t = v.trim()
+  if (t === '') return null
+  if (isVar(t, vars)) return t
+  let p: unknown = t.startsWith('[') ? parse(t) : t.split(/[\s,]+/).filter(Boolean).map((x) => (/^\d+(\.\d+)?$/.test(x) ? Number(x) : NaN))
+  if (!Array.isArray(p) || !p.every(lengthVar(vars)) || !counts.includes(p.length)) return undefined
+  return p.length === 1 ? p[0] : p
+}
+
+/** A non-negative number, a $variable that exists, or empty to clear. */
+function lengthOf(v: string, vars: Record<string, any>): unknown {
+  const t = v.trim()
+  return t === '' ? null : isVar(t, vars) ? t : /^\d+(\.\d+)?$/.test(t) ? Number(t) : undefined
+}
+
+/** Stroke width: a length, or JSON per-side widths {top, right, bottom, left}. */
+function strokeWidthOf(v: string, vars: Record<string, any>): unknown {
+  const p = lengthOf(v, vars)
+  if (p !== undefined) return p
+  const o = parse(v)
+  return o && typeof o === 'object' && !Array.isArray(o) && Object.keys(o).length > 0 && Object.keys(o).every((k) => ['top', 'right', 'bottom', 'left'].includes(k)) && Object.values(o).every(lengthVar(vars)) ? o : undefined
+}
+
+/** Font weight: normal, bold, a number from 1 to 1000, a $variable that exists, or empty for the default. */
+function fontWeightOf(v: string, vars: Record<string, any>): unknown {
+  const t = v.trim()
+  return t === '' ? null : isVar(t, vars, ['number', 'string']) || t === 'normal' || t === 'bold' || (/^\d+$/.test(t) && Number(t) >= 1 && Number(t) <= 1000) ? t : undefined
+}
+
+/** An effect object (or non-empty list of them) of a type the renderer knows, with fields it can read: lengths for blur / radius / offset, a hex or $color for the shadow color. */
+function effectOf(v: string, vars: Record<string, any>): unknown {
+  const t = v.trim()
+  if (t === '') return null
+  const p = parse(t)
+  const optional = (x: unknown, ok: (x: unknown) => boolean) => x === undefined || ok(x)
+  const len = (x: unknown) => lengthVar(vars)(x)
+  const coord = (x: unknown) => (typeof x === 'number' && Number.isFinite(x)) || isVar(x, vars)
+  const hue = (x: unknown) => typeof x === 'string' && (/^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(x.trim()) || isVar(x.trim(), vars, ['color']))
+  const one = (e: any) => {
+    if (!e || typeof e !== 'object' || Array.isArray(e) || !EFFECT_TYPES.includes(e.type)) return false
+    if (e.type !== 'shadow') return optional(e.radius, len)
+    const o = e.offset
+    const offset = o === undefined || (!!o && typeof o === 'object' && !Array.isArray(o) && optional(o.x, coord) && optional(o.y, coord))
+    return optional(e.blur, len) && optional(e.color, hue) && offset
+  }
+  return Array.isArray(p) ? (p.length > 0 && p.every(one) ? p : undefined) : one(p) ? p : undefined
+}
+
 export function Inspector({ version, selection, select, toast }: Props) {
   const infos = useMemo(() => selection.map((id) => ({ id, ...tryCall('node', { id }) }) as Info).filter((i) => i.node), [selection, version])
   const update = (props: Record<string, unknown>, coalesce?: string) => {
-    if (tryCall('update', { ids: selection, props, coalesce }) === null) toast('Unable to apply that value. Check its format, for example #FF6A3D or 24, and try again.', true)
+    const ok = tryCall('update', { ids: selection, props, coalesce }) !== null
+    if (!ok) toast(BAD_VALUE, true)
+    return ok
+  }
+  /** Free-text commit: a value the renderer cannot use reverts the field instead of being stored. */
+  const setChecked = (prop: string, check: (v: string) => unknown) => (v: string) => {
+    const value = check(v)
+    if (value !== undefined) return update({ [prop]: value })
+    toast(BAD_VALUE, true)
+    return false
   }
   /** Fill / stroke commit: a color the renderer cannot read would leave the layer unpainted, so reject it. */
   const setPaint = (prop: 'fill' | 'stroke', vars: Record<string, any>) => (v: string) => {
@@ -216,7 +282,7 @@ export function Inspector({ version, selection, select, toast }: Props) {
             <>
               <Row>
                 <NumField label="G" name="Gap" value={Number(n.gap ?? 0) || 0} onCommit={(v, k) => update({ gap: v }, k)} testId="inspector-gap" />
-                <Field label="P" name="Padding" value={str(n.padding ?? 0)} onCommit={(v) => update({ padding: parse(v) })} />
+                <Field label="P" name="Padding" value={str(n.padding ?? 0)} onCommit={setChecked('padding', (v) => sides(v, vars, [1, 2, 4]))} testId="inspector-padding" />
               </Row>
               <Segmented
                 label="Distribute"
@@ -256,10 +322,10 @@ export function Inspector({ version, selection, select, toast }: Props) {
           <Field name="Font family" value={str(n.fontFamily ?? 'Inter')} onCommit={(v) => update({ fontFamily: v })} />
           <Row>
             <NumField label="S" name="Font size" value={Number(n.fontSize ?? 14) || 14} onCommit={(v, k) => update({ fontSize: Math.max(1, v) }, k)} testId="inspector-font-size" />
-            <Field label="W" name="Font weight" value={str(n.fontWeight ?? '400')} onCommit={(v) => update({ fontWeight: v })} />
+            <Field label="W" name="Font weight" value={str(n.fontWeight ?? '400')} onCommit={setChecked('fontWeight', (v) => fontWeightOf(v, vars))} testId="inspector-font-weight" />
           </Row>
           <Row>
-            <Field label="L" name="Line height" value={str(n.lineHeight ?? '')} onCommit={(v) => update({ lineHeight: parse(v) })} />
+            <Field label="L" name="Line height" value={str(n.lineHeight ?? '')} onCommit={setChecked('lineHeight', (v) => lengthOf(v, vars))} testId="inspector-line-height" />
             <NumField label="K" name="Letter spacing" value={Number(n.letterSpacing ?? 0) || 0} step={0.1} onCommit={(v, k) => update({ letterSpacing: v || null }, k)} />
           </Row>
           <Segmented
@@ -298,19 +364,19 @@ export function Inspector({ version, selection, select, toast }: Props) {
           <Row>
             {stroke ? <Swatch color={stroke} /> : null}
             <Field name="Stroke color" value={str(n.stroke)} mono onCommit={setPaint('stroke', vars)} placeholder="#000000" />
-            <Field name="Stroke width" value={str(n.strokeWidth ?? '')} width={58} onCommit={(v) => update({ strokeWidth: parse(v) })} placeholder="1" />
+            <Field name="Stroke width" value={str(n.strokeWidth ?? '')} width={58} onCommit={setChecked('strokeWidth', (v) => strokeWidthOf(v, vars))} placeholder="1" testId="inspector-stroke-width" />
           </Row>
           {n.type !== 'ellipse' && n.type !== 'path' ? (
             typeof (n.cornerRadius ?? 0) === 'number'
               ? <NumField label="R" name="Corner radius" value={n.cornerRadius ?? 0} onCommit={(v, k) => update({ cornerRadius: Math.max(0, v) || null }, k)} testId="inspector-radius" />
-              : <Field label="R" name="Corner radius" value={str(n.cornerRadius)} onCommit={(v) => update({ cornerRadius: parse(v) })} testId="inspector-radii" />
+              : <Field label="R" name="Corner radius" value={str(n.cornerRadius)} onCommit={setChecked('cornerRadius', (v) => sides(v, vars, [1, 4]))} testId="inspector-radii" />
           ) : null}
         </Section>
       ) : null}
 
       {!multi ? (
         <Section title="Effect">
-          <Field name="Effect" value={str(n.effect)} mono onCommit={(v) => update({ effect: parse(v) })} placeholder='{"type":"shadow","blur":12,"offset":{"x":0,"y":4},"color":"#00000033"}' />
+          <Field name="Effect" value={str(n.effect)} mono onCommit={setChecked('effect', (v) => effectOf(v, vars))} testId="inspector-effect" placeholder='{"type":"shadow","blur":12,"offset":{"x":0,"y":4},"color":"#00000033"}' />
         </Section>
       ) : null}
 

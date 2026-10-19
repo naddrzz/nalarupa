@@ -3,7 +3,7 @@
 // usage rows, queued prompts, parallel agents.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { call, tryCall } from './core'
-import { barAgents, imageSrc, lastContentId, profileOf, resetChat, restoreChat, store, type ChatItem } from './agents'
+import { barAgents, imageSrc, lastContentId, profileOf, resetChat, restoreChat, store, type Author, type ChatItem } from './agents'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import * as SelectPrimitive from '@gpuix/react/select'
 import { C, FONT, INDICATOR_TICK_MS, MONO, REDUCED_MOTION, ellipsisAt, ellipsisPadAt, pulseAt } from './theme'
@@ -86,15 +86,30 @@ function visibleText(it: Extract<ChatItem, { kind: 'assistant' }>, isLast: boole
   return { text: words.slice(0, isLast ? shown : words.length).join(''), done: !isLast || shown >= words.length }
 }
 
+// The panel unmounts while the Design tab is open; what the user set up in it (draft, agent options, open cards) lives here.
+const kept = new Map<string, unknown>()
+function useKept<T>(key: string, init: () => T) {
+  const [v, set] = useState<T>(() => {
+    if (!kept.has(key)) kept.set(key, init())
+    return kept.get(key) as T
+  })
+  const setKept = (n: T | ((p: T) => T)) => {
+    const x = typeof n === 'function' ? (n as (p: T) => T)(kept.get(key) as T) : n
+    kept.set(key, x)
+    set(x)
+  }
+  return [v, setKept] as const
+}
+
 export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: number; running: boolean; mcpUrl: string; toast: Toast; onSent?: () => void }) {
-  const [draft, setDraft] = useState('')
-  const [settings, setSettings] = useState(false)
-  const [parallel, setParallel] = useState('1')
-  const [mode, setMode] = useState<'split' | 'side'>('split')
-  const [open, setOpen] = useState<Set<number>>(new Set())
-  const [planOpen, setPlanOpen] = useState(true)
+  const [draft, setDraft] = useKept('draft', () => '')
+  const [settings, setSettings] = useKept('settings', () => false)
+  const [parallel, setParallel] = useKept('parallel', () => '1')
+  const [mode, setMode] = useKept<'split' | 'side'>('mode', () => 'split')
+  const [open, setOpen] = useKept<Set<number>>('open', () => new Set())
+  const [planOpen, setPlanOpen] = useKept('planOpen', () => true)
   const [, setChatVersion] = useState(0)
-  const picks = useRef(SUGGESTIONS.slice().sort(() => Math.random() - 0.5).slice(0, 6))
+  const [picks] = useKept('picks', () => SUGGESTIONS.slice().sort(() => Math.random() - 0.5).slice(0, 6))
   // "Let it cook" settings (design count, iterate mode) persist in the app settings.
   const saved = useMemo(() => tryCall<Record<string, unknown>>('settings_get') ?? {}, [])
   const [designs, setDesigns] = useState(Math.min(MAX_DESIGNS, Math.max(1, Number(saved.agent_designs) || 1)))
@@ -174,9 +189,9 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
       ) : null}
 
       {items.length === 0 ? (
-        <div style={{ flexGrow: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 8, padding: 14 }}>
+        <div testId="agent-empty" style={{ flexGrow: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 8, padding: 14, overflowY: 'scroll' }}>
           <T size={15} weight="600" color={C.text}>Ask me to design anything</T>
-          {picks.current.map((s) => (
+          {picks.map((s) => (
             <Pressable key={s} testId={`suggestion-${s.slice(0, 12)}`} label={`Design ${s}`} onClick={() => send(`Design ${s}`)} style={{ padding: 10, borderRadius: 8, borderWidth: 1, borderColor: C.border, hover: { backgroundColor: C.panel2 } }}>
               <T size={12} color={C.muted}>{s}</T>
             </Pressable>
@@ -517,33 +532,27 @@ function ChatHistory({ running, toast, changed }: { running: boolean; toast: Toa
   )
 }
 
-function AgentHeader({ agentId }: { agentId: string }) {
+function AgentHeader({ agentId, by }: { agentId: string; by?: Author }) {
   const p = profileOf(agentId)
-  const model = tryModel()
+  const model = by ? modelLabel(by) : ''
   return (
     <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, paddingTop: 8 }}>
       <div style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: p.color }} />
       <T size={12} weight="600" color={C.text}>{p.name}</T>
-      {p.parent ? <T size={11} color={C.ghost}>{`· helping ${profileOf(p.parent).name}`}</T> : <T size={11} color={C.ghost}>{model}</T>}
+      {p.parent ? <T size={11} color={C.ghost}>{`· helping ${profileOf(p.parent).name}`}</T> : null}
+      {model ? <T size={11} color={C.ghost}>{model}</T> : null}
     </div>
   )
 }
 
-let cachedModel: string | null = null
-function tryModel() {
-  if (cachedModel === null) {
-    const s = tryCall<Record<string, string>>('settings_get') ?? {}
-    const cli = s.backend === 'claude-code'
-    const model = MODELS.find((m) => m.value === s.agent_model)?.label
-    cachedModel = cli ? (model ? `Claude Code · ${model}` : 'Claude Code') : model ?? 'Opus 5.5'
-  }
-  return cachedModel
+function modelLabel({ backend, model }: Author) {
+  const label = model ? MODELS.find((m) => m.value === model)?.label ?? model : null
+  return backend === 'claude-code' ? (label ? `Claude Code · ${label}` : 'Claude Code') : label ?? ''
 }
 
 /** Save one setting. A failed save leaves the core on the old value: say so and return false, so the
  *  control stays as it was. */
 function saveSetting(toast: Toast, key: string, value: unknown) {
-  cachedModel = null
   if (tryCall('settings_set', { key, value }) !== null) return true
   toast('Unable to save that setting. Check that the app data folder is writable, then try again.', true)
   return false
@@ -656,7 +665,7 @@ function Item({ m, isLast, expanded, toggle }: { m: ChatItem; isLast: boolean; e
       const { text } = visibleText(m, isLast)
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingBottom: 4 }}>
-          {m.header ? <AgentHeader agentId={m.agent.id} /> : null}
+          {m.header ? <AgentHeader agentId={m.agent.id} by={m.by} /> : null}
           <markdown source={text} style={{ fontSize: 13, color: C.text, fontFamily: FONT }} />
         </div>
       )

@@ -79,6 +79,34 @@ try {
   await sleep(250)
   if ((await rows()) !== rows0 || (await app.getByTestId('layer-rename').count())) throw new Error('a quick second chevron click did not collapse (or opened rename)')
 
+  // The eye icon hides and shows its layer (the row's press capture used to swallow the click). A hidden
+  // layer keeps its eye while the pointer is away; the click does not select the row.
+  const eyeShown = async (want: boolean) => {
+    await until(async () => ((await app!.getByTestId('layer-eye-sld02').count()) > 0) === want, `the eye of slide 2 to ${want ? 'show' : 'go away'}`)
+  }
+  const eyeBox = async () => { const b = await app!.getByTestId('layer-eye-sld02').bounds(); return { x: b.x + b.width / 2, y: b.y + b.height / 2 } }
+  const rowBox = await app.getByTestId('layer-sld02').bounds()
+  await app.mouse.move({ x: rowBox.x + 100, y: rowBox.y + 10 })
+  await eyeShown(true)
+  const clickEye = async () => {
+    const p = await eyeBox()
+    await app!.mouse.move(p)
+    await sleep(300)
+    await app!.mouse.down(p)
+    await sleep(100)
+    await app!.mouse.up(p)
+    await sleep(400)
+  }
+  await clickEye()
+  await app.mouse.move({ x: 700, y: 900 })
+  await eyeShown(true)
+  if (await app.getByTestId('selection-box').count()) throw new Error('the eye click selected the layer')
+  await app.mouse.move({ x: rowBox.x + 100, y: rowBox.y + 10 })
+  await sleep(300)
+  await clickEye()
+  await app.mouse.move({ x: 700, y: 900 })
+  await eyeShown(false)
+
   // Present starts at the slide holding the selection, also when a layer inside it is selected.
   await app.getByTestId('layer-toggle-sld03').click()
   await app.getByTestId('layers').getByText('Thanks').click()
@@ -261,12 +289,12 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
 
   // The Plan block: a long todo wraps inside the panel (it used to run past the window edge) and 32 of
   // them scroll in a capped block, so the composer stays on screen (it used to be pushed out of the window).
-  const until = async (ok: () => Promise<boolean>, ms = 5000) => {
+  const untilVisible = async (ok: () => Promise<boolean>, ms = 5000) => {
     for (const end = Date.now() + ms; Date.now() < end; await sleep(100)) if (await ok()) return true
     return false
   }
   const laidOut = async () => !!((await app!.getByText('Step 1: lay out').bounds())?.height && (await app!.getByTestId('plan-todos').bounds())?.height && (await app!.getByTestId('agent-input').bounds())?.height)
-  if (!(await until(laidOut))) throw new Error('the Plan block did not lay out')
+  if (!(await untilVisible(laidOut))) throw new Error('the Plan block did not lay out')
   const planField = (await app.getByTestId('agent-input').bounds())!
   const count = (await app.getByText('3/32').bounds())!
   const step = (await app.getByText('Step 1: lay out').bounds())!
@@ -418,6 +446,29 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
   await app.getByText('Claude Code CLI').click()
   await app.getByTestId('agent-settings').click()
   await sleep(300)
+
+  // The Design tab unmounts the agent panel: the draft and the Agents option are still there on return.
+  await app.getByTestId('tab-agent').click()
+  await app.getByTestId('agent-input').click()
+  await app.getByTestId('agent-input').fill('make the title bigger')
+  await app.getByText('2×').click()
+  await app.getByText('Side by side').waitFor()
+  await app.getByTestId('tab-design').click()
+  await until(async () => !(await app.getByTestId('agent-input').count()), 'the agent panel to close')
+  await app.getByTestId('tab-agent').click()
+  await app.getByTestId('agent-input').waitFor()
+  if (!(await app.getByText('Side by side').count())) throw new Error('switching to the Design tab and back reset the Agents option')
+  // A textarea's value cannot be read, so send it: the prompt bubble shows what the composer held (the stand-in
+  // replies; on Windows a send would start the real CLI).
+  if (standIn) {
+    await app.getByTestId('agent-send').click()
+    await until(async () => (await app!.getByText('make the title bigger').count()) > 0, 'the composer draft to survive the Design tab and be sent')
+    await until(async () => !(await app!.getByTestId('agent-stop').count()), 'the stand-in agent to finish', 20000)
+  }
+  // "1×" also appears in the agent cook button, so click the narrowest match: the segment.
+  const one = (await app.getByText('1×').all()).map((n) => n.bounds!).sort((a, b) => a.width - b.width)[0]
+  await app.mouse.click({ x: one.x + one.width / 2, y: one.y + one.height / 2 })
+  await app.getByTestId('agent-input').fill('')
 
   // The agent message pill: a reply long enough to fill the pill must not squash its status dot.
   if (standIn) {
