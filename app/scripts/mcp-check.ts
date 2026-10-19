@@ -100,6 +100,16 @@ const text = (r: any) => r.content.map((c: any) => c.text ?? '').join('')
   assert(/A page\n {2}A text/.test(layers) && !/B page\n {2}A text/.test(layers), `A's text lands in A's frame:\n${layers}`)
   assert((await as('agC', 'Print(typeof page)')).includes('undefined'), 'another agent does not inherit A/B globals')
 
+  // A script that runs for seconds must not freeze the window: `call` is synchronous on this one thread,
+  // so a core call that waits for the script (it ran under the engine lock) blocks for its whole run.
+  const slow = tool('execute', { input: 'const until = Date.now() + 2000; while (Date.now() < until) {} Print("done")' })
+  await new Promise((r) => setTimeout(r, 400))
+  const asked = performance.now()
+  call('state')
+  const waited = performance.now() - asked
+  assert(waited < 1000, `state() answers while a script runs (waited ${waited.toFixed(0)} ms)`)
+  assert(text(await slow).includes('done'), 'the long script still finishes and prints')
+
   console.log('mcp-check ok — MCP at', mcpUrl)
 }
 process.exit(0)

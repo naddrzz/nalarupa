@@ -103,7 +103,7 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
         "state" => Ok(state(&engine())),
         "new" => {
             let mut e = engine();
-            if e.agent.running {
+            if e.agent.running || e.executing {
                 return Err(engine::SWITCH_BUSY.into());
             }
             e.load_template(req["template"].as_str().unwrap_or("blank"));
@@ -111,7 +111,7 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
         }
         "open" => {
             let mut e = engine();
-            if e.agent.running {
+            if e.agent.running || e.executing {
                 return Err(engine::SWITCH_BUSY.into());
             }
             e.open(std::path::Path::new(req["path"].as_str().ok_or("path required")?))?;
@@ -333,7 +333,7 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             Ok(state(&e))
         }
         "tool" => {
-            let out = engine().tool(req["name"].as_str().unwrap_or(""), &req["args"]);
+            let out = engine::call_tool(req["name"].as_str().unwrap_or(""), &req["args"]);
             let out = out.finish();
             Ok(json!({"text": out.text, "error": out.error, "images": out.images.len()}))
         }
