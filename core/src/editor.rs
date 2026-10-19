@@ -46,8 +46,10 @@ pub fn top_only(doc: &Doc, ids: &[String]) -> Vec<String> {
     let set: HashSet<&str> = ids.iter().map(String::as_str).collect();
     let mut out: Vec<String> = Vec::new();
     for id in ids {
-        let mut p = doc.parent_of(id).map(|p| p.0);
-        let mut nested = false;
+        // A component instance's rendered descendants ("inst/child") are not in the tree: walk up from the instance.
+        let (base, inst) = id.split_once('/').map_or((id.as_str(), false), |(b, _)| (b, true));
+        let mut nested = inst && id.match_indices('/').any(|(i, _)| set.contains(&id[..i]));
+        let mut p = if nested { None } else { doc.parent_of(base).map(|p| p.0) };
         while let Some(pid) = p.filter(|p| p != ROOT) {
             if set.contains(pid.as_str()) {
                 nested = true;
