@@ -23,6 +23,9 @@ export function LeftPanel(props: {
 type Row = Layer & { index: number; layout: boolean }
 type DropAt = { id: string; pos: 'before' | 'after' | 'inside' }
 const ROW_H = 28
+// A slide row is the 14 px number, an 8 px gap and the framed thumbnail: 14 + 8 + (196 + 4) = 222 px,
+// inside the 223 px the panel leaves after its border and the rows' 12 px padding.
+const THUMB_W = 196
 
 function Layers({ version, selection, select, focus, hover }: { version: number; selection: string[]; select: (ids: string[]) => void; focus: (id: string) => void; hover?: (id: string | null) => void }) {
   const layers = useMemo(() => tryCall<Row[]>('layers') ?? [], [version])
@@ -261,7 +264,7 @@ function Layers({ version, selection, select, focus, hover }: { version: number;
                   >
                     <Icon name={l.expanded ? 'chevronDown' : 'chevronRight'} size={12} color={C.ghost} />
                   </Pressable>
-                ) : <div style={{ width: 14 }} />}
+                ) : <div style={{ width: 14, flexShrink: 0 }} />}
                 <Icon name={nodeIcon(l.type, l.reusable)} size={13} color={l.reusable || l.type === 'ref' ? C.component : C.ghost} />
                 {renaming?.id === l.id ? (
                   <div style={{ flexGrow: 1, minWidth: 0, height: 22, borderRadius: 4, borderWidth: 1, borderColor: C.select, backgroundColor: C.panel2, display: 'flex', alignItems: 'center', paddingLeft: 4 }}>
@@ -278,7 +281,7 @@ function Layers({ version, selection, select, focus, hover }: { version: number;
                     />
                   </div>
                 ) : (
-                  <T size={12} color={l.reusable || l.type === 'ref' ? C.component : active ? C.text : '#C9C9D0'} grow style={{ whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>
+                  <T size={12} color={l.reusable || l.type === 'ref' ? C.component : active ? C.text : '#C9C9D0'} grow style={{ minWidth: 0, whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>
                     {l.name}
                   </T>
                 )}
@@ -313,7 +316,7 @@ function Slides({ version, selection, select, focus, present, toast }: { version
   const thumbs = useMemo(() => {
     const m = new Map<string, string>()
     for (const f of frames.slice(0, 60)) {
-      const scale = Math.min(1, 200 / Math.max(f.w, 1))
+      const scale = Math.min(1, THUMB_W / Math.max(f.w, 1))
       const b64 = tryCall<string>('png', { id: f.id, scale })
       if (b64) m.set(f.id, `data:image/png;base64,${b64}`)
     }
@@ -328,17 +331,17 @@ function Slides({ version, selection, select, focus, present, toast }: { version
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}>
       <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', paddingLeft: 14, paddingRight: 8, height: 36 }}>
-        <T size={11} color={C.muted} grow>{`${frames.length} slides · top-level frames`}</T>
+        <T size={11} color={C.muted} grow>{`${frames.length} ${frames.length === 1 ? 'slide' : 'slides'} · top-level frames`}</T>
         <IconButton icon="download" title="Export deck to PDF" testId="export-deck-pdf" onClick={exportPdf} />
         <IconButton icon="play" title="Present" testId="present-from-slides" onClick={() => present(selection[0])} />
       </div>
-      <virtual-list estimatedItemHeight={150} style={{ flexGrow: 1, minHeight: 0, paddingLeft: 12, paddingRight: 12, paddingBottom: 12 }}>
+      <virtual-list estimatedItemHeight={150} style={{ flexGrow: 1, minHeight: 0, paddingBottom: 12 }}>
         {frames.map((f, i) => {
-          const tw = 200
-          const th = Math.max(20, Math.round((f.h / Math.max(f.w, 1)) * tw))
+          const th = Math.max(20, Math.round((f.h / Math.max(f.w, 1)) * THUMB_W))
           const active = selection.includes(f.id)
+          // The list ignores horizontal padding, so each row carries its own 12 px.
           return (
-            <div key={f.id}>
+            <div key={f.id} style={{ paddingLeft: 12, paddingRight: 12 }}>
               <Pressable
                 testId={`slide-${i + 1}`}
                 label={`Slide ${i + 1}: ${f.name}`}
@@ -346,12 +349,12 @@ function Slides({ version, selection, select, focus, present, toast }: { version
                 onClick={() => { select([f.id]); focus(f.id) }}
                 style={{ display: 'flex', flexDirection: 'row', gap: 8, paddingTop: 6, paddingBottom: 6, borderRadius: 6 }}
               >
-                <T size={11} color={C.ghost} style={{ width: 14 }}>{String(i + 1)}</T>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                  <div style={{ borderRadius: 6, borderWidth: 2, borderColor: active ? C.select : C.border, overflow: 'hidden', width: tw + 4, height: th + 4 }}>
-                    <img src={thumbs.get(f.id) ?? ''} objectFit="contain" style={{ width: tw, height: th, borderRadius: 4 }} />
+                <T size={11} color={C.ghost} style={{ width: 14, flexShrink: 0 }}>{String(i + 1)}</T>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flexGrow: 1, minWidth: 0 }}>
+                  <div style={{ borderRadius: 6, borderWidth: 2, borderColor: active ? C.select : C.border, overflow: 'hidden', width: THUMB_W + 4, height: th + 4 }}>
+                    <img src={thumbs.get(f.id) ?? ''} objectFit="contain" style={{ width: THUMB_W, height: th, borderRadius: 4 }} />
                   </div>
-                  <T size={11} color={active ? C.text : C.muted}>{f.name}</T>
+                  <T size={11} color={active ? C.text : C.muted} style={{ minWidth: 0, whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>{f.name}</T>
                 </div>
               </Pressable>
             </div>
