@@ -222,7 +222,7 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
           </Row>
           {parallel !== '1' ? <Segmented label="How agents share the work" value={mode} onChange={setMode} options={[{ value: 'split', label: 'Split' }, { value: 'side', label: 'Side by side' }]} /> : null}
           <Row gap={6}>
-            <ModelPicker settingsOpen={settings} />
+            <ModelPicker settingsOpen={settings} toast={toast} />
             <div style={{ flexGrow: 1 }} />
             <CookMenu designs={designs} mode={cookMode} set={setCook} />
             {running ? (
@@ -523,6 +523,15 @@ function tryModel() {
   return cachedModel
 }
 
+/** Save one setting. A failed save leaves the core on the old value: say so and return false, so the
+ *  control stays as it was. */
+function saveSetting(toast: Toast, key: string, value: unknown) {
+  cachedModel = null
+  if (tryCall('settings_set', { key, value }) !== null) return true
+  toast('Unable to save that setting. Check that the app data folder is writable, then try again.', true)
+  return false
+}
+
 const MODELS = [
   { value: 'claude-opus-5-5', label: 'Opus 5.5' },
   { value: 'claude-sonnet-5-5', label: 'Sonnet 5.5' },
@@ -534,7 +543,7 @@ const FAST_MODELS = ['claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8']
 
 /** Model picker plus the Fast toggle, which shows only where the model has a fast mode. Claude Code
  *  also offers "Default", which leaves the CLI on its own configured model. */
-function ModelPicker({ settingsOpen }: { settingsOpen: boolean }) {
+function ModelPicker({ settingsOpen, toast }: { settingsOpen: boolean; toast: Toast }) {
   // Re-read when the settings panel closes: the backend may have changed.
   const s = useMemo(() => tryCall<Record<string, unknown>>('settings_get') ?? {}, [settingsOpen])
   const cli = s.backend === 'claude-code'
@@ -549,9 +558,7 @@ function ModelPicker({ settingsOpen }: { settingsOpen: boolean }) {
   // keyboard drives the menu, not while the mouse does.
   const [keys, setKeys] = useState(false)
   const pick = (v: string) => {
-    setModel(v)
-    cachedModel = null
-    tryCall('settings_set', { key: 'agent_model', value: v === 'default' ? null : v })
+    if (saveSetting(toast, 'agent_model', v === 'default' ? null : v)) setModel(v)
   }
   const label = items.find((m) => m.value === model)?.label ?? model
   return (
@@ -609,7 +616,7 @@ function ModelPicker({ settingsOpen }: { settingsOpen: boolean }) {
         </SelectPrimitive.Content>
       </SelectPrimitive.Root>
       {FAST_MODELS.includes(model) ? (
-        <Toggle label="Fast" on={fast} testId="agent-fast" onChange={(on) => { setFast(on); tryCall('settings_set', { key: 'agent_fast', value: on || null }) }} />
+        <Toggle label="Fast" on={fast} testId="agent-fast" onChange={(on) => { if (saveSetting(toast, 'agent_fast', on || null)) setFast(on) }} />
       ) : null}
     </>
   )
@@ -769,11 +776,7 @@ function AgentSettings({ mcpUrl, toast }: { mcpUrl: string; toast: Toast }) {
   const [hasKey, setHasKey] = useState(!!s.anthropic_api_key)
   const [keyBox, setKeyBox] = useState(0)
   const [perms, setPerms] = useState<'ask' | 'auto'>((s as Record<string, unknown>).agent_auto_permissions === true ? 'auto' : 'ask')
-  const set = (key: string, value: unknown) => {
-    cachedModel = null
-    return tryCall('settings_set', { key, value }) !== null // false: not saved, the setting kept its old value
-  }
-  const keyNotSaved = () => toast('Unable to save the API key setting. Check that the app data folder is writable, then try again.', true)
+  const set = (key: string, value: unknown) => saveSetting(toast, key, value)
   const install = (client: string) => {
     const r = tryCall<string>('mcp_install', { client })
     if (r) toast(r)
@@ -785,7 +788,7 @@ function AgentSettings({ mcpUrl, toast }: { mcpUrl: string; toast: Toast }) {
       <Segmented
         label="Agent backend"
         value={backend}
-        onChange={(v) => { setBackend(v); set('agent_backend', v) }}
+        onChange={(v) => { if (set('agent_backend', v)) setBackend(v) }}
         options={[{ value: 'api', label: 'Claude API' }, { value: 'claude-code', label: 'Claude Code CLI' }]}
       />
       {backend === 'api' ? (
@@ -795,15 +798,12 @@ function AgentSettings({ mcpUrl, toast }: { mcpUrl: string; toast: Toast }) {
             <Field key={keyBox} name="Anthropic API key" value="" placeholder={hasKey ? 'Key saved. Paste a new key to replace it' : 'sk-ant-…'} onCommit={(v) => {
               const key = v.trim() // a blank key is no key (Engine::api_key), so it must not replace a saved one
               if (!key) return false // Field reverts the box to empty, so the saved-key placeholder shows again
-              if (!set('anthropic_api_key', key)) {
-                keyNotSaved()
-                return false
-              }
+              if (!set('anthropic_api_key', key)) return false
               setHasKey(true)
               setKeyBox((n) => n + 1) // remount: the new key must not stay readable in the box
               toast('API key saved locally')
             }} testId="api-key" />
-            {hasKey ? <Button testId="api-key-remove" onClick={() => { if (!set('anthropic_api_key', null)) return keyNotSaved(); setHasKey(false); toast('API key removed') }}>Remove</Button> : null}
+            {hasKey ? <Button testId="api-key-remove" onClick={() => { if (!set('anthropic_api_key', null)) return; setHasKey(false); toast('API key removed') }}>Remove</Button> : null}
           </Row>
           <T size={11} color={C.ghost}>Or set ANTHROPIC_API_KEY. Pick the model below the chat box.</T>
           <Row>
@@ -818,7 +818,7 @@ function AgentSettings({ mcpUrl, toast }: { mcpUrl: string; toast: Toast }) {
           <Segmented
             label="Permission for other tools"
             value={perms}
-            onChange={(v) => { setPerms(v); set('agent_auto_permissions', v === 'auto' ? true : null) }}
+            onChange={(v) => { if (set('agent_auto_permissions', v === 'auto' ? true : null)) setPerms(v) }}
             options={[{ value: 'ask', label: 'Ask me' }, { value: 'auto', label: 'Auto mode' }]}
           />
         </>

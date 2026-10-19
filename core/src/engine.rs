@@ -494,9 +494,11 @@ impl Engine {
         let text = serde_json::to_string_pretty(&self.settings).map_err(|e| e.to_string())?;
         let path = self.data_dir.join("settings.json");
         let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, text)
-            .and_then(|_| std::fs::rename(&tmp, &path))
-            .map_err(|e| format!("cannot save {}: {e}", path.display()))
+        let saved = std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, &path));
+        if saved.is_err() {
+            let _ = std::fs::remove_file(&tmp); // a failed save leaves no copy of the new settings (an API key) behind
+        }
+        saved.map_err(|e| format!("cannot save {}: {e}", path.display()))
     }
 
     pub fn setting(&self, key: &str) -> Option<String> {
@@ -732,6 +734,11 @@ mod tests {
         e.set_setting("k", Value::Null).unwrap();
         let saved: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("settings.json")).unwrap()).unwrap();
         assert!(saved.get("k").is_none() && !blocker.exists());
+        std::fs::remove_file(dir.join("settings.json")).unwrap();
+        std::fs::create_dir(dir.join("settings.json")).unwrap(); // the temp file writes, the rename fails
+        assert!(e.set_setting("k", json!("new")).is_err());
+        assert!(!blocker.exists(), "a failed rename must not leave the new settings in the temp file");
+        assert_eq!(e.setting("k"), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
