@@ -24,7 +24,15 @@ jobs:
         with: { sparse-checkout: .github/scripts, persist-credentials: false }
       - run: bash .github/scripts/auto-merge.sh
         env: { GH_TOKEN: "${{ secrets.GH_PAT }}", GITHUB_REPOSITORY: "${{ github.repository }}" }
-      # Same runner and cadence: rerun Claude jobs that the usage limit (or another API error) ended.
+
+  # Same runner and cadence, with its own time budget: rerun Claude jobs that the usage limit (or another API error) ended.
+  retry-claude:
+    needs: auto-merge
+    if: ${{ !cancelled() }}
+    runs-on: [self-hosted, nalarupa-light]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with: { sparse-checkout: .github/scripts, persist-credentials: false }
       - run: bash .github/scripts/retry-claude.sh
-        if: ${{ !cancelled() }}
         env: { GH_TOKEN: "${{ secrets.GH_PAT }}", GITHUB_REPOSITORY: "${{ github.repository }}" }
