@@ -6,7 +6,7 @@ import { C } from './theme'
 import { Button, Field, Icon, IconButton, NumField, Row, Section, Segmented, Swatch, T, Toggle, type Toast } from './ui'
 
 type Props = { version: number; selection: string[]; select: (ids: string[]) => void; toast: Toast }
-type Info = { id: string; node: any; box: { w: number; h: number } | null; parentLayout: string; variables: Record<string, any> }
+type Info = { id: string; node: any; box: { w: number; h: number } | null; local: { bx: number; by: number } | null; parentLayout: string; variables: Record<string, any> }
 
 const str = (v: unknown) => (v === undefined || v === null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v))
 const isMode = (v: unknown, mode: string) => typeof v === 'string' && v.startsWith(mode)
@@ -124,16 +124,18 @@ export function Inspector({ version, selection, select, toast }: Props) {
   const stroke = solidColor(n.stroke, vars)
 
   // Rotation turns around the center like the canvas handle: a free layer's origin moves so the center stays put.
+  // A group's box starts (bx, by) past its origin.
   const setRotation = (v: number, key: string) => perNode((i) => {
     const props: Record<string, unknown> = { rotation: v || null }
-    if (!inFlow(i) && i.box && i.node.type !== 'group') {
+    if (!inFlow(i) && i.box) {
       const [fx, fy] = [!!i.node.flipX, !!i.node.flipY]
-      ;[props.x, props.y] = turnAroundCenter(Number(i.node.x ?? 0), Number(i.node.y ?? 0), i.box.w, i.box.h, Number(i.node.rotation ?? 0), v, fx, fy)
+      ;[props.x, props.y] = turnAroundCenter(Number(i.node.x ?? 0), Number(i.node.y ?? 0), i.box.w, i.box.h, Number(i.node.rotation ?? 0), v, fx, fy, i.local?.bx, i.local?.by)
     }
     return props
   }, key)
-  // W/H: typing a number makes that axis fixed; auto text becomes fixed width (height: fixed size).
+  // W/H: typing a number makes that axis fixed; auto text becomes fixed width (height: fixed size). A group is the union of its children and has no size to set.
   const setSize = (axis: 'width' | 'height', v: number, key: string) => perNode((i) => {
+    if (i.node.type === 'group') return null
     const p: Record<string, unknown> = { [axis]: Math.max(0, Math.round(v * 100) / 100) }
     if (i.node.type === 'text') {
       if (axis === 'height') Object.assign(p, { textGrowth: 'fixed-width-height', width: i.node.width ?? Math.round(i.box?.w ?? 0) })
@@ -152,7 +154,8 @@ export function Inspector({ version, selection, select, toast }: Props) {
     return p
   })
   const canHug = all((i) => i.node.type === 'frame' && i.node.layout !== 'none')
-  const canFill = all(inFlow)
+  // A group's size is its children's union, so it cannot fill either.
+  const canFill = all((i) => inFlow(i) && i.node.type !== 'group')
   const hugW = all((i) => isMode(i.node.width, 'fit_content'))
   const hugH = all((i) => isMode(i.node.height, 'fit_content'))
   const fillW = all((i) => isMode(i.node.width, 'fill_container'))
@@ -184,10 +187,12 @@ export function Inspector({ version, selection, select, toast }: Props) {
       </Section>
 
       <Section title={!multi && inFlow(infos[0]) ? 'Size (auto layout child)' : 'Size'}>
-        <Row>
-          <NumField label="W" name="Width" {...numOf((i) => dimOf(i, 'width'))} onCommit={(v, k) => setSize('width', v, k)} testId="inspector-w" />
-          <NumField label="H" name="Height" {...numOf((i) => dimOf(i, 'height'))} onCommit={(v, k) => setSize('height', v, k)} testId="inspector-h" />
-        </Row>
+        {all((i) => i.node.type === 'group') ? null : (
+          <Row>
+            <NumField label="W" name="Width" {...numOf((i) => dimOf(i, 'width'))} onCommit={(v, k) => setSize('width', v, k)} testId="inspector-w" />
+            <NumField label="H" name="Height" {...numOf((i) => dimOf(i, 'height'))} onCommit={(v, k) => setSize('height', v, k)} testId="inspector-h" />
+          </Row>
+        )}
         {canHug || canFill ? (
           <Row gap={6}>
             {canHug ? <Toggle label="Hug W" on={hugW} onChange={(on) => sizing('width', 'fit_content', on)} testId="hug-width" /> : null}

@@ -31,10 +31,10 @@ export const own = (deg: number, flipX: boolean, flipY: boolean): M => {
  *  its local bounds start (groups). */
 export const centerOffset = (w: number, h: number, deg: number, flipX: boolean, flipY: boolean, bx = 0, by = 0): Pt =>
   lin(own(deg, flipX, flipY), bx + w / 2, by + h / 2)
-/** The origin that keeps a box's center put when its rotation goes from `from` to `to` degrees. */
-export const turnAroundCenter = (x: number, y: number, w: number, h: number, from: number, to: number, flipX: boolean, flipY: boolean): Pt => {
-  const [ox0, oy0] = centerOffset(w, h, from, flipX, flipY)
-  const [ox, oy] = centerOffset(w, h, to, flipX, flipY)
+/** The origin that keeps a box's center put when its rotation goes from `from` to `to` degrees (`bx`/`by` as in `centerOffset`). */
+export const turnAroundCenter = (x: number, y: number, w: number, h: number, from: number, to: number, flipX: boolean, flipY: boolean, bx = 0, by = 0): Pt => {
+  const [ox0, oy0] = centerOffset(w, h, from, flipX, flipY, bx, by)
+  const [ox, oy] = centerOffset(w, h, to, flipX, flipY, bx, by)
   return [Math.round((x + ox0 - ox) * 100) / 100, Math.round((y + oy0 - oy) * 100) / 100]
 }
 /** Corners tl, tr, br, bl of `r` under `m`. */
@@ -180,5 +180,6 @@ if (import.meta.main) {
   eq(centerOffset(20, 10, 0, true, false), [-10, 5], 'a flip puts the center on the other side of the origin')
   eq([resizeCursor('e', null), resizeCursor('e', m), resizeCursor('ne', null), resizeCursor('ne', m)], ['ew-resize', 'ns-resize', 'nesw-resize', 'nwse-resize'], 'cursors turn with the box')
   eq(turnAroundCenter(0, 0, 100, 50, 0, 90, false, false), [25, 75], 'turning keeps the center put')
+  eq(turnAroundCenter(0, 0, 100, 50, 0, 90, false, false, 10, 20), [15, 105], 'a group turns around its box center, not its origin')
   console.log('geometry ok')
 }

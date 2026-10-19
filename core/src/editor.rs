@@ -146,22 +146,14 @@ impl<'a> View<'a> {
     }
 
     /// World position of the node's own origin (what its children's x/y are relative to).
-    /// Groups are the union of their children, so their origin sits before the box.
+    /// Groups are the union of their (turned) children, so their origin sits before the box, where layout put it.
     fn origin(&self, id: &str) -> Option<(f64, f64)> {
         if id == ROOT {
             return Some((0.0, 0.0));
         }
+        self.doc.find(id)?;
         let f = self.flat(id)?;
-        let n = self.doc.find(id)?;
-        if n["type"] != "group" {
-            return Some((f.x, f.y));
-        }
-        let shown: Vec<&Value> = n["children"].as_array().map(|k| k.iter().filter(|k| k["enabled"] != false).collect()).unwrap_or_default();
-        if shown.is_empty() {
-            return Some((f.x, f.y));
-        }
-        let min = |k: &str| shown.iter().map(|c| c[k].as_f64().unwrap_or(0.0)).fold(f64::MAX, f64::min);
-        Some((f.x - min("x"), f.y - min("y")))
+        Some((f.x - f.local.0[0], f.y - f.local.0[1]))
     }
 
     fn paint_order(&self, ids: &[String]) -> Vec<String> {
@@ -1159,6 +1151,27 @@ mod tests {
         // Positions are stored to 0.01, so a parent-space step lands within that of the canvas edge.
         assert!(after.iter().all(|r| (r.0 - left).abs() < 0.01), "canvas-space left edges: {after:?}");
         assert!(before.iter().any(|r| (r.0 - left).abs() > 1e-6), "the layers started unaligned");
+    }
+
+    #[test]
+    fn reparent_keeps_a_group_with_a_turned_child_in_place() {
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        e.load_template("empty");
+        let frame = e.edit(|d| d.insert(ROOT, json!({"type": "frame", "x": 300, "y": 300, "width": 400, "height": 400, "layout": "none"}), None)).unwrap();
+        // Turned 180°, the second child paints up-left of its origin (0..40, 0..20): the group's box starts there,
+        // not at the lowest child x/y (40, 20).
+        let group = e.edit(|d| d.insert(ROOT, json!({"type": "group", "x": 100, "y": 100, "children": [
+            {"type": "rectangle", "x": 100, "y": 100, "width": 40, "height": 20},
+            {"type": "rectangle", "x": 40, "y": 20, "width": 40, "height": 20, "rotation": 180}]}), None)).unwrap();
+        let painted = |e: &mut Engine| {
+            e.sync();
+            View::new(e).painted(&group, None).unwrap()
+        };
+        let before = painted(&mut e);
+        reparent(&mut e, std::slice::from_ref(&group), &frame, None).unwrap();
+        let after = painted(&mut e);
+        assert!((after.0 - before.0).abs() < 1e-6 && (after.1 - before.1).abs() < 1e-6, "{before:?} → {after:?}");
     }
 
     #[test]
