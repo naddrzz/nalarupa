@@ -53,12 +53,15 @@ call('undo')
 assert(node(B).x === 100, 'an unchanged drag adds no undo step')
 
 // A drag that moves something and is then dragged back to the start is not an edit either.
+call('update', { ids: [B], props: { x: 200 } })
 const before = JSON.stringify(call('layers'))
 call('drag_begin')
 call('move_by', { ids: [A], dx: 30, dy: 0 })
 call('move_by', { ids: [A], dx: -30, dy: 0 })
 call('drag_end')
 assert(JSON.stringify(call('layers')) === before && node(A).x === 10, 'dragging back to the start changes nothing')
+call('undo')
+assert(node(B).x === 100, 'and leaves no undo step: the next undo reverts the edit before it')
 
 // drag_end with no drag running is harmless; the end of a drag consumes it, so a second one adds nothing.
 call('update', { ids: [B], props: { x: 150 } })
@@ -71,7 +74,17 @@ assert(node(A).x === 10 && node(B).x === 150, 'a stray drag_end adds no step')
 call('undo')
 assert(node(B).x === 100, 'the step before the drag is still there')
 
-// A drag leaves the document dirty, and a new drag after undo clears the redo stack.
+// A drag makes a clean document dirty (a fresh template starts clean).
+call('new', { template: 'slides' })
+const S = call('frames')[0].id
+const sx = node(S).x
+assert(!dirty(), 'a new document starts clean')
+call('drag_begin')
+call('move_by', { ids: [S], dx: 5, dy: 5 })
+call('drag_end')
+assert(dirty() && node(S).x === sx + 5, 'a drag marks a clean document dirty')
+
+// A new drag after undo clears the redo stack.
 call('new', { template: 'empty' })
 const G = call('insert', { parent: 'document', node: { type: 'frame', name: 'G', x: 0, y: 0, width: 100, height: 100, layout: 'none' } }).id
 call('undo')
@@ -79,7 +92,7 @@ call('redo')
 call('drag_begin')
 call('move_by', { ids: [G], dx: 5, dy: 5 })
 call('drag_end')
-assert(dirty() && node(G).x === 5, 'a drag marks the document dirty')
+assert(node(G).x === 5, 'the drag moved the layer')
 call('undo')
 call('drag_begin')
 call('move_by', { ids: [G], dx: 9, dy: 0 })
