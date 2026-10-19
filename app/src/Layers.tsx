@@ -4,7 +4,7 @@ import { tryCall, type Box, type Layer } from './core'
 import type { Mods } from './Canvas'
 import { nodeIcon } from './icons'
 import { C, LEFT_W } from './theme'
-import { FocusRing, forwardKey, Icon, IconButton, Pressable, Segmented, setKeyboardFocus, T, useKeyboardFocusId, type Toast } from './ui'
+import { FocusRing, forwardKey, Icon, IconButton, Pressable, Segmented, setKeyboardFocus, ShortcutScope, T, useKeyboardFocusId, type Toast } from './ui'
 
 export function LeftPanel(props: {
   version: number; selection: string[]; select: (ids: string[]) => void; focus: (id: string) => void; present: (id?: string) => void
@@ -246,6 +246,8 @@ function Layers({ version, selection, select, focus, hover, onShortcut }: { vers
                 }}
               >
                 {l.children ? (
+                  // The row forwards the keys that bubble up from the chevron: no second forward from the button.
+                  <ShortcutScope value={null}>
                   <Pressable
                     onClick={() => setExpanded(l.id, !l.expanded)}
                     // Out of the Tab order: Left and Right on the row expand and collapse.
@@ -265,6 +267,7 @@ function Layers({ version, selection, select, focus, hover, onShortcut }: { vers
                   >
                     <Icon name={l.expanded ? 'chevronDown' : 'chevronRight'} size={12} color={C.ghost} />
                   </Pressable>
+                  </ShortcutScope>
                 ) : <div style={{ width: 14, flexShrink: 0 }} />}
                 <Icon name={nodeIcon(l.type, l.reusable)} size={13} color={l.reusable || l.type === 'ref' ? C.component : C.ghost} />
                 {renaming?.id === l.id ? (
