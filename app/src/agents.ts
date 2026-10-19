@@ -275,6 +275,16 @@ export function lastContentId(items: ChatItem[]): number | undefined {
   for (let i = items.length - 1; i >= 0; i--) if (items[i].kind !== 'usage' && items[i].kind !== 'note') return items[i].id
 }
 
+/** A card with an animated ellipsis (running tool, live thinking). */
+export function spinning(it: ChatItem): boolean {
+  return (it.kind === 'tool' && it.running) || (it.kind === 'thinking' && !it.endedAt)
+}
+
+/** An item that still changes in place while the agent works, so its row must re-render on a store change. */
+export function changing(it: ChatItem): boolean {
+  return spinning(it) || (it.kind === 'assistant' && it.streaming)
+}
+
 /** Agent bar pills: the running agents first, then the finished ones, at most `max`; `more` counts the rest. */
 export function barAgents(max = 8) {
   const all = [...store.profiles.values()]

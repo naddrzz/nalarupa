@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { call, renderPixels } from '../src/core'
-import { applyEvents, barAgents, cursorFaded, imageSrc, lastContentId, needsFrame, poke, resetChat, store } from '../src/agents'
+import { applyEvents, barAgents, changing, cursorFaded, imageSrc, lastContentId, needsFrame, poke, resetChat, spinning, store } from '../src/agents'
 import { INDICATOR_TICK_MS, ellipsisAt, ellipsisPadAt, pulseAt } from '../src/theme'
 
 const assert = (ok: unknown, msg: string) => {
@@ -107,6 +107,18 @@ assert(store.items.some((i) => i.kind === 'usage') && store.items.some((i) => i.
 assert(lastContentId(store.items) === reply.id, 'a usage row or a note after the reply does not end its typewriter')
 applyEvents([{ type: 'agent', kind: 'message_end', agent: { id: 'a0', name: 'Agent 0', color: '#ffffff' } }, { type: 'agent', kind: 'text_delta', text: 'Next.', agent: { id: 'a0', name: 'Agent 0', color: '#ffffff' } }], 0)
 assert(lastContentId(store.items) !== reply.id, 'a later reply does')
+// Chat rows: only a running tool, live thinking or streaming reply is animated or changes in place; the rest of a long chat must not re-render on a tick.
+resetChat()
+{
+  const ag = { id: 'a0', name: 'Agent 0', color: '#ffffff' }
+  for (let i = 0; i < 20; i++) applyEvents([{ type: 'agent', kind: 'tool_start', id: `t${i}`, name: 'execute', agent: ag }, { type: 'agent', kind: 'tool_done', id: `t${i}`, name: 'execute', agent: ag }], 0)
+  applyEvents([{ type: 'agent', kind: 'tool_start', id: 'run', name: 'execute', agent: ag }, { type: 'agent', kind: 'thinking_delta', text: 'hm', agent: { id: 'a1', name: 'Agent 1', color: '#ffffff' } }, { type: 'agent', kind: 'text_delta', text: 'Hi', agent: { id: 'a2', name: 'Agent 2', color: '#ffffff' } }], 0)
+  const live = store.items.filter(changing)
+  assert(live.length === 3 && live.map((i) => i.kind).join() === 'tool,thinking,assistant', `live chat rows ${live.map((i) => i.kind)}`)
+  assert(store.items.filter(spinning).map((i) => i.kind).join() === 'tool,thinking', 'the ellipsis animates on the running tool and the live thinking only')
+  applyEvents([{ type: 'agent', kind: 'done', agent: ag }, { type: 'agent', kind: 'done', agent: { id: 'a1', name: 'Agent 1', color: '#ffffff' } }, { type: 'agent', kind: 'done', agent: { id: 'a2', name: 'Agent 2', color: '#ffffff' } }], 01)
+  assert(!store.items.some(changing), 'a finished chat has no live row')
+}
 // Agent bar: running agents come first and survive the cap; a new conversation forgets every agent.
 resetChat()
 for (let i = 0; i < 10; i++) applyEvents([{ type: 'agent', kind: i < 7 ? 'done' : 'start', agent: { id: `a${i}`, name: `Agent ${i}`, color: '#ffffff' } }], 0)
