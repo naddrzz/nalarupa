@@ -46,6 +46,8 @@ export const store = {
   /** Backend and model of each agent's current turn, from its `start` event. */
   authors: new Map<string, Author>(),
   todos: [] as Todo[],
+  /** The agent that last wrote `todos`; only its run ending settles the plan. */
+  todosOwner: '',
   cursors: new Map<string, CursorState>(),
   /** AI Pen cursors by the frame they draw into. */
   pens: new Map<string, PenState>(),
@@ -111,7 +113,7 @@ function lastOf(agent: string, kinds: ChatItem['kind'][]): ChatItem | undefined 
 function endStreaming(agent: string, now: number) {
   for (const it of store.items) {
     if (it.kind === 'assistant' && it.agent.id === agent) it.streaming = false
-    if (it.kind === 'thinking' && it.agent.id === agent && !it.endedAt) it.endedAt = now
+    if (it.kind === 'thinking' && it.agent.id === agent && it.endedAt === undefined) it.endedAt = now
   }
 }
 
@@ -192,7 +194,7 @@ export function applyEvents(events: any[], now: number): boolean {
       }
       case 'thinking_delta': {
         const last = lastOf(aid, ['thinking', 'assistant', 'tool'])
-        if (last?.kind === 'thinking' && !last.endedAt) last.text += ev.text
+        if (last?.kind === 'thinking' && last.endedAt === undefined) last.text += ev.text
         else {
           endStreaming(aid, now)
           store.items.push({ kind: 'thinking', id: nextId++, agent: p ?? FALLBACK, text: ev.text, startedAt: now })
@@ -226,6 +228,7 @@ export function applyEvents(events: any[], now: number): boolean {
         break
       case 'todos':
         store.todos = Array.isArray(ev.todos) ? ev.todos : []
+        store.todosOwner = aid
         break
       case 'note':
         store.items.push({ kind: 'note', id: nextId++, text: ev.text })
@@ -247,7 +250,8 @@ export function applyEvents(events: any[], now: number): boolean {
         endStreaming(aid, now)
         store.running.delete(aid)
         for (const it of store.items) if (it.kind === 'tool' && it.agent.id === aid && it.running) Object.assign(it, { running: false, error: true, output: 'Tool call cancelled' })
-        if (ev.stopped) store.todos = store.todos.map((t) => (t.status === 'completed' ? t : { ...t, status: 'cancelled' }))
+        // A failed run ends the agent as a Stop does: its unfinished plan must not keep reading as live.
+        if (store.todosOwner === aid && (ev.stopped || failedRun(aid))) store.todos = store.todos.map((t) => (t.status === 'completed' ? t : { ...t, status: 'cancelled' }))
         store.items.push({ kind: 'usage', id: nextId++, agent: p ?? FALLBACK, durationMs: ev.durationMs ?? 0, usage: ev.usage ?? {}, stopped: !!ev.stopped })
         const c = store.cursors.get(aid)
         if (c) c.lastActivity = now
@@ -259,9 +263,20 @@ export function applyEvents(events: any[], now: number): boolean {
   return changed
 }
 
+/** Whether the agent's current run (since its last usage row) reported an error. */
+function failedRun(aid: string): boolean {
+  for (let i = store.items.length - 1; i >= 0; i--) {
+    const it = store.items[i]
+    if (it.kind === 'usage' && it.agent.id === aid) return false
+    if (it.kind === 'error' && (it.agent?.id ?? 'agent') === aid) return true
+  }
+  return false
+}
+
 export function resetChat() {
   store.items = []
   store.todos = []
+  store.todosOwner = ''
   store.pills.clear()
   store.profiles.clear()
   store.running.clear()
@@ -272,6 +287,16 @@ export function resetChat() {
 /** The newest item that is real chat content: a usage row or a note is not a "later message" for the typewriter. */
 export function lastContentId(items: ChatItem[]): number | undefined {
   for (let i = items.length - 1; i >= 0; i--) if (items[i].kind !== 'usage' && items[i].kind !== 'note') return items[i].id
+}
+
+/** A card with an animated ellipsis (running tool, live thinking). */
+export function spinning(it: ChatItem): boolean {
+  return (it.kind === 'tool' && it.running) || (it.kind === 'thinking' && it.endedAt === undefined)
+}
+
+/** An item that still changes in place while the agent works, so its row must re-render on a store change. */
+export function changing(it: ChatItem): boolean {
+  return spinning(it) || (it.kind === 'assistant' && it.streaming)
 }
 
 /** Agent bar pills: the running agents first, then the finished ones, at most `max`; `more` counts the rest. */

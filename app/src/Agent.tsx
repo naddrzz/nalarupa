@@ -1,9 +1,9 @@
 // Agent chat panel: agent headers, typewriter text,
 // collapsible thinking, tool cards ("Designing…" → "Designed"), plan panel,
 // usage rows, queued prompts, parallel agents.
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { call, tryCall } from './core'
-import { barAgents, imageSrc, lastContentId, profileOf, resetChat, restoreChat, store, type Author, type ChatItem } from './agents'
+import { barAgents, changing, imageSrc, lastContentId, profileOf, resetChat, restoreChat, spinning, store, type Author, type ChatItem } from './agents'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import * as SelectPrimitive from '@gpuix/react/select'
 import { C, FONT, INDICATOR_TICK_MS, MONO, REDUCED_MOTION, ellipsisAt, ellipsisPadAt, pulseAt } from './theme'
@@ -59,7 +59,7 @@ function duration(ms: number) {
   return s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`
 }
 
-/** Re-render on an interval while `active` (animated ellipsis, typewriter). */
+/** Re-render the calling component alone on an interval while `active` (animated ellipsis, typewriter); the chat never ticks as a whole, its cost would grow with its length. */
 function useTick(ms: number, active: boolean) {
   const [, set] = useState(0)
   useEffect(() => {
@@ -123,9 +123,6 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
   }
   const items = store.items
   const lastId = lastContentId(items)
-  const typing = items.some((i) => i.kind === 'assistant' && i.id === lastId && (revealed.get(i.id) ?? 0) < i.text.split(/(\s+)/).length)
-  useTick(16, typing)
-  useTick(REDUCED_MOTION ? 400 : INDICATOR_TICK_MS, running)
 
   const send = (text: string) => {
     const t = text.trim()
@@ -146,12 +143,13 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
     setChatVersion((n) => n + 1)
     toast('New conversation')
   }
-  const toggle = (id: number) => setOpen((s) => {
+  // Stable (setOpen only reads `kept`), so a memoized Item is not re-rendered by a new closure.
+  const toggle = useCallback((id: number) => setOpen((s) => {
     const n = new Set(s)
     if (n.has(id)) n.delete(id)
     else n.add(id)
     return n
-  })
+  }), [])
 
   const { all: agents, running: runningAgents, shown: shownAgents, more: moreAgents } = barAgents()
   const planning = running && (() => {
@@ -203,12 +201,13 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
         <virtual-list estimatedItemHeight={44} followTail alignment="bottom" style={{ flexGrow: 1, minHeight: 0, paddingTop: 8, paddingBottom: 8 }}>
           {items.map((m) => (
             <div key={m.id} style={{ paddingLeft: 12, paddingRight: 12 }}>
-              <Item m={m} isLast={m.id === lastId} expanded={open.has(m.id)} toggle={() => toggle(m.id)} tick={tick} />
+              {/* Items are mutated in place, so `tick` (the store version) is what re-renders one; only the live ones take it (a finished row never changes; `isLast` and the row's own ticks cover the rest). */}
+              <Item m={m} isLast={m.id === lastId} expanded={open.has(m.id)} toggle={toggle} tick={changing(m) ? tick : 0} />
             </div>
           ))}
           {planning ? (
             <div key="planning" style={{ paddingTop: 6, paddingBottom: 6, paddingLeft: 12, paddingRight: 12 }}>
-              <T size={12} color={C.ghost}>{`Planning next moves${dots()}`}</T>
+              <Planning />
             </div>
           ) : null}
         </virtual-list>
@@ -655,7 +654,14 @@ function ModelPicker({ settingsOpen, toast }: { settingsOpen: boolean; toast: To
   )
 }
 
-function Item({ m, isLast, expanded, toggle }: { m: ChatItem; isLast: boolean; expanded: boolean; toggle: () => void; tick: number }) {
+function Planning() {
+  useTick(REDUCED_MOTION ? 400 : INDICATOR_TICK_MS, true)
+  return <T size={12} color={C.ghost}>{`Planning next moves${dots()}`}</T>
+}
+
+const Item = memo(function Item({ m, isLast, expanded, toggle }: { m: ChatItem; isLast: boolean; expanded: boolean; toggle: (id: number) => void; tick: number }) {
+  const typing = m.kind === 'assistant' && isLast && (revealed.get(m.id) ?? 0) < m.text.split(/(\s+)/).length
+  useTick(typing ? 16 : REDUCED_MOTION ? 400 : INDICATOR_TICK_MS, typing || spinning(m))
   switch (m.kind) {
     case 'user':
     case 'queued':
@@ -678,11 +684,11 @@ function Item({ m, isLast, expanded, toggle }: { m: ChatItem; isLast: boolean; e
       )
     }
     case 'thinking': {
-      const live = !m.endedAt
+      const live = m.endedAt === undefined
       const label = live ? `Thinking${dots()}` : `Thought for ${duration((m.endedAt ?? 0) - m.startedAt)}`
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingTop: 4, paddingBottom: 4 }}>
-          <Pressable label={label} expanded={expanded} onClick={toggle} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 24, borderRadius: 4 }}>
+          <Pressable label={label} expanded={expanded} onClick={() => toggle(m.id)} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 24, borderRadius: 4 }}>
             <Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={11} color={C.ghost} />
             <T size={12} color={C.ghost}>{label}</T>
           </Pressable>
@@ -697,7 +703,7 @@ function Item({ m, isLast, expanded, toggle }: { m: ChatItem; isLast: boolean; e
       const src = m.name === 'execute' && typeof m.input?.input === 'string' ? (m.input.input as string) : null
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 3, paddingBottom: 3 }}>
-          <Pressable label={m.running ? `${label}, running` : `${label}, ${m.error ? 'failed' : 'done'}`} expanded={expanded} onClick={toggle} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 24, borderRadius: 4 }}>
+          <Pressable label={m.running ? `${label}, running` : `${label}, ${m.error ? 'failed' : 'done'}`} expanded={expanded} onClick={() => toggle(m.id)} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 24, borderRadius: 4 }}>
             <div style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: m.agent.color, opacity: m.running && !REDUCED_MOTION ? pulseAt(now) : 1 }} />
             {m.running ? (
               <div style={{ display: 'flex', flexDirection: 'row' }}>
@@ -737,7 +743,7 @@ function Item({ m, isLast, expanded, toggle }: { m: ChatItem; isLast: boolean; e
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingTop: 6, paddingBottom: 8 }}>
           {m.stopped ? <T size={11} color={C.ghost} style={{ fontStyle: 'italic' }}>Agent stopped by user.</T> : null}
-          <Pressable label={`${m.agent.name} designed for ${duration(m.durationMs)}. Show usage`} expanded={expanded} onClick={toggle} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 24, borderRadius: 4 }}>
+          <Pressable label={`${m.agent.name} designed for ${duration(m.durationMs)}. Show usage`} expanded={expanded} onClick={() => toggle(m.id)} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 24, borderRadius: 4 }}>
             <div style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: m.agent.color }} />
             <T size={11} color={C.ghost}>{`${m.agent.name} designed for ${duration(m.durationMs)}`}</T>
           </Pressable>
@@ -769,7 +775,7 @@ function Item({ m, isLast, expanded, toggle }: { m: ChatItem; isLast: boolean; e
     case 'permission':
       return <PermissionCard m={m} />
   }
-}
+})
 
 const WARN = '#F59E0B'
 
