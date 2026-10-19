@@ -158,6 +158,18 @@ TakeScreenshot([s])`,
   await app.getByTestId('agent-history').click()
   await app.getByTestId(`chat-${chatId}`).waitFor()
   await shot('07-chat-history')
+  // A chat saved from a multi-line prompt has line breaks in its title; its row still reads as one line.
+  const multiId = `e2emulti${Date.now().toString(36)}`
+  const multiFile = join(sessions, `${multiId}.json`)
+  writeFileSync(multiFile, JSON.stringify({ version: 1, id: multiId, title: 'Make it dark\nand add a footer', updatedAt: Date.now() - 5000, agent, messages: [], session: null, events: [] }))
+  await app.getByTestId('agent-history').click()
+  await sleep(200)
+  await app.getByTestId('agent-history').click()
+  await app.getByTestId(`chat-${multiId}`).waitFor()
+  const multiRow = (await app.getByTestId(`chat-${multiId}`).bounds())!
+  const multiText = (await app.getByText('Make it dark and add a footer').bounds())!
+  if (multiText.height > multiRow.height) throw new Error(`a multi-line chat title is ${multiText.height}px tall inside a ${multiRow.height}px row`)
+  rmSync(multiFile)
   await app.getByTestId(`chat-${chatId}`).click()
   await sleep(500)
   // The prompt bubble and the agent's reply (a markdown block) are back.

@@ -353,7 +353,11 @@ function ChatHistory({ running, toast, changed }: { running: boolean; toast: Toa
   useEffect(() => {
     if (armed && kbChat === armed) focusKeys(els.current.get(`confirm:${armed}`))
   }, [armed])
-  const refresh = () => setList(tryCall<ChatList>('chat_list') ?? { current: null, chats: [] })
+  // Titles saved from a multi-line prompt hold line breaks; a row is one line, so collapse them.
+  const refresh = () => {
+    const l = tryCall<ChatList>('chat_list') ?? { current: null, chats: [] }
+    setList({ ...l, chats: l.chats.map((c) => ({ ...c, title: (c.title ?? '').split(/\s+/).filter(Boolean).join(' ') })) })
+  }
   const close = () => {
     setList(null)
     setConfirm(false)
