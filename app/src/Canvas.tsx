@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject, type Ref } from 'react'
 import type { EventModifiers, EventPayload } from '@gpuix/native'
 import type { CursorValue } from '@gpuix/native/host'
 import type { ImgInstance, PublicInstance } from '@gpuix/react'
@@ -163,6 +163,8 @@ export function Canvas(props: {
   w: number; h: number; cam: Cam; setCam: (c: Cam) => void; version: number; selection: string[]
   select: (ids: string[]) => void; tool: Tool; setTool: (t: Tool) => void; toast: Toast
   onShortcut: (key: string, mods: Mods) => boolean
+  /** Set to the pen-key handler (false = not editing points or not handled) so keys from other panels reach it. */
+  penKeyRef?: MutableRefObject<((key: string, mods: Mods) => boolean) | null>
   hoverId?: string | null
   chatOpen?: boolean
   /** Agent-inserted nodes are sliding in: the core paints them per frame. */
@@ -1224,6 +1226,8 @@ export function Canvas(props: {
       moveCam({ ...cam, x: cam.x - ddx / cam.zoom, y: cam.y - ddy / cam.zoom })
     }
   }
+
+  if (props.penKeyRef) props.penKeyRef.current = (key, m) => !!pen.current && penKey(key, m)
 
   function onKeyDown(e: EventPayload) {
     const key = (e.key ?? '').toLowerCase()

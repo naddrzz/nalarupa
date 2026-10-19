@@ -283,6 +283,12 @@ export function App() {
     }
     return false
   }
+  // The left panel's rows own focus after a click and pass on the keys they do not handle. A stable
+  // wrapper keeps the memoized panel from re-rendering with every `onShortcut`.
+  const shortcutRef = useRef(onShortcut)
+  shortcutRef.current = onShortcut
+  const penKeyRef = useRef<((key: string, m: Mods) => boolean) | null>(null)
+  const panelShortcut = useCallback((key: string, m: Mods) => !!penKeyRef.current?.(key, m) || shortcutRef.current(key, m), [])
 
   const toastEl = toastMsg ? (
     <div
@@ -359,10 +365,10 @@ export function App() {
         <IconButton icon="open" title="Save as… (Ctrl+Shift+S)" onClick={() => save(true)} />
       </div>
       <div style={{ flexGrow: 1, minHeight: 0, display: 'flex', flexDirection: 'row' }}>
-        <Left version={state.version} selection={selection} select={select} focus={focusLayer} present={present} toast={toast} hover={setHoverId} />
+        <Left version={state.version} selection={selection} select={select} focus={focusLayer} present={present} toast={toast} hover={setHoverId} onShortcut={panelShortcut} />
         <Canvas
           w={cw} h={ch} cam={cam} setCam={setCam} version={state.version} selection={selection}
-          select={select} tool={tool} setTool={setTool} toast={toast} onShortcut={onShortcut} chatOpen={rightTab === 'agent'} hoverId={hoverId}
+          select={select} tool={tool} setTool={setTool} toast={toast} onShortcut={onShortcut} penKeyRef={penKeyRef} chatOpen={rightTab === 'agent'} hoverId={hoverId}
           animating={!!state.animating} rootRef={canvasEl}
         />
         <div style={{ width: RIGHT_W, flexShrink: 0, height: '100%', display: 'flex', flexDirection: 'column', backgroundColor: C.panel, borderLeftWidth: 1, borderColor: C.border }}>
