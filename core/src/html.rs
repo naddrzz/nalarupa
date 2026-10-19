@@ -161,25 +161,22 @@ fn gradient_css(o: &serde_json::Map<String, Value>) -> Option<String> {
     })
 }
 
-/// A gradient stroke: the gradient fills a box inset by `inset` px, masked down to its `pad` px ring.
+/// A gradient stroke: the gradient fills a box moved out by `reach` of each side width, masked down to its per-side ring.
 fn stroke_overlay(grad: &str, w: &Value, alignment: Option<&str>) -> Option<String> {
-    let (inset, pad) = match w {
-        Value::Object(s) => {
-            let side = |k: &str| s.get(k).and_then(num).unwrap_or(0.0).max(0.0);
-            (0.0, format!("{}px {}px {}px {}px", side("top"), side("right"), side("bottom"), side("left")))
-        }
-        v => {
-            let w = num(v).filter(|w| *w > 0.0)?;
-            let inset = match alignment {
-                Some("inner" | "inside") => 0.0,
-                Some("outer" | "outside") => -w,
-                _ => -w / 2.0,
-            };
-            (inset, format!("{w}px"))
-        }
+    let sides = match w {
+        Value::Object(s) => ["top", "right", "bottom", "left"].map(|k| s.get(k).and_then(num).unwrap_or(0.0).max(0.0)),
+        v => [num(v).filter(|w| *w > 0.0)?; 4],
     };
+    // The box reaches out by the whole width (outer), half of it (centered) or not at all (inner), per side.
+    let reach = match alignment {
+        Some("inner" | "inside") => 0.0,
+        Some("outer" | "outside") => 1.0,
+        _ => 0.5,
+    };
+    let px = |f: f64| if sides.iter().all(|w| *w == sides[0]) { format!("{}px", sides[0] * f + 0.0) } else { sides.map(|w| format!("{}px", w * f + 0.0)).join(" ") };
+    let (inset, pad) = (px(-reach), px(1.0));
     Some(format!(
-        "<div style=\"{}inset:{inset}px;padding:{pad};background:{grad};-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);mask-composite:exclude;\"></div>\n",
+        "<div style=\"{}inset:{inset};padding:{pad};background:{grad};-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);mask-composite:exclude;\"></div>\n",
         OVERLAY
     ))
 }
@@ -573,6 +570,11 @@ mod tests {
         // Per-side widths of a stroke stack are masked rings, one per stroke.
         let (s, h) = rect_html(json!({"fill": "#ffffff", "stroke": ["#ff0000", "#0000ff80"], "strokeWidth": {"top": 4, "left": 2}}));
         assert!(!s.contains("border") && h.matches("mask-composite:exclude").count() == 2 && h.find("#ff0000") < h.find("rgba(0, 0, 255"), "{h}");
+        // Per-side rings follow the stroke alignment: inner stays inside, outer reaches out by each side's width, centered by half.
+        for (align, inset) in [("inner", "0px 0px 0px 0px"), ("outer", "-4px 0px 0px -2px"), ("center", "-2px 0px 0px -1px")] {
+            let (_, h) = rect_html(json!({"fill": "#ffffff", "stroke": ["#ff0000", "#0000ff80"], "strokeWidth": {"top": 4, "left": 2}, "strokeAlignment": align}));
+            assert!(h.contains(&format!("inset:{inset};padding:4px 0px 0px 2px;")), "{align}: {h}");
+        }
         // Layer blur: CSS takes the standard deviation, half the radius.
         let (s, _) = rect_html(json!({"fill": "#ff0000", "effect": {"type": "blur", "radius": 4}}));
         assert!(s.contains("filter:blur(2px);"), "{s}");
