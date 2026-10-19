@@ -14,12 +14,7 @@ on:
 # never drops the nightly scheduled QA.
 concurrency: { group: "claude-qa-${{ github.event_name }}", cancel-in-progress: false }
 
-# Claude Code ends its session while a background command still runs; keep commands in the foreground, with room
-# for long checks.
 env:
-  CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
-  BASH_DEFAULT_TIMEOUT_MS: "3600000"
-  BASH_MAX_TIMEOUT_MS: "3600000"
   # The in-app agent runs the `claude` CLI (Claude Code backend); this logs it in.
   CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
@@ -146,7 +141,9 @@ jobs:
           display_report: true
           # The owner's token: issues it labels "claude" start the claude workflow (GITHUB_TOKEN events don't).
           github_token: ${{ secrets.GH_PAT }}
-          settings: '{"includeCoAuthoredBy": false, "fastMode": false}'
+          # Claude Code ends its session while a background command still runs: keep commands in the foreground, with
+          # room for long checks. These must sit in settings.env to reach Claude Code.
+          settings: '{"includeCoAuthoredBy": false, "fastMode": false, "env": {"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1", "BASH_DEFAULT_TIMEOUT_MS": "3600000", "BASH_MAX_TIMEOUT_MS": "3600000"}}'
           claude_args: --model claude-sonnet-5-5 --effort high --max-turns 300 --allowedTools "Bash,Read,Glob,Grep,Write,Edit"
           prompt: |
             You are the nightly QA for Nalarupa (repo ${{ github.repository }}, branch ${{ github.ref_name }}), area: ${{ matrix.area }}.
@@ -207,7 +204,7 @@ jobs:
           github_token: ${{ secrets.GH_PAT }}
           bot_id: "129574549"
           bot_name: naddrzz
-          settings: '{"includeCoAuthoredBy": false, "fastMode": false}'
+          settings: '{"includeCoAuthoredBy": false, "fastMode": false, "env": {"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1", "BASH_DEFAULT_TIMEOUT_MS": "3600000", "BASH_MAX_TIMEOUT_MS": "3600000"}}'
           claude_args: --model claude-sonnet-5-5 --effort high --max-turns 300 --allowedTools "Bash,Read,Glob,Grep,Write,Edit,Skill"
           prompt: |
             Run the bmad-qa-generate-e2e-tests skill for Nalarupa (repo ${{ github.repository }}, branch dev), unattended.

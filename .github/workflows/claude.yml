@@ -12,13 +12,6 @@ on:
   pull_request_review_comment: { types: [created] }
   pull_request_review: { types: [submitted] }
 
-# Claude Code ends its session while a background command still runs, so a check suite started in the background
-# never reached the push. Keep every command in the foreground, with room for the full suite (cargo test + e2e).
-env:
-  CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
-  BASH_DEFAULT_TIMEOUT_MS: "3600000"
-  BASH_MAX_TIMEOUT_MS: "3600000"
-
 jobs:
   claude:
     if: |
@@ -45,7 +38,9 @@ jobs:
           branch_prefix: claude/
           bot_id: "129574549"
           bot_name: naddrzz
-          settings: '{"includeCoAuthoredBy": false, "fastMode": false}'
+          # Claude Code ends its session while a background command still runs: keep commands in the foreground, with
+          # room for long checks. These must sit in settings.env to reach Claude Code.
+          settings: '{"includeCoAuthoredBy": false, "fastMode": false, "env": {"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1", "BASH_DEFAULT_TIMEOUT_MS": "3600000", "BASH_MAX_TIMEOUT_MS": "3600000"}}'
           additional_permissions: |
             actions: read
           claude_args: |
@@ -82,7 +77,7 @@ jobs:
           allowed_bots: cubic-dev-ai,coderabbitai
           bot_id: "129574549"
           bot_name: naddrzz
-          settings: '{"includeCoAuthoredBy": false, "fastMode": false}'
+          settings: '{"includeCoAuthoredBy": false, "fastMode": false, "env": {"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1", "BASH_DEFAULT_TIMEOUT_MS": "3600000", "BASH_MAX_TIMEOUT_MS": "3600000"}}'
           claude_args: --model claude-sonnet-5-5 --effort high --max-turns 150 --allowedTools "Bash,Read,Edit,Write,Glob,Grep"
           prompt: |
             Nalarupa repo; follow AGENTS.md. ${{ github.event.review.user.login }} reviewed PR #${{ github.event.pull_request.number }} (${{ github.repository }}),
