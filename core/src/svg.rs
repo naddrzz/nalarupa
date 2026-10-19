@@ -1407,13 +1407,14 @@ fn union(a: Rect, b: Rect) -> Rect {
     (x0, y0, (a.0 + a.2).max(b.0 + b.2) - x0, (a.1 + a.3).max(b.1 + b.3) - y0)
 }
 
-/// Box of a node and everything it draws outside it (unclipped descendants).
+/// Box of a node and everything it draws outside it (unclipped descendants, under their own
+/// rotation and flips), in the node's own space.
 fn extent(n: &RNode) -> Rect {
     let own = (n.x, n.y, n.w, n.h);
     if n.ty == "frame" && n.b("clip") {
         return own;
     }
-    n.kids.iter().map(extent).fold(own, union)
+    n.kids.iter().map(|k| turn(k, extent(k))).fold(own, union)
 }
 
 /// Axis-aligned box of `r` (in the node's own space) after the node's rotation and flips, so it
@@ -1697,6 +1698,18 @@ mod tests {
         let (c, s) = (30f64.to_radians().cos(), 30f64.to_radians().sin());
         assert!((w - (100.0 * c + 60.0 * s)).abs() < 1e-5 && (h - (100.0 * s + 60.0 * c)).abs() < 1e-5, "{w}x{h}");
         assert!((x - 340.0).abs() < 1e-5 && (y - (40.0 - 100.0 * s)).abs() < 1e-5, "{x},{y}");
+    }
+
+    /// A blurred frame's filter region covers its children where they paint: a flipped or rotated
+    /// child reaches left of / above its own box.
+    #[test]
+    fn extent_follows_children_rotation_and_flips() {
+        let mut f = node("frame", json!({}), (100.0, 100.0, 100.0, 100.0));
+        f.kids.push(node("rectangle", json!({"flipX": true}), (139.0, 138.0, 112.0, 130.0)));
+        // flipX mirrors about the child's left edge: it paints 27..139 instead of 139..251.
+        assert_eq!(extent(&f), (27.0, 100.0, 173.0, 168.0));
+        f.kids[0] = node("rectangle", json!({"rotation": 180}), (139.0, 138.0, 112.0, 130.0));
+        assert_eq!(extent(&f), (27.0, 8.0, 173.0, 192.0));
     }
 
     #[test]
