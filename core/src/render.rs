@@ -1107,6 +1107,54 @@ pub(crate) mod tests {
         assert!(missing.is_empty(), "hairline pixels missing: {missing:?}");
     }
 
+    /// Text takes a stroke like a shape: stroke-only text is visible, and a stroke paints around filled glyphs.
+    #[test]
+    fn text_stroke_is_painted() {
+        let text = |x: u32, extra: &str| format!(r##"{{"type":"text","x":{x},"y":10,"content":"Out","fontSize":50,"fontWeight":"700"{extra}}}"##);
+        let json = format!(
+            r##"{{"version":"2.19","children":[{{"type":"frame","id":"f","x":0,"y":0,"width":580,"height":80,"layout":"none","fill":"#ffffff","children":[{},{},{},{},{}]}}]}}"##,
+            text(10, r##","fill":"#ffff00""##),
+            text(150, r##","fill":"#ffff00","stroke":"#000000","strokeWidth":4"##),
+            text(290, r##","stroke":"#000000","strokeWidth":4"##),
+            text(430, r##","fill":"#ffff00","stroke":"#000000","strokeWidth":4,"strokeAlignment":"outer""##),
+            text(570, r##","fill":"#ffff00","stroke":"#000000","strokeWidth":4,"strokeAlignment":"inner""##),
+        );
+        let doc = Doc::from_json(&json).unwrap();
+        for raster in [Raster::Resvg, Raster::Vello] {
+            let mut r = Renderer { raster, ..Renderer::default() };
+            sync(&mut r, &doc);
+            let px = r.render(720, 80, 0.0, 0.0, 1.0, [255, 255, 255], None, true).to_vec();
+            let dark = |x0: usize, x1: usize| (0..80).flat_map(|y| (x0..x1).map(move |x| (x, y))).filter(|&(x, y)| px[(y * 720 + x) * 4] < 80).count();
+            let counts = [dark(0, 140), dark(140, 280), dark(280, 420), dark(420, 560), dark(560, 720)];
+            assert_eq!(counts[0], 0, "{raster:?}: fill-only text has no dark pixels");
+            assert!(counts[1] > 100 && counts[2] > 100 && counts[3] > 100 && counts[4] > 100, "{raster:?}: stroke pixels {counts:?}");
+            // An outer stroke grows past the glyphs, an inner one stays inside them.
+            assert!(counts[3] > counts[1] && counts[4] < counts[1], "{raster:?}: outer > center > inner expected, got {counts:?}");
+        }
+    }
+
+    /// A text shadow follows what paints: stroke-only text casts its stroke, not solid glyphs.
+    #[test]
+    fn stroke_only_text_casts_a_hollow_shadow() {
+        let text = |y: u32, extra: &str| {
+            format!(r##"{{"type":"text","x":10,"y":{y},"content":"Out","fontSize":50,"fontWeight":"700","stroke":"#000000","strokeWidth":2,"effect":{{"type":"shadow","offset":{{"x":150,"y":0}},"color":"#ff0000"}}{extra}}}"##)
+        };
+        let json = format!(
+            r##"{{"version":"2.19","children":[{{"type":"frame","id":"f","x":0,"y":0,"width":300,"height":180,"layout":"none","fill":"#ffffff","children":[{},{}]}}]}}"##,
+            text(10, r##","fill":"#ffff00""##),
+            text(100, ""),
+        );
+        let doc = Doc::from_json(&json).unwrap();
+        for raster in [Raster::Resvg, Raster::Vello] {
+            let mut r = Renderer { raster, ..Renderer::default() };
+            sync(&mut r, &doc);
+            let px = r.render(300, 180, 0.0, 0.0, 1.0, [255, 255, 255], None, true).to_vec();
+            let red = |y0: usize, y1: usize| (y0..y1).flat_map(|y| (150..300).map(move |x| (y * 300 + x) * 4)).filter(|&o| px[o] > 200 && px[o + 1] < 80).count();
+            let (solid, hollow) = (red(0, 95), red(95, 180));
+            assert!(hollow > 100 && hollow * 3 < solid * 2, "{raster:?}: shadow pixels filled {solid}, stroke-only {hollow}");
+        }
+    }
+
     /// An agent-inserted node is left out of the cached view, painted 50 units low and
     /// transparent at its first frame, part way there 100 ms later, and back in the
     /// cached view (at its real place) once it settles.

@@ -560,23 +560,40 @@ impl<'a> Svg<'a> {
     /// Text and icons: every fill paints the glyphs; shadows use the glyph outline.
     fn glyphs(&mut self, n: &RNode, fx: &Effects, outline: Option<&str>) {
         let text = n.ty == "text";
-        let b = if text { inflate((n.x, n.y, n.w, n.h), TextStyle::of(n).size / 2.0) } else { (n.x, n.y, n.w, n.h) };
+        // Text takes a stroke like any shape; icons draw their own strokes.
+        let stroke = if text { self.stroke_of(n, &Geo { d: String::new(), evenodd: false, closed: true }) } else { None };
+        let reach = stroke.as_ref().map_or(0.0, Stroke::reach);
+        let b = if text { inflate((n.x, n.y, n.w, n.h), TextStyle::of(n).size / 2.0 + reach) } else { (n.x, n.y, n.w, n.h) };
+        let fills = if text { self.paints(n.p.get("fill"), (n.x, n.y, n.w, n.h)) } else { Vec::new() };
+        let visible = fills.iter().any(|p| p.alpha > 0.0);
         let mask = outline.map(|m| {
             let black = [Paint { value: "#000".into(), alpha: 1.0, blend: None }];
-            let body = if text { self.text_markup(n, &black) } else { self.icon_markup(n, Some(&black)) };
+            // Like shapes, glyphs without a visible fill are no outline: stroke-only text casts its stroke.
+            let mut body = if !text {
+                self.icon_markup(n, Some(&black))
+            } else if visible {
+                self.text_markup(n, &black)
+            } else {
+                String::new()
+            };
+            match &stroke {
+                Some(s) if !visible => body += &self.text_stroke(n, s, &black),
+                // Over the fill an unclipped stroke adds the same outline; an inner one adds nothing.
+                Some(s) if s.align != "inner" => body += &self.text_stroke_markup(n, s, &black),
+                _ => {}
+            }
             let _ = write!(self.defs, r#"<g id="{m}">{body}</g>"#);
             m
         });
         if let Some(m) = &mask {
             self.drop_shadows(fx, m, b, None);
         }
-        let body = if text {
-            let paints = self.paints(n.p.get("fill"), (n.x, n.y, n.w, n.h));
-            self.text_markup(n, &paints)
-        } else {
-            self.icon_markup(n, None)
-        };
+        let body = if text { self.text_markup(n, &fills) } else { self.icon_markup(n, None) };
         self.out.push_str(&body);
+        if let Some(s) = &stroke {
+            let body = self.text_stroke(n, s, &s.paints);
+            self.out.push_str(&body);
+        }
         if let Some(m) = &mask {
             self.inner_shadows(fx, m, b, None);
         }
@@ -750,6 +767,34 @@ impl<'a> Svg<'a> {
             }
             _ => self.out.push_str(&body),
         }
+    }
+
+    /// Glyph outlines stroked with `paints`, unclipped: width k·w, so inner/outer strokes
+    /// are double width and `text_stroke` clips them.
+    fn text_stroke_markup(&mut self, n: &RNode, s: &Stroke, paints: &[Paint]) -> String {
+        let mut extra = format!(r#" fill="none" stroke-width="{}""#, s.widths[0] * s.k());
+        for (prop, attr) in [("strokeLinecap", "stroke-linecap"), ("strokeLinejoin", "stroke-linejoin")] {
+            if let Some(v) = n.s(prop) {
+                let _ = write!(extra, r#" {attr}="{}""#, esc(v));
+            }
+        }
+        let st = TextStyle::of(n);
+        self.lines_with(n, &st, &n.lines, (n.x, n.y, n.w, n.h), paints, "stroke", &extra)
+    }
+
+    /// Text stroke painted with `paints`; inner/outer keep the half of the double-width stroke inside/outside the glyphs.
+    fn text_stroke(&mut self, n: &RNode, s: &Stroke, paints: &[Paint]) -> String {
+        let body = self.text_stroke_markup(n, s, paints);
+        if s.align == "center" {
+            return body;
+        }
+        let id = self.id("k");
+        let (x, y, w, h) = inflate((n.x, n.y, n.w, n.h), TextStyle::of(n).size / 2.0 + s.reach() + 2.0);
+        let inner = s.align == "inner";
+        let glyphs = self.text_markup(n, &[Paint { value: if inner { "#fff" } else { "#000" }.into(), alpha: 1.0, blend: None }]);
+        let rect = if inner { String::new() } else { format!(r##"<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="#fff"/>"##) };
+        let _ = write!(self.defs, r#"<mask id="{id}" maskUnits="userSpaceOnUse" x="{x}" y="{y}" width="{w}" height="{h}">{rect}{glyphs}</mask>"#);
+        format!(r#"<g mask="url(#{id})">{body}</g>"#)
     }
 
     /// Paints of a `fill`/`stroke` value. Gradients and images span the node box `b`
@@ -958,6 +1003,11 @@ impl<'a> Svg<'a> {
     /// One `<text>` per paint; lines are positioned from our own measurement (text-anchor start),
     /// so alignment, justify and wrapping match the layout exactly.
     fn lines_markup(&mut self, n: &RNode, st: &TextStyle, lines: &[Line], b: Rect, paints: &[Paint]) -> String {
+        self.lines_with(n, st, lines, b, paints, "fill", "")
+    }
+
+    /// `lines_markup` painting each `<text>` with `prop` (`fill` or `stroke`) plus the raw attributes `extra`.
+    fn lines_with(&mut self, n: &RNode, st: &TextStyle, lines: &[Line], b: Rect, paints: &[Paint], prop: &str, extra: &str) -> String {
         if paints.is_empty() {
             return String::new();
         }
@@ -1004,8 +1054,8 @@ impl<'a> Svg<'a> {
                 // `wght` = weight on every variable font (usvg skips 400, which leaves
                 // fonts whose default master is lighter, e.g. Manrope, too thin) and nothing else:
                 // optical size stays at the font's default.
-                r#"<text font-family="'{}', 'Noto Sans', sans-serif" font-size="{}" font-weight="{}" font-variation-settings="'wght' {}" font-optical-sizing="none"{italic}{ls}{deco} xml:space="preserve"{}>{spans}</text>"#,
-                esc(&st.family), st.size, st.weight, st.weight, p.attrs("fill")
+                r#"<text font-family="'{}', 'Noto Sans', sans-serif" font-size="{}" font-weight="{}" font-variation-settings="'wght' {}" font-optical-sizing="none"{italic}{ls}{deco} xml:space="preserve"{extra}{}>{spans}</text>"#,
+                esc(&st.family), st.size, st.weight, st.weight, p.attrs(prop)
             );
         }
         out
