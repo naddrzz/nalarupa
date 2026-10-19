@@ -719,10 +719,7 @@ impl Engine {
     pub fn font_ready(&mut self, family: &str, weight: u16, italic: bool) {
         if self.fonts.downloaded(family, weight, italic) {
             let clean = !self.dirty();
-            self.version += 1;
-            if clean {
-                self.saved = self.version;
-            }
+            self.redraw(clean);
         }
     }
 
