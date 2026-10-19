@@ -133,16 +133,8 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             let mut e = engine();
             e.sync();
             let sel = ids(&req["ids"]);
-            let boxes: Vec<(f64, f64, f64, f64)> = if sel.is_empty() {
-                e.renderer.bounds().into_iter().collect()
-            } else {
-                sel.iter().filter_map(|id| e.renderer.find(id)).map(|f| (f.x, f.y, f.w, f.h)).collect()
-            };
-            let x0 = boxes.iter().map(|b| b.0).fold(f64::MAX, f64::min);
-            let y0 = boxes.iter().map(|b| b.1).fold(f64::MAX, f64::min);
-            let x1 = boxes.iter().map(|b| b.0 + b.2).fold(f64::MIN, f64::max);
-            let y1 = boxes.iter().map(|b| b.1 + b.3).fold(f64::MIN, f64::max);
-            Ok(if boxes.is_empty() { Value::Null } else { json!({"x": x0, "y": y0, "w": x1 - x0, "h": y1 - y0}) })
+            let b = if sel.is_empty() { e.renderer.bounds() } else { editor::painted_bounds(&e, &sel) };
+            Ok(b.map_or(Value::Null, |(x, y, w, h)| json!({"x": x, "y": y, "w": w, "h": h})))
         }
         "hit" => {
             let mut e = engine();
