@@ -747,7 +747,8 @@ impl<'a> Svg<'a> {
             _ => "center",
         };
         let mut s = Stroke { paints: Vec::new(), widths, align };
-        self.pad = s.reach() + 2.0;
+        // Inner strokes stay inside the box; a miter tip past the pad repeats the pattern edge (accepted).
+        self.pad = if s.align == "inner" { 0.0 } else { s.reach() + 2.0 };
         s.paints = self.paints(n.p.get("stroke"), (n.x, n.y, n.w, n.h));
         self.pad = 0.0;
         (!s.paints.is_empty()).then_some(s)
