@@ -36,7 +36,7 @@ const ROTATE_HIT = 17.5
 const X_MARK = '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 8 8"><path d="M2 2L6 6M6 2L2 6" fill="none" stroke="#000" stroke-width="1.2" stroke-linecap="round"/></svg>'
 
 /** Result of the core's `drop_target`: where a drag would land (auto-layout targets carry index + line). */
-type Drop = { id: string; layout: string; x?: number; y?: number; w?: number; h?: number; index?: number; line?: [number, number, number, number] }
+type Drop = { id: string; layout: string; x?: number; y?: number; w?: number; h?: number; m?: M | null; index?: number; line?: [number, number, number, number] }
 type Item = { id: string; box: Box; node: any; movable: boolean }
 /** A rotated outline or handle in screen px (drawn through `Quads`). */
 type Quad = { pts: Pt[]; stroke: string; width: number; fill?: string }
@@ -45,7 +45,7 @@ type Drag =
   | { mode: 'pan'; sx: number; sy: number; cam: Cam }
   | {
       mode: 'move'; sx: number; sy: number; dx0: number; dy0: number; ids: string[]; narrow?: string; moved: boolean
-      start: Rect; sentX: number; sentY: number; anchors: Pt[]; parent: string; groupOf?: string; flow: boolean
+      start: Rect; sentX: number; sentY: number; anchors: Pt[]; parent: string; pm: M | null; groupOf?: string; flow: boolean
       container: Drop | null; index?: number; deferred?: Drop; dup?: { originals: string[]; offAt?: number }
     }
   // `box` and the start point `f0` are in the selection frame's coordinates; `m` maps them to the canvas.
@@ -436,10 +436,20 @@ export function Canvas(props: {
     drag.current = { mode: 'radius', id: selection[0], corner, f0: unapply(frame.m, dx, dy), m: frame.m, r0: radiiOf(selNode?.node) }
   }
 
+  /** A parent's painted transform: its children's x / y (and so `move_by`) live in its space. */
+  const parentM = (id: string): M | null => (id === 'document' ? null : tryCall('node', { id })?.box?.m ?? null)
+
+  /** `move_by` for a canvas-space delta, turned into the parent's space (rotated or flipped frames). */
+  function moveBy(ids: string[], d: Extract<Drag, { mode: 'move' }>, dx: number, dy: number) {
+    const [px, py] = unapply(d.pm, dx, dy, true)
+    tryCall('move_by', { ids, dx: px, dy: py })
+  }
+
   /** Move the dragged nodes under `parent` (keeping their canvas position) and re-sync the drag offsets. */
   function toParent(d: Extract<Drag, { mode: 'move' }>, parent: string) {
     tryCall('reparent', { ids: d.ids, parent })
     d.parent = parent
+    d.pm = parentM(parent)
     d.flow = false
     d.groupOf = undefined
     const b = unionRect((tryCall<Box[]>('boxes', { ids: d.ids }) ?? []).map(painted))
@@ -453,7 +463,7 @@ export function Canvas(props: {
     else if (alt) {
       const r = tryCall<{ ids: string[] }>('duplicate', { ids: d.ids, inPlace: true })
       if (!r?.ids?.length) return
-      if (d.sentX || d.sentY) tryCall('move_by', { ids: d.ids, dx: -d.sentX, dy: -d.sentY })
+      if (d.sentX || d.sentY) moveBy(d.ids, d, -d.sentX, -d.sentY)
       d.dup = { originals: d.ids }
       d.ids = r.ids
       d.anchors = anchorsFor(d.ids)
@@ -463,7 +473,7 @@ export function Canvas(props: {
       d.dup.offAt ??= now
       if (now - d.dup.offAt < 700) return
       tryCall('delete', { ids: d.ids })
-      if (d.sentX || d.sentY) tryCall('move_by', { ids: d.dup.originals, dx: d.sentX, dy: d.sentY })
+      if (d.sentX || d.sentY) moveBy(d.dup.originals, d, d.sentX, d.sentY)
       d.ids = d.dup.originals
       d.dup = undefined
       d.anchors = anchorsFor(d.ids)
@@ -476,6 +486,7 @@ export function Canvas(props: {
     d.start = unionRect((tryCall<Box[]>('boxes', { ids: d.ids }) ?? []).map(painted)) ?? { x: d.dx0, y: d.dy0, w: 0, h: 0 }
     const infos = d.ids.map((id) => tryCall('node', { id }))
     d.parent = infos[0]?.parent ?? 'document'
+    d.pm = parentM(d.parent)
     d.flow = infos.every((i) => inFlow(i) && i.parent === d.parent)
     const p = d.parent !== 'document' ? tryCall('node', { id: d.parent }) : null
     d.groupOf = p?.node?.type === 'group' ? p.parent : undefined
@@ -492,7 +503,8 @@ export function Canvas(props: {
     const tx = Math.round(dx - d.dx0)
     const ty = Math.round(dy - d.dy0)
     const c = d.container
-    const inC = !!c && c.id !== 'document' && dx >= c.x! && dy >= c.y! && dx <= c.x! + c.w! && dy <= c.y! + c.h!
+    const [lx, ly] = unapply(c?.m, dx, dy)
+    const inC = !!c && c.id !== 'document' && lx >= c.x! && ly >= c.y! && lx <= c.x! + c.w! && ly <= c.y! + c.h!
     d.deferred = undefined
     if (c && inC && c.layout !== 'none' && d.flow) {
       // Live reorder by child midpoints; the node itself sits in its slot, a ghost follows the pointer.
@@ -526,7 +538,7 @@ export function Canvas(props: {
     setGuides(found)
     const [fx, fy] = [tx + ox, ty + oy]
     if (fx !== d.sentX || fy !== d.sentY) {
-      tryCall('move_by', { ids: d.ids, dx: fx - d.sentX, dy: fy - d.sentY })
+      moveBy(d.ids, d, fx - d.sentX, fy - d.sentY)
       ;[d.sentX, d.sentY] = [fx, fy]
     }
     refresh()
@@ -1070,7 +1082,7 @@ export function Canvas(props: {
     const narrow = !target || isArtboard(chain, target) ? '' : target
     drag.current = {
       mode: 'move', sx, sy, dx0: dx, dy0: dy, ids: ids.filter((id) => !id.includes('/')), narrow: inside ? narrow : undefined, moved: false,
-      start: { x: dx, y: dy, w: 0, h: 0 }, sentX: 0, sentY: 0, anchors: [], parent: 'document', flow: false, container: null,
+      start: { x: dx, y: dy, w: 0, h: 0 }, sentX: 0, sentY: 0, anchors: [], parent: 'document', pm: null, flow: false, container: null,
     }
   }
 
@@ -1336,7 +1348,6 @@ export function Canvas(props: {
         const [x, y] = frameScreen(hx, hy)
         return <div key={hnd} style={{ position: 'absolute', left: x - 4, top: y - 4, width: 8, height: 8, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: C.select, pointerEvents: 'none' }} />
       }) : null}
-      {quads.length ? <Quads quads={quads} testId="rotated-overlay" /> : null}
       {!float ? radiusHandles().map(({ i, x, y }) => (
         <div key={`radius-${i}`} testId="radius-handle" style={{ position: 'absolute', left: x - 5.5, top: y - 5.5, width: 11, height: 11, borderRadius: 5.5, borderWidth: 1, borderColor: C.select, backgroundColor: i === activeCorner ? C.select : '#FFFFFF', display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
           {/* Corners that differ show a dot (they move one at a time). */}
@@ -1361,11 +1372,12 @@ export function Canvas(props: {
         const [x2, y2] = pt(drop.line[2], drop.line[3])
         return (
           <>
-            <Outline r={screenRect({ x: drop.x!, y: drop.y!, w: drop.w!, h: drop.h! })} color={C.select} width={3} testId="drop-target" />
+            {outline({ id: drop.id, name: '', type: 'frame', x: drop.x!, y: drop.y!, w: drop.w!, h: drop.h!, m: drop.m }, C.select, 3, 'drop-target')}
             <Dashed x1={x1} y1={y1} x2={x2} y2={y2} color={C.select} width={2} dash={8} />
           </>
         )
       })() : null}
+      {quads.length ? <Quads quads={quads} testId="rotated-overlay" /> : null}
       {guides.map((g, i) => {
         const [a1, b1] = g.axis === 0 ? pt(g.pos, g.from) : pt(g.from, g.pos)
         const [a2, b2] = g.axis === 0 ? pt(g.pos, g.to) : pt(g.to, g.pos)

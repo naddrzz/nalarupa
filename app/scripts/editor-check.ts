@@ -189,6 +189,29 @@ call('update', { ids: [bar], props: { height: 0 } })
 assert(marquee(1200, 190, 20, 20), 'marquee on a zero-height 45° line selects it')
 assert(!marquee(1110, 90, 30, 30), "marquee in the empty corner of a zero-height 45° line's bounds misses it")
 
+// Drop targets follow the frame's painted box: a rotated row is entered where it is painted (its
+// insertion line runs along the turned axis), the empty spot of the unrotated box is the document.
+const R = call('insert', { parent: 'document', node: { type: 'frame', name: 'R', x: 2000, y: 2000, width: 300, height: 100, fill: '#fff', layout: 'horizontal', gap: 10, padding: 10, rotation: 90 } }).id
+const rk = [0, 1, 2].map(() => call('insert', { parent: R, node: { type: 'rectangle', width: 50, height: 50 } }).id)
+const centre = (id: string) => {
+  const b = call('bounds', { ids: [id] })
+  return [b.x + b.w / 2, b.y + b.h / 2]
+}
+const [c0, c1] = [centre(rk[0]), centre(rk[1])]
+const [gx, gy] = [(c0[0] + c1[0]) / 2, (c0[1] + c1[1]) / 2]
+const rd = call('drop_target', { x: gx, y: gy, w: 10, h: 10, ignore: [] })
+assert(rd.id === R && rd.layout === 'horizontal' && rd.index === 1, `drop over a rotated row ${JSON.stringify(rd)}`)
+const [lx1, ly1, lx2, ly2] = rd.line
+const [dx, dy] = [lx2 - lx1, ly2 - ly1]
+const along = (gx - lx1) * dx + (gy - ly1) * dy
+assert(Math.abs(dx * (gy - ly1) - dy * (gx - lx1)) < 0.01 && along >= -0.01 && along <= dx * dx + dy * dy + 0.01 && Math.abs(Math.hypot(dx, dy) - 100) < 0.01, `the line crosses the turned row at the gap ${JSON.stringify(rd.line)}`)
+const [e0, e1] = [centre(rk[0]), centre(rk[2])]
+assert(call('drop_target', { x: e0[0] + (e0[0] - e1[0]) / 4, y: e0[1] + (e0[1] - e1[1]) / 4, w: 10, h: 10, ignore: [] }).index === 0, 'before the first child of a rotated row')
+assert(call('drop_target', { x: 2250, y: 2050, w: 10, h: 10, ignore: [] }).id === 'document', 'the empty spot of the unrotated row is the document')
+const free = call('insert', { parent: 'document', node: { type: 'frame', name: 'Free', x: 3000, y: 2000, width: 300, height: 200, fill: '#fff', layout: 'none', rotation: 30 } }).id
+assert(call('drop_target', { x: 3150, y: 2100, w: 10, h: 10, ignore: [] }).id === free, 'drop into a rotated free frame at its centre')
+assert(call('drop_target', { x: 3001, y: 2199, w: 10, h: 10, ignore: [] }).id === 'document', 'the unrotated corner of a rotated free frame is the document')
+
 // drop_target runs on every mouse move of a drag: it must stay linear in the layer count (it used to look up every layer's type in the tree first, ~80 ms at 1,500 layers).
 const BF = call('insert', { parent: 'document', node: { type: 'frame', name: 'BF', x: 5000, y: 0, width: 4000, height: 4000, layout: 'none', fill: '#fff' } }).id
 for (let i = 0; i < 1500; i++) call('insert', { parent: BF, node: { type: 'rectangle', x: 5000 + (i % 50) * 70, y: Math.floor(i / 50) * 70, width: 60, height: 60, fill: '#f00' } })
