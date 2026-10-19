@@ -185,6 +185,7 @@ fn merge3(base: &Value, theirs: &Value, ours: &Value) -> Value {
         }
         (Value::Array(b), Value::Array(t), Value::Array(o)) if [b, t, o].iter().all(|a| a.iter().all(|n| n["id"].is_string())) => {
             let find = |a: &'_ [Value], id: &Value| a.iter().find(|n| n["id"] == *id).cloned();
+            let has = |a: &[Value], id: &Value| a.iter().any(|n| n["id"] == *id);
             let mut out: Vec<Value> = Vec::new();
             for n in o {
                 match (find(b, &n["id"]), find(t, &n["id"])) {
@@ -194,15 +195,15 @@ fn merge3(base: &Value, theirs: &Value, ours: &Value) -> Value {
                 }
             }
             for (i, n) in t.iter().enumerate() {
-                if find(b, &n["id"]).is_none() && find(o, &n["id"]).is_none() {
+                if !has(b, &n["id"]) && !has(o, &n["id"]) {
                     let at = t[..i].iter().rev().find_map(|p| out.iter().position(|x| x["id"] == p["id"]).map(|j| j + 1)).unwrap_or(0);
                     out.insert(at, n.clone());
                 }
             }
             // A reorder by `theirs` re-sequences the shared nodes in the slots they already fill.
-            let shared = |a: &[Value], other: &[Value]| a.iter().filter(|n| find(other, &n["id"]).is_some()).map(|n| n["id"].clone()).collect::<Vec<_>>();
+            let shared = |a: &[Value], other: &[Value]| a.iter().filter(|n| has(other, &n["id"])).map(|n| n["id"].clone()).collect::<Vec<_>>();
             if shared(b, t) != shared(t, b) {
-                let slots: Vec<usize> = (0..out.len()).filter(|&i| find(t, &out[i]["id"]).is_some()).collect();
+                let slots: Vec<usize> = (0..out.len()).filter(|&i| has(t, &out[i]["id"])).collect();
                 let mut moved: Vec<Value> = slots.iter().map(|&i| out[i].clone()).collect();
                 moved.sort_by_key(|n| t.iter().position(|x| x["id"] == n["id"]));
                 for (&i, n) in slots.iter().zip(moved) {
