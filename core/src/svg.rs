@@ -1556,9 +1556,11 @@ fn ellipse_d(n: &RNode) -> String {
 }
 
 /// Regular polygon on the inscribed ellipse (first vertex top-center, clockwise); `cornerRadius`
-/// rounds every corner with a tangent arc. No `polygonCount` (or < 3) draws nothing.
+/// rounds every corner with a tangent arc. No `polygonCount` (or < 3) draws nothing; more than
+/// `MAX_POLYGON_COUNT` is capped, since the value comes from the document.
 fn polygon_d(n: &RNode) -> String {
-    let Some(count) = n.f("polygonCount").filter(|c| *c >= 3.0).map(|c| c as usize) else { return String::new() };
+    const MAX_POLYGON_COUNT: f64 = 1000.0;
+    let Some(count) = n.f("polygonCount").filter(|c| *c >= 3.0).map(|c| c.min(MAX_POLYGON_COUNT) as usize) else { return String::new() };
     let (cx, cy, rx, ry) = (n.x + n.w / 2.0, n.y + n.h / 2.0, n.w / 2.0, n.h / 2.0);
     let pts: Vec<(f64, f64)> = (0..count).map(|i| {
         let a = (-90.0 + 360.0 * i as f64 / count as f64).to_radians();
@@ -1711,6 +1713,11 @@ mod tests {
         assert_eq!(polygon_d(&node("polygon", json!({}), (0.0, 0.0, 10.0, 10.0))), "");
         let tri = polygon_d(&node("polygon", json!({"polygonCount": 3, "cornerRadius": 2}), (0.0, 0.0, 10.0, 10.0)));
         assert_eq!(tri.matches('A').count(), 3);
+        // A huge count from the document is capped instead of allocating or stalling.
+        for c in [1e4, 4294967296.0, 1e300] {
+            let big = polygon_d(&node("polygon", json!({"polygonCount": c}), (0.0, 0.0, 10.0, 10.0)));
+            assert_eq!(big.matches('L').count(), 999, "{c}");
+        }
         let line = geometry(&node("line", json!({}), (5.0, 5.0, 20.0, 0.0)));
         assert_eq!((line.d.as_str(), line.closed), ("M5 5L25 5", false));
         let (_, closed) = path_geometry(&node("path", json!({"geometry": "M0 0L10 0L10 10Z"}), (0.0, 0.0, 10.0, 10.0)));
