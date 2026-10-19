@@ -19,10 +19,10 @@ const throws = (fn: () => unknown, re: RegExp, msg: string) => {
 // with a fresh data folder so settings and documents written here never touch the real ones.
 if (!process.env.NALARUPA_CHECK_CHILD) {
   const data = mkdtempSync(join(tmpdir(), 'nalarupa-doc-'))
-  // A stand-in `claude` that runs long and prints nothing: a running agent without a login.
+  // A stand-in `claude` that records its stdin and arguments, then runs long and prints nothing: a running agent without a login.
   const bin = join(data, 'bin')
   mkdirSync(bin)
-  writeFileSync(join(bin, 'claude'), '#!/bin/sh\nexec sleep 60\n', { mode: 0o755 })
+  writeFileSync(join(bin, 'claude'), '#!/bin/sh\ncat > "$(dirname "$0")/stdin.txt"\nprintf \'%s\\n\' "$@" > "$(dirname "$0")/args.txt"\nexec sleep 60\n', { mode: 0o755 })
   const PATH = `${bin}${delimiter}${process.env.PATH ?? ''}`
   const run = Bun.spawnSync([process.execPath, import.meta.path], { env: { ...process.env, PATH, NALARUPA_DATA: data, NALARUPA_CHECK_CHILD: '1' }, stdio: ['inherit', 'inherit', 'inherit'] })
   rmSync(data, { recursive: true, force: true })
@@ -127,6 +127,17 @@ const [pdf] = call('export', { format: 'pdf', path: join(out, 'deck.pdf') })
 assert(readFileSync(pdf, 'latin1').startsWith('%PDF-') && readFileSync(pdf, 'latin1').match(/\/Type ?\/Page\b(?!s)/g)?.length === 3, 'deck pdf has one page per slide')
 const [html] = call('export', { ids: ['sld02'], format: 'html-css', path: join(out, 'slide.html') })
 assert(/<html[\s>]/i.test(readFileSync(html, 'utf8')) && readFileSync(html, 'utf8').includes('Hello'), 'html export contains the text')
+// HTML paints follow the canvas: bottom fill last in CSS, blur as sigma, angular as conic, gradient stroke as a ring.
+const htmlOf = (node: any) => {
+  const id = call('insert', { parent: 'document', node: { type: 'rectangle', x: 0, y: 0, width: 160, height: 100, ...node } }).id
+  return readFileSync(call('export', { ids: [id], format: 'html-css', path: join(out, `${id}.html`) })[0], 'utf8')
+}
+const grad = (extra: any = {}) => ({ type: 'gradient', rotation: 90, colors: [{ color: '#ff0000', position: 0 }, { color: '#0000ff', position: 1 }], ...extra })
+assert(htmlOf({ fill: ['#ff0000', '#0000ff80'] }).includes('background:linear-gradient(rgba(0, 0, 255, 0.502),rgba(0, 0, 255, 0.502)),linear-gradient(#ff0000,#ff0000)'), 'html lists the topmost fill first')
+assert(htmlOf({ fill: grad({ opacity: 0.4 }) }).includes('rgba(255, 0, 0, 0.400) 0%'), 'html applies gradient fill opacity')
+assert(htmlOf({ fill: grad({ gradientType: 'angular' }) }).includes('conic-gradient(from -90deg at 50% 50%'), 'html exports an angular gradient as conic')
+assert(htmlOf({ fill: '#ff0000', effect: { type: 'blur', radius: 4 } }).includes('filter:blur(2px)'), 'html exports layer blur')
+assert(/padding:12px;background:linear-gradient/.test(htmlOf({ fill: '#ffff00', stroke: grad(), strokeWidth: 12 })), 'html exports a gradient stroke')
 assert(Buffer.from(call('png', { id: 'sld01', scale: 0.1 }), 'base64').subarray(0, 4).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47])), 'png command returns a PNG')
 throws(() => call('export', { ids: ['sld02'], format: 'bmp', path: out }), /unknown export format/, 'unknown export format')
 throws(() => call('export', { ids: ['nope'], format: 'png', path: out }), /node not found: nope/, 'exporting a missing node')
@@ -195,6 +206,31 @@ if (process.platform !== 'win32') {
   assert(call('agent_reset') === true && call('chat_list').current === null, 'new conversation once the agent has stopped')
   call('new', { template: 'slides' })
   assert(ids() === 'sld01,sld02,sld03', 'switching works again once the agent stopped')
+
+  // A long message and a big selection reach the CLI on stdin, not as arguments (the OS caps the argument list), and
+  // the editor state lists at most 40 selected nodes.
+  call('new', { template: 'empty' })
+  const made = exec('f = Insert(document, {type:"frame", name:"Big", width:800, height:800}); for (let i = 0; i < 2000; i++) Insert(f, {type:"rectangle", name:"Product card background rectangle number " + i, width:10, height:10})')
+  const rects = [...made.matchAll(/^"Product card[^"]*": "([^"]+)"/gm)].map((m) => m[1])
+  assert(rects.length === 2000, `built 2000 rectangles (${rects.length})`)
+  call('select', { ids: rects })
+  const sel = call('tool', { name: 'get_editor_state', args: {} }).text as string
+  assert(sel.length < 20000 && /\.\.\. \+1960 others/.test(sel), `the selection list is capped (${sel.length} bytes)`)
+  const brief = 'lorem ipsum '.repeat(12000)
+  const bin = join(data, 'bin')
+  rmSync(join(bin, 'stdin.txt'), { force: true })
+  rmSync(join(bin, 'args.txt'), { force: true })
+  try {
+    call('agent_send', { text: `Summarize this brief: ${brief}` })
+    const sent = join(bin, 'stdin.txt')
+    await until(() => existsSync(sent) && readFileSync(sent, 'utf8').includes(brief), 'the whole prompt reaches the CLI on stdin')
+    await until(() => existsSync(join(bin, 'args.txt')), 'the CLI started')
+    assert(!readFileSync(join(bin, 'args.txt'), 'utf8').includes('lorem'), 'the prompt is not an argument')
+    assert(call('state').agentRunning, 'a long prompt starts the run')
+  } finally {
+    call('agent_stop')
+  }
+  await until(() => !call('state').agentRunning, 'the long-prompt run stops')
 }
 
 console.log('doc-check ok')

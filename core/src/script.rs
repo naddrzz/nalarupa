@@ -28,6 +28,11 @@ pub const MEMORY_LIMIT: usize = 64 << 20;
 /// Native stack QuickJS may use. Half of the 1 MB Windows main-thread stack,
 /// leaving room for the layout code natives run on the same stack.
 const STACK_LIMIT: usize = 512 << 10;
+/// A job queue is checked against the heap cap every this many jobs; a heap within `OOM_SLACK` of
+/// the cap counts as out of memory. Jobs allocate a few hundred bytes each, so the slack outruns
+/// the growth between checks.
+const HEAP_CHECK_JOBS: u32 = 1024;
+const OOM_SLACK: usize = 4 << 20;
 
 #[derive(Default)]
 pub struct ScriptState {
@@ -529,14 +534,8 @@ fn eval<'js, V: FromJs<'js>>(ctx: &Ctx<'js>, src: &str, file: Option<&str>) -> R
     ctx.eval_with_options(src, opts).map_err(|err| describe(ctx, err))
 }
 
-/// Run the jobs the snippet queued (code after an `await`, `.then` callbacks) within the same
-/// deadline. A promise left rejected fails the call like a throw does.
-fn settle(ctx: &Ctx<'_>) -> Result<(), String> {
-    while ctx.execute_pending_job() {
-        if over_time() {
-            return Err(describe(ctx, rquickjs::Error::Exception));
-        }
-    }
+/// A promise left rejected fails the call like a throw does.
+fn unhandled_rejection(ctx: &Ctx<'_>) -> Result<(), String> {
     // Boxed in an array so a rejection with an `undefined` reason still counts as found.
     let reason: Option<rquickjs::Array> = ctx.globals().get::<_, Function>("__unhandled").and_then(|f| f.call(())).map_err(|e| describe(ctx, e))?;
     match reason {
@@ -545,22 +544,58 @@ fn settle(ctx: &Ctx<'_>) -> Result<(), String> {
     }
 }
 
+/// Finish a snippet: run the jobs it queued (code after an `await`, `.then` callbacks) within the
+/// same deadline, then fail the call on an unhandled rejection.
+///
+/// Running out of memory inside a job can drop the job without a usable error (the queue just
+/// ends and the call looks finished), so the heap is checked every `HEAP_CHECK_JOBS` jobs and once
+/// more when the queue drains. The jobs run outside `with` because the heap walk takes the
+/// runtime lock `with` holds.
+fn settle(js: &Context) -> Result<(), String> {
+    let rt = js.runtime();
+    let near_cap = || rt.memory_usage().malloc_size >= (MEMORY_LIMIT - OOM_SLACK) as i64;
+    let mut jobs = 0u32;
+    loop {
+        match rt.execute_pending_job() {
+            Ok(true) => {}
+            Ok(false) => break,
+            Err(failed) => return Err(failed.0.with(|ctx| describe(&ctx, rquickjs::Error::Exception))),
+        }
+        jobs += 1;
+        if over_time() {
+            return Err(js.with(|ctx| describe(&ctx, rquickjs::Error::Exception)));
+        }
+        if jobs % HEAP_CHECK_JOBS == 0 && near_cap() {
+            return Err(oom_stop());
+        }
+    }
+    if near_cap() {
+        return Err(oom_stop());
+    }
+    js.with(|ctx| unhandled_rejection(&ctx))
+}
+
+fn oom_stop() -> String {
+    limit_stop(format!("InternalError: out of memory: the snippet used more than {} MB", MEMORY_LIMIT >> 20))
+}
+
+/// Time or memory limit: flag it so a streamed call stops re-running.
+fn limit_stop(msg: String) -> String {
+    EXEC.with(|c| {
+        if let Some(ex) = c.borrow_mut().as_mut() {
+            ex.limit = true;
+        }
+    });
+    msg
+}
+
 fn describe(ctx: &Ctx<'_>, err: rquickjs::Error) -> String {
     if !err.is_exception() {
         return err.to_string();
     }
     let thrown = ctx.catch();
-    // Time or memory limit: flag it so a streamed call stops re-running.
-    let stopped = |msg: String| {
-        EXEC.with(|c| {
-            if let Some(ex) = c.borrow_mut().as_mut() {
-                ex.limit = true;
-            }
-        });
-        msg
-    };
     if let Some(budget) = EXEC.with(|c| c.borrow().as_ref().filter(|ex| Instant::now() >= ex.deadline).map(|ex| ex.budget)) {
-        return stopped(format!("the snippet ran past the {:.1} s time limit and was stopped (endless loop?)", budget.as_secs_f64()));
+        return limit_stop(format!("the snippet ran past the {:.1} s time limit and was stopped (endless loop?)", budget.as_secs_f64()));
     }
     let Some(ex) = thrown.as_exception() else {
         return format!("Uncaught {}", Coerced::<String>::from_js(ctx, thrown).map(|s| s.0).unwrap_or_default());
@@ -570,7 +605,7 @@ fn describe(ctx: &Ctx<'_>, err: rquickjs::Error) -> String {
     let line = ex.stack().and_then(|s| s.split("input:").nth(1).map(|l| l.chars().take_while(char::is_ascii_digit).collect::<String>()));
     let text = format!("{name}: {message}{}", line.filter(|l| !l.is_empty()).map(|l| format!(" (line {l})")).unwrap_or_default());
     if message == "out of memory" {
-        return stopped(format!("{text}: the snippet used more than {} MB", MEMORY_LIMIT >> 20));
+        return limit_stop(format!("{text}: the snippet used more than {} MB", MEMORY_LIMIT >> 20));
     }
     text
 }
@@ -601,9 +636,9 @@ fn bind<R>(e: &mut Engine, preview: bool, budget: Duration, f: impl FnOnce() -> 
 
 fn run(source: &str, globals: &Map<String, Value>) -> Result<Map<String, Value>, String> {
     let js = sandbox(globals)?;
+    js.with(|ctx| eval::<()>(&ctx, source, Some("input")))?;
+    settle(&js)?;
     js.with(|ctx| {
-        eval::<()>(&ctx, source, Some("input"))?;
-        settle(&ctx)?;
         let out: String = eval(&ctx, EXPORT_GLOBALS, None)?;
         Ok(serde_json::from_str::<Value>(&out).ok().and_then(|v| v.as_object().cloned()).unwrap_or_default())
     })
@@ -647,7 +682,7 @@ pub fn stream_step(e: &mut Engine, key: &str, agent: &str, source: &str, seed: u
     let chunk = &source[live.ran.len()..];
     if !chunk.trim().is_empty() {
         resume_ids(seed, live.draws);
-        let (r, ex) = bind(e, true, PREVIEW_TIMEOUT, || live.js.with(|ctx| eval::<()>(&ctx, chunk, Some("input")).and_then(|_| settle(&ctx))));
+        let (r, ex) = bind(e, true, PREVIEW_TIMEOUT, || live.js.with(|ctx| eval::<()>(&ctx, chunk, Some("input"))).and_then(|_| settle(&live.js)));
         match ids_drawn(seed, live.draws) {
             Some(n) => live.draws = n,
             None => live.broken = true,
@@ -1478,8 +1513,12 @@ Insert(card, {type:\"text\", name:\"Title\", content:\"Hi\", fill:\"#111111\"})
         // A rejection that is handled later is not a failure; a job loop stops at the deadline.
         let handled = execute(&mut e, &json!({"input": "const p = Promise.reject(new Error('x')); p.catch(() => Print('caught'))"}));
         assert!(!handled.error && handled.text.contains("caught"), "{}", handled.text);
-        let spin = execute_within(&mut e, &json!({"input": "const f = () => Promise.resolve().then(f); f()"}), Duration::from_millis(300));
+        let spin = execute_within(&mut e, &json!({"input": "const f = () => { Promise.resolve().then(f) }; f()"}), Duration::from_millis(300));
         assert!(spin.error && spin.text.contains("time limit"), "{}", spin.text);
+        // Jobs that grow the heap fail the call at the memory cap, whatever the deadline.
+        let grow = execute_within(&mut e, &json!({"input": "Insert(document, {type:'frame', name:'Late'}); const f = () => Promise.resolve().then(f); f()"}), Duration::from_secs(30));
+        assert!(grow.error && grow.text.contains("out of memory") && grow.text.contains("editId"), "{}", grow.text);
+        assert_eq!(e.doc.children().len(), 3, "rolled back");
     }
 
     #[test]
