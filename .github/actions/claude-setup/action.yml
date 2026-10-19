@@ -3,6 +3,13 @@ description: Prepares a GitHub-hosted Ubuntu runner for the Claude jobs the same
 runs:
   using: composite
   steps:
+    # The QA areas render and export a lot; on a stock runner the core and layers areas were killed mid-run
+    # ("runner has received a shutdown signal"). Free the disk taken by toolchains nothing here uses, and add swap.
+    - shell: bash
+      run: |
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+        if sudo fallocate -l 8G /mnt/claude-swap && sudo chmod 600 /mnt/claude-swap && sudo mkswap /mnt/claude-swap >/dev/null           && sudo swapon /mnt/claude-swap; then :; else echo "::warning::could not add swap"; fi
+        df -h / /mnt; free -m
     # Headless Wayland desktop for the GUI checks (GPUIX's Linux build has no X11): sway + grim + lavapipe.
     - shell: bash
       run: |

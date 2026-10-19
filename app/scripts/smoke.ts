@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { call, renderPixels } from '../src/core'
-import { applyEvents, barAgents, changing, cursorFaded, imageSrc, lastContentId, needsFrame, poke, resetChat, spinning, store } from '../src/agents'
+import { applyEvents, barAgents, changing, cursorFaded, imageSrc, lastContentId, needsFrame, poke, resetChat, restoreChat, spinning, store } from '../src/agents'
 import { INDICATOR_TICK_MS, ellipsisAt, ellipsisPadAt, pulseAt } from '../src/theme'
 
 const assert = (ok: unknown, msg: string) => {
@@ -116,8 +116,22 @@ resetChat()
   const live = store.items.filter(changing)
   assert(live.length === 3 && live.map((i) => i.kind).join() === 'tool,thinking,assistant', `live chat rows ${live.map((i) => i.kind)}`)
   assert(store.items.filter(spinning).map((i) => i.kind).join() === 'tool,thinking', 'the ellipsis animates on the running tool and the live thinking only')
-  applyEvents([{ type: 'agent', kind: 'done', agent: ag }, { type: 'agent', kind: 'done', agent: { id: 'a1', name: 'Agent 1', color: '#ffffff' } }, { type: 'agent', kind: 'done', agent: { id: 'a2', name: 'Agent 2', color: '#ffffff' } }], 01)
+  applyEvents([{ type: 'agent', kind: 'done', agent: ag }, { type: 'agent', kind: 'done', agent: { id: 'a1', name: 'Agent 1', color: '#ffffff' } }, { type: 'agent', kind: 'done', agent: { id: 'a2', name: 'Agent 2', color: '#ffffff' } }], 0)
   assert(!store.items.some(changing), 'a finished chat has no live row')
+}
+// A long chat keeps every item, the first prompt included, live and when reopened from history.
+{
+  const agent = { id: 'ag1', name: 'Surya', color: '#38B2AC' }
+  const ev = (kind: string, o: object = {}) => ({ type: 'agent', kind, agent, ...o })
+  const events: any[] = [ev('user', { text: 'Design me a pricing page' }), ev('start')]
+  for (let i = 0; i < 500; i++) events.push(ev('text_delta', { text: `Step ${i}` }), ev('message_end'), ev('tool_start', { id: `t${i}`, name: 'execute' }), ev('tool_done', { id: `t${i}`, name: 'execute', input: {}, output: 'ok' }))
+  events.push(ev('done', { durationMs: 1, usage: {}, stopped: false }))
+  resetChat()
+  for (const e of events) applyEvents([e], 0)
+  assert(store.items.length === 1002 && store.items[0].kind === 'user', `a long chat is not cut live (${store.items.length} items)`)
+  restoreChat(events)
+  assert(store.items.length === 1002 && store.items[0].kind === 'user', `a long chat is not cut when reopened (${store.items.length} items)`)
+  resetChat()
 }
 // Agent bar: running agents come first and survive the cap; a new conversation forgets every agent.
 resetChat()
