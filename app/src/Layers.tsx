@@ -4,7 +4,7 @@ import { tryCall, type Box, type Layer } from './core'
 import type { Mods } from './Canvas'
 import { nodeIcon } from './icons'
 import { C, LEFT_W } from './theme'
-import { FocusRing, Icon, IconButton, Pressable, Segmented, setKeyboardFocus, T, useKeyboardFocusId, type Toast } from './ui'
+import { FocusRing, forwardKey, Icon, IconButton, Pressable, Segmented, setKeyboardFocus, T, useKeyboardFocusId, type Toast } from './ui'
 
 export function LeftPanel(props: {
   version: number; selection: string[]; select: (ids: string[]) => void; focus: (id: string) => void; present: (id?: string) => void
@@ -27,12 +27,6 @@ const ROW_H = 28
 // A slide row is the 14 px number, an 8 px gap and the framed thumbnail: 14 + 8 + (196 + 4) = 222 px,
 // inside the 223 px the panel leaves after its border and the rows' 12 px padding.
 const THUMB_W = 196
-
-// A row owns the keyboard after a click: the keys it does not use are the editor's shortcuts (Delete, Ctrl+Z, Escape).
-const forwardKey = (onShortcut: (key: string, mods: Mods) => boolean, e: { key?: string; modifiers?: { ctrl?: boolean; cmd?: boolean; shift?: boolean; alt?: boolean } }) => {
-  const m = e.modifiers
-  onShortcut((e.key ?? '').toLowerCase(), { mod: !!(m?.ctrl || m?.cmd), shift: !!m?.shift, alt: !!m?.alt })
-}
 
 function Layers({ version, selection, select, focus, hover, onShortcut }: { version: number; selection: string[]; select: (ids: string[]) => void; focus: (id: string) => void; hover?: (id: string | null) => void; onShortcut: (key: string, mods: Mods) => boolean }) {
   const layers = useMemo(() => tryCall<Row[]>('layers') ?? [], [version])
@@ -322,7 +316,7 @@ function Layers({ version, selection, select, focus, hover, onShortcut }: { vers
   )
 }
 
-function Slides({ version, selection, select, focus, present, toast, onShortcut }: { version: number; selection: string[]; select: (ids: string[]) => void; focus: (id: string) => void; present: (id?: string) => void; toast: Toast; onShortcut: (key: string, mods: Mods) => boolean }) {
+function Slides({ version, selection, select, focus, present, toast }: { version: number; selection: string[]; select: (ids: string[]) => void; focus: (id: string) => void; present: (id?: string) => void; toast: Toast }) {
   const frames = useMemo(() => (tryCall<Box[]>('frames') ?? []).filter((f) => f.type === 'frame'), [version])
   // Thumbnails are rendered by the core (PNG) at a small scale, a few per tick so a long deck neither
   // freezes the UI nor stops at a cap; a row shows a placeholder until its thumbnail is ready.
@@ -372,8 +366,6 @@ function Slides({ version, selection, select, focus, present, toast, onShortcut 
                 label={`Slide ${i + 1}: ${f.name}`}
                 selected={active}
                 onClick={() => { select([f.id]); focus(f.id) }}
-                // Enter and Space activate the thumbnail (Pressable); the other keys are shortcuts.
-                onKeyDown={(e) => { if (!['enter', 'space'].includes((e.key ?? '').toLowerCase())) forwardKey(onShortcut, e) }}
                 style={{ display: 'flex', flexDirection: 'row', gap: 8, paddingTop: 6, paddingBottom: 6, borderRadius: 6 }}
               >
                 <T size={11} color={C.ghost} style={{ width: 14, flexShrink: 0 }}>{String(i + 1)}</T>

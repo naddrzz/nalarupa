@@ -13,7 +13,7 @@ import { AgentPanel } from './Agent'
 import { Home } from './Home'
 import { Present } from './Present'
 import { C, LEFT_W, REDUCED_MOTION, RIGHT_W, TOP_H } from './theme'
-import { Icon, IconButton, Pressable, Segmented, T, type Toast } from './ui'
+import { Icon, IconButton, Pressable, Segmented, ShortcutScope, T, type Toast } from './ui'
 import { centerOffset } from './geometry'
 import type { IconName } from './icons'
 
@@ -283,8 +283,8 @@ export function App() {
     }
     return false
   }
-  // The left panel's rows own focus after a click and pass on the keys they do not handle. A stable
-  // wrapper keeps the memoized panel from re-rendering with every `onShortcut`.
+  // Buttons and the left panel's rows own focus after a click and pass on the keys they do not handle. A stable
+  // wrapper keeps the memoized panels from re-rendering with every `onShortcut`.
   const shortcutRef = useRef(onShortcut)
   shortcutRef.current = onShortcut
   const penKeyRef = useRef<((key: string, m: Mods) => boolean) | null>(null)
@@ -339,6 +339,7 @@ export function App() {
   }
 
   return (
+    <ShortcutScope value={panelShortcut}>
     <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', backgroundColor: C.bg }}>
       <div style={{ height: TOP_H, flexShrink: 0, display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 4, paddingLeft: 8, paddingRight: 10, backgroundColor: C.panel, borderBottomWidth: 1, borderColor: C.border }}>
         <IconButton icon="home" title="Home" testId="home" onClick={() => setScreen('home')} />
@@ -378,11 +379,14 @@ export function App() {
           {rightTab === 'design' ? (
             <Design version={state.version} selection={selection} select={select} toast={toast} />
           ) : (
-            <Chat tick={chatTick} running={state.agentRunning} mcpUrl={init.mcpUrl} toast={toast} onSent={sent} />
+            <ShortcutScope value={null}>
+              <Chat tick={chatTick} running={state.agentRunning} mcpUrl={init.mcpUrl} toast={toast} onSent={sent} />
+            </ShortcutScope>
           )}
         </div>
       </div>
       {toastEl}
     </div>
+    </ShortcutScope>
   )
 }
