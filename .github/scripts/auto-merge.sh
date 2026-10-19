@@ -49,10 +49,10 @@ for n in $prs; do
   elif [ "$mergeable" = CONFLICTING ]; then
     # Nothing else resolves conflicts (parallel fix PRs often touch the same files).
     ask conflict "This PR conflicts with \`dev\`. Merge \`origin/dev\` into this branch and resolve every conflict so both sides keep working: the fixes already merged into dev stay, and this PR's change still does what it set out to do. Run the checks from the claude workflow, then push to this branch. Do not open a new PR."
-  elif [ "$running" = 0 ] && [ "$cubic" = COMPLETED ] && [ "$rabbit" != PENDING ] && [ -n "$open" ] && [ "$open" -gt 0 ]; then
+  elif [ "$running" = 0 ] && [ "$ci" != FAILURE ] && [ "$cubic" = COMPLETED ] && [ "$rabbit" != PENDING ] && [ -n "$open" ] && [ "$open" -gt 0 ]; then
     # Review threads still open with nothing queued to handle them: review-fix ended without resolving them (or never
-    # ran), and no new review will start it again.
-    ask threads "$open review thread(s) from cubic or CodeRabbit are still unresolved on this PR and nothing is queued to handle them. For each one: fix a real problem at the root cause, or reply on the thread explaining why the finding is wrong; then resolve the thread (gh api graphql resolveReviewThread). Run the checks from the claude workflow before you push to this branch. Do not open a new PR."
+    # ran), and no new review will start it again. A failed ci run is left to claude-ci-fix: both would push to the branch.
+    ask threads "$open review thread(s) from cubic or CodeRabbit are still unresolved on this PR and nothing is queued to handle them. For each one: fix a real problem at the root cause, or reply on the thread explaining why the finding is wrong; then resolve the thread (gh api graphql -f query='mutation{resolveReviewThread(input:{threadId:\"<thread id>\"}){thread{isResolved}}}'). Run the checks from the claude workflow before you push to this branch. Do not open a new PR."
   else
     echo "wait #$n ($state) $title"
   fi
