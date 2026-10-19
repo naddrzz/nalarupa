@@ -362,7 +362,7 @@ try {
   await canvas.press('ctrl-c')
   await canvas.press('ctrl-v')
   await sleep(400)
-  assert((await app.getByText('Cards').count()) >= 2, 'Ctrl+V pastes a copy')
+  assert((await app.getByTestId('layers').getByText('Cards').count()) >= 2, 'Ctrl+V pastes a copy')
   await canvas.press('ctrl-z')
   await sleep(400)
 
