@@ -361,17 +361,8 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             Ok(Value::Object(s))
         }
         "settings_set" => {
-            let mut e = engine();
-            let key = req["key"].as_str().ok_or("key required")?.to_string();
-            match &req["value"] {
-                Value::Null => {
-                    e.settings.remove(&key);
-                }
-                v => {
-                    e.settings.insert(key, v.clone());
-                }
-            }
-            e.save_settings();
+            let key = req["key"].as_str().ok_or("key required")?;
+            engine().set_setting(key, req["value"].clone())?;
             Ok(json!(true))
         }
         "agent_send" => agent::send(

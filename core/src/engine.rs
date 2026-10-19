@@ -471,13 +471,34 @@ impl Engine {
         recent.insert(0, json!(p));
         recent.truncate(20);
         self.settings.insert("recent".into(), Value::Array(recent));
-        self.save_settings();
+        let _ = self.save_settings(); // the document is saved; a recents list that did not save must not fail it
     }
 
-    pub fn save_settings(&self) {
-        if let Ok(text) = serde_json::to_string_pretty(&self.settings) {
-            let _ = std::fs::write(self.data_dir.join("settings.json"), text);
+    /// Set one setting (`null` removes it) and save. If the save fails the setting keeps its old value,
+    /// so an error means nothing changed, in memory or on disk.
+    pub fn set_setting(&mut self, key: &str, value: Value) -> Result<(), String> {
+        let old = if value.is_null() { self.settings.remove(key) } else { self.settings.insert(key.to_string(), value) };
+        let saved = self.save_settings();
+        if saved.is_err() {
+            match old {
+                Some(v) => self.settings.insert(key.to_string(), v),
+                None => self.settings.remove(key),
+            };
         }
+        saved
+    }
+
+    /// Atomic like `Doc::save`: a crash or a reader mid-save never sees a truncated file (which would drop
+    /// every setting, the API key included, at the next start).
+    pub fn save_settings(&self) -> Result<(), String> {
+        let text = serde_json::to_string_pretty(&self.settings).map_err(|e| e.to_string())?;
+        let path = self.data_dir.join("settings.json");
+        let tmp = path.with_extension("json.tmp");
+        let saved = std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, &path));
+        if saved.is_err() {
+            let _ = std::fs::remove_file(&tmp); // a failed save leaves no copy of the new settings (an API key) behind
+        }
+        saved.map_err(|e| format!("cannot save {}: {e}", path.display()))
     }
 
     pub fn setting(&self, key: &str) -> Option<String> {
@@ -694,5 +715,30 @@ mod tests {
         assert_eq!(nonblank(Some(String::new())), None);
         assert_eq!(nonblank(Some("  \t".into())), None);
         assert_eq!(nonblank(Some(" sk-ant-x\n".into())), Some("sk-ant-x".into()));
+    }
+
+    #[test]
+    fn failed_settings_save_keeps_old_values() {
+        let dir = std::env::temp_dir().join("nalarupa-test-settings-save");
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut e = Engine::new(dir.clone());
+        e.set_setting("k", json!("old")).unwrap();
+        let blocker = dir.join("settings.json.tmp");
+        std::fs::create_dir_all(&blocker).unwrap(); // a folder where the temp file goes: every save fails
+        assert!(e.set_setting("k", json!("new")).is_err());
+        assert!(e.set_setting("k", Value::Null).is_err());
+        assert!(e.set_setting("other", json!("x")).is_err());
+        assert_eq!(e.setting("k").as_deref(), Some("old"));
+        assert_eq!(e.setting("other"), None);
+        std::fs::remove_dir(&blocker).unwrap();
+        e.set_setting("k", Value::Null).unwrap();
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("settings.json")).unwrap()).unwrap();
+        assert!(saved.get("k").is_none() && !blocker.exists());
+        std::fs::remove_file(dir.join("settings.json")).unwrap();
+        std::fs::create_dir(dir.join("settings.json")).unwrap(); // the temp file writes, the rename fails
+        assert!(e.set_setting("k", json!("new")).is_err());
+        assert!(!blocker.exists(), "a failed rename must not leave the new settings in the temp file");
+        assert_eq!(e.setting("k"), None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
