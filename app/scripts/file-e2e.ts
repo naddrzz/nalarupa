@@ -126,6 +126,7 @@ try {
   await app.close()
   writeFileSync(join(data, 'settings.json'), JSON.stringify({ recent: [long] }))
   app = await launch({ command: 'bun', args: ['app.tsx'], cwd: join(import.meta.dir, '..'), env: { ...process.env, GPUIX_BACKGROUND: '1', NALARUPA_DATA: data, HOME: data, USERPROFILE: data } })
+  await app.getByTestId(`recent-${basename(long)}`).waitFor({ timeoutMs: 30000 })
   await app.getByTestId(`recent-${basename(long)}`).click()
   await app.getByTestId('canvas').waitFor()
   assert(!(await app.getByTestId('unsaved-dot').count()), 'a freshly opened document shows no unsaved dot')
