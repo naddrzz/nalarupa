@@ -280,7 +280,9 @@ impl Html<'_> {
                 (shape.x, shape.y, shape.w, shape.h) = (n.x, n.y, n.w, n.h);
                 let mut svg = crate::svg::Svg::new(self.fonts, self.assets, self.base.clone());
                 svg.node(&shape);
-                let _ = writeln!(self.out, "<div{attrs} style=\"{css}\">{}</div>", svg.finish(Some((n.x, n.y, n.w.max(1.0), n.h.max(1.0)))));
+                // Browsers clip an inline svg to its viewport; caps, outer strokes and shadows paint past the box.
+                let svg = svg.finish(Some((n.x, n.y, n.w.max(1.0), n.h.max(1.0)))).replacen("<svg ", "<svg style=\"overflow:visible\" ", 1);
+                let _ = writeln!(self.out, "<div{attrs} style=\"{css}\">{svg}</div>");
             }
             _ => {
                 if n.ty == "frame" {
