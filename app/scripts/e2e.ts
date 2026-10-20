@@ -425,6 +425,7 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
     if (!(await app.getByTestId(menu).count())) throw new Error(`${trigger} swallowed a quick reopen`)
     await app.getByTestId(menu).press('escape')
     await until(async () => !(await app.getByTestId(menu).count()), `${menu} to close on Escape`)
+    await until(async () => !!(await app.getByTestId(`${trigger}-focus`).count()), `${trigger} to regain keyboard focus`)
     // Escape hands keyboard focus back to the trigger: Tab goes on from it, not from the window's first control (Home).
     await app.call('keystrokes', { keys: 'tab' })
     await sleep(200)

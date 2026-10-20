@@ -307,6 +307,7 @@ function CookMenu({ designs, mode, set }: { designs: number; mode: CookMode; set
       <Pressable
         ref={trigger.ref}
         testId="agent-cook"
+        focusTestId="agent-cook-focus"
         label={on ? `Let it cook: ${designs} variants` : 'Let it cook: off'}
         expanded={open}
         onClick={() => setOpen(!open)}
@@ -444,7 +445,7 @@ function ChatHistory({ running, toast, changed }: { running: boolean; toast: Toa
   const chats = list?.chats ?? []
   return (
     <div style={{ position: 'relative', display: 'flex' }}>
-      <IconButton ref={trigger.ref} icon="history" title="Chat history" testId="agent-history" active={!!list} onClick={() => (list ? close() : refresh())} />
+      <IconButton ref={trigger.ref} icon="history" title="Chat history" testId="agent-history" focusTestId="agent-history-focus" active={!!list} onClick={() => (list ? close() : refresh())} />
       {list ? (
         <anchored side="bottom" align="end" gap={4} fit="snap" snapMargin={8} deferred priority={1} occlude>
           <div
