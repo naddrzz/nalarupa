@@ -714,9 +714,9 @@ mod tests {
         let inst = e.edit(|d| d.insert("", json!({"type":"ref","ref":comp,"descendants":{kid.clone():{"enabled":false}}}), None)).unwrap();
         let id = format!("{inst}/{kid}");
         let err = super::export(&mut e, &[id.clone()], "png", out.to_str().unwrap(), &json!({})).unwrap_err();
-        assert!(err.contains("hidden"), "{err}");
+        assert!(err.contains("hidden") && !err.contains("node not found"), "{err}");
         let err = super::export(&mut e, &[format!("{inst}/nope")], "png", out.to_str().unwrap(), &json!({})).unwrap_err();
-        assert!(err.contains("node not found"), "{err}");
+        assert!(err.contains("node not found") && !err.contains("hidden"), "{err}");
     }
 
     /// A text stroke reaches the SVG and HTML exports (it was dropped before).
