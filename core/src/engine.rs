@@ -792,7 +792,7 @@ impl Engine {
                 let created = if p.exists() {
                     Ok(())
                 } else {
-                    Doc::from_json(&json!({"version": crate::doc::FORMAT_VERSION, "children": []}).to_string()).and_then(|d| d.save(p))
+                    Doc::new().save(p)
                 };
                 let res = created.and_then(|_| self.open(p));
                 match res {
