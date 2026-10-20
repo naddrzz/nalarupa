@@ -153,6 +153,20 @@ try {
   await sleep(500)
   await shot('04-drawn-rectangle')
 
+  // The Text tool opens its editor with the placeholder selected: typing straight away replaces it
+  // ("TextHello" when the caret just sat after it).
+  const texts = async (content: string) => JSON.parse((await mcp('execute', { input: `Print(JSON.stringify(Get(n => n.type === "text" && n.content === "${content}" ? n.id : undefined).filter(Boolean)))` })).match(/\[[^\]]*\]/)![0]) as string[]
+  await app.getByTestId('tool-text').click()
+  await app.mouse.click({ x: canvas.x + 400, y: canvas.y + 560 })
+  await app.getByTestId('text-editor').waitFor({ timeoutMs: 6000 })
+  await sleep(500)
+  await app.call('keystrokes', { keys: 'H e l l o' })
+  await sleep(300)
+  await app.call('keystrokes', { keys: 'enter' })
+  await until(async () => (await texts('Hello')).length === 1, 'typing into the fresh Text-tool editor to replace the placeholder')
+  if ((await texts('TextHello')).length) throw new Error('the placeholder was kept in front of the typed text')
+  for (const id of await texts('Hello')) await mcp('execute', { input: `Delete("${id}")` })
+
   // A text field clicked into draws a focus ring. Linux only: grim.
   if (process.platform === 'linux') {
     const grab = async () => {
