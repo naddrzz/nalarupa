@@ -379,7 +379,7 @@ export function Inspector({ version, selection, select, toast }: Props) {
           <Row>
             {stroke ? <Swatch color={stroke} /> : null}
             <Field name="Stroke color" value={str(n.stroke)} mono onCommit={setPaint('stroke', vars, n.strokeWidth == null ? { strokeWidth: 1 } : {})} placeholder="#000000" testId="inspector-stroke" />
-            <Field name="Stroke width" value={str(n.strokeWidth ?? '')} width={58} onCommit={setChecked('strokeWidth', (v) => strokeWidthOf(v, vars), n.stroke == null ? { stroke: '#000000' } : {})} placeholder="1" testId="inspector-stroke-width" />
+            <Field name="Stroke width" value={str(n.strokeWidth ?? '')} width={58} onCommit={setChecked('strokeWidth', (v) => strokeWidthOf(v, vars), n.stroke == null || (Array.isArray(n.stroke) && !n.stroke.length) ? { stroke: '#000000' } : {})} placeholder="1" testId="inspector-stroke-width" />
           </Row>
           {n.type !== 'ellipse' && n.type !== 'path' ? (
             typeof (n.cornerRadius ?? 0) === 'number'

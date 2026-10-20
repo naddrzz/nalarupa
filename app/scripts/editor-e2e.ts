@@ -451,7 +451,9 @@ try {
   await canvas.press('ctrl-z')
   await sleep(300)
   // No width, no stroke: each stroke field fills in the other's placeholder default, in one undo step.
-  const port = (await ports()).find((p) => !portsBefore.has(p))!
+  const fresh = (await ports()).filter((p) => !portsBefore.has(p))
+  assert(fresh.length === 1, `expected one new MCP port, found ${fresh.join(', ') || 'none'}`)
+  const port = fresh[0]
   const stroked = async () => {
     const res: any = await (await mcpCall(port, { method: 'tools/call', params: { name: 'execute', arguments: { input: 'Get(undefined, n => { if (n.name === "Rectangle") Print(JSON.stringify({ stroke: n.stroke ?? "", strokeWidth: n.strokeWidth ?? "" })) })' } } })).json()
     return String(res.result?.content?.[0]?.text ?? '').split('\n').filter((l) => l.startsWith('{')).pop() ?? ''
@@ -469,7 +471,7 @@ try {
   await sleep(700)
   assert(await settled('#000000', 6), `a stroke width alone adds the black its placeholder shows (${await stroked()})`)
   await canvas.press('ctrl-z')
-  await sleep(300)
+  assert(await settled('', ''), 'one undo step reverts the stroke width and its default color')
   // A number the core clamps is shown as stored (100 %, radius 0), not as typed: the stored value does not change, so nothing else resyncs the field.
   await typeInto('inspector-opacity', 'ctrl-a 5 0 0')
   await typeInto('inspector-radius', 'ctrl-a - 4')
