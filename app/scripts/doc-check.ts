@@ -221,6 +221,20 @@ const kid = call('insert', { parent: frame, node: rect({ name: 'kid', flipX: tru
 const kidSvg = readFileSync(call('export', { ids: [kid], format: 'svg', path: out })[0], 'utf8')
 assert(kidSvg.includes('width="100" height="60" viewBox="500 500 100 60"'), `a flipped child of a frame exports its painted box: ${kidSvg.slice(0, 160)}`)
 
+// A gradient stroke on a horizontal or vertical line exports a usable gradient: a box-sized gradientTransform
+// of a flat box is singular and browsers paint nothing.
+for (const [name, gradientType, box] of [['hline', 'linear', { x: 20, y: 50, width: 160, height: 0 }], ['vline', 'linear', { x: 100, y: 20, width: 0, height: 160 }], ['hradial', 'radial', { x: 20, y: 50, width: 160, height: 0 }]] as const) {
+  const id = call('insert', { parent: 'document', node: { type: 'line', name, ...box, strokeWidth: 20, stroke: { type: 'gradient', gradientType, rotation: 90, colors: [{ color: '#ff0000', position: 0 }, { color: '#0000ff', position: 1 }] } } }).id
+  const svg = readFileSync(call('export', { ids: [id], format: 'svg', path: out })[0], 'utf8')
+  assert(/<(linear|radial)Gradient [^>]*gradientUnits="userSpaceOnUse"[^>]*>/.test(svg) && /stroke="url\(#[^)]+\)"/.test(svg) && !svg.includes('gradientTransform') && !/\de-\d/.test(svg), `${name} gradient stroke has no singular matrix: ${svg.slice(0, 300)}`)
+}
+{
+  // A rotated radial gradient on a flat box keeps the full half-length as its radius.
+  const id = call('insert', { parent: 'document', node: { type: 'line', name: 'hradial45', x: 20, y: 50, width: 160, height: 0, strokeWidth: 20, stroke: { type: 'gradient', gradientType: 'radial', rotation: 45, colors: [{ color: '#ff0000', position: 0 }, { color: '#0000ff', position: 1 }] } } }).id
+  const svg = readFileSync(call('export', { ids: [id], format: 'svg', path: out })[0], 'utf8')
+  assert(/<radialGradient [^>]* r="80"/.test(svg), `a rotated flat radial gradient keeps its radius: ${svg.slice(0, 300)}`)
+}
+
 // Settings persist to the data folder; the API key is never read back.
 call('settings_set', { key: 'anthropic_api_key', value: 'sk-test-not-real' })
 call('settings_set', { key: 'agent_backend', value: 'claude-code' })
