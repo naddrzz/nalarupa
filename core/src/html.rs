@@ -27,7 +27,8 @@ pub fn export(e: &mut Engine, ids: &[String], format: &str, out: &str, opts: &Va
             for id in ids {
                 let file = dir.join(format!("{}.{format}", id.replace('/', "_")));
                 let bytes = if format == "svg" {
-                    e.ctx().node_svg(id).ok_or_else(|| format!("node not found: {id}"))?.0.into_bytes()
+                    let mut cx = e.ctx();
+                    cx.node_svg(id).ok_or_else(|| cx.missing(id))?.0.into_bytes()
                 } else {
                     e.ctx().node_image(id, format, scale, quality)?
                 };
@@ -74,9 +75,10 @@ pub fn html_document(e: &mut Engine, ids: &[String], opts: &Value) -> Result<Str
     let mut body = String::new();
     let mut fonts = Vec::new();
     for id in ids {
-        let top = crate::render::top_index(&e.doc, id).ok_or_else(|| format!("node not found: {id}"))?;
-        let root = e.ctx().laid_out(top).ok_or_else(|| format!("node not found: {id}"))?;
-        let n = find_rnode(&root, id).ok_or_else(|| format!("node not found: {id}"))?;
+        let mut cx = e.ctx();
+        let top = crate::render::top_index(cx.doc, id).ok_or_else(|| cx.missing(id))?;
+        let root = cx.laid_out(top).ok_or_else(|| cx.missing(id))?;
+        let n = find_rnode(&root, id).ok_or_else(|| cx.missing(id))?;
         let mut h = Html { out: &mut body, names, ids: ids_attr, base: base.clone(), families: &mut fonts, fonts: &mut e.fonts, assets: &mut e.assets };
         h.node(n, None);
     }
@@ -678,6 +680,26 @@ mod tests {
         let webp = std::fs::read(&webp[0]).unwrap();
         assert!(webp.starts_with(b"RIFF") && &webp[8..12] == b"WEBP");
         assert!(super::export(&mut e, &ids, "tiff", "", &json!({})).is_err());
+    }
+
+    /// A hidden layer (or one inside a hidden parent) says so instead of "node not found".
+    #[test]
+    fn hidden_layer_export_says_hidden() {
+        let out = std::env::temp_dir().join("nalarupa-test-export-hidden");
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        e.load_template("slides");
+        e.edit(|d| d.update("sld02", &json!({"enabled": false}))).unwrap();
+        let child = e.doc.find("sld02").unwrap()["children"][0]["id"].as_str().unwrap().to_string();
+        for id in ["sld02".to_string(), child] {
+            for format in ["png", "svg", "pdf", "html-css"] {
+                let err = super::export(&mut e, &[id.clone()], format, out.to_str().unwrap(), &json!({})).unwrap_err();
+                assert!(err.contains("hidden") && !err.contains("node not found"), "{format} {id}: {err}");
+            }
+            assert!(e.ctx().node_png(&id, 1.0).unwrap_err().contains("hidden"));
+        }
+        let err = super::export(&mut e, &["nope".to_string()], "png", out.to_str().unwrap(), &json!({})).unwrap_err();
+        assert!(err.contains("node not found: nope"), "{err}");
     }
 
     /// A text stroke reaches the SVG and HTML exports (it was dropped before).

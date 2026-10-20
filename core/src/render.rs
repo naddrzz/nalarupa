@@ -250,8 +250,18 @@ impl Ctx<'_> {
         self.node_tree_at(id, 1.0)
     }
 
+    /// Why `id` cannot be exported: resolving drops hidden nodes, so a node that exists in the
+    /// document but is absent from the laid-out tree is hidden itself or inside a hidden parent.
+    pub fn missing(&self, id: &str) -> String {
+        if self.doc.find(id).is_some() {
+            format!("{id} is hidden (or inside a hidden layer); show it before exporting")
+        } else {
+            format!("node not found: {id}")
+        }
+    }
+
     pub fn node_tree_at(&mut self, id: &str, scale: f64) -> Result<usvg::Tree, String> {
-        let (svg, _) = self.node_svg_at(id, scale).ok_or_else(|| format!("node not found: {id}"))?;
+        let (svg, _) = self.node_svg_at(id, scale).ok_or_else(|| self.missing(id))?;
         usvg::Tree::from_str(&svg, &self.tree_options()).map_err(|e| e.to_string())
     }
 
