@@ -86,14 +86,14 @@ function Layers({ version, selection, select, focus, hover, onShortcut }: { vers
     else n.delete(id)
     return n
   })
-  const focusRow = (id: string | undefined) => {
+  const focusRow = (id: string | undefined, ring = true) => {
     const el = id ? rowEls.current.get(id) : undefined
     if (!id || !el) return
     setCursor(id)
     renderer.focusElement?.(el.id)
     el.scrollIntoView?.()
     // GPUIX fires no onFocus for programmatic focus, so the ring is moved here.
-    setKeyboardFocus(el.id)
+    if (ring) setKeyboardFocus(el.id)
   }
   // Click or Enter/Space: Ctrl toggles the row, Shift adds the range from the first selected row.
   const pick = (id: string, row: number, m?: { ctrl?: boolean; cmd?: boolean; shift?: boolean }) => {
@@ -281,9 +281,9 @@ function Layers({ version, selection, select, focus, hover, onShortcut }: { vers
                       autoFocus
                       value={renaming.draft}
                       onChange={(e) => rename(live.current && { ...live.current, draft: e.value ?? '' })}
-                      onSubmit={(e) => commitRename(e.value)}
+                      onSubmit={(e) => { commitRename(e.value); focusRow(l.id, false) }}
                       onBlur={() => commitRename()}
-                      onKeyDown={(e) => { if ((e.key ?? '').toLowerCase() === 'escape') rename(null) }}
+                      onKeyDown={(e) => { if ((e.key ?? '').toLowerCase() === 'escape') { rename(null); focusRow(l.id, false) } }}
                       style={{ flexGrow: 1, minWidth: 0, fontSize: 12, color: C.text }}
                     />
                   </div>

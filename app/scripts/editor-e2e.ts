@@ -324,6 +324,9 @@ try {
   await app.call('keystrokes', { keys: 'ctrl-a C a r d s enter' })
   await sleep(400)
   assert(await app.getByText('Cards').count(), 'layer renamed from the layers panel')
+  // Enter in the rename field hands the keys back to the Layers row, which passes shortcuts on.
+  await app.call('keystrokes', { keys: 'escape' })
+  assert(await until(async () => !(await count('size-label'))), 'Escape clears the selection after a layer rename')
   await shot('08-renamed')
 
   // An unfocused Inspector field shows the start of a value wider than itself (GPUIX scrolls a set input to
@@ -481,7 +484,8 @@ try {
   await sleep(400)
   await shot('12-frame-renamed')
   assert(await app.getByTestId('layers').getByText('Home').count(), 'frame renamed from its canvas title')
-  await canvas.press('ctrl-z')
+  // Keys go to the focused element: Enter in the title field must hand the keyboard back to the canvas.
+  await app.call('keystrokes', { keys: 'ctrl-z' })
   await sleep(400)
   assert(await app.getByTestId('layers').getByText('Desktop').count(), 'one undo step reverts the title rename')
 
@@ -589,6 +593,9 @@ try {
   )
   await app.call('keystrokes', { keys: 'escape' })
   assert(await until(async () => !(await count('text-editor'))), 'Escape ends the text edit')
+  assert(await until(async () => (await count('size-label')) > 0), 'the text layer stays selected after Escape')
+  await app.call('keystrokes', { keys: 'escape' })
+  assert(await until(async () => !(await count('size-label'))), 'Escape clears the selection after a text edit (the canvas has the keys)')
 
   // A child of a rotated or flipped frame follows the pointer: the drag delta is turned into the frame's space first.
   await app.getByTestId('tool-frame').click()
