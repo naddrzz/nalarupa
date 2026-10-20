@@ -18,6 +18,8 @@ export const unapply = (m: M | null | undefined, x: number, y: number, lin = fal
   const [u, v] = lin ? [x, y] : [x - m[4], y - m[5]]
   return [(m[3] * u - m[2] * v) / det, (m[0] * v - m[1] * u) / det]
 }
+/** A canvas-space delta as the `x` / `y` delta of a child of the parent painted under `m` (what `move_by` takes). */
+export const inParent = (m: M | null | undefined, dx: number, dy: number): Pt => unapply(m, dx, dy, true).map((v) => Math.round(v * 1e6) / 1e6) as Pt
 export const lin = (m: M | null | undefined, x: number, y: number): Pt => apply(m && [m[0], m[1], m[2], m[3], 0, 0], x, y)
 /** Rotated (flips alone keep a box axis-aligned). */
 export const turned = (m: M | null | undefined) => !!m && (Math.abs(m[1]) > 1e-9 || Math.abs(m[2]) > 1e-9)
@@ -182,6 +184,8 @@ if (import.meta.main) {
   const m = own(90, false, false)
   eq(apply(m, 10, 0).map(Math.round), [0, -10], '90° turns +x to screen up (CCW)')
   eq(unapply([0, -1, 1, 0, 5, 7], ...apply([0, -1, 1, 0, 5, 7], 3, 4)).map((v) => Math.round(v * 1e9) / 1e9), [3, 4], 'unapply inverts apply')
+  eq(inParent(m, 1, 0), [0, 1], 'right on screen is local +y in a frame turned 90°')
+  eq(inParent(own(0, true, false), 1, 0), [-1, 0], 'right on screen is local -x in a mirrored frame')
   eq(painted({ x: 0, y: 0, w: 20, h: 10, m: [-1, 0, 0, 1, 0, 0] }), { x: -20, y: 0, w: 20, h: 10 }, 'flipX paints left of the origin')
   eq(centerOffset(20, 10, 0, true, false), [-10, 5], 'a flip puts the center on the other side of the origin')
   eq([resizeCursor('e', null), resizeCursor('e', m), resizeCursor('ne', null), resizeCursor('ne', m)], ['ew-resize', 'ns-resize', 'nesw-resize', 'nwse-resize'], 'cursors turn with the box')

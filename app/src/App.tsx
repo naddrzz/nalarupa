@@ -14,10 +14,11 @@ import { Home } from './Home'
 import { Present } from './Present'
 import { C, LEFT_W, REDUCED_MOTION, RIGHT_W, TOP_H } from './theme'
 import { Icon, IconButton, Pressable, Segmented, ShortcutScope, T, type Toast } from './ui'
-import { centerOffset } from './geometry'
+import { centerOffset, inParent, type M } from './geometry'
 import type { IconName } from './icons'
 
 let flips = 0
+let nudges = 0
 
 const TOOLS: { tool: Tool; icon: IconName; key: string; label: string }[] = [
   { tool: 'move', icon: 'cursor', key: 'v', label: 'Move (V)' },
@@ -161,6 +162,11 @@ export function App() {
     writeClipboard({ html: r.html, text: r.text })
     return true
   }
+  const inside = (id: string, of: string) => {
+    if (id.startsWith(`${of}/`)) return true
+    for (let p = parentOf(id); p !== 'document'; p = parentOf(p)) if (p === of) return true
+    return false
+  }
   const ALIGN: Record<string, string> = { w: 'top', a: 'left', s: 'bottom', d: 'right', h: 'hcenter', v: 'vcenter' }
 
   const onShortcut = (key: string, m: Mods): boolean => {
@@ -180,11 +186,6 @@ export function App() {
       const k = key === 'h' ? 'flipX' : 'flipY'
       const undoKey = `flip:${++flips}`
       // A flipped layer mirrors its descendants too, so a selected descendant of a selected layer is left to it.
-      const inside = (id: string, of: string) => {
-        if (id.startsWith(`${of}/`)) return true
-        for (let p = parentOf(id); p !== 'document'; p = parentOf(p)) if (p === of) return true
-        return false
-      }
       for (const id of sel.filter((id) => !sel.some((o) => o !== id && inside(id, o)))) {
         const info = nodeOf(id)
         const l = info?.local
@@ -262,18 +263,30 @@ export function App() {
     const nudge: Record<string, [number, number]> = { left: [-1, 0], right: [1, 0], up: [0, -1], down: [0, 1] }
     if (nudge[key] && has) {
       // Inside auto layout arrows reorder along the layout axis (Alt: to the end); elsewhere they nudge.
-      const free: string[] = []
+      const free = new Map<string, string[]>()
+      const loose: string[] = []
       for (const id of sel) {
         const info = nodeOf(id)
         const layout = info?.node?.layoutPosition !== 'absolute' ? info?.parentLayout : 'none'
-        if (!layout || layout === 'none') free.push(id)
+        if (!layout || layout === 'none') loose.push(id)
         else if ((layout === 'vertical') === (key === 'up' || key === 'down')) {
           const later = key === 'right' || key === 'down'
           tryCall('reorder', { ids: [id], dir: m.alt ? (later ? 'front' : 'back') : later ? 'up' : 'down' })
         }
       }
+      // A moved layer carries its descendants, so a loose descendant of a loose layer is left to it.
+      for (const id of loose.filter((id) => !loose.some((o) => o !== id && inside(id, o)))) {
+        const p = parentOf(id)
+        free.set(p, [...(free.get(p) ?? []), id])
+      }
       const s = m.shift ? 10 : 1
-      if (free.length) tryCall('move_by', { ids: free, dx: nudge[key][0] * s, dy: nudge[key][1] * s })
+      // `move_by` works in the parent's space: turn the screen delta into it (rotated or flipped frames).
+      const undoKey = `nudge:${++nudges}`
+      for (const [parent, ids] of free) {
+        const pm: M | null = parent === 'document' ? null : nodeOf(parent)?.box?.m ?? null
+        const [dx, dy] = inParent(pm, nudge[key][0] * s, nudge[key][1] * s)
+        tryCall('move_by', { ids, dx, dy, coalesce: undoKey })
+      }
       return true
     }
     return false

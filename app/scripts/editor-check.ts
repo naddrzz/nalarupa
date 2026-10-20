@@ -1,5 +1,6 @@
 // Core checks for the canvas editing commands (no window): `bun scripts/editor-check.ts`
 import { call } from '../src/core'
+import { inParent } from '../src/geometry'
 import { nodeIcon } from '../src/icons'
 
 const assert = (ok: unknown, msg: string) => {
@@ -114,6 +115,29 @@ assert(ls.every((p) => Math.abs(p.l - ls[0].l) < 0.01), `align left of flipped/r
 call('align', { ids: turned, dir: 'top' })
 const ts = painted()
 assert(ts.every((p) => Math.abs(p.t - ts[0].t) < 0.01), `align top of flipped/rotated ${JSON.stringify(ts)}`)
+
+// An arrow-key nudge goes right on screen inside a rotated or flipped frame: the delta is turned into the parent's space for move_by.
+for (const [what, turn] of [['rotated', { rotation: 90 }], ['flipped', { flipX: true }]] as const) {
+  const NF = call('insert', { parent: 'document', node: { type: 'frame', name: `Nudge ${what}`, x: 1200, y: 600, width: 300, height: 200, layout: 'none', ...turn } }).id
+  const NK = call('insert', { parent: NF, node: { type: 'rectangle', x: 20, y: 20, width: 60, height: 40 } }).id
+  const n0 = call('bounds', { ids: [NK] })
+  const [ndx, ndy] = inParent(node(NF).box.m, 10, 0)
+  call('move_by', { ids: [NK], dx: ndx, dy: ndy })
+  const n1 = call('bounds', { ids: [NK] })
+  assert(Math.abs(n1.x - n0.x - 10) < 0.01 && Math.abs(n1.y - n0.y) < 0.01, `a nudge to the right in a ${what} frame moves the child right (${n0.x},${n0.y} → ${n1.x},${n1.y})`)
+}
+
+// One arrow press over layers in different parents is one undo step: the per-parent move_by calls share a coalesce key.
+{
+  const [P, Q] = [0, 1].map((i) => call('insert', { parent: 'document', node: { type: 'frame', name: `Nudge pair ${i}`, x: 1600 + i * 400, y: 600, width: 300, height: 200, layout: 'none' } }).id)
+  const [PK, QK] = [P, Q].map((f) => call('insert', { parent: f, node: { type: 'rectangle', x: 20, y: 20, width: 60, height: 40 } }).id)
+  const [p0, q0] = [call('bounds', { ids: [PK] }), call('bounds', { ids: [QK] })]
+  call('move_by', { ids: [PK], dx: 10, dy: 0, coalesce: 'nudge:test' })
+  call('move_by', { ids: [QK], dx: 10, dy: 0, coalesce: 'nudge:test' })
+  call('undo')
+  const [p1, q1] = [call('bounds', { ids: [PK] }), call('bounds', { ids: [QK] })]
+  assert(p1.x === p0.x && q1.x === q0.x, `one undo reverts a nudge across parents (${p0.x},${q0.x} → ${p1.x},${q1.x})`)
+}
 
 // Duplicate: same position, right above the source.
 const d = call('duplicate', { ids: [A] }).ids[0]
