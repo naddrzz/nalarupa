@@ -273,7 +273,7 @@ TakeScreenshot([s])`,
   await mcp('execute', { input: `${ids}.forEach(id => Update(id, {enabled:false}))` })
   await sleep(500)
   await app.getByTestId('export-deck-pdf').click()
-  await until(async () => /No slides to export/.test(await app!.getByTestId('toast').textContent().catch(() => '')), 'the "No slides to export" toast')
+  await until(async () => /No visible slides to export/.test(await app!.getByTestId('toast').textContent().catch(() => '')), 'the "No visible slides to export" toast')
   await app.getByTestId('toast-dismiss').click()
   await mcp('execute', { input: `${ids}.forEach(id => Update(id, {enabled:true}))` })
   await sleep(500)

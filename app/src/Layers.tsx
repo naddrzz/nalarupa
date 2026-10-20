@@ -355,7 +355,7 @@ function Slides({ version, selection, select, focus, present, toast, onShortcut 
       const why = (e as Error).message
       console.error('[core] export:', why)
       // An empty (or all-hidden) deck is not a folder problem: name the cause instead of the generic hint.
-      if (why.startsWith('nothing to export')) toast('No slides to export. Add a visible top-level frame first.', true)
+      if (why.startsWith('nothing to export')) toast('No visible slides to export. Show a slide or add a frame first.', true)
       else toast('Unable to export. Check that the export folder is writable and try again.', true)
     }
   }
