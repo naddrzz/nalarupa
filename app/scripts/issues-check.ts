@@ -48,6 +48,14 @@ assert(has(out, /"Flow" \(\w+\): x\/y are ignored inside a flex layout parent/),
 out = run('Insert(col, {type:"rectangle", name:"Pinned", x:5, y:5, width:20, height:20, layoutPosition:"absolute", fill:"#0000ff"})')
 assert(!has(out, /Pinned/), `an absolute child in a flex parent is fine: ${out}`)
 
+// An instance's x/y come from its component, not the snippet: no warning unless the instance sets its own.
+out = run(`comp = Insert(document, {type:"frame", name:"Btn", reusable:true, x:300, y:400, padding:8, fill:"#0000ff", width:100, height:40})
+row = Insert(document, {type:"frame", name:"Row", x:900, y:0, layout:"horizontal", gap:8, padding:8, fill:"#eeeeee"})
+Insert(row, {type:"ref", ref:comp, name:"inst1"}); Copy(comp, row)`)
+assert(!out.includes('Issues detected'), `instances of a placed component are not flagged for the component's x/y: ${out}`)
+out = run('Insert(row, {type:"ref", ref:comp, name:"inst2", x:5, y:5})')
+assert(has(out, /"inst2" \(\w+\): x\/y are ignored inside a flex layout parent/), `an instance's own x/y in flex: ${out}`)
+
 // fill_container needs a flex parent.
 out = run('Insert(f, {type:"rectangle", name:"Fill", x:0, y:130, width:"fill_container", height:10, fill:"#999999"})')
 assert(has(out, /"Fill" \(\w+\) uses fill_container but its parent has no flex layout/), `fill_container in a freeform frame: ${out}`)

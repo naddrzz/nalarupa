@@ -929,7 +929,9 @@ fn validate(e: &mut Engine, touched: &[String]) -> Vec<String> {
             }
             let parent_layout = parent.map(|p| p.ty == "frame" && p.s("layout") != Some("none")).unwrap_or(false);
             let absolute = n.s("layoutPosition") == Some("absolute");
-            if parent_layout && !absolute && (n.p.contains_key("x") || n.p.contains_key("y")) && touched.contains(n.id.as_str()) {
+            // An instance's resolved props carry its component's x/y; only its own count.
+            let has_xy = |k: &str| if n.inst.is_some() { e.doc.find(&n.id).is_some_and(|raw| raw.get(k).is_some()) } else { n.p.contains_key(k) };
+            if parent_layout && !absolute && (has_xy("x") || has_xy("y")) && touched.contains(n.id.as_str()) {
                 out.push(format!("{label}: x/y are ignored inside a flex layout parent"));
             }
             let fills_parent = ["width", "height"].iter().any(|k| n.s(k).is_some_and(|v| v.starts_with("fill_container")));
