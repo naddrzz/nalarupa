@@ -100,8 +100,8 @@ export function Home({ recent, dirty, title, save, back, onOpened, toast }: {
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <T size={12} color={C.muted} weight="600">Recent</T>
-          {/* Long paths are cut at the row's end: the full path shows in a tooltip on hover, and in the row
-              itself while it has keyboard focus. */}
+          {/* Long names and paths are cut with an ellipsis: the full path shows in a tooltip on hover, and in the
+              row itself while it has keyboard focus. */}
           <Tooltip.Provider delayDuration={350}>
             {recent.filter((p) => existsSync(p)).slice(0, 8).map((p) => (
               <Tooltip.Root key={p} style={{ flexDirection: 'column', alignItems: 'stretch', minWidth: 0 }}>
@@ -110,7 +110,7 @@ export function Home({ recent, dirty, title, save, back, onOpened, toast }: {
                     {(focused) => (
                       <>
                         <Icon name="frame" size={13} color={C.ghost} />
-                        <T size={13}>{basename(p)}</T>
+                        <T size={13} style={{ flexShrink: 0, maxWidth: 440, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{basename(p)}</T>
                         <T size={12} color={C.ghost} grow style={focused ? { minWidth: 0 } : { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p}</T>
                       </>
                     )}

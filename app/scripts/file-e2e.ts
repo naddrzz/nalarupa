@@ -1,6 +1,6 @@
 // Save and reopen through the real window: `bun scripts/file-e2e.ts`
 // Draw → Save (toolbar) → Home lists it under Recent → reopen shows the drawing; a second Save keeps the
-// same file; Home asks before it replaces unsaved edits (Cancel / Escape / Back, Save, a failed Save, Don't save); a recent file that vanished from disk is no longer offered; Home and the agent's empty state scroll in a minimum-height window (Linux, where the window can be resized). No OS file dialogs involved.
+// same file; Home asks before it replaces unsaved edits (Cancel / Escape / Back, Save, a failed Save, Don't save); a recent file that vanished from disk is no longer offered; a very long recent name is cut inside its row; Home and the agent's empty state scroll in a minimum-height window (Linux, where the window can be resized). No OS file dialogs involved.
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync, renameSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
@@ -126,7 +126,8 @@ try {
   if (sock) {
     await app.close()
     const docs = mkdtempSync(join(tmpdir(), 'nalarupa-recent-'))
-    const paths = Array.from({ length: 8 }, (_, i) => join(docs, `project-${i}.nala`))
+    const long = `${'Quarterly planning deck for the entire organisation including every single department and subsidiary '.repeat(2).trim()}.nala`
+    const paths = Array.from({ length: 8 }, (_, i) => join(docs, i ? `project-${i}.nala` : long))
     paths.forEach((p) => writeFileSync(p, '{}'))
     writeFileSync(join(data, 'settings.json'), JSON.stringify({ recent: paths }))
     try {
@@ -134,6 +135,11 @@ try {
       await app.getByTestId('template-blank').waitFor({ timeoutMs: 30000 })
       await Bun.$`swaymsg -s ${join(dir!, sock)} [app_id=".*"] resize set 1100 680`.quiet()
       await Bun.sleep(1500)
+      // A very long name is cut inside its row and leaves room for the path.
+      const row = await app.getByTestId(`recent-${long}`).bounds()
+      const [name, where] = (await app.getByTestId(`recent-${long}`).getByType('text').all()).map((n) => n.bounds!)
+      assert(name.x + name.width <= row.x + row.width, `a long recent name stays inside its row (${name.x + name.width} > ${row.x + row.width})`)
+      assert(where.width > 40, `the path keeps room beside a long name (${where.width} px)`)
       const home = app.getByTestId('home-scroll')
       const last = app.getByTestId('recent-project-7.nala')
       // Bounds follow the scroll offset, so compare with fixed limits: the window's bottom edge, the composer's top edge.
