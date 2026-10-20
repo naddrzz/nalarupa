@@ -785,6 +785,29 @@ try {
     await shot('15-mesh-gradient')
     assert(await app.getByTestId('layers').getByText('Mesh').count(), 'the mesh-filled rectangle pasted')
   }
+  // Ctrl+0 (100 %) zooms around the middle of the canvas like the zoom keys: the document point there stays put
+  // (it used to keep the camera's corner, so the view jumped away from the content).
+  await canvas.press('escape')
+  await canvas.press('shift-1')
+  await sleep(500)
+  await canvas.press('ctrl-a') // any selected layer's box is a fixed point in the document
+  assert(await until(async () => (await count('selection-box')) > 0), 'Ctrl+A selects layers')
+  const mid = { x: c.x + c.width / 2, y: c.y + c.height / 2 }
+  const docAtMid = async () => {
+    const b = (await app.getByTestId('selection-box').all())[0].bounds!
+    const zoom = parseInt(await app.getByTestId('zoom-level').textContent()) / 100
+    return [(mid.x - b.x) / zoom, (mid.y - b.y) / zoom]
+  }
+  const fitZoom = await app.getByTestId('zoom-level').textContent()
+  const p0 = await docAtMid()
+  await canvas.press('ctrl-0')
+  assert(await until(async () => (await app.getByTestId('zoom-level').textContent()) === '100%'), `Ctrl+0 sets the zoom to 100% (was ${fitZoom})`)
+  await sleep(300)
+  const p1 = await docAtMid()
+  // The fit zoom label is rounded to a whole percent, so allow for that in the document point.
+  assert(Math.abs(p1[0] - p0[0]) < 60 && Math.abs(p1[1] - p0[1]) < 60, `Ctrl+0 keeps the document point under the canvas middle (${p0.map(Math.round)} → ${p1.map(Math.round)})`)
+  await canvas.press('shift-1')
+  await sleep(300)
   await shot('10-final')
   console.log('editor-e2e ok — screenshots in', out)
 } finally {

@@ -140,12 +140,13 @@ export function App() {
   // Keys go back to the canvas once a prompt is sent: Space-pan and shortcuts work while the agent designs.
   const sent = useCallback(() => canvasEl.current && renderer.focusElement?.(canvasEl.current.id), [renderer])
 
-  const zoomBy = (f: number) => {
-    const z = Math.min(64, Math.max(0.02, cam.zoom * f))
+  const zoomTo = (to: number) => {
+    const z = Math.min(64, Math.max(0.02, to))
     const cx = cam.x + cw / 2 / cam.zoom
     const cy = cam.y + ch / 2 / cam.zoom
     setCam({ zoom: z, x: cx - cw / 2 / z, y: cy - ch / 2 / z })
   }
+  const zoomBy = (f: number) => zoomTo(cam.zoom * f)
 
   const run = <R = any,>(cmd: string, args: Record<string, unknown>, then?: (r: R) => void) => {
     const r = tryCall<R>(cmd, args)
@@ -240,7 +241,7 @@ export function App() {
     }
     if (m.mod && key === 's') return save(m.shift), true
     if (m.mod && key === 'enter') return present(), true
-    if (m.mod && key === '0') return setCam({ ...cam, zoom: 1 }), true
+    if (m.mod && key === '0') return zoomTo(1), true
     if (key === 'escape') {
       if (tool !== 'move') setTool('move')
       select([])
