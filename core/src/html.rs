@@ -460,7 +460,13 @@ impl Html<'_> {
             } else {
                 // A text-shadow would show through gradient text, whose colour is transparent. `drop-shadow()` takes
                 // the standard deviation, half the blur radius.
-                filters.extend(outer.map(|(_, x, y, b, c)| format!("drop-shadow({x}px {y}px {}px {c})", b / 2.0)));
+                let outer: Vec<_> = outer.collect();
+                if let [(_, x, y, b, c)] = outer[..] {
+                    filters.push(format!("drop-shadow({x}px {y}px {}px {c})", b / 2.0));
+                } else if !outer.is_empty() {
+                    // Chained `drop-shadow()`s would cast shadows of the earlier shadows: every one needs the original alpha.
+                    filters.push(shadow_filter(&outer));
+                }
             }
         } else {
             shadows.extend(list.iter().map(|(inner, x, y, b, c)| format!("{}{x}px {y}px {b}px {c}", if *inner { "inset " } else { "" })));
@@ -525,6 +531,10 @@ impl Html<'_> {
         let gradient = fills(n.p.get("fill")).first().and_then(|f| f.as_object().filter(|o| o.get("type").and_then(Value::as_str) == Some("gradient"))).and_then(gradient_css);
         if let Some(g) = gradient {
             let _ = write!(css, "background:{g};-webkit-background-clip:text;background-clip:text;color:transparent;");
+            // Decorations default to the transparent colour; an opaque one lets the clipped gradient show through them.
+            if !deco.is_empty() {
+                css.push_str("text-decoration-color:#000000;");
+            }
         } else if let Some(c) = fills(n.p.get("fill")).first().and_then(|f| f.as_str().map(str::to_string).or_else(|| f["color"].as_str().map(str::to_string))).and_then(|c| css_color(&c)) {
             let _ = write!(css, "color:{c};");
         }
@@ -546,6 +556,18 @@ impl Html<'_> {
             }
         }
     }
+}
+
+/// One `filter` casting every outer shadow from the element's own alpha (unlike chained `drop-shadow()`s, which
+/// shadow each other), as an inline SVG filter. Its blur is the standard deviation, half the radius.
+fn shadow_filter(shadows: &[&(bool, f64, f64, f64, String)]) -> String {
+    let mut f = String::new();
+    for (i, (_, x, y, b, c)) in shadows.iter().enumerate() {
+        let _ = write!(f, "<feGaussianBlur in=\"SourceAlpha\" stdDeviation=\"{}\"/><feOffset dx=\"{x}\" dy=\"{y}\" result=\"o{i}\"/><feFlood flood-color=\"{c}\"/><feComposite in2=\"o{i}\" operator=\"in\" result=\"s{i}\"/>", b / 2.0);
+    }
+    let merge: String = (0..shadows.len()).rev().map(|i| format!("<feMergeNode in=\"s{i}\"/>")).collect();
+    let svg = format!("<svg xmlns=\"http://www.w3.org/2000/svg\"><filter id=\"s\" x=\"-50%\" y=\"-50%\" width=\"200%\" height=\"200%\" color-interpolation-filters=\"sRGB\">{f}<feMerge>{merge}<feMergeNode in=\"SourceGraphic\"/></feMerge></filter></svg>");
+    format!("url('data:image/svg+xml,{}#s')", svg.replace('%', "%25").replace('<', "%3C").replace('>', "%3E").replace('#', "%23").replace('"', "%22"))
 }
 
 pub fn file_name(p: &Path) -> String {
@@ -637,15 +659,20 @@ mod tests {
         let id = e.insert_root(json!({"type": "frame", "layout": "none", "width": 300, "height": 200, "children": [
             {"type": "text", "name": "t", "content": "Hi", "fontSize": 40, "fill": "#0000ff", "effect": sh},
             {"type": "text", "name": "g", "content": "Grad", "fontSize": 40, "fill": grad, "effect": sh},
+            {"type": "text", "name": "g2", "content": "Grad", "fontSize": 40, "fill": grad, "underline": true, "effect": [sh, sh]},
             {"type": "group", "name": "grp", "effect": [sh, {"type": "blur", "radius": 4}], "children": [{"type": "ellipse", "width": 60, "height": 60, "fill": "#00aa00"}]}
         ]})).unwrap();
         let h = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
         let style = |name: &str| h.split(&format!("data-name=\"{name}\" style=\"")).nth(1).unwrap().split('"').next().unwrap().to_string();
-        let (t, g, grp) = (style("t"), style("g"), style("grp"));
+        let (t, g, g2, grp) = (style("t"), style("g"), style("g2"), style("grp"));
         assert!(t.contains("text-shadow:6px 6px 4px #ff0000;") && t.contains("color:#0000ff;") && !t.contains("box-shadow"), "{t}");
         // Gradient text is clipped to its glyphs, so its shadow is a filter that follows them.
         assert!(g.contains("background:linear-gradient(-0deg,#ff0000 0%,#0000ff 100%);-webkit-background-clip:text;background-clip:text;color:transparent;"), "{g}");
         assert!(g.contains("filter:drop-shadow(6px 6px 2px #ff0000);") && !g.contains("text-shadow") && !g.contains("box-shadow"), "{g}");
+        // Several shadows all start from the element's alpha, so they are one SVG filter, not a chain of `drop-shadow()`s.
+        assert!(g2.contains("filter:url('data:image/svg+xml,%3Csvg") && g2.contains("%3CfeMergeNode in=%22SourceGraphic%22/%3E") && !g2.contains("drop-shadow"), "{g2}");
+        // The decoration needs a colour of its own: the text colour is transparent.
+        assert!(g2.contains("text-decoration:underline;") && g2.contains("text-decoration-color:#000000;") && !g.contains("text-decoration"), "{g2}");
         assert!(grp.contains("filter:drop-shadow(6px 6px 2px #ff0000) blur(2px);") && !grp.contains("box-shadow"), "{grp}");
     }
 
