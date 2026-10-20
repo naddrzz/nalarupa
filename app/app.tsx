@@ -22,16 +22,22 @@ render(
     // focused element gets its keyboard focus ring.
     onKeyDown(event, renderer) {
       if ((event.key ?? '').toLowerCase() !== 'tab') return
-      let settle = 30
+      const sync = () => setTimeout(() => setKeyboardFocus(renderer.getFocusedElementId?.() ?? null), 30)
       const back = event.modifiers?.shift ? backStopOf(renderer.getFocusedElementId?.()) : undefined
       if (back !== undefined) {
-        // Out of a text field backwards: see `backStops` in ui.tsx. The focus request lands with the next frame.
+        // Out of a text field backwards: see `backStops` in ui.tsx. The focus request lands with a later
+        // frame (slow ones included), so walk back from the stop only once it holds focus.
         renderer.focusElement?.(back)
-        setTimeout(() => renderer.focusPrevious?.(), 40)
-        settle = 90
-      } else if (event.modifiers?.shift) renderer.focusPrevious?.()
+        const step = (tries: number) => {
+          if (renderer.getFocusedElementId?.() === back) { renderer.focusPrevious?.(); sync() }
+          else if (tries > 0) setTimeout(() => step(tries - 1), 40)
+        }
+        setTimeout(() => step(25), 40)
+        return
+      }
+      if (event.modifiers?.shift) renderer.focusPrevious?.()
       else renderer.focusNext?.()
-      setTimeout(() => setKeyboardFocus(renderer.getFocusedElementId?.() ?? null), settle)
+      sync()
     },
   },
 )

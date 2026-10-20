@@ -39,7 +39,7 @@ export const useKeyboardFocusId = () => useSyncExternalStore(subscribeFocus, () 
  *  edge, for elements that clip their overflow or sit flush against their neighbours. */
 export function FocusRing({ radius = 6, inset }: { radius?: number; inset?: boolean }) {
   const o = inset ? 0 : -3
-  return <div style={{ position: 'absolute', left: o, top: o, right: o, bottom: o, borderRadius: radius - o, borderWidth: 2, borderColor: C.focus, pointerEvents: 'none' }} />
+  return <div testId="focus-ring" style={{ position: 'absolute', left: o, top: o, right: o, bottom: o, borderRadius: radius - o, borderWidth: 2, borderColor: C.focus, pointerEvents: 'none' }} />
 }
 
 type Handler = (e: EventPayload) => void

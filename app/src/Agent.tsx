@@ -215,7 +215,7 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
 
       {todos.length ? (
         <div style={{ borderTopWidth: 1, borderColor: C.border, paddingLeft: 12, paddingRight: 12, paddingTop: 8, paddingBottom: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <Pressable label={`Plan, ${doneTodos} of ${todos.length} done`} expanded={planOpen} onClick={() => setPlanOpen((o) => !o)} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, height: 24, borderRadius: 4 }}>
+          <Pressable testId="plan-toggle" label={`Plan, ${doneTodos} of ${todos.length} done`} expanded={planOpen} onClick={() => setPlanOpen((o) => !o)} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, height: 24, borderRadius: 4 }}>
             <Icon name={planOpen ? 'chevronDown' : 'chevronRight'} size={12} color={C.ghost} />
             <T size={11} weight="600" color={C.muted} grow>Plan</T>
             <T size={11} color={C.ghost}>{`${doneTodos}/${todos.length}`}</T>
@@ -836,7 +836,7 @@ function AgentSettings({ mcpUrl, toast }: { mcpUrl: string; toast: Toast }) {
         label="Agent backend"
         value={backend}
         onChange={(v) => { if (set('agent_backend', v)) setBackend(v) }}
-        options={[{ value: 'api', label: 'Claude API' }, { value: 'claude-code', label: 'Claude Code CLI' }]}
+        options={[{ value: 'api', label: 'Claude API' }, { value: 'claude-code', label: 'Claude Code CLI', testId: 'backend-claude-code' }]}
       />
       {backend === 'api' ? (
         <>
