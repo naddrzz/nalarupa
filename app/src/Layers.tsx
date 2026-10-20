@@ -85,6 +85,7 @@ function Layers({ version, selection, select, focus, hover, onShortcut }: { vers
   useEffect(() => {
     if (scrolledFor.current === selection) return
     const at = visible.findIndex((v) => selection.includes(v.id))
+    clearInterval(scrollTimer.current)
     if (at < 0) return
     scrolledFor.current = selection
     // The list's anchor is [first row, px scrolled into it, viewport px]; rows are ROW_H tall.
@@ -97,7 +98,6 @@ function Layers({ version, selection, select, focus, hover, onShortcut }: { vers
       if (!done && listEl.current) renderer.scrollToItem?.(listEl.current.id, at)
       return done
     }
-    clearInterval(scrollTimer.current)
     if (go()) return
     let tries = 0
     scrollTimer.current = setInterval(() => { if (go() || ++tries >= 20) clearInterval(scrollTimer.current) }, 100)
