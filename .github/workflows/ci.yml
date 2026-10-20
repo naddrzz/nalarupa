@@ -62,7 +62,8 @@ jobs:
         run: bun install --frozen-lockfile && bun run typecheck && bun run smoke && bun run editor-check && bun run mcp-check && bun run doc-check && bun run script-check && bun run chat-check && bun run drag-check && bun run viewport-check && bun run issues-check
         working-directory: app
       # The hosted desktop is 1024×768; the GUI suites assume the full 1440×900 window, as on a real screen.
-      - shell: pwsh
+      - id: display
+        shell: pwsh
         run: |
           Set-DisplayResolution -Width 1920 -Height 1080 -Force
           $mode = Get-CimInstance Win32_VideoController | Select-Object CurrentHorizontalResolution, CurrentVerticalResolution
@@ -71,21 +72,21 @@ jobs:
       - run: bun run e2e
         working-directory: app
         timeout-minutes: 10
-      # A GUI suite after a failed build waits for a core that never comes and times the whole job out;
-      # like the plain e2e step above, skip them when the app install or checks failed too.
-      - if: ${{ !cancelled() && steps.core.outcome == 'success' && steps.app.outcome == 'success' }}
+      # A GUI suite after a failed build waits for a core that never comes and times the whole job out. The display
+      # step runs only after the core and app steps passed, so its success covers all three.
+      - if: ${{ !cancelled() && steps.display.outcome == 'success' }}
         run: bun run editor-e2e
         working-directory: app
         timeout-minutes: 10
-      - if: ${{ !cancelled() && steps.core.outcome == 'success' && steps.app.outcome == 'success' }}
+      - if: ${{ !cancelled() && steps.display.outcome == 'success' }}
         run: bun run file-e2e
         working-directory: app
         timeout-minutes: 10
-      - if: ${{ !cancelled() && steps.core.outcome == 'success' && steps.app.outcome == 'success' }}
+      - if: ${{ !cancelled() && steps.display.outcome == 'success' }}
         run: bun run a11y-check && bun run motion-check && bun run window-check
         working-directory: app
         timeout-minutes: 10
-      - if: ${{ !cancelled() && steps.core.outcome == 'success' && steps.app.outcome == 'success' }}
+      - if: ${{ !cancelled() && steps.display.outcome == 'success' }}
         run: bun run build && bun run exe-check && bun run window-check dist/nalarupa.exe
         working-directory: app
         timeout-minutes: 10
