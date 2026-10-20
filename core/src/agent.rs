@@ -982,7 +982,7 @@ fn clip_ends(s: &str, n: usize) -> String {
     format!("{}\n…\n{}", s[..head].trim_end(), s[tail..].trim_start())
 }
 
-/// MCP client config for one agent's Claude Code process (per-agent URL = attribution). Deleted when the run
+/// MCP client config for one run of an agent's Claude Code process (per-agent URL = attribution). Deleted when the run
 /// ends, however it ends: the CLI reads it only at start, and its port belongs to this process alone.
 struct McpConfig(PathBuf);
 
@@ -1015,7 +1015,9 @@ fn claude_mcp_config(agent: &str) -> Result<McpConfig, String> {
         return Err("the MCP server is not running".into());
     }
     sweep_mcp_configs(&dir);
-    let path = dir.join(format!("claude-code-mcp-{agent}.json"));
+    // One file per run: the agent id is reused, so a concurrent run of it must not share (and delete) the file.
+    static NEXT_RUN: AtomicUsize = AtomicUsize::new(0);
+    let path = dir.join(format!("claude-code-mcp-{agent}-{}-{}.json", std::process::id(), NEXT_RUN.fetch_add(1, Ordering::Relaxed)));
     let cfg = json!({"mcpServers": {"nalarupa": {"type": "http", "url": format!("http://127.0.0.1:{port}/mcp/{agent}")}}});
     std::fs::write(&path, cfg.to_string()).map_err(|e| e.to_string())?;
     Ok(McpConfig(path))
