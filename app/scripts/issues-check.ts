@@ -56,6 +56,16 @@ assert(!out.includes('Issues detected'), `instances of a placed component are no
 out = run('Insert(row, {type:"ref", ref:comp, name:"inst2", x:5, y:5})')
 assert(has(out, /"inst2" \(\w+\): x\/y are ignored inside a flex layout parent/), `an instance's own x/y in flex: ${out}`)
 
+// A nested instance reports its own x/y override (set through the outer instance's descendants), not the component's.
+out = run(`inner = Insert(document, {type:"frame", name:"Inner", reusable:true, x:50, y:60, width:30, height:30, fill:"#ff0000"})
+outer = Insert(document, {type:"frame", name:"Outer", reusable:true, x:700, y:700, layout:"horizontal", gap:4, padding:4, width:80, height:50, fill:"#ffffff"})
+ni = Insert(outer, {type:"ref", ref:inner})
+host = Insert(document, {type:"frame", name:"Host", x:1200, y:0, layout:"horizontal", width:200, height:100, fill:"#dddddd"})
+oi = Insert(host, {type:"ref", ref:outer, name:"oi"})`)
+assert(!out.includes('x/y are ignored'), `a nested instance of a placed component is not flagged: ${out}`)
+out = run('Update(oi + "/" + ni, {x:5, y:5})')
+assert(has(out, /x\/y are ignored inside a flex layout parent/), `a nested instance's own x/y in flex: ${out}`)
+
 // fill_container needs a flex parent.
 out = run('Insert(f, {type:"rectangle", name:"Fill", x:0, y:130, width:"fill_container", height:10, fill:"#999999"})')
 assert(has(out, /"Fill" \(\w+\) uses fill_container but its parent has no flex layout/), `fill_container in a freeform frame: ${out}`)
