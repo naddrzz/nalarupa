@@ -344,7 +344,7 @@ export function App() {
         <IconButton icon="home" title="Home" testId="home" onClick={() => setScreen('home')} />
         <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, width: LEFT_W - 48, paddingLeft: 4 }}>
           <T size={13} weight="600" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{state.title}</T>
-          {state.dirty ? <div style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: C.accent }} /> : null}
+          {state.dirty ? <div testId="unsaved-dot" style={{ width: 6, height: 6, flexShrink: 0, borderRadius: 3, backgroundColor: C.accent }} /> : null}
         </div>
         {TOOLS.map((t) => (
           <IconButton key={t.tool} icon={t.icon} title={t.label} testId={`tool-${t.tool}`} active={tool === t.tool} onClick={() => setTool(t.tool)} />
