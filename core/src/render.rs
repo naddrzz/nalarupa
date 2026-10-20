@@ -625,7 +625,7 @@ impl Renderer {
                         (x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0))
                     });
                     let own = canvas(f);
-                    let seen = clip.is_none_or(|c| c.0 < own.0 + own.2 && c.0 + c.2 > own.0 && c.1 < own.1 + own.3 && c.1 + c.3 > own.1);
+                    let seen = clip.is_none_or(|c| c.2 > 0.0 && c.3 > 0.0 && c.0 < own.0 + own.2 && c.0 + c.2 > own.0 && c.1 < own.1 + own.3 && c.1 + c.3 > own.1);
                     if seen {
                         out.push((f, clip));
                     }
@@ -1255,7 +1255,9 @@ pub(crate) mod tests {
         let json = format!(r##"{{"version":"2.19","children":[
             {{"type":"frame","id":"c","x":100,"y":100,"width":300,"height":200,"layout":"none","clip":true,"children":[
                 {{"type":"rectangle","id":"img","x":150,"y":50,"width":400,"height":300,"fill":{pending}}},
-                {{"type":"rectangle","id":"gone","x":500,"y":10,"width":50,"height":50,"fill":{pending}}}]}},
+                {{"type":"rectangle","id":"gone","x":500,"y":10,"width":50,"height":50,"fill":{pending}}},
+                {{"type":"frame","id":"far","x":350,"y":0,"width":100,"height":100,"layout":"none","clip":true,"children":[
+                    {{"type":"rectangle","id":"apart","x":-50,"y":10,"width":100,"height":50,"fill":{pending}}}]}}]}},
             {{"type":"frame","id":"open","x":600,"y":0,"width":100,"height":100,"layout":"none","children":[
                 {{"type":"rectangle","id":"free","x":80,"y":80,"width":100,"height":100,"fill":{pending}}}]}}]}}"##);
         let doc = Doc::from_json(&json).unwrap();
