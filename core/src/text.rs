@@ -292,7 +292,9 @@ impl Fonts {
             let (mut start, mut end, mut line_w) = (0, 0, 0.0);
             for (brk, opp) in unicode_linebreak::linebreaks(para) {
                 let te = trimmed(end, brk);
-                if end > start && line_w + w(end, te) > max_w + FIT_EPS {
+                // At zero width a whitespace-only prefix is not a line of its own: the word joins it.
+                let blank = max_w == 0.0 && trimmed(start, end) == start;
+                if end > start && !blank && line_w + w(end, te) > max_w + FIT_EPS {
                     lines.push((start, end, true));
                     (start, line_w) = (end, 0.0);
                 }
@@ -636,5 +638,7 @@ mod tests {
         // Zero width breaks only at word boundaries, never inside a word.
         let zero = f.wrap("one two three", 0.0, &st);
         assert_eq!(zero.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["one", "two", "three"]);
+        let lead = f.wrap(" one two", 0.0, &st);
+        assert_eq!(lead.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), [" one", "two"]);
     }
 }
