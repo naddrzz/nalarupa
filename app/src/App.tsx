@@ -121,10 +121,15 @@ export function App() {
   // takes keys and every shortcut is dead. Hand focus back to the canvas once the panels have re-rendered.
   useEffect(() => {
     if (screen !== 'editor') return
-    const t = setTimeout(() => {
-      if (renderer.getFocusedElementId?.() == null && canvasEl.current) renderer.focusElement?.(canvasEl.current.id)
+    // Retry for about a second: under a slow frame the control can unmount well after the state change.
+    let tries = 0
+    const t = setInterval(() => {
+      if (renderer.getFocusedElementId?.() == null && canvasEl.current) {
+        renderer.focusElement?.(canvasEl.current.id)
+        clearInterval(t)
+      } else if (++tries >= 10) clearInterval(t)
     }, 100)
-    return () => clearTimeout(t)
+    return () => clearInterval(t)
   }, [selection, state.version, screen, renderer])
 
   const saveTo = (path?: string) => {
