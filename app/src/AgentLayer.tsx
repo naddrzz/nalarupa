@@ -229,15 +229,16 @@ export function AgentLayer({ cam, w, h, version, chatOpen }: { cam: Cam; w: numb
       if (m) {
         // Document units: the turned box with the band sliding along its own x axis.
         const [bd, o] = [band / cam.zoom, pos / cam.zoom]
-        const half = (id: string, a: number, z: number) => `<linearGradient id="${id}"><stop offset="0" stop-color="#fff" stop-opacity="${a}"/><stop offset="1" stop-color="#fff" stop-opacity="${z}"/></linearGradient>`
-        return spun(n, m, `<defs><clipPath id="k"><rect x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}"/></clipPath>${half('a', 0, 0.45)}${half('b', 0.45, 0)}</defs>`
+        const grad = `<linearGradient id="a"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset="0.5" stop-color="#fff" stop-opacity="0.45"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>`
+        // One rect with a peaked gradient: two adjacent rects would blend their shared edge twice, a seam.
+        return spun(n, m, `<defs><clipPath id="k"><rect x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}"/></clipPath>${grad}</defs>`
           + `<g clip-path="url(#k)"><rect x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}" fill="#000" fill-opacity="0.25"/>`
-          + `<rect x="${n.x + o}" y="${n.y}" width="${bd / 2}" height="${n.h}" fill="url(#a)"/><rect x="${n.x + o + bd / 2}" y="${n.y}" width="${bd / 2}" height="${n.h}" fill="url(#b)"/></g>`, 'agent-shimmer-turned', `p${n.id}`)
+          + `<rect x="${n.x + o}" y="${n.y}" width="${bd}" height="${n.h}" fill="url(#a)"/></g>`, 'agent-shimmer-turned', `p${n.id}`)
       }
       return (
         <div key={`p${n.id}`} style={{ position: 'absolute', left: X, top: Y, width: W, height: H, overflow: 'hidden', backgroundColor: '#00000040', pointerEvents: 'none' }}>
-          {shimmerHalves(pos, band).map(([left, width], k) => (
-            <div key={k} style={{ position: 'absolute', left, top: 0, width, height: H, background: { type: 'linear-gradient', angle: 90, stops: k ? [{ color: '#FFFFFF73', position: 0 }, { color: '#FFFFFF00', position: 1 }] : [{ color: '#FFFFFF00', position: 0 }, { color: '#FFFFFF73', position: 1 }] } }} />
+          {shimmerHalves(X + pos, band).map(([left, width], k) => (
+            <div key={k} style={{ position: 'absolute', left: left - X, top: 0, width, height: H, background: { type: 'linear-gradient', angle: 90, stops: k ? [{ color: '#FFFFFF73', position: 0 }, { color: '#FFFFFF00', position: 1 }] : [{ color: '#FFFFFF00', position: 0 }, { color: '#FFFFFF73', position: 1 }] } }} />
           ))}
         </div>
       )

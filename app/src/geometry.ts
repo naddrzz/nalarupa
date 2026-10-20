@@ -45,13 +45,13 @@ export const bounds = (pts: Pt[]): Rect => {
   const [x, y] = [Math.min(...xs), Math.min(...ys)]
   return { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y }
 }
-/** Where a box is painted (its rotated/flipped corners' bounds). */
-/** The two halves of the pending-image shimmer band as whole-pixel [left, width] pairs that meet on one edge, so no column is blended twice. */
+/** The two halves of the pending-image shimmer band as whole-pixel [left, width] pairs that meet on one edge, so no column is blended twice. `pos` is in the screen's coordinates, not a fractionally placed parent's. */
 export const shimmerHalves = (pos: number, band: number): [[number, number], [number, number]] => {
   const [a, mid, b] = [Math.round(pos), Math.round(pos + band / 2), Math.round(pos + band)]
   return [[a, mid - a], [mid, b - mid]]
 }
 
+/** Where a box is painted (its rotated/flipped corners' bounds). */
 export const painted = (b: Rect & { m?: M | null }): Rect => (b.m ? bounds(corners(b, b.m)) : b)
 
 export const unionRect = (rs: Rect[]): Rect | null => {
