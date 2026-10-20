@@ -622,6 +622,35 @@ try {
   await canvas.press('delete')
   await sleep(300)
 
+  // A layer dragged onto a frame that sits beside it in the same parent moves into that frame, and back out when the pointer leaves it.
+  await app.getByTestId('tool-frame').click()
+  await app.mouse.drag(at(400, 400), at(560, 560), { steps: 5 })
+  await sleep(300)
+  const card = await app.getByTestId('selection-box').bounds()
+  await app.getByTestId('tool-rectangle').click()
+  await app.mouse.drag(at(640, 420), at(690, 470), { steps: 5 })
+  await sleep(300)
+  const rect = await app.getByTestId('selection-box').bounds()
+  const sameBox = (b: typeof card, to: typeof card) => Math.abs(b.x - to.x) <= 2 && Math.abs(b.y - to.y) <= 2 && Math.abs(b.width - to.width) <= 2
+  // The box of the dragged layer's parent (Shift+Enter); Enter picks the layer again, and the poll waits for its own box.
+  const parentBox = async () => {
+    await canvas.press('shift-enter')
+    const b = (await until(async () => (await count('selection-box')) > 0)) ? await app.getByTestId('selection-box').bounds() : null
+    await canvas.press('enter')
+    await until(async () => (await count('selection-box')) > 0 && Math.abs(((await app.getByTestId('selection-box').all())[0]?.bounds.width ?? NaN) - rect.width) <= 2)
+    return b
+  }
+  await app.mouse.drag(at(665, 445), at(480, 480), { steps: 8 })
+  assert(await until(async () => { const b = await parentBox(); return !!b && sameBox(b, card) }, 6000), 'dragging a layer onto a sibling frame moves it into that frame')
+  await app.mouse.drag(at(480, 480), at(665, 445), { steps: 8 })
+  assert(await until(async () => { const b = await parentBox(); return !!b && !sameBox(b, card) }, 6000), 'dragging it back out into the shared parent leaves the frame')
+  await canvas.press('delete')
+  await sleep(300)
+  await app.mouse.click(at(420, 540))
+  await sleep(300)
+  await canvas.press('delete')
+  await sleep(300)
+
   // A layer drawn inside a flipped or rotated frame lands where it was dragged (its center, as the ghost showed).
   const drawn = async (name: string, ox: number, turn: () => Promise<void>) => {
     await app.getByTestId('tool-frame').click()
