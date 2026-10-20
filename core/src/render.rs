@@ -603,6 +603,39 @@ impl Renderer {
         self.order.iter().filter_map(|id| self.layers.get(id)).flat_map(|l| l.flat.iter())
     }
 
+    /// Nodes that need animated overlays (placeholder frames, pending images), each with the canvas box its
+    /// clipping ancestors leave visible (`None` when nothing clips it). A node clipped away entirely is left out.
+    pub fn live(&self) -> Vec<(&Flat, Option<Rect>)> {
+        let canvas = |f: &Flat| {
+            let m = f.m.unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+            let pts = [(f.x, f.y), (f.x + f.w, f.y), (f.x, f.y + f.h), (f.x + f.w, f.y + f.h)].map(|(x, y)| (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]));
+            let lo = |g: fn(&(f64, f64)) -> f64| pts.iter().map(g).fold(f64::MAX, f64::min);
+            let hi = |g: fn(&(f64, f64)) -> f64| pts.iter().map(g).fold(f64::MIN, f64::max);
+            (lo(|p| p.0), lo(|p| p.1), hi(|p| p.0) - lo(|p| p.0), hi(|p| p.1) - lo(|p| p.1))
+        };
+        let mut out = Vec::new();
+        for layer in self.order.iter().filter_map(|id| self.layers.get(id)) {
+            let mut path: Vec<usize> = Vec::new();
+            for (i, f) in layer.flat.iter().enumerate() {
+                path.truncate(f.depth);
+                if f.placeholder || f.pending {
+                    // A rotated clipping frame is cut by its canvas bounding box (its corners may still show).
+                    let clip = path.iter().map(|&p| &layer.flat[p]).filter(|p| p.clip).map(canvas).reduce(|a, b| {
+                        let (x0, y0, x1, y1) = (a.0.max(b.0), a.1.max(b.1), (a.0 + a.2).min(b.0 + b.2), (a.1 + a.3).min(b.1 + b.3));
+                        (x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0))
+                    });
+                    let own = canvas(f);
+                    let seen = clip.is_none_or(|c| c.2 > 0.0 && c.3 > 0.0 && c.0 < own.0 + own.2 && c.0 + c.2 > own.0 && c.1 < own.1 + own.3 && c.1 + c.3 > own.1);
+                    if seen {
+                        out.push((f, clip));
+                    }
+                }
+                path.push(i);
+            }
+        }
+        out
+    }
+
     pub fn find(&self, id: &str) -> Option<&Flat> {
         self.flat().find(|f| f.id == id)
     }
@@ -1213,6 +1246,26 @@ pub(crate) mod tests {
         assert_eq!(hit_chain(&r, 860.0, 50.0), ["c"]);
         assert_eq!(hit_chain(&r, 880.0, 80.0), ["c", "h"]);
         assert!(hit_chain(&r, 950.0, 150.0).is_empty(), "clipped overflow is invisible");
+    }
+
+    /// A pending image or placeholder inside a clipping frame is cut to the frame's box; one clipped away is not live.
+    #[test]
+    fn live_overlays_follow_clipping_ancestors() {
+        let pending = r##"{"type":"image","url":"nalarupa:pending-x"}"##;
+        let json = format!(r##"{{"version":"2.19","children":[
+            {{"type":"frame","id":"c","x":100,"y":100,"width":300,"height":200,"layout":"none","clip":true,"children":[
+                {{"type":"rectangle","id":"img","x":150,"y":50,"width":400,"height":300,"fill":{pending}}},
+                {{"type":"rectangle","id":"gone","x":500,"y":10,"width":50,"height":50,"fill":{pending}}},
+                {{"type":"frame","id":"far","x":350,"y":0,"width":100,"height":100,"layout":"none","clip":true,"children":[
+                    {{"type":"rectangle","id":"apart","x":-50,"y":10,"width":100,"height":50,"fill":{pending}}}]}}]}},
+            {{"type":"frame","id":"open","x":600,"y":0,"width":100,"height":100,"layout":"none","children":[
+                {{"type":"rectangle","id":"free","x":80,"y":80,"width":100,"height":100,"fill":{pending}}}]}}]}}"##);
+        let doc = Doc::from_json(&json).unwrap();
+        let mut r = Renderer::default();
+        sync(&mut r, &doc);
+        let live: Vec<_> = r.live().into_iter().map(|(f, c)| (f.id.as_str(), c)).collect();
+        // `img` sits at doc (250, 150) and sticks out of the frame (x 100..400, y 100..300).
+        assert_eq!(live, [("img", Some((100.0, 100.0, 300.0, 200.0))), ("free", None)]);
     }
 
     /// A group paints nothing of its own: a point in its box but on none of its children hits the layer below.
