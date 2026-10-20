@@ -1488,6 +1488,21 @@ mod tests {
         }
     }
 
+    /// An angular stroke is one sweep around the node's centre: the band straight above it has the
+    /// colour of the sweep there (#bf0040 for rotation 90) outside the node box too, not the
+    /// opposite side's (the pattern must not tile past the box).
+    #[test]
+    fn angular_stroke_sweeps_once_outside_the_box() {
+        for (kind, align) in [("rectangle", "center"), ("rectangle", "outer"), ("ellipse", "outer")] {
+            let json = format!(r##"{{"version":"2.19","children":[
+                {{"type":"frame","id":"f","x":0,"y":0,"width":200,"height":200,"fill":"#ffffff","layout":"none","children":[
+                  {{"type":"{kind}","id":"n","x":30,"y":30,"width":140,"height":140,"stroke":{{"type":"gradient","gradientType":"angular","rotation":90,"colors":[{{"color":"#ff0000","position":0}},{{"color":"#0000ff","position":1}}]}},"strokeWidth":18,"strokeAlignment":"{align}"}}]}}]}}"##);
+            let px = vello(&Doc::from_json(&json).unwrap(), 200, 200);
+            let got = &px[(25 * 200 + 100) * 4..][..3]; // above the node box
+            assert!(got.iter().zip([0xbf, 0x00, 0x40]).all(|(a, b)| a.abs_diff(b) <= 4), "{kind} {align}: {got:?}");
+        }
+    }
+
     /// Rotating or flipping a text layer does not change how much of an angular-gradient stroke
     /// (a pattern stroke drawn through the resvg fallback) the canvas paints.
     #[test]

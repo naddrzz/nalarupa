@@ -348,11 +348,13 @@ pub struct Svg<'a> {
     pub skip: std::collections::HashSet<String>,
     /// Outline of the shape whose fills are being emitted, for shader fills' `@sdf`.
     outline: Option<crate::shader::Outline>,
+    /// How far the paints being built reach outside the node box (a stroke's outer half): image patterns grow by it so they do not tile there.
+    pad: f64,
 }
 
 impl<'a> Svg<'a> {
     pub fn new(fonts: &'a mut Fonts, assets: &'a mut Assets, base: Option<PathBuf>) -> Self {
-        Svg { fonts, assets, base, defs: String::new(), out: String::new(), uid: 0, painted: Vec::new(), tag: false, skip: Default::default(), outline: None }
+        Svg { fonts, assets, base, defs: String::new(), out: String::new(), uid: 0, painted: Vec::new(), tag: false, skip: Default::default(), outline: None, pad: 0.0 }
     }
 
     /// Wrap emitted nodes into a document. With `view` the output is cropped to that box (exports);
@@ -739,17 +741,18 @@ impl<'a> Svg<'a> {
         if widths.iter().all(|w| *w <= 0.0) {
             return None;
         }
-        let paints = self.paints(n.p.get("stroke"), (n.x, n.y, n.w, n.h));
-        if paints.is_empty() {
-            return None;
-        }
         let align = match n.s("strokeAlignment") {
             _ if !geo.closed => "center",
             Some("inner" | "inside") => "inner",
             Some("outer" | "outside") => "outer",
             _ => "center",
         };
-        Some(Stroke { paints, widths, align })
+        let mut s = Stroke { paints: Vec::new(), widths, align };
+        // Inner strokes stay inside the box; a miter tip past the pad repeats the pattern edge (accepted).
+        self.pad = if s.align == "inner" { 0.0 } else { s.reach() + 2.0 };
+        s.paints = self.paints(n.p.get("stroke"), (n.x, n.y, n.w, n.h));
+        self.pad = 0.0;
+        (!s.paints.is_empty()).then_some(s)
     }
 
     /// Stroke outline painted with `paints`, unclipped. Rects/frames build a per-side band
@@ -979,16 +982,18 @@ impl<'a> Svg<'a> {
     }
 
     /// Angular gradient: SVG has no conic gradient, so it is rasterized into an image pattern over the
-    /// node box (angle 0 points "up" through the gradient frame, clockwise on screen).
+    /// node box grown by `pad` (angle 0 points "up" through the gradient frame, clockwise on screen).
     fn conic(&mut self, stops: &[(f64, [f64; 4])], c: (f64, f64), up: (f64, f64), right: (f64, f64), b: Rect) -> Option<String> {
         let det = up.0 * right.1 - up.1 * right.0;
-        if det.abs() < 1e-12 {
+        if det.abs() < 1e-12 || b.2 <= 0.0 || b.3 <= 0.0 {
             return None;
         }
-        self.raster_pattern(b, |pw, ph| {
+        let g = inflate(b, self.pad);
+        self.raster_pattern(g, |pw, ph| {
             let mut pm = tiny_skia::Pixmap::new(pw, ph)?;
             for (i, px) in pm.pixels_mut().iter_mut().enumerate() {
-                let (dx, dy) = (((i as u32 % pw) as f64 + 0.5) / pw as f64 - c.0, ((i as u32 / pw) as f64 + 0.5) / ph as f64 - c.1);
+                let (x, y) = (g.0 + ((i as u32 % pw) as f64 + 0.5) / pw as f64 * g.2, g.1 + ((i as u32 / pw) as f64 + 0.5) / ph as f64 * g.3);
+                let (dx, dy) = ((x - b.0) / b.2 - c.0, (y - b.1) / b.3 - c.1);
                 let (u, v) = ((dx * right.1 - dy * right.0) / det, (up.0 * dy - up.1 * dx) / det);
                 let t = v.atan2(u).rem_euclid(std::f64::consts::TAU) / std::f64::consts::TAU;
                 let k = sample(stops, t).map(|x| (x.clamp(0.0, 1.0) * 255.0).round() as u8);
