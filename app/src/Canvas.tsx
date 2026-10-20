@@ -203,17 +203,16 @@ export function Canvas(props: {
   editLive.current = editing
   // The editor opens with its text selected, so typing replaces it. GPUIX has no select-on-focus, so once the
   // field holds focus the select-all chord goes through its input pipeline (sent while the canvas still held
-  // focus it would select every layer).
+  // focus it would select every layer). Polls until focus lands, however late; closing the editor stops it.
   const editId = editing?.id
   useEffect(() => {
     if (!editId) return
-    let tries = 0
     const timer = setInterval(() => {
       const el = textEl.current
       if (el && renderer.getFocusedElementId?.() === el.id) {
         clearInterval(timer)
         ;(renderer as unknown as { simulateKeystrokes?(keys: string): void }).simulateKeystrokes?.(process.platform === 'darwin' ? 'cmd-a' : 'ctrl-a')
-      } else if (++tries > 40) clearInterval(timer)
+      }
     }, 25)
     return () => clearInterval(timer)
   }, [editId, renderer])
