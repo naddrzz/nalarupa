@@ -169,6 +169,17 @@ try {
   await rectRow.click()
   assert(await until(async () => (await app.getByText(`Rendered ${rw0} × ${rh0}`).count()) > 0), 'one undo step shows the layer again at its rendered size')
 
+  // Deleting from the Inspector unmounts the focused button: the keys go back to the canvas, so Ctrl+Z (sent
+  // to whatever has focus, not to the canvas by id) still undoes it.
+  const rectsNow = () => app.getByTestId('layers').getByText('Rectangle').count()
+  const rectsBefore = await rectsNow()
+  await app.getByText('Delete').click()
+  assert(await until(async () => (await rectsNow()) === rectsBefore - 1), 'the Inspector Delete button deletes the layer')
+  await app.call('keystrokes', { keys: 'ctrl-z' })
+  assert(await until(async () => (await rectsNow()) === rectsBefore), 'Ctrl+Z works right after the Inspector Delete button unmounted')
+  await sleep(600)
+  await rectRow.click()
+
   await app.getByTestId('tool-rectangle').click()
   await app.mouse.drag(at(420, 260), at(520, 340), { steps: 5 })
   await sleep(300)
