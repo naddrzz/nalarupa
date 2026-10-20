@@ -119,6 +119,7 @@ try {
   await app.getByTestId('home').click()
   await app.getByTestId('template-blank').waitFor()
   assert(!(await recent.count()), 'a vanished recent file is hidden')
+  assert(await app.getByText('No recent files yet.').count(), 'Home says so when every recent file has vanished')
 
   // At the minimum window height (1100×680) Home and the agent's empty state scroll, so nothing stays out of reach.
   const dir = process.env.XDG_RUNTIME_DIR

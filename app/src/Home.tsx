@@ -48,6 +48,7 @@ export function Home({ recent, dirty, title, save, back, onOpened, toast }: {
     const paths = await renderer.promptForPaths?.({ files: true, multiple: false, prompt: 'Open' })
     if (paths?.[0]) open(paths[0])
   }
+  const shown = recent.filter((p) => existsSync(p)).slice(0, 8)
   return (
     <div testId="home-scroll" style={{ width: '100%', height: '100%', backgroundColor: C.bg, display: 'flex', flexDirection: 'column', alignItems: 'center', overflowY: 'scroll' }}>
       {/* Scrolls when Recent runs past a short window; the column keeps its height instead of squeezing. */}
@@ -103,7 +104,7 @@ export function Home({ recent, dirty, title, save, back, onOpened, toast }: {
           {/* Long paths are cut at the row's end: the full path shows in a tooltip on hover, and in the row
               itself while it has keyboard focus. */}
           <Tooltip.Provider delayDuration={350}>
-            {recent.filter((p) => existsSync(p)).slice(0, 8).map((p) => (
+            {shown.map((p) => (
               <Tooltip.Root key={p} style={{ flexDirection: 'column', alignItems: 'stretch', minWidth: 0 }}>
                 <Tooltip.Trigger asChild>
                   <Pressable testId={`recent-${basename(p)}`} label={`Open ${basename(p)}, ${p}`} onClick={() => open(p)} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 34, paddingLeft: 10, paddingRight: 10, borderRadius: 7, hover: { backgroundColor: C.panel } }}>
@@ -122,7 +123,7 @@ export function Home({ recent, dirty, title, save, back, onOpened, toast }: {
               </Tooltip.Root>
             ))}
           </Tooltip.Provider>
-          {recent.length === 0 ? <T size={12} color={C.ghost}>No recent files yet.</T> : null}
+          {shown.length === 0 ? <T size={12} color={C.ghost}>No recent files yet.</T> : null}
         </div>
       </div>
     </div>
