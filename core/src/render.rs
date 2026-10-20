@@ -8,7 +8,7 @@
 use crate::doc::Doc;
 use crate::raster;
 use crate::resolve::{RNode, Resolver};
-use crate::svg::{fxhash, is_turned, own_matrix, Assets, Svg};
+use crate::svg::{clip_svg, fxhash, is_turned, own_matrix, Assets, Svg};
 use crate::text::Fonts;
 use resvg::{tiny_skia, usvg};
 use serde_json::{json, Map, Value};
@@ -52,13 +52,17 @@ pub struct Slide {
     lin: [f64; 4],
     /// Sliding ancestors: their offset and fade carry this node along.
     ancestors: Vec<String>,
+    /// Clip shapes of the clipping ancestors, each with the ids of the nodes whose slide moves it
+    /// (the ancestor and those above it). The snapshot sits at the settled spot and is moved, so
+    /// the clips are applied when it is painted, not baked into it.
+    clips: Vec<(usvg::Tree, Vec<String>)>,
     /// Raster of `tree` at (zoom, device rect).
     cache: Option<(f64, (i32, i32, u32, u32), tiny_skia::Pixmap)>,
 }
 
 impl Slide {
     pub fn new(id: &str) -> Slide {
-        Slide { id: id.to_string(), added: Instant::now(), start: None, from: (0.0, SLIDE_OFFSET), fade: true, fresh: true, tree: None, lin: [1.0, 0.0, 0.0, 1.0], ancestors: Vec::new(), cache: None }
+        Slide { id: id.to_string(), added: Instant::now(), start: None, from: (0.0, SLIDE_OFFSET), fade: true, fresh: true, tree: None, lin: [1.0, 0.0, 0.0, 1.0], ancestors: Vec::new(), clips: Vec::new(), cache: None }
     }
 
     /// (offset x, offset y, opacity) now.
@@ -456,6 +460,18 @@ impl Renderer {
             ancestors_of(root, &s.id, &mut chain);
             let (m, alpha) = chain.iter().fold((None, 1.0), |(m, a), n| (if is_turned(n) { Some(compose(m, own_matrix(n))) } else { m }, a * n.f("opacity").unwrap_or(1.0).min(1.0)));
             s.lin = m.map_or([1.0, 0.0, 0.0, 1.0], |m: [f64; 6]| [m[0], m[1], m[2], m[3]]);
+            // Each clipping ancestor cuts the node where it cuts it in the layer: its shape under
+            // the matrix of the ancestors down to it.
+            s.clips.clear();
+            let mut turned = None;
+            for (i, a) in chain.iter().enumerate() {
+                if is_turned(a) {
+                    turned = Some(compose(turned, own_matrix(a)));
+                }
+                if let Some(tree) = clip_svg(a, turned).and_then(|t| usvg::Tree::from_str(&t, &cx.tree_options()).ok()) {
+                    s.clips.push((tree, chain[..=i].iter().map(|n| n.id.clone()).collect()));
+                }
+            }
             // An invisible ancestor hides the node, as it does in the layer.
             if alpha <= 0.0 {
                 s.tree = None;
@@ -543,7 +559,19 @@ impl Renderer {
             }
             let Some((_, _, pm)) = &s.cache else { continue };
             let paint = tiny_skia::PixmapPaint { opacity: alpha.clamp(0.0, 1.0) as f32, ..Default::default() };
-            let (px, py) = (x0 - vx + (dx * zoom).round() as i32, y0 - vy + (dy * zoom).round() as i32);
+            let (rx, ry) = ((dx * zoom).round() as i32, (dy * zoom).round() as i32);
+            let (px, py) = (x0 - vx + rx, y0 - vy + ry);
+            // The clipping ancestors cut the moving node where they stand (sliding ones move theirs).
+            let mut cut = (!s.clips.is_empty()).then(|| pm.clone());
+            for (tree, owners) in &s.clips {
+                let Some(cut) = cut.as_mut() else { break };
+                let (cdx, cdy) = owners.iter().filter_map(|o| states.get(o)).fold((0.0, 0.0), |(x, y), st| (x + st.0, y + st.1));
+                let Some(mut shape) = tiny_skia::Pixmap::new(cut.width(), cut.height()) else { continue };
+                let tf = tiny_skia::Transform::from_row(zoom as f32, 0.0, 0.0, zoom as f32, (-x0 - rx) as f32 + (cdx * zoom).round() as f32, (-y0 - ry) as f32 + (cdy * zoom).round() as f32);
+                resvg::render(tree, tf, &mut shape.as_mut());
+                cut.apply_mask(&tiny_skia::Mask::from_pixmap(shape.as_ref(), tiny_skia::MaskType::Alpha));
+            }
+            let pm = cut.as_ref().unwrap_or(pm);
             out.draw_pixmap(px, py, pm.as_ref(), &paint, tiny_skia::Transform::identity(), None);
             // Top-level frames stacked above the slide's own cover it, as they do once it settles.
             let own = self.order.iter().position(|id| self.layers.get(id).is_some_and(|l| l.flat.iter().any(|f| f.id == s.id)));
@@ -1480,6 +1508,31 @@ pub(crate) mod tests {
             let jumped = late.chunks(4).zip(done.chunks(4)).filter(|(a, b)| a[0].abs_diff(b[0]) as u32 + a[1].abs_diff(b[1]) as u32 > 40).count();
             assert!(jumped < 100, "{extra}: {jumped} pixels change when the slide ends");
         }
+    }
+
+    /// A node sliding into a clipping frame is cut at the frame's edge while it moves (its snapshot
+    /// is painted offset, so the clip cannot sit in the snapshot), and still shows inside.
+    #[test]
+    fn slide_is_clipped_by_its_clipping_parent() {
+        let json = r##"{"version":"2.19","children":[
+            {"type":"frame","id":"p","x":100,"y":100,"width":300,"height":200,"layout":"none","clip":true,"fill":"#eeeeaa","children":[
+                {"type":"rectangle","id":"k","x":20,"y":150,"width":260,"height":50,"fill":"#00ff00"}]}]}"##;
+        let doc = Doc::from_json(json).unwrap();
+        let (mut fonts, mut assets) = offline();
+        let mut r = Renderer::default();
+        r.slides.push(Slide::new("k"));
+        let mut cx = Ctx { doc: &doc, libs: &[], fonts: &mut fonts, assets: &mut assets };
+        let roots = r.shift_siblings(&mut cx);
+        let rebuilt = r.sync(&mut cx);
+        r.refresh_slides(&mut cx, &rebuilt, roots);
+        r.render(500, 400, 0.0, 0.0, 1.0, [30, 30, 30], None, true);
+        // Mid-slide: about 15 units low, the frame's bottom edge is at y 300.
+        r.slides[0].start = Some(Instant::now() - Duration::from_millis(100));
+        let px = r.render(500, 400, 0.0, 0.0, 1.0, [30, 30, 30], None, true).to_vec();
+        let green = |x: usize, y: usize| px[(y * 500 + x) * 4 + 1] > px[(y * 500 + x) * 4] + 12;
+        let outside = (302..400).flat_map(|y| (0..500).map(move |x| (x, y))).filter(|&(x, y)| green(x, y)).count();
+        assert_eq!(outside, 0, "the sliding node shows below the clipping frame");
+        assert!(green(200, 290), "the part inside the frame still shows the sliding node");
     }
 
     /// Present mode renders one frame alone; a node sliding into it must still paint there (the

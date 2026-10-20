@@ -1372,6 +1372,18 @@ fn has_backdrop_blur(n: &RNode) -> bool {
     own || n.kids.iter().any(has_backdrop_blur)
 }
 
+/// The clip shape of a node that clips its children, as a one-shape SVG (opaque white) under the
+/// matrix `m`: the mask of a sliding descendant, which the layer's own clip group cannot give
+/// (the slide's snapshot moves, the clip does not).
+pub fn clip_svg(n: &RNode, m: Option<[f64; 6]>) -> Option<String> {
+    if !n.b("clip") || !(n.ty == "frame" || n.ty == "script" && !n.p.contains_key("__status")) {
+        return None;
+    }
+    let g = geometry(n);
+    let tf = m.map_or(String::new(), |[a, b, c, d, e, f]| format!(r#" transform="matrix({a} {b} {c} {d} {e} {f})""#));
+    Some(format!(r##"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><path d="{}"{} fill="#fff"{tf}/></svg>"##, g.d, g.rule("fill-rule")))
+}
+
 /// The node has its own rotation or flip (`transform` is not empty).
 pub fn is_turned(n: &RNode) -> bool {
     n.f("rotation").is_some_and(|r| r.abs() > 1e-6) || n.b("flipX") || n.b("flipY")
