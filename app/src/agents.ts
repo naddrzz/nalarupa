@@ -79,10 +79,11 @@ export const PILL_MS = 3000
 /**
  * Whether the agent layer must repaint now. Normally any agent presence animates every frame. Under
  * reduced motion only fades and the pill expiry change on their own; everything else moves on events,
- * which already re-render the layer.
+ * which already re-render the layer. `painted` is when the layer last rendered: a pill that was still
+ * showing then needs one more render at or after its expiry, however late the next tick lands.
  */
-export function needsFrame(now: number, reduced: boolean, liveCount: number): boolean {
-  const pills = [...store.pills.values()].some((p) => now - p.at < PILL_MS)
+export function needsFrame(now: number, reduced: boolean, liveCount: number, painted = now): boolean {
+  const pills = [...store.pills.values()].some((p) => Math.min(now, painted) - p.at < PILL_MS)
   if (store.activity.length > 0 || store.flashes.length > 0 || pills) return true
   if (!reduced) {
     return liveCount > 0 || store.pens.size > 0 || [...store.cursors.values()].some((c) => store.running.has(c.profile.id) || now - c.lastActivity < GONE)
@@ -164,7 +165,8 @@ export function applyEvents(events: any[], now: number): boolean {
     switch (ev.kind) {
       case 'user':
         store.items.push({ kind: 'user', id: nextId++, text: ev.text })
-        store.items = store.items.filter((i) => i.kind !== 'queued' || !ev.text.includes(i.text))
+        // The core runs the whole queue as one turn, its texts joined by a blank line; any other user message (the cook's "Iterating…") leaves it queued.
+        if (ev.text === store.items.flatMap((i) => (i.kind === 'queued' ? [i.text] : [])).join('\n\n')) store.items = store.items.filter((i) => i.kind !== 'queued')
         break
       case 'queued':
         store.items.push({ kind: 'queued', id: nextId++, text: ev.text })

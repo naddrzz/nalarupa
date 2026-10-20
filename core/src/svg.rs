@@ -559,7 +559,8 @@ impl<'a> Svg<'a> {
 
     fn group(&mut self, n: &RNode, fx: &Effects, outline: Option<&str>) {
         let kids = outline.map(|m| format!("{m}k"));
-        let b = extent(n);
+        // The children's strokes, shadows and blur paint outside their boxes and shape the group's outline.
+        let b = n.kids.iter().map(visual_bounds).fold(extent(n), union);
         let mask = outline.zip(kids.as_ref()).map(|(m, k)| {
             // The children's outline in solid black (the union of their masks).
             let f = self.id("f");
@@ -933,23 +934,48 @@ impl<'a> Svg<'a> {
         let right = (rx * cs, rx * sn);
         let (bx, by, bw, bh) = b;
         let id = self.id("g");
+        // A line's box has no height (or width): a box-sized gradientTransform is then singular and
+        // browsers paint nothing, so such a box gets its end points in user space instead.
+        let flat = bw.abs() < 1e-6 || bh.abs() < 1e-6;
+        // Rounds away float leftovers (cos 90° = 6e-17) and negative zeros.
+        let n = |v: f64| (v * 1e9).round() / 1e9 + 0.0;
         match o.get("gradientType").and_then(Value::as_str) {
             Some("angular") => return self.conic(&stops, (cx, cy), up, right, b),
             Some("radial") => {
-                let _ = write!(
-                    self.defs,
-                    r#"<radialGradient id="{id}" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="matrix({} {} {} {} {} {})">{}</radialGradient>"#,
-                    bw * right.0, bh * right.1, -bw * up.0, -bh * up.1, bx + bw * cx, by + bh * cy,
-                    stop_tags(&stops)
-                );
+                let m = [bw * right.0, bh * right.1, -bw * up.0, -bh * up.1, bx + bw * cx, by + bh * cy];
+                let _ = if flat {
+                    // The ellipse collapses to a segment; a circle over its half-length stands in. Both axes
+                    // lie along the line, so their surviving components combine.
+                    let r = if bw.abs() >= bh.abs() { m[0].hypot(m[2]) } else { m[1].hypot(m[3]) };
+                    write!(
+                        self.defs,
+                        r#"<radialGradient id="{id}" cx="{}" cy="{}" r="{}" gradientUnits="userSpaceOnUse">{}</radialGradient>"#,
+                        n(m[4]), n(m[5]), n(r), stop_tags(&stops)
+                    )
+                } else {
+                    write!(
+                        self.defs,
+                        r#"<radialGradient id="{id}" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="matrix({} {} {} {} {} {})">{}</radialGradient>"#,
+                        n(m[0]), n(m[1]), n(m[2]), n(m[3]), n(m[4]), n(m[5]), stop_tags(&stops)
+                    )
+                };
             }
             _ => {
-                let _ = write!(
-                    self.defs,
-                    r#"<linearGradient id="{id}" x1="{}" y1="{}" x2="{}" y2="{}" gradientUnits="userSpaceOnUse" gradientTransform="matrix({bw} 0 0 {bh} {bx} {by})">{}</linearGradient>"#,
-                    cx - up.0, cy - up.1, cx + up.0, cy + up.1,
-                    stop_tags(&stops)
-                );
+                let _ = if flat {
+                    write!(
+                        self.defs,
+                        r#"<linearGradient id="{id}" x1="{}" y1="{}" x2="{}" y2="{}" gradientUnits="userSpaceOnUse">{}</linearGradient>"#,
+                        n(bx + bw * (cx - up.0)), n(by + bh * (cy - up.1)), n(bx + bw * (cx + up.0)), n(by + bh * (cy + up.1)),
+                        stop_tags(&stops)
+                    )
+                } else {
+                    write!(
+                        self.defs,
+                        r#"<linearGradient id="{id}" x1="{}" y1="{}" x2="{}" y2="{}" gradientUnits="userSpaceOnUse" gradientTransform="matrix({} 0 0 {} {} {})">{}</linearGradient>"#,
+                        n(cx - up.0), n(cy - up.1), n(cx + up.0), n(cy + up.1), n(bw), n(bh), n(bx), n(by),
+                        stop_tags(&stops)
+                    )
+                };
             }
         }
         Some(id)
@@ -1349,6 +1375,18 @@ fn has_backdrop_blur(n: &RNode) -> bool {
         None => false,
     };
     own || n.kids.iter().any(has_backdrop_blur)
+}
+
+/// The clip shape of a node that clips its children, as a one-shape SVG (opaque white) under the
+/// matrix `m`: the mask of a sliding descendant, which the layer's own clip group cannot give
+/// (the slide's snapshot moves, the clip does not).
+pub fn clip_svg(n: &RNode, m: Option<[f64; 6]>) -> Option<String> {
+    if !n.b("clip") || !(n.ty == "frame" || n.ty == "script" && !n.p.contains_key("__status")) {
+        return None;
+    }
+    let g = geometry(n);
+    let tf = m.map_or(String::new(), |[a, b, c, d, e, f]| format!(r#" transform="matrix({a} {b} {c} {d} {e} {f})""#));
+    Some(format!(r##"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><path d="{}"{} fill="#fff"{tf}/></svg>"##, g.d, g.rule("fill-rule")))
 }
 
 /// The node has its own rotation or flip (`transform` is not empty).
@@ -1787,6 +1825,28 @@ VAT office", 230.0, &st);
             let want = -(l.width - st.letter_spacing);
             assert!((got as f64 - want).abs() < 0.02, "{:?}: usvg starts at {got}, measured {want}", l.text);
         }
+    }
+
+    /// A line's box is flat: a box-sized gradientTransform would be singular (browsers paint
+    /// nothing), so its gradient is written in user space, without float leftovers.
+    #[test]
+    fn gradients_on_a_flat_box_stay_invertible() {
+        let mut fonts = Fonts::new(std::env::temp_dir().join("nalarupa-test-fonts"));
+        fonts.online = false;
+        let mut assets = Assets::new(std::env::temp_dir().join("nalarupa-test-assets"));
+        assets.online = false;
+        let mut svg = Svg::new(&mut fonts, &mut assets, None);
+        let grad = |ty: &str, rotation: f64| json!({"gradientType": ty, "rotation": rotation, "colors": [{"color": "#f00", "position": 0}, {"color": "#00f", "position": 1}]});
+        for (ty, rotation, b) in [("linear", 90.0, (20.0, 50.0, 160.0, 0.0)), ("linear", 0.0, (100.0, 20.0, 0.0, 160.0)), ("radial", 90.0, (20.0, 50.0, 160.0, 0.0))] {
+            svg.gradient(grad(ty, rotation).as_object().unwrap(), b).unwrap();
+        }
+        assert!(!svg.defs.contains("gradientTransform"), "{}", svg.defs);
+        assert!(svg.defs.contains(r#"x1="180" y1="50" x2="20" y2="50""#), "{}", svg.defs);
+        assert!(svg.defs.contains(r#"cx="100" cy="50" r="80""#), "{}", svg.defs);
+        svg.defs.clear();
+        svg.gradient(grad("radial", 90.0).as_object().unwrap(), (20.0, 20.0, 160.0, 80.0)).unwrap();
+        assert!(svg.defs.contains(r#"gradientTransform="matrix(0 -40 80 0 100 60)""#), "{}", svg.defs);
+        assert!(!svg.defs.contains("e-"), "{}", svg.defs);
     }
 
     #[test]
