@@ -210,26 +210,52 @@ fn size_css(v: Option<&Value>, prop: &str, parent_dir: Option<&str>, horiz_axis:
     }
 }
 
+/// Rounded so trig noise (6e-15 at 90deg) stays out of the CSS; `+ 0.0` turns -0 into 0.
+fn px(v: f64) -> f64 {
+    (v * 1e6).round() / 1e6 + 0.0
+}
+
 impl Html<'_> {
     fn node(&mut self, n: &RNode, parent: Option<&RNode>) {
-        let parent_dir = parent.map(|p| if p.ty == "frame" { p.s("layout").unwrap_or("horizontal") } else { "none" });
-        let absolute = parent_dir == Some("none") || n.s("layoutPosition") == Some("absolute");
+        let in_flow = parent.is_some_and(|p| p.ty == "frame" && p.s("layout") != Some("none")) && n.s("layoutPosition") != Some("absolute");
+        let tilted = n.f("rotation").is_some_and(|r| r != 0.0) || n.b("flipX") || n.b("flipY");
+        if !(in_flow && tilted) {
+            return self.element(n, parent, None);
+        }
+        // The canvas places a rotated or flipped child by its bounding box, so it takes that much room in the
+        // flow: the box is a wrapper of that size and the element sits in it with its origin where the layout put it.
+        let l = crate::layout::local_aabb(n);
+        let _ = writeln!(self.out, "<div style=\"position:relative;flex-shrink:0;width:{}px;height:{}px;\">", px(l[2] - l[0]), px(l[3] - l[1]));
+        self.element(n, parent, Some((n.bx - l[0], n.by - l[1])));
+        let _ = writeln!(self.out, "</div>");
+    }
+
+    /// `slot` = where the node's unrotated box sits in its wrapper (see `node`).
+    fn element(&mut self, n: &RNode, parent: Option<&RNode>, slot: Option<(f64, f64)>) {
+        // A wrapped node is sized in its wrapper, not as a flex item.
+        let parent_dir = parent.filter(|_| slot.is_none()).map(|p| if p.ty == "frame" { p.s("layout").unwrap_or("horizontal") } else { "none" });
+        let absolute = slot.is_some() || parent_dir == Some("none") || n.s("layoutPosition") == Some("absolute");
         let mut css = String::new();
         if parent.is_none() {
             css += "position:relative;";
+        } else if let Some((x, y)) = slot {
+            let _ = write!(css, "position:absolute;left:{}px;top:{}px;", px(x), px(y));
         } else if absolute {
             let p = parent.unwrap();
             let _ = write!(css, "position:absolute;left:{}px;top:{}px;", n.x - p.x, n.y - p.y);
         }
         let text_auto = n.ty == "text" && n.s("textGrowth").unwrap_or("auto") == "auto";
         if !text_auto {
-            css += &size_css(n.p.get("width"), "width", parent_dir, true, n.w);
-            css += &size_css(n.p.get("height"), "height", parent_dir, false, n.h);
+            // In a wrapper the laid-out size is final: fill and fit have no flow left to resolve against.
+            let fixed = slot.map(|_| (Value::from(px(n.w)), Value::from(px(n.h))));
+            let (wv, hv) = (fixed.as_ref().map(|f| &f.0).or(n.p.get("width")), fixed.as_ref().map(|f| &f.1).or(n.p.get("height")));
+            css += &size_css(wv, "width", parent_dir, true, n.w);
+            css += &size_css(hv, "height", parent_dir, false, n.h);
             if matches!(n.ty.as_str(), "rectangle" | "ellipse" | "icon" | "polygon" | "line" | "path") {
-                if n.p.get("width").is_none() {
+                if wv.is_none() {
                     css += &size_css(Some(&Value::from(n.w)), "width", parent_dir, true, n.w);
                 }
-                if n.p.get("height").is_none() {
+                if hv.is_none() {
                     css += &size_css(Some(&Value::from(n.h)), "height", parent_dir, false, n.h);
                 }
             }
@@ -246,7 +272,8 @@ impl Html<'_> {
             let _ = write!(tf, " scale({},{})", if n.b("flipX") { -1 } else { 1 }, if n.b("flipY") { -1 } else { 1 });
         }
         if !tf.is_empty() {
-            let _ = write!(css, "transform:{};transform-origin:0 0;", tf.trim_start());
+            // A group's box starts at (bx, by) from the origin it turns about.
+            let _ = write!(css, "transform:{};transform-origin:{}px {}px;", tf.trim_start(), px(-n.bx), px(-n.by));
         }
         // Shapes CSS cannot draw are inlined as SVG, which carries their own paint.
         let as_svg = matches!(n.ty.as_str(), "path" | "polygon" | "line") || n.ty == "ellipse" && (n.f("innerRadius").unwrap_or(0.0) > 0.0 || n.f("sweepAngle").is_some_and(|s| s.abs() < 360.0));
@@ -635,6 +662,31 @@ mod tests {
         let id = e.insert_root(json!({"type": "frame", "width": 100, "height": 60, "layout": "horizontal", "children": [{"type": "group", "children": [{"type": "rectangle", "width": 80, "height": 20, "fill": "#ff0000"}]}]})).unwrap();
         let g = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
         assert!(g.contains("width:80px;flex-shrink:0;"), "{g}");
+    }
+
+    /// A rotated or flipped child of an auto layout takes its bounding box in the flow, like the canvas.
+    #[test]
+    fn tilted_children_reserve_their_bounding_box() {
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        e.load_template("empty");
+        let rect = |extra: serde_json::Value| {
+            let mut r = json!({"type": "rectangle", "width": 60, "height": 60, "fill": "#ff0000"});
+            r.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            r
+        };
+        let id = e.insert_root(json!({"type": "frame", "layout": "horizontal", "width": 300, "height": 120, "padding": 10, "gap": 10, "children": [rect(json!({"rotation": 90})), rect(json!({"flipX": true})), rect(json!({}))]})).unwrap();
+        let h = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
+        // 90deg CCW about the origin: the box spans (0..60, -60..0), so it sits 60 down in its wrapper.
+        assert!(h.contains("<div style=\"position:relative;flex-shrink:0;width:60px;height:60px;\">\n<div data-name=\"rectangle\" style=\"position:absolute;left:0px;top:60px;width:60px;height:60px;"), "{h}");
+        assert!(h.contains("transform:rotate(-90deg);transform-origin:0px 0px;"), "{h}");
+        // flipX about the origin spans (-60..0): the origin is the wrapper's right edge.
+        assert!(h.contains("left:60px;top:0px;width:60px;height:60px;") && h.contains("transform:scale(-1,1);"), "{h}");
+        assert_eq!(h.matches("position:relative;flex-shrink:0;").count(), 2, "only the tilted children are wrapped: {h}");
+        // 45deg: the wrapper is the 84.85 wide bounding box.
+        let id = e.insert_root(json!({"type": "frame", "layout": "horizontal", "width": 300, "height": 120, "children": [rect(json!({"rotation": 45}))]})).unwrap();
+        let h = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
+        assert!(h.contains("width:84.852814px;height:84.852814px;"), "{h}");
     }
 
     #[test]
