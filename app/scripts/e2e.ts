@@ -361,6 +361,18 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
   const canvasBox = (await app.getByTestId('canvas').bounds())!
   if (planField.y + planField.height > canvasBox.y + canvasBox.height) throw new Error(`32 todos pushed the composer to ${planField.y + planField.height}, below the window's bottom ${canvasBox.y + canvasBox.height}`)
 
+  // Shift+Tab leaves a text field backwards (GPUIX registers a field's focus handle twice, so GPUI's own
+  // walk lands on the field again): from the composer it reaches the Plan toggle above it, which Enter
+  // folds, and Enter again unfolds.
+  await app.getByTestId('agent-input').click()
+  await sleep(300)
+  await app.call('keystrokes', { keys: 'shift-tab' })
+  await until(async () => !!(await app!.getByTestId('plan-toggle-focus').count()), 'the focus ring on the Plan toggle after Shift+Tab')
+  await app.call('keystrokes', { keys: 'enter' })
+  await until(async () => !(await app.getByTestId('plan-todos').count()), 'Shift+Tab from the composer to reach the Plan toggle')
+  await app.call('keystrokes', { keys: 'enter' })
+  await until(async () => !!(await app.getByTestId('plan-todos').count()), 'Enter on the Plan toggle to unfold the plan again')
+
   // Per-tool permission: Claude Code asks through the MCP permission tool (as the restored chat's
   // agent); the card in the chat answers it.
   const asked = fetch(`http://127.0.0.1:${port}/mcp/${agent.id}`, {
@@ -424,7 +436,14 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
     await sleep(150)
     if (!(await app.getByTestId(menu).count())) throw new Error(`${trigger} swallowed a quick reopen`)
     await app.getByTestId(menu).press('escape')
-    await sleep(150)
+    await until(async () => !(await app.getByTestId(menu).count()), `${menu} to close on Escape`)
+    await until(async () => !!(await app.getByTestId(`${trigger}-focus`).count()), `${trigger} to regain keyboard focus`)
+    // Escape hands keyboard focus back to the trigger: Tab goes on from it, not from the window's first control (Home).
+    await app.call('keystrokes', { keys: 'tab' })
+    await sleep(200)
+    await app.call('keystrokes', { keys: 'enter' })
+    await sleep(400)
+    if (await app.getByTestId('template-slides').count() || !(await app.getByTestId('agent-input').count())) throw new Error(`Escape on ${menu} dropped keyboard focus: the next Tab and Enter left the editor`)
   }
   // + (New agent) repaints the panel at once: the open chat gives way to the empty state, without another re-render.
   await app.getByTestId('agent-new').click()
@@ -490,6 +509,15 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
   await app.call('keyDown', { key: 'enter' })
   await sleep(500)
   if (savedKey() !== 'sk-ant-first') throw new Error(`backspace and enter in the saved key box changed the key: ${savedKey()}`)
+  // Shift+Tab from the key box reaches the backend switch: Enter on its last option swaps the box away.
+  await app.getByTestId('api-key').click()
+  await sleep(300)
+  await app.call('keystrokes', { keys: 'shift-tab' })
+  await until(async () => !!(await app!.getByTestId('backend-claude-code-focus').count()), 'the focus ring on the backend switch after Shift+Tab')
+  await app.call('keystrokes', { keys: 'enter' })
+  await until(async () => !(await app!.getByTestId('api-key').count()), 'Shift+Tab from the API key box to reach the backend switch')
+  await app.getByText('Claude API').click()
+  await app.getByTestId('api-key').waitFor()
   await app.getByTestId('api-key').fill('sk-ant-second')
   await app.getByTestId('api-key').press('enter')
   if (!(await settled(() => savedKey() === 'sk-ant-second'))) throw new Error(`a new key did not replace the saved one: ${savedKey()}`)

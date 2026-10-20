@@ -119,6 +119,7 @@ function TextContent({ value, onSubmit }: { value: string; onSubmit: (v: string)
   const field = useFieldRing()
   return (
     <div onMouseDown={field.onMouseDown} style={{ position: 'relative', borderRadius: 6, backgroundColor: C.panel2, borderWidth: 1, borderColor: C.border, padding: 6 }}>
+      {field.back}
       <textarea
         ref={field.ref}
         aria-label="Text content"
