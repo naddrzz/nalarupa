@@ -139,6 +139,7 @@ fn rpc(msg: &Value, agent: Option<&str>) -> Option<Value> {
         })),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({"tools": tools_for(agent)})),
+        "tools/call" if !matches!(msg["params"].get("arguments"), None | Some(Value::Null | Value::Object(_))) => Err((-32602, "invalid params: arguments must be an object".into())),
         "tools/call" => {
             let name = msg["params"]["name"].as_str().unwrap_or("");
             let mut args = msg["params"].get("arguments").cloned().unwrap_or(json!({}));

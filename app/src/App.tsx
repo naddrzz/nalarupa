@@ -118,6 +118,21 @@ export function App() {
     if (boxes.length !== selection.length) setSelection(boxes.map((b) => b.id))
   }, [state.version])
 
+  // The control that held focus can unmount (Inspector Delete/Hide, Delete on a Layers row): then no element
+  // takes keys and every shortcut is dead. Hand focus back to the canvas once the panels have re-rendered.
+  useEffect(() => {
+    if (screen !== 'editor') return
+    // Retry for about a second: under a slow frame the control can unmount well after the state change.
+    let tries = 0
+    const t = setInterval(() => {
+      if (renderer.getFocusedElementId?.() == null && canvasEl.current) {
+        renderer.focusElement?.(canvasEl.current.id)
+        clearInterval(t)
+      } else if (++tries >= 10) clearInterval(t)
+    }, 100)
+    return () => clearInterval(t)
+  }, [selection, state.version, screen, renderer])
+
   const saveTo = (path?: string) => {
     const r = tryCall('save', { path })
     if (r) toast(`Saved ${r.path}`)
@@ -140,12 +155,13 @@ export function App() {
   // Keys go back to the canvas once a prompt is sent: Space-pan and shortcuts work while the agent designs.
   const sent = useCallback(() => canvasEl.current && renderer.focusElement?.(canvasEl.current.id), [renderer])
 
-  const zoomBy = (f: number) => {
-    const z = Math.min(64, Math.max(0.02, cam.zoom * f))
+  const zoomTo = (to: number) => {
+    const z = Math.min(64, Math.max(0.02, to))
     const cx = cam.x + cw / 2 / cam.zoom
     const cy = cam.y + ch / 2 / cam.zoom
     setCam({ zoom: z, x: cx - cw / 2 / z, y: cy - ch / 2 / z })
   }
+  const zoomBy = (f: number) => zoomTo(cam.zoom * f)
 
   const run = <R = any,>(cmd: string, args: Record<string, unknown>, then?: (r: R) => void) => {
     const r = tryCall<R>(cmd, args)
@@ -240,7 +256,7 @@ export function App() {
     }
     if (m.mod && key === 's') return save(m.shift), true
     if (m.mod && key === 'enter') return present(), true
-    if (m.mod && key === '0') return setCam({ ...cam, zoom: 1 }), true
+    if (m.mod && key === '0') return zoomTo(1), true
     if (key === 'escape') {
       if (tool !== 'move') setTool('move')
       select([])

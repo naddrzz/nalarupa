@@ -33,6 +33,13 @@ const until = async (ok: () => Promise<boolean>, ms = 3000) => {
   }
   return r
 }
+// The canvas takes the keys back from an unmounted control within about a second (App.tsx). Wait that out, then
+// send one Ctrl+Z: resending could undo an earlier edit when the first one only shows up late in the render.
+const undoAfterHandBack = async (ok: () => Promise<boolean>) => {
+  await sleep(1300)
+  await app.call('keystrokes', { keys: 'ctrl-z' })
+  return until(ok, 5000)
+}
 const val = async (testId: string) => {
   const e = await app.getByTestId(testId).element()
   return String(e.customProps?.value ?? e.text ?? '')
@@ -172,6 +179,24 @@ try {
   await sleep(600) // past the double-click window, or the second row click would start a rename
   await rectRow.click()
   assert(await until(async () => (await app.getByText(`Rendered ${rw0} × ${rh0}`).count()) > 0), 'one undo step shows the layer again at its rendered size')
+
+  // Deleting from the Inspector unmounts the focused button: the keys go back to the canvas, so Ctrl+Z (sent
+  // to whatever has focus, not to the canvas by id) still undoes it.
+  const rectsNow = () => app.getByTestId('layers').getByText('Rectangle').count()
+  const rectsBefore = await rectsNow()
+  await app.getByText('Delete').click()
+  assert(await until(async () => (await rectsNow()) === rectsBefore - 1), 'the Inspector Delete button deletes the layer')
+  assert(await undoAfterHandBack(async () => (await rectsNow()) === rectsBefore), 'Ctrl+Z works right after the Inspector Delete button unmounted')
+  await sleep(600)
+  await rectRow.click()
+  assert(await until(async () => (await count('inspector-visibility')) > 0), 'the Layers row selects the restored layer')
+  await app.getByTestId('inspector-visibility').click()
+  assert(await until(async () => !(await count('inspector-visibility'))), 'the Inspector Hide button hides the layer')
+  await sleep(1200) // past the whole canvas hand-back window (App.tsx)
+  await app.call('keystrokes', { keys: 'ctrl-z' })
+  await sleep(600)
+  await rectRow.click()
+  assert(await until(async () => (await app.getByText(`Rendered ${rw0} × ${rh0}`).count()) > 0), 'Ctrl+Z works right after the Inspector Hide button unmounted')
 
   await app.getByTestId('tool-rectangle').click()
   await app.mouse.drag(at(420, 260), at(520, 340), { steps: 5 })
@@ -591,6 +616,14 @@ try {
   assert(await until(async () => (await paths()) === paths0 + 1), 'Ctrl+D duplicates the layer selected in the Layers panel')
   await app.call('keystrokes', { keys: 'delete' })
   assert(await until(async () => (await paths()) === paths0), 'Delete removes the layer selected in the Layers panel')
+  assert(await undoAfterHandBack(async () => (await paths()) === paths0 + 1), 'Ctrl+Z works right after Delete unmounted the focused Layers row')
+  await app.call('keystrokes', { keys: 'ctrl-y' })
+  assert(await until(async () => (await paths()) === paths0), 'Ctrl+Y redoes the Layers-row Delete')
+  await app.getByTestId('layers').getByText('Path').click()
+  await sleep(300)
+  await app.call('keystrokes', { keys: 'ctrl-x' })
+  assert(await until(async () => (await paths()) === paths0 - 1), 'Ctrl+X cuts the layer selected in the Layers panel')
+  assert(await undoAfterHandBack(async () => (await paths()) === paths0), 'Ctrl+Z works right after Ctrl+X unmounted the focused Layers row')
   await app.getByTestId('layers').getByText('Path').click()
   await sleep(300)
   assert(await count('size-label'), 'clicking a Layers row selects it')
@@ -785,6 +818,29 @@ try {
     await shot('15-mesh-gradient')
     assert(await app.getByTestId('layers').getByText('Mesh').count(), 'the mesh-filled rectangle pasted')
   }
+  // Ctrl+0 (100 %) zooms around the middle of the canvas like the zoom keys: the document point there stays put
+  // (it used to keep the camera's corner, so the view jumped away from the content).
+  await canvas.press('escape')
+  await canvas.press('shift-1')
+  await sleep(500)
+  await canvas.press('ctrl-a') // any selected layer's box is a fixed point in the document
+  assert(await until(async () => (await count('selection-box')) > 0), 'Ctrl+A selects layers')
+  const mid = { x: c.x + c.width / 2, y: c.y + c.height / 2 }
+  const docAtMid = async () => {
+    const b = (await app.getByTestId('selection-box').all())[0].bounds!
+    const zoom = parseInt(await app.getByTestId('zoom-level').textContent()) / 100
+    return [(mid.x - b.x) / zoom, (mid.y - b.y) / zoom]
+  }
+  const fitZoom = await app.getByTestId('zoom-level').textContent()
+  const p0 = await docAtMid()
+  await canvas.press('ctrl-0')
+  assert(await until(async () => (await app.getByTestId('zoom-level').textContent()) === '100%'), `Ctrl+0 sets the zoom to 100% (was ${fitZoom})`)
+  await sleep(300)
+  const p1 = await docAtMid()
+  // The fit zoom label is rounded to a whole percent, so allow for that in the document point.
+  assert(Math.abs(p1[0] - p0[0]) < 60 && Math.abs(p1[1] - p0[1]) < 60, `Ctrl+0 keeps the document point under the canvas middle (${p0.map(Math.round)} → ${p1.map(Math.round)})`)
+  await canvas.press('shift-1')
+  await sleep(300)
   await shot('10-final')
   console.log('editor-e2e ok — screenshots in', out)
 } finally {

@@ -14,7 +14,7 @@ AI design editor: a Rust core (`core/`, a cdylib loaded through `bun:ffi`) and a
 ## Where things are
 
 - `core/guide/*.md` is runtime content compiled into the in-app agent (`core/src/guide.rs`), not instructions for you; edit it only to change what that agent is told.
-- `core/vendor/resvg` is resvg 0.47 with three patches (search `Nalarupa:`); bump resvg, usvg and krilla-svg together and re-apply them.
+- `core/vendor/resvg` is resvg 0.47 with three patches and `core/vendor/usvg` is usvg 0.47 with one (search `Nalarupa:`); bump resvg, usvg and krilla-svg together and re-apply them. `core/vendor/tiny-skia` is tiny-skia 0.12 with one patch (`Nalarupa:` in `pipeline/highp.rs`); re-apply it when bumping.
 
 ## Running and verifying
 

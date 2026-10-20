@@ -1722,6 +1722,22 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// The non-separable blend modes rasterise to the W3C result in PNG export: a channel the
+    /// luminosity step pushes below zero is clipped back toward the luminosity, not just cut at 0.
+    #[test]
+    fn png_non_separable_blends_match_w3c() {
+        for (mode, want) in [("hue", [0x00, 0x5e, 0x37]), ("color", [0x00, 0x5e, 0x37]), ("saturation", [0xb1, 0x00, 0x4e]), ("luminosity", [0xff, 0x93, 0xc2])] {
+            let svg = format!(r##"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect width="4" height="4" fill="#b1004e"/><rect width="4" height="4" fill="#33ffaa" style="mix-blend-mode:{mode}"/></svg>"##);
+            let tree = resvg::usvg::Tree::from_str(&svg, &resvg::usvg::Options::default()).unwrap();
+            let mut pm = tiny_skia::Pixmap::new(4, 4).unwrap();
+            resvg::render(&tree, tiny_skia::Transform::identity(), &mut pm.as_mut());
+            let p = pm.pixel(2, 2).unwrap();
+            for (got, want) in [p.red(), p.green(), p.blue()].into_iter().zip(want) {
+                assert!(got.abs_diff(want) <= 1, "{mode}: {:?} want {want:#x?}", [p.red(), p.green(), p.blue()]);
+            }
+        }
+    }
+
     /// Export area: box + outer stroke + drop shadow (offset ± 3σ, σ = blur/2), not inner shadows.
     #[test]
     fn export_visual_bounds() {

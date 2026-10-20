@@ -45,8 +45,15 @@ zstd = { version = "0.13", default-features = false }
 # resvg 0.47.0 (Apache-2.0 OR MIT) with two fixes in src/render.rs: group layers (and filter
 # regions) are clamped to their own target pixmap. Upstream clamps nested layers to a box in
 # root-canvas coordinates, which drops content when painting small bands/tiles and wastes memory.
+# tiny-skia 0.12.0 (BSD-3-Clause) with one fix in src/pipeline/highp.rs: ClipColor of the non-separable
+# blend modes (hue, saturation, color, luminosity) never clipped a negative channel, so exports differed
+# from the canvas.
 [patch.crates-io]
 resvg = { path = "vendor/resvg" }
+# usvg 0.47.0 (Apache-2.0 OR MIT) with one fix in src/text/layout.rs: code point lookups are
+# precomputed per text chunk, so laying out one very long line is linear instead of quadratic.
+usvg = { path = "vendor/usvg" }
+tiny-skia = { path = "vendor/tiny-skia" }
 
 [profile.release]
 opt-level = 3

@@ -50,6 +50,17 @@ const text = (r: any) => r.content.map((c: any) => c.text ?? '').join('')
   const batch = await (await post(JSON.stringify([{ jsonrpc: '2.0', id: 1, method: 'ping' }, { jsonrpc: '2.0', method: 'notifications/x' }, { jsonrpc: '2.0', id: 2, method: 'ping' }]))).json()
   assert(Array.isArray(batch) && batch.map((m: any) => m.id).join() === '1,2', `batch answers requests only, in order: ${JSON.stringify(batch)}`)
 
+  // A non-object `arguments` is an invalid-params error for that call only (it used to panic the handler: HTTP 500, batch lost).
+  const tc = (id: number, args: unknown) => ({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: 'get_editor_state', arguments: args } })
+  for (const args of [[], 'str', 5, true]) {
+    const r = await post(JSON.stringify(tc(1, args)))
+    const j = await r.json()
+    assert(r.status === 200 && j.error?.code === -32602, `arguments ${JSON.stringify(args)} is -32602 with HTTP 200 (got ${r.status} ${JSON.stringify(j)})`)
+  }
+  const mixedRes = await post(JSON.stringify([tc(1, {}), tc(2, 'x'), tc(3, null), tc(4, undefined)]))
+  const mixed = await mixedRes.json()
+  assert(mixedRes.status === 200 && mixed.length === 4 && !mixed[0].error && mixed[1].error?.code === -32602 && !mixed[2].error && !mixed[3].error, `a bad call does not take its batch down: ${JSON.stringify(mixed).slice(0, 300)}`)
+
   // initialize echoes the client's protocol version and names the server.
   const init = await rpc({ id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26' } })
   assert(init.result.protocolVersion === '2025-03-26' && init.result.serverInfo.name === 'nalarupa' && init.result.instructions, `initialize: ${JSON.stringify(init).slice(0, 200)}`)
@@ -90,6 +101,15 @@ const text = (r: any) => r.content.map((c: any) => c.text ?? '').join('')
   assert(unsaved.isError && /unsaved changes/.test(text(unsaved)) && !existsSync(doc), `open_document refuses a dirty document: ${text(unsaved)}`)
   assert(call<any>('state').dirty && JSON.stringify(call('layers')) === before, 'a refused open_document keeps the unsaved edits')
   call('save', { path: join(data, 'saved.pen') })
+  // A file where the folder should be: the create fails, and the open document must stay as it was.
+  const kept = JSON.stringify(call('layers'))
+  const failed = await tool('open_document', { path: join(data, 'saved.pen', 'x.pen') })
+  assert(failed.isError && call<any>('state').title === 'saved' && JSON.stringify(call('layers')) === kept, `a failed open_document keeps the open document: ${text(failed)}`)
+  call('undo')
+  assert(!JSON.stringify(call('layers')).includes('McpRect'), 'a failed open_document keeps the undo history')
+  call('redo')
+  assert(JSON.stringify(call('layers')) === kept, 'redo restores the edit after a failed open_document')
+  call('save')
   assert(!(await tool('open_document', { path: doc })).isError && existsSync(doc), 'open_document creates a missing file')
   assert(!(await tool('open_document', { path: doc })).isError, 'open_document reopens it')
   assert((await tool('spawn_agents', { agents: [] })).isError, 'external agents cannot spawn agents')
