@@ -215,7 +215,7 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
 
       {todos.length ? (
         <div style={{ borderTopWidth: 1, borderColor: C.border, paddingLeft: 12, paddingRight: 12, paddingTop: 8, paddingBottom: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <Pressable testId="plan-toggle" label={`Plan, ${doneTodos} of ${todos.length} done`} expanded={planOpen} onClick={() => setPlanOpen((o) => !o)} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, height: 24, borderRadius: 4 }}>
+          <Pressable testId="plan-toggle" focusTestId="plan-toggle-focus" label={`Plan, ${doneTodos} of ${todos.length} done`} expanded={planOpen} onClick={() => setPlanOpen((o) => !o)} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, height: 24, borderRadius: 4 }}>
             <Icon name={planOpen ? 'chevronDown' : 'chevronRight'} size={12} color={C.ghost} />
             <T size={11} weight="600" color={C.muted} grow>Plan</T>
             <T size={11} color={C.ghost}>{`${doneTodos}/${todos.length}`}</T>
@@ -308,6 +308,7 @@ function CookMenu({ designs, mode, set }: { designs: number; mode: CookMode; set
       <Pressable
         ref={trigger.ref}
         testId="agent-cook"
+        focusTestId="agent-cook-focus"
         label={on ? `Let it cook: ${designs} variants` : 'Let it cook: off'}
         expanded={open}
         onClick={() => setOpen(!open)}
@@ -328,7 +329,7 @@ function CookMenu({ designs, mode, set }: { designs: number; mode: CookMode; set
             tabIndex={0}
             autoFocus
             onMouseDownOutside={(e) => { if (!trigger.hit(e)) setOpen(false) }}
-            onKeyDown={(e) => { if (e.key === 'escape') setOpen(false) }}
+            onKeyDown={(e) => { if (e.key === 'escape') { setOpen(false); trigger.restore() } }}
             style={{
               width: 260, padding: 12, display: 'flex', flexDirection: 'column', gap: 12, borderRadius: 12, borderWidth: 1, borderColor: C.border, backgroundColor: C.panel2,
               boxShadow: { offsetX: 0, offsetY: 8, blurRadius: 24, spreadRadius: 0, color: '#00000080' },
@@ -444,8 +445,8 @@ function ChatHistory({ running, toast, changed }: { running: boolean; toast: Toa
 
   const chats = list?.chats ?? []
   return (
-    <div ref={trigger.ref} style={{ position: 'relative', display: 'flex' }}>
-      <IconButton icon="history" title="Chat history" testId="agent-history" active={!!list} onClick={() => (list ? close() : refresh())} />
+    <div style={{ position: 'relative', display: 'flex' }}>
+      <IconButton ref={trigger.ref} icon="history" title="Chat history" testId="agent-history" focusTestId="agent-history-focus" active={!!list} onClick={() => (list ? close() : refresh())} />
       {list ? (
         <anchored side="bottom" align="end" gap={4} fit="snap" snapMargin={8} deferred priority={1} occlude>
           <div
@@ -456,7 +457,7 @@ function ChatHistory({ running, toast, changed }: { running: boolean; toast: Toa
             tabIndex={0}
             autoFocus
             onMouseDownOutside={(e) => { if (!trigger.hit(e)) close() }}
-            onKeyDown={(e) => { if (e.key === 'escape') close() }}
+            onKeyDown={(e) => { if (e.key === 'escape') { close(); trigger.restore() } }}
             style={{
               width: 280, maxHeight: 440, display: 'flex', flexDirection: 'column', paddingTop: 6, paddingBottom: 6, borderRadius: 10,
               borderWidth: 1, borderColor: C.border, backgroundColor: C.panel2,

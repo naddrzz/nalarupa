@@ -367,7 +367,7 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
   await app.getByTestId('agent-input').click()
   await sleep(300)
   await app.call('keystrokes', { keys: 'shift-tab' })
-  await until(async () => !!(await app!.getByTestId('plan-toggle').getByTestId('focus-ring').count()), 'the focus ring on the Plan toggle after Shift+Tab')
+  await until(async () => !!(await app!.getByTestId('plan-toggle-focus').count()), 'the focus ring on the Plan toggle after Shift+Tab')
   await app.call('keystrokes', { keys: 'enter' })
   await until(async () => !(await app.getByTestId('plan-todos').count()), 'Shift+Tab from the composer to reach the Plan toggle')
   await app.call('keystrokes', { keys: 'enter' })
@@ -436,7 +436,14 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
     await sleep(150)
     if (!(await app.getByTestId(menu).count())) throw new Error(`${trigger} swallowed a quick reopen`)
     await app.getByTestId(menu).press('escape')
-    await sleep(150)
+    await until(async () => !(await app.getByTestId(menu).count()), `${menu} to close on Escape`)
+    await until(async () => !!(await app.getByTestId(`${trigger}-focus`).count()), `${trigger} to regain keyboard focus`)
+    // Escape hands keyboard focus back to the trigger: Tab goes on from it, not from the window's first control (Home).
+    await app.call('keystrokes', { keys: 'tab' })
+    await sleep(200)
+    await app.call('keystrokes', { keys: 'enter' })
+    await sleep(400)
+    if (await app.getByTestId('template-slides').count() || !(await app.getByTestId('agent-input').count())) throw new Error(`Escape on ${menu} dropped keyboard focus: the next Tab and Enter left the editor`)
   }
   // + (New agent) repaints the panel at once: the open chat gives way to the empty state, without another re-render.
   await app.getByTestId('agent-new').click()
@@ -506,7 +513,7 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
   await app.getByTestId('api-key').click()
   await sleep(300)
   await app.call('keystrokes', { keys: 'shift-tab' })
-  await until(async () => !!(await app!.getByTestId('backend-claude-code').getByTestId('focus-ring').count()), 'the focus ring on the backend switch after Shift+Tab')
+  await until(async () => !!(await app!.getByTestId('backend-claude-code-focus').count()), 'the focus ring on the backend switch after Shift+Tab')
   await app.call('keystrokes', { keys: 'enter' })
   await until(async () => !(await app!.getByTestId('api-key').count()), 'Shift+Tab from the API key box to reach the backend switch')
   await app.getByText('Claude API').click()

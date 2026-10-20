@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject, type Ref } from 'react'
 import type { EventModifiers, EventPayload } from '@gpuix/native'
 import type { CursorValue } from '@gpuix/native/host'
-import type { ImgInstance, PublicInstance } from '@gpuix/react'
+import { useGpuixRequired, type ImgInstance, type PublicInstance } from '@gpuix/react'
 import { call, renderPixels, tryCall, type Box } from './core'
 import { CANVAS_BG, C, DPR, FONT, FRAME_LABEL_TEXT, LEFT_W, TOP_H } from './theme'
 import { FocusRing, setKeyboardFocus, SvgOverlay, T, useRing, type Toast } from './ui'
@@ -45,7 +45,7 @@ type Drag =
   | { mode: 'pan'; sx: number; sy: number; cam: Cam }
   | {
       mode: 'move'; sx: number; sy: number; dx0: number; dy0: number; ids: string[]; narrow?: string; moved: boolean
-      start: Rect; sentX: number; sentY: number; anchors: Pt[]; parent: string; pm: M | null; groupOf?: string; flow: boolean
+      start: Rect; sentX: number; sentY: number; anchors: Pt[]; parent: string; pm: M | null; groupOf?: string; from?: string; mixed?: boolean; flow: boolean
       container: Drop | null; index?: number; deferred?: Drop; dup?: { originals: string[]; offAt?: number }
     }
   // `box` and the start point `f0` are in the selection frame's coordinates; `m` maps them to the canvas.
@@ -174,6 +174,9 @@ export function Canvas(props: {
   const { w, h, cam, setCam, version, selection, select, tool, setTool, toast } = props
   // Keyboard focus ring (Tab onto the canvas); a press clears it in onMouseDown.
   const ring = useRing(props.rootRef)
+  const renderer = useGpuixRequired()
+  // An in-place editor unmounts while it holds focus: Enter or Escape hands the keys back to the canvas.
+  const refocus = () => void (ring.el.current && renderer.focusElement?.(ring.el.current.id))
 
   // Tell the core what the user sees, so the agent's editor state marks visible frames.
   useEffect(() => {
@@ -195,6 +198,8 @@ export function Canvas(props: {
   const [ghost, setGhost] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
   const [hover, setHover] = useState<Box | null>(null)
   const [editing, setEditing] = useState<{ id: string; box: Box; value: string; size: number } | null>(null)
+  const editLive = useRef(editing)
+  editLive.current = editing
   const [renaming, setRenaming] = useState<{ id: string; draft: string } | null>(null)
   const renameLive = useRef(renaming)
   renameLive.current = renaming
@@ -336,8 +341,10 @@ export function Canvas(props: {
   }
 
   function commitEdit(value: string) {
-    if (!editing) return
-    if (value !== '' && value !== undefined) tryCall('update', { ids: [editing.id], props: { content: value } })
+    const e = editLive.current
+    if (!e) return
+    editLive.current = null
+    if (value !== '' && value !== undefined) tryCall('update', { ids: [e.id], props: { content: value } })
     setEditing(null)
   }
 
@@ -445,10 +452,17 @@ export function Canvas(props: {
     tryCall('move_by', { ids, dx: px, dy: py })
   }
 
-  /** Move the dragged nodes under `parent` (keeping their canvas position) and re-sync the drag offsets. */
-  function toParent(d: Extract<Drag, { mode: 'move' }>, parent: string) {
+  /** Is `id` a frame or layer somewhere below `ancestor`? */
+  function below(id: string, ancestor: string) {
+    for (let p = tryCall('node', { id })?.parent; p && p !== 'document'; p = tryCall('node', { id: p })?.parent) if (p === ancestor) return true
+    return false
+  }
+
+  /** Move the dragged nodes under `parent` (keeping their canvas position) and re-sync the drag offsets. `from` is where to put them back when the pointer leaves a frame nested in the one the drag started in. */
+  function toParent(d: Extract<Drag, { mode: 'move' }>, parent: string, from?: string) {
     tryCall('reparent', { ids: d.ids, parent })
     d.parent = parent
+    d.from = from
     d.pm = parentM(parent)
     d.flow = false
     d.groupOf = undefined
@@ -486,6 +500,8 @@ export function Canvas(props: {
     d.start = unionRect((tryCall<Box[]>('boxes', { ids: d.ids }) ?? []).map(painted)) ?? { x: d.dx0, y: d.dy0, w: 0, h: 0 }
     const infos = d.ids.map((id) => tryCall('node', { id }))
     d.parent = infos[0]?.parent ?? 'document'
+    // Layers from several parents cannot all go back to one, so they never enter a nested frame.
+    d.mixed = infos.some((i) => i.parent !== d.parent)
     d.pm = parentM(d.parent)
     d.flow = infos.every((i) => inFlow(i) && i.parent === d.parent)
     const p = d.parent !== 'document' ? tryCall('node', { id: d.parent }) : null
@@ -525,7 +541,8 @@ export function Canvas(props: {
       d.deferred = t
       if (d.flow || (!inC && d.parent !== 'document')) toParent(d, 'document')
       snapOn = false
-    } else if (!inC && t && t.id !== d.parent && t.id !== d.groupOf) toParent(d, t.id)
+    } else if (t && t.id !== d.parent && t.id !== d.groupOf && (!inC || (!d.mixed && below(t.id, c!.id)))) toParent(d, t.id, inC ? d.from ?? d.parent : undefined)
+    else if (inC && d.from && !(t && below(t.id, c!.id))) toParent(d, d.from)
     setDrop(d.deferred ?? null)
     setFloat(null)
     let [ox, oy] = [0, 0]
@@ -1322,12 +1339,13 @@ export function Canvas(props: {
                 autoFocus
                 value={renaming.draft}
                 onChange={(ev) => setRenaming((s) => (s ? { ...s, draft: ev.value ?? '' } : s))}
-                onSubmit={(ev) => commitRename(ev.value)}
+                onSubmit={(ev) => { commitRename(ev.value); refocus() }}
                 onBlur={() => commitRename()}
                 onKeyDown={(ev) => {
                   if ((ev.key ?? '').toLowerCase() !== 'escape') return
                   renameLive.current = null
                   setRenaming(null)
+                  refocus()
                 }}
                 style={{ flexGrow: 1, minWidth: 0, fontSize: 11, color: C.text, fontFamily: FONT }}
               />
@@ -1480,9 +1498,9 @@ export function Canvas(props: {
               minRows={1}
               maxRows={12}
               onChange={(ev) => setEditing((s) => (s ? { ...s, value: ev.value ?? '' } : s))}
-              onSubmit={(ev) => commitEdit(ev.value ?? editing.value)}
+              onSubmit={(ev) => { commitEdit(ev.value ?? editing.value); refocus() }}
               onBlur={() => commitEdit(editing.value)}
-              onKeyDown={(ev) => { if ((ev.key ?? '').toLowerCase() === 'escape') setEditing(null) }}
+              onKeyDown={(ev) => { if ((ev.key ?? '').toLowerCase() === 'escape') { editLive.current = null; setEditing(null); refocus() } }}
               style={{ fontSize: Math.max(10, Math.min(72, editing.size * cam.zoom)), color: '#111111', fontFamily: FONT, width: '100%' }}
             />
           </div>

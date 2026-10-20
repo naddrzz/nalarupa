@@ -1,5 +1,5 @@
 #!/bin/bash
-# Merge every open PR into dev that passes the gate: no check still running, `checks` (ci) passed, cubic's review
+# Merge every open PR into dev that passes the gate: no check still running, `checks` and `windows` (ci) passed, cubic's review
 # finished, CodeRabbit not pending, every thread started by cubic or CodeRabbit resolved, and GitHub says MERGEABLE.
 # A PR that conflicts with dev gets an @claude request to merge dev in (claude workflow). Skips drafts, forks and PRs
 # labelled no-auto-merge. DRY_RUN=1 only prints the decisions. Needs GH_TOKEN and
@@ -34,23 +34,24 @@ for n in $prs; do
     [.mergeable,
      ([.statusCheckRollup[]|select((.__typename=="CheckRun" and .status!="COMPLETED" and .name!="auto-merge") or (.__typename=="StatusContext" and (.state=="PENDING" or .state=="EXPECTED")))]|length),
      ([.statusCheckRollup[]|select(.name=="checks")|.conclusion]|last // "NONE"),
+     ([.statusCheckRollup[]|select(.name=="windows")|.conclusion]|last // "NONE"),
      ([.statusCheckRollup[]|select((.name // "")|startswith("cubic"))|.status]|last // "NONE"),
      ([.statusCheckRollup[]|select(.context=="CodeRabbit")|.state]|last // "NONE"),
      .title] | map(tostring) | join("|")')
-  IFS="|" read -r mergeable running ci cubic rabbit title <<<"$info"
+  IFS="|" read -r mergeable running ci win cubic rabbit title <<<"$info"
   # --paginate runs the query once per page of 100 threads; --jq prints one line per open bot thread, wc counts them.
   # A failed query leaves $open empty, which the gate treats as "wait".
   open=$(gh api graphql --paginate -f query="query(\$endCursor:String){repository(owner:\"$owner\",name:\"$name\"){pullRequest(number:$n){reviewThreads(first:100,after:\$endCursor){pageInfo{hasNextPage endCursor} nodes{isResolved comments(first:1){nodes{author{login}}}}}}}}" \
            --jq '.data.repository.pullRequest.reviewThreads.nodes[]|select((.comments.nodes[0].author.login=="cubic-dev-ai" or .comments.nodes[0].author.login=="coderabbitai") and (.isResolved|not))|"open"' | wc -l; [ "${PIPESTATUS[0]}" = 0 ]) || open=
-  state="mergeable=$mergeable running=$running ci=$ci cubic=$cubic coderabbit=$rabbit open_bot_threads=$open"
-  if [ "$mergeable" = MERGEABLE ] && [ "$running" = 0 ] && [ "$ci" = SUCCESS ] && [ "$cubic" = COMPLETED ] && [ "$rabbit" != PENDING ] && [ "$open" = 0 ]; then
+  state="mergeable=$mergeable running=$running ci=$ci windows=$win cubic=$cubic coderabbit=$rabbit open_bot_threads=$open"
+  if [ "$mergeable" = MERGEABLE ] && [ "$running" = 0 ] && [ "$ci" = SUCCESS ] && [ "$win" = SUCCESS ] && [ "$cubic" = COMPLETED ] && [ "$rabbit" != PENDING ] && [ "$open" = 0 ]; then
     if [ "${DRY_RUN:-}" = 1 ]; then echo "would merge #$n ($state) $title"
     elif gh pr merge "$n" -R "$R" --merge --subject "Merge #$n: $title"; then echo "merged #$n $title"
     else echo "merge failed #$n ($state)"; fi
   elif [ "$mergeable" = CONFLICTING ]; then
     # Nothing else resolves conflicts (parallel fix PRs often touch the same files).
     ask conflict "This PR conflicts with \`dev\`. Merge \`origin/dev\` into this branch and resolve every conflict so both sides keep working: the fixes already merged into dev stay, and this PR's change still does what it set out to do. Run the checks from the claude workflow, then push to this branch. Do not open a new PR."
-  elif [ "$running" = 0 ] && [ "$ci" != FAILURE ] && [ "$cubic" = COMPLETED ] && [ "$rabbit" != PENDING ] && [ -n "$open" ] && [ "$open" -gt 0 ]; then
+  elif [ "$running" = 0 ] && [ "$ci" != FAILURE ] && [ "$win" = SUCCESS ] && [ "$cubic" = COMPLETED ] && [ "$rabbit" != PENDING ] && [ -n "$open" ] && [ "$open" -gt 0 ]; then
     # Review threads still open with nothing queued to handle them: review-fix ended without resolving them (or never
     # ran), and no new review will start it again. A failed ci run is left to claude-ci-fix: both would push to the branch.
     ask threads "$open review thread(s) from cubic or CodeRabbit are still unresolved on this PR and nothing is queued to handle them. For each one: fix a real problem at the root cause, or reply on the thread explaining why the finding is wrong. Run the checks from the claude workflow, then push to this branch. Only after the push, resolve each thread (gh api graphql -f query='mutation{resolveReviewThread(input:{threadId:\"<thread id>\"}){thread{isResolved}}}'): with no open thread left the PR can merge, so resolving first could merge the old head. Do not open a new PR."
