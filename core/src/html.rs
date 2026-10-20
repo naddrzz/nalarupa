@@ -566,7 +566,10 @@ fn shadow_filter(shadows: &[&(bool, f64, f64, f64, String)]) -> String {
         let _ = write!(f, "<feGaussianBlur in=\"SourceAlpha\" stdDeviation=\"{}\"/><feOffset dx=\"{x}\" dy=\"{y}\" result=\"o{i}\"/><feFlood flood-color=\"{c}\"/><feComposite in2=\"o{i}\" operator=\"in\" result=\"s{i}\"/>", b / 2.0);
     }
     let merge: String = (0..shadows.len()).rev().map(|i| format!("<feMergeNode in=\"s{i}\"/>")).collect();
-    let svg = format!("<svg xmlns=\"http://www.w3.org/2000/svg\"><filter id=\"s\" x=\"-50%\" y=\"-50%\" width=\"200%\" height=\"200%\" color-interpolation-filters=\"sRGB\">{f}<feMerge>{merge}<feMergeNode in=\"SourceGraphic\"/></feMerge></filter></svg>");
+    // The region must hold every offset, blurred shadow: a percentage of the element would clip big ones. The element's
+    // size is not known here, so it starts a margin before the origin and runs far past any element.
+    let m = shadows.iter().map(|(_, x, y, b, _)| x.abs().max(y.abs()) + b * 1.5).fold(0.0, f64::max).ceil() + 1.0;
+    let svg = format!("<svg xmlns=\"http://www.w3.org/2000/svg\"><filter id=\"s\" filterUnits=\"userSpaceOnUse\" x=\"-{m}\" y=\"-{m}\" width=\"100000\" height=\"100000\" color-interpolation-filters=\"sRGB\">{f}<feMerge>{merge}<feMergeNode in=\"SourceGraphic\"/></feMerge></filter></svg>");
     format!("url('data:image/svg+xml,{}#s')", svg.replace('%', "%25").replace('<', "%3C").replace('>', "%3E").replace('#', "%23").replace('"', "%22"))
 }
 
@@ -671,6 +674,8 @@ mod tests {
         assert!(g.contains("filter:drop-shadow(6px 6px 2px #ff0000);") && !g.contains("text-shadow") && !g.contains("box-shadow"), "{g}");
         // Several shadows all start from the element's alpha, so they are one SVG filter, not a chain of `drop-shadow()`s.
         assert!(g2.contains("filter:url('data:image/svg+xml,%3Csvg") && g2.contains("%3CfeMergeNode in=%22SourceGraphic%22/%3E") && !g2.contains("drop-shadow"), "{g2}");
+        // The filter region grows with the offset and blur (6 + 1.5 * 4, rounded up, plus one) instead of a share of the element.
+        assert!(g2.contains("filterUnits=%22userSpaceOnUse%22 x=%22-13%22 y=%22-13%22"), "{g2}");
         // The decoration needs a colour of its own: the text colour is transparent.
         assert!(g2.contains("text-decoration:underline;") && g2.contains("text-decoration-color:#000000;") && !g.contains("text-decoration"), "{g2}");
         assert!(grp.contains("filter:drop-shadow(6px 6px 2px #ff0000) blur(2px);") && !grp.contains("box-shadow"), "{grp}");
