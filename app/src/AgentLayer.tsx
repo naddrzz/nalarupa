@@ -6,7 +6,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { tryCall, type Box } from './core'
 import { FADE_DELAY, FADE_DUR, FADE_IN, GONE, PILL_MS, PRESENCE, cursorFaded, needsFrame, profileOf, store, type CursorState } from './agents'
 import { ICONS } from './icons'
-import { painted, turned, type M, type Rect } from './geometry'
+import { painted, shimmerHalves, turned, type M, type Rect } from './geometry'
 import { SvgOverlay } from './ui'
 import { C, FONT, REDUCED_MOTION } from './theme'
 import type { Cam } from './Canvas'
@@ -236,8 +236,9 @@ export function AgentLayer({ cam, w, h, version, chatOpen }: { cam: Cam; w: numb
       }
       return (
         <div key={`p${n.id}`} style={{ position: 'absolute', left: X, top: Y, width: W, height: H, overflow: 'hidden', backgroundColor: '#00000040', pointerEvents: 'none' }}>
-          <div style={{ position: 'absolute', left: pos, top: 0, width: band / 2, height: H, background: { type: 'linear-gradient', angle: 90, stops: [{ color: '#FFFFFF00', position: 0 }, { color: '#FFFFFF73', position: 1 }] } }} />
-          <div style={{ position: 'absolute', left: pos + band / 2, top: 0, width: band / 2, height: H, background: { type: 'linear-gradient', angle: 90, stops: [{ color: '#FFFFFF73', position: 0 }, { color: '#FFFFFF00', position: 1 }] } }} />
+          {shimmerHalves(pos, band).map(([left, width], k) => (
+            <div key={k} style={{ position: 'absolute', left, top: 0, width, height: H, background: { type: 'linear-gradient', angle: 90, stops: k ? [{ color: '#FFFFFF73', position: 0 }, { color: '#FFFFFF00', position: 1 }] : [{ color: '#FFFFFF00', position: 0 }, { color: '#FFFFFF73', position: 1 }] } }} />
+          ))}
         </div>
       )
     }
