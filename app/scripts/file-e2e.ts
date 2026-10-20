@@ -120,10 +120,10 @@ try {
   await app.getByTestId('template-blank').waitFor()
   assert(!(await recent.count()), 'a vanished recent file is hidden')
 
-  // At the minimum window height (1100×680) Home and the agent's empty state scroll, so nothing stays out of reach.
+  // A very long recent name is cut inside its row, and at the minimum window height (1100×680, sway only) Home and the agent's empty state scroll, so nothing stays out of reach.
   const dir = process.env.XDG_RUNTIME_DIR
   const sock = process.platform === 'linux' && dir ? readdirSync(dir).find((f) => f.startsWith('sway-ipc')) : undefined
-  if (sock) {
+  {
     await app.close()
     const docs = mkdtempSync(join(tmpdir(), 'nalarupa-recent-'))
     const long = `${'Quarterly planning deck for the entire organisation including every single department and subsidiary '.repeat(2).trim()}.nala`
@@ -133,31 +133,35 @@ try {
     try {
       app = await launch({ command: 'bun', args: ['app.tsx'], cwd: join(import.meta.dir, '..'), env: { ...process.env, GPUIX_BACKGROUND: '1', NALARUPA_DATA: data, HOME: data, USERPROFILE: data } })
       await app.getByTestId('template-blank').waitFor({ timeoutMs: 30000 })
-      await Bun.$`swaymsg -s ${join(dir!, sock)} [app_id=".*"] resize set 1100 680`.quiet()
-      await Bun.sleep(1500)
-      // A very long name is cut inside its row and leaves room for the path.
+      if (sock) {
+        await Bun.$`swaymsg -s ${join(dir!, sock)} [app_id=".*"] resize set 1100 680`.quiet()
+        await Bun.sleep(1500)
+      }
       const row = await app.getByTestId(`recent-${long}`).bounds()
       const [name, where] = (await app.getByTestId(`recent-${long}`).getByType('text').all()).map((n) => n.bounds!)
+      assert(name.width <= 440, `a long recent name is capped at 440 px (${name.width} > 440)`)
       assert(name.x + name.width <= row.x + row.width, `a long recent name stays inside its row (${name.x + name.width} > ${row.x + row.width})`)
       assert(where.width > 40, `the path keeps room beside a long name (${where.width} px)`)
-      const home = app.getByTestId('home-scroll')
-      const last = app.getByTestId('recent-project-7.nala')
-      // Bounds follow the scroll offset, so compare with fixed limits: the window's bottom edge, the composer's top edge.
-      const above = async (el: typeof last, limit: number) => { const b = await el.bounds(); return b.y >= 0 && b.y + b.height <= limit }
-      assert(!(await above(last, 680)), 'the eighth recent file starts below the 680 px window (the check needs a window this short)')
-      await until(async () => { await home.wheel(0, -400); return above(last, 680) }, 'scrolling Home reaches the eighth recent file')
-      await Bun.sleep(300)
-      await app.getByTestId('template-blank').click()
-      await app.getByTestId('canvas').waitFor()
-      await until(async () => (await app!.getByTestId('agent-empty').count()) > 0, 'the agent shows its empty state')
-      const empty = app.getByTestId('agent-empty')
-      const composer = (await app.getByTestId('agent-input').bounds()).y - 18 // the composer's card starts about 18 px above its input
-      const hint = app.getByText('Each agent gets a cursor')
-      await until(async () => { await empty.wheel(0, -400); return above(hint, composer) }, "scrolling the agent's empty state reaches its hint")
+      if (sock) {
+        const home = app.getByTestId('home-scroll')
+        const last = app.getByTestId('recent-project-7.nala')
+        // Bounds follow the scroll offset, so compare with fixed limits: the window's bottom edge, the composer's top edge.
+        const above = async (el: typeof last, limit: number) => { const b = await el.bounds(); return b.y >= 0 && b.y + b.height <= limit }
+        assert(!(await above(last, 680)), 'the eighth recent file starts below the 680 px window (the check needs a window this short)')
+        await until(async () => { await home.wheel(0, -400); return above(last, 680) }, 'scrolling Home reaches the eighth recent file')
+        await Bun.sleep(300)
+        await app.getByTestId('template-blank').click()
+        await app.getByTestId('canvas').waitFor()
+        await until(async () => (await app!.getByTestId('agent-empty').count()) > 0, 'the agent shows its empty state')
+        const empty = app.getByTestId('agent-empty')
+        const composer = (await app.getByTestId('agent-input').bounds()).y - 18 // the composer's card starts about 18 px above its input
+        const hint = app.getByText('Each agent gets a cursor')
+        await until(async () => { await empty.wheel(0, -400); return above(hint, composer) }, "scrolling the agent's empty state reaches its hint")
+      } else console.log('file-e2e: skipped the minimum-window scroll check (needs sway)')
     } finally {
       rmSync(docs, { recursive: true, force: true })
     }
-  } else console.log('file-e2e: skipped the minimum-window scroll check (needs sway)')
+  }
   console.log('file-e2e ok')
 } finally {
   await app?.close()
