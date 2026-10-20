@@ -118,6 +118,21 @@ export function App() {
     if (boxes.length !== selection.length) setSelection(boxes.map((b) => b.id))
   }, [state.version])
 
+  // The control that held focus can unmount (Inspector Delete/Hide, Delete on a Layers row): then no element
+  // takes keys and every shortcut is dead. Hand focus back to the canvas once the panels have re-rendered.
+  useEffect(() => {
+    if (screen !== 'editor') return
+    // Retry for about a second: under a slow frame the control can unmount well after the state change.
+    let tries = 0
+    const t = setInterval(() => {
+      if (renderer.getFocusedElementId?.() == null && canvasEl.current) {
+        renderer.focusElement?.(canvasEl.current.id)
+        clearInterval(t)
+      } else if (++tries >= 10) clearInterval(t)
+    }, 100)
+    return () => clearInterval(t)
+  }, [selection, state.version, screen, renderer])
+
   const saveTo = (path?: string) => {
     const r = tryCall('save', { path })
     if (r) toast(`Saved ${r.path}`)
