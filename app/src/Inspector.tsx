@@ -274,15 +274,15 @@ export function Inspector({ version, selection, select, toast }: Props) {
         ) : null}
         <Row>
           <NumField label="↻" name="Rotation" {...numOf((i) => i.node.rotation)} onCommit={(v, k) => setRotation(v, k)} testId="inspector-rotation" />
-          <NumField label="α" name="Opacity" {...numOf((i) => (i.node.opacity ?? 1) * 100)} onCommit={(v, k) => update({ opacity: v >= 100 ? null : Math.max(0, v) / 100 }, k)} testId="inspector-opacity" />
+          <NumField label="α" name="Opacity" {...numOf((i) => (i.node.opacity ?? 1) * 100)} onCommit={(v, k) => update({ opacity: v >= 100 ? null : v / 100 }, k)} min={0} max={100} testId="inspector-opacity" />
         </Row>
       </Section>
 
       <Section title={!multi && inFlow(infos[0]) ? 'Size (auto layout child)' : 'Size'}>
         {all((i) => i.node.type === 'group') ? null : (
           <Row>
-            <NumField label="W" name="Width" {...numOf((i) => dimOf(i, 'width'))} onCommit={(v, k) => setSize('width', v, k)} testId="inspector-w" />
-            <NumField label="H" name="Height" {...numOf((i) => dimOf(i, 'height'))} onCommit={(v, k) => setSize('height', v, k)} testId="inspector-h" />
+            <NumField label="W" name="Width" {...numOf((i) => dimOf(i, 'width'))} onCommit={(v, k) => setSize('width', v, k)} min={0} testId="inspector-w" />
+            <NumField label="H" name="Height" {...numOf((i) => dimOf(i, 'height'))} onCommit={(v, k) => setSize('height', v, k)} min={0} testId="inspector-h" />
           </Row>
         )}
         {canHug || canFill ? (
@@ -336,7 +336,7 @@ export function Inspector({ version, selection, select, toast }: Props) {
           <T size={10} color={C.ghost}>Enter applies · Shift+Enter new line</T>
           <Field name="Font family" value={str(n.fontFamily ?? 'Inter')} onCommit={(v) => update({ fontFamily: v })} />
           <Row>
-            <NumField label="S" name="Font size" value={Number(n.fontSize ?? 14) || 14} onCommit={(v, k) => update({ fontSize: Math.max(1, v) }, k)} testId="inspector-font-size" />
+            <NumField label="S" name="Font size" value={Number(n.fontSize ?? 14) || 14} onCommit={(v, k) => update({ fontSize: v }, k)} min={1} testId="inspector-font-size" />
             <Field label="W" name="Font weight" value={str(n.fontWeight ?? '400')} onCommit={setChecked('fontWeight', (v) => fontWeightOf(v, vars))} testId="inspector-font-weight" />
           </Row>
           <Row>
@@ -383,7 +383,7 @@ export function Inspector({ version, selection, select, toast }: Props) {
           </Row>
           {n.type !== 'ellipse' && n.type !== 'path' ? (
             typeof (n.cornerRadius ?? 0) === 'number'
-              ? <NumField label="R" name="Corner radius" value={n.cornerRadius ?? 0} onCommit={(v, k) => update({ cornerRadius: Math.max(0, v) || null }, k)} testId="inspector-radius" />
+              ? <NumField label="R" name="Corner radius" value={n.cornerRadius ?? 0} onCommit={(v, k) => update({ cornerRadius: v || null }, k)} min={0} testId="inspector-radius" />
               : <Field label="R" name="Corner radius" value={str(n.cornerRadius)} onCommit={setChecked('cornerRadius', (v) => sides(v, vars, [1, 4]))} testId="inspector-radii" />
           ) : null}
         </Section>

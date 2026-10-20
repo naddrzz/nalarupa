@@ -446,6 +446,13 @@ try {
   assert(!(await count('toast')), 'a valid hex color is applied without an error')
   await canvas.press('ctrl-z')
   await sleep(300)
+  // A number the core clamps is shown as stored (100 %, radius 0), not as typed: the stored value does not change, so nothing else resyncs the field.
+  await typeInto('inspector-opacity', 'ctrl-a 5 0 0')
+  await typeInto('inspector-radius', 'ctrl-a - 4')
+  await app.getByTestId('inspector-name').click()
+  await sleep(700)
+  assert(await until(async () => !(await app.getByText('500').count())), 'an opacity above 100 no longer shows the typed 500')
+  assert(await until(async () => !(await app.getByText('-4').count())), 'a negative radius no longer shows the typed -4')
 
   // Handle centers (canvas px), tl, tr, br, bl. Each sits 12 px in at radius 0 and slides toward the middle
   // (80 px for a 180×160 box) as the radius grows: inset = 12 + radius·68/80.

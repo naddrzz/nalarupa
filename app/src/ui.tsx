@@ -316,8 +316,8 @@ function scrubMove(e: EventPayload) {
  * Number field: drag the label to scrub, Up/Down ±step (Shift ×10), Enter/blur
  * commits. `onCommit` gets a coalescing key: one focus session or one scrub = one undo step.
  */
-export function NumField({ label, name = label, value, mixed, onCommit, step = 1, testId, width }: {
-  label: string; value: number; mixed?: boolean; onCommit: (v: number, coalesce: string) => void; step?: number; testId?: string; width?: number
+export function NumField({ label, name = label, value, mixed, onCommit, step = 1, min, max, testId, width }: {
+  label: string; value: number; mixed?: boolean; onCommit: (v: number, coalesce: string) => void; step?: number; min?: number; max?: number; testId?: string; width?: number
   /** Accessible name when the visible label is a letter or symbol ("W", "↻"). */
   name?: string
 }) {
@@ -332,6 +332,8 @@ export function NumField({ label, name = label, value, mixed, onCommit, step = 1
   const key = () => (session.current ??= `field:${testId ?? label}:${++gesture}`)
   const commit = (v: number, k = key()) => {
     if (!Number.isFinite(v)) return setDraft(shown)
+    // The draft shows what is stored: a value the caller would clamp never changes `shown`, so nothing would resync it.
+    v = Math.min(max ?? Infinity, Math.max(min ?? -Infinity, v))
     latest.current = fmt(v)
     setDraft(latest.current)
     onCommit(v, k)
