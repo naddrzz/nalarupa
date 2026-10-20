@@ -252,8 +252,10 @@ impl Ctx<'_> {
 
     /// Why `id` cannot be exported: resolving drops hidden nodes, so a node that exists in the
     /// document but is absent from the laid-out tree is hidden itself or inside a hidden parent.
+    /// An instance child `instanceId/childId` lives in the component, so each segment is looked up
+    /// on its own.
     pub fn missing(&self, id: &str) -> String {
-        if self.doc.find(id).is_some() {
+        if id.split('/').all(|seg| self.doc.find(seg).is_some()) {
             format!("{id} is hidden (or inside a hidden layer); show it before exporting")
         } else {
             format!("node not found: {id}")

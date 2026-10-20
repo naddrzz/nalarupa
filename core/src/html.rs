@@ -702,6 +702,23 @@ mod tests {
         assert!(err.contains("node not found: nope"), "{err}");
     }
 
+    /// A component child hidden through an instance override is addressed as `instanceId/childId`.
+    #[test]
+    fn hidden_instance_child_export_says_hidden() {
+        let out = std::env::temp_dir().join("nalarupa-test-export-hidden-inst");
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        let comp = json!({"type":"frame","reusable":true,"width":100,"height":50,"children":[{"id":"kid","type":"rectangle","width":10,"height":10}]});
+        let comp = e.edit(|d| d.insert("", comp, None)).unwrap();
+        let kid = e.doc.find(&comp).unwrap()["children"][0]["id"].as_str().unwrap().to_string();
+        let inst = e.edit(|d| d.insert("", json!({"type":"ref","ref":comp,"descendants":{kid.clone():{"enabled":false}}}), None)).unwrap();
+        let id = format!("{inst}/{kid}");
+        let err = super::export(&mut e, &[id.clone()], "png", out.to_str().unwrap(), &json!({})).unwrap_err();
+        assert!(err.contains("hidden"), "{err}");
+        let err = super::export(&mut e, &[format!("{inst}/nope")], "png", out.to_str().unwrap(), &json!({})).unwrap_err();
+        assert!(err.contains("node not found"), "{err}");
+    }
+
     /// A text stroke reaches the SVG and HTML exports (it was dropped before).
     #[test]
     fn text_stroke_is_exported() {
