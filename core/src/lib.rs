@@ -206,7 +206,11 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
                 let y = n["y"].as_f64().unwrap_or(0.0);
                 Some((id, x, y))
             }).collect();
-            e.edit_or_drag(|d| pos.iter().try_for_each(|(id, x, y)| d.update(id, &json!({"x": editor::num(x + dx), "y": editor::num(y + dy)}))))?;
+            let apply = |d: &mut doc::Doc| pos.iter().try_for_each(|(id, x, y)| d.update(id, &json!({"x": editor::num(x + dx), "y": editor::num(y + dy)})));
+            match req["coalesce"].as_str() {
+                Some(key) => e.edit_coalesced(key, apply)?,
+                None => e.edit_or_drag(apply)?,
+            }
             Ok(state(&e))
         }
         "insert" => {

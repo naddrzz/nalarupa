@@ -127,6 +127,18 @@ for (const [what, turn] of [['rotated', { rotation: 90 }], ['flipped', { flipX: 
   assert(Math.abs(n1.x - n0.x - 10) < 0.01 && Math.abs(n1.y - n0.y) < 0.01, `a nudge to the right in a ${what} frame moves the child right (${n0.x},${n0.y} → ${n1.x},${n1.y})`)
 }
 
+// One arrow press over layers in different parents is one undo step: the per-parent move_by calls share a coalesce key.
+{
+  const [P, Q] = [0, 1].map((i) => call('insert', { parent: 'document', node: { type: 'frame', name: `Nudge pair ${i}`, x: 1600 + i * 400, y: 600, width: 300, height: 200, layout: 'none' } }).id)
+  const [PK, QK] = [P, Q].map((f) => call('insert', { parent: f, node: { type: 'rectangle', x: 20, y: 20, width: 60, height: 40 } }).id)
+  const [p0, q0] = [call('bounds', { ids: [PK] }), call('bounds', { ids: [QK] })]
+  call('move_by', { ids: [PK], dx: 10, dy: 0, coalesce: 'nudge:test' })
+  call('move_by', { ids: [QK], dx: 10, dy: 0, coalesce: 'nudge:test' })
+  call('undo')
+  const [p1, q1] = [call('bounds', { ids: [PK] }), call('bounds', { ids: [QK] })]
+  assert(p1.x === p0.x && q1.x === q0.x, `one undo reverts a nudge across parents (${p0.x},${q0.x} → ${p1.x},${q1.x})`)
+}
+
 // Duplicate: same position, right above the source.
 const d = call('duplicate', { ids: [A] }).ids[0]
 assert(same(box(d), a0) && node(d).parent === F, 'duplicate in place')
