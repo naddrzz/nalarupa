@@ -909,6 +909,21 @@ fn validate(e: &mut Engine, touched: &[String]) -> Vec<String> {
     let mut tops: Vec<usize> = touched.iter().filter_map(|id| crate::render::top_index(&e.doc, id)).collect();
     tops.sort_unstable();
     tops.dedup();
+    // An instance's resolved props carry its component's x/y; only its own count: set on the
+    // instance, or by a `descendants` override for a nested one (id `outer/inner`).
+    let mut own_xy: HashSet<String> = HashSet::new();
+    crate::doc::walk(e.doc.children(), &mut |n| {
+        let (Some(id), true) = (n["id"].as_str(), n["type"] == "ref") else { return };
+        let sets_xy = |v: &Value| v.get("x").is_some() || v.get("y").is_some();
+        if sets_xy(n) {
+            own_xy.insert(id.to_string());
+        }
+        for (path, over) in n["descendants"].as_object().into_iter().flatten() {
+            if sets_xy(over) {
+                own_xy.insert(format!("{id}/{path}"));
+            }
+        }
+    });
     let mut out = Vec::new();
     for t in tops {
         let Some(root) = e.ctx().laid_out(t) else { continue };
@@ -929,7 +944,8 @@ fn validate(e: &mut Engine, touched: &[String]) -> Vec<String> {
             }
             let parent_layout = parent.map(|p| p.ty == "frame" && p.s("layout") != Some("none")).unwrap_or(false);
             let absolute = n.s("layoutPosition") == Some("absolute");
-            if parent_layout && !absolute && (n.p.contains_key("x") || n.p.contains_key("y")) && touched.contains(n.id.as_str()) {
+            let has_xy = if n.inst.is_some() { own_xy.contains(&n.id) } else { n.p.contains_key("x") || n.p.contains_key("y") };
+            if parent_layout && !absolute && has_xy && touched.contains(n.id.as_str()) {
                 out.push(format!("{label}: x/y are ignored inside a flex layout parent"));
             }
             let fills_parent = ["width", "height"].iter().any(|k| n.s(k).is_some_and(|v| v.starts_with("fill_container")));
