@@ -215,7 +215,7 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
 
       {todos.length ? (
         <div style={{ borderTopWidth: 1, borderColor: C.border, paddingLeft: 12, paddingRight: 12, paddingTop: 8, paddingBottom: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <Pressable label={`Plan, ${doneTodos} of ${todos.length} done`} expanded={planOpen} onClick={() => setPlanOpen((o) => !o)} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, height: 24, borderRadius: 4 }}>
+          <Pressable testId="plan-toggle" focusTestId="plan-toggle-focus" label={`Plan, ${doneTodos} of ${todos.length} done`} expanded={planOpen} onClick={() => setPlanOpen((o) => !o)} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, height: 24, borderRadius: 4 }}>
             <Icon name={planOpen ? 'chevronDown' : 'chevronRight'} size={12} color={C.ghost} />
             <T size={11} weight="600" color={C.muted} grow>Plan</T>
             <T size={11} color={C.ghost}>{`${doneTodos}/${todos.length}`}</T>
@@ -237,6 +237,7 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
         <div style={{ position: 'relative', borderRadius: 10, borderWidth: 1, borderColor: C.border, backgroundColor: C.panel2, padding: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
           {input.ring ? <FocusRing radius={10} /> : null}
           <div onMouseDown={input.onMouseDown}>
+            {input.back}
             <textarea
               ref={input.ref}
               onFocus={input.onFocus}
@@ -836,7 +837,7 @@ function AgentSettings({ mcpUrl, toast }: { mcpUrl: string; toast: Toast }) {
         label="Agent backend"
         value={backend}
         onChange={(v) => { if (set('agent_backend', v)) setBackend(v) }}
-        options={[{ value: 'api', label: 'Claude API' }, { value: 'claude-code', label: 'Claude Code CLI' }]}
+        options={[{ value: 'api', label: 'Claude API' }, { value: 'claude-code', label: 'Claude Code CLI', testId: 'backend-claude-code' }]}
       />
       {backend === 'api' ? (
         <>

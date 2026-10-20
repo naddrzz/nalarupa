@@ -119,19 +119,36 @@ export function useRing<T extends PublicInstance>(forwarded?: Ref<T>) {
   return { ref, el, on, clear: () => setKeyboardFocus(null) }
 }
 
+// GPUIX tracks a text field's focus handle on two nested divs, so GPUI's tab-stop list holds the field
+// twice and `focusPrevious` from it lands on the field again: Shift+Tab never leaves. Each field keeps a
+// `back` stop (a focusable div that is no tab stop) right before it; focusing that and walking back from
+// it reaches the stop before the field.
+const backStops = new Map<number, number>()
+/** Host id of the `back` stop that sits before the text field `fieldId`, if it is one. */
+export const backStopOf = (fieldId: number | null | undefined) => (fieldId == null ? undefined : backStops.get(fieldId))
+const noKey = () => {}
+
 /** Focus state of a text field: `ring` is true while it has focus, from the mouse or Tab. GPUIX sends no
  *  focus event for Tab, nor any for a click while its window is inactive (the background e2e window), so
  *  a press on `container` (the field's box; a press on the field bubbles to it) asks the renderer what
  *  has focus, as Tab does in `app.tsx`. Spread `ref`, `onFocus` and `onBlur` on the field, `onMouseDown`
- *  on its container, and draw a `FocusRing` while `ring`. */
+ *  on its container, and draw a `FocusRing` while `ring`. Render `back` right before the field. */
 export function useFieldRing(onFocus?: Handler, onBlur?: Handler) {
   const renderer = useGpuixRequired()
   const [focus, setFocus] = useState(false)
   const el = useRef<PublicInstance | null>(null)
   const { ref: own, on } = useRing()
   const ref = useCallback((v: PublicInstance | null) => { el.current = v; own(v) }, [own])
+  const stop = useRef<PublicInstance | null>(null)
+  useLayoutEffect(() => {
+    const field = el.current?.id
+    if (field === undefined || stop.current === null) return
+    backStops.set(field, stop.current.id)
+    return () => void backStops.delete(field)
+  })
   return {
     ref,
+    back: <div ref={stop} onKeyDown={noKey} style={{ position: 'absolute', width: 0, height: 0 }} />,
     ring: focus || on,
     onFocus: (e: EventPayload) => { setFocus(true); onFocus?.(e) },
     // Leave the id alone when it already names another element: Tab sets it before the blur arrives.
@@ -221,6 +238,7 @@ function TextInput({ value, mono, onFocus, onBlur, ...rest }: {
             <T mono={mono} color={C.text} grow style={{ whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>{value}</T>
           </div>
         ) : null}
+        {field.back}
         <input
           {...rest}
           ref={field.ref}
@@ -431,6 +449,7 @@ export function Segmented<V extends string>({ value, options, onChange, label }:
         <Pressable
           key={o.value}
           testId={o.testId}
+          focusTestId={o.testId ? `${o.testId}-focus` : undefined}
           role="tab"
           label={o.name ?? o.label}
           selected={o.value === value}
