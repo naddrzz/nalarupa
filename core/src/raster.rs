@@ -310,7 +310,7 @@ impl Build {
             self.failed = true;
             return;
         }
-        if let Some(b) = painted_box(n) {
+        if let Some(b) = painted_box(n, parent) {
             let op = Op::Fallback { at: self.at.clone().into(), parent, blend };
             self.push(rect(b.to_rect()), Affine::IDENTITY, op);
         }
@@ -788,9 +788,11 @@ struct Frame {
 
 /// Everything `n` paints: usvg's layer box of a path leaves out its stroke, which a resvg
 /// fallback (a pattern stroke, e.g. an angular gradient) would then lose outside the fill box.
-fn painted_box(n: &usvg::Node) -> Option<usvg::NonZeroRect> {
+/// A path's box follows `abs` (the transform it is drawn with): usvg's own abs transforms leave out
+/// the transform of the text a glyph path belongs to.
+fn painted_box(n: &usvg::Node, abs: tiny_skia::Transform) -> Option<usvg::NonZeroRect> {
     match n {
-        usvg::Node::Path(p) => p.abs_stroke_bounding_box().to_non_zero_rect(),
+        usvg::Node::Path(p) => p.stroke_bounding_box().transform(abs)?.to_non_zero_rect(),
         _ => n.abs_layer_bounding_box(),
     }
 }
@@ -802,7 +804,7 @@ fn fallback(ctx: &mut RenderContext, tree: &usvg::Tree, at: &[u32], parent: tiny
     // resvg's render_node origin is the layer box (none for a horizontal or vertical line, which
     // it draws unshifted); the pixmap covers everything painted.
     let origin = node.abs_layer_bounding_box().map_or((0.0, 0.0), |o| (o.x(), o.y()));
-    let Some(b) = painted_box(node) else { return };
+    let Some(b) = painted_box(node, parent) else { return };
     let z = f.zoom;
     let x0 = (b.left() as f64).max(view.0) * z;
     let y0 = (b.top() as f64).max(view.1) * z;
@@ -1483,6 +1485,25 @@ mod tests {
             let px = vello(&Doc::from_json(&json).unwrap(), 140, 140);
             let i = (70 * 140 + 16) * 4; // 4 px outside the left edge, mid height
             assert_eq!(px[i..i + 3], [0, 255, 0], "{kind}: the outer stroke is missing");
+        }
+    }
+
+    /// Rotating or flipping a text layer does not change how much of an angular-gradient stroke
+    /// (a pattern stroke drawn through the resvg fallback) the canvas paints.
+    #[test]
+    fn angular_stroke_of_transformed_text_shows() {
+        let ink = |extra: &str| {
+            let json = format!(r##"{{"version":"2.19","children":[
+                {{"type":"frame","id":"f","x":0,"y":0,"width":400,"height":400,"fill":"#ffffff","layout":"none","children":[
+                  {{"type":"text","id":"n","x":150,"y":150,"content":"Q","fontSize":100,"fontWeight":"900","fill":"#ffcc00","stroke":{{"type":"gradient","gradientType":"angular","rotation":90,"colors":[{{"color":"#ff0000","position":0}},{{"color":"#0000ff","position":1}}]}},"strokeWidth":14,"strokeAlignment":"outer"{extra}}}]}}]}}"##);
+            let px = vello(&Doc::from_json(&json).unwrap(), 400, 400);
+            px.chunks(4).filter(|p| p[..3] != [255, 255, 255] && p[..3] != [255, 204, 0]).count()
+        };
+        let plain = ink("");
+        assert!(plain > 1000, "the unrotated stroke is missing: {plain}");
+        for extra in [r#","rotation":90"#, r#","flipX":true"#] {
+            let n = ink(extra);
+            assert!(n * 10 > plain * 9, "{extra}: {n} stroke pixels, {plain} unrotated");
         }
     }
 
