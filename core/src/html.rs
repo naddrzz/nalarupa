@@ -411,8 +411,8 @@ impl Html<'_> {
                 let stroke = paint.as_str().map(str::to_string).or_else(|| paint["color"].as_str().map(str::to_string)).and_then(|c| css_color(&c));
                 let gradient = paint.as_object().filter(|o| o.get("type").and_then(Value::as_str) == Some("gradient")).and_then(gradient_css);
                 match (stroke, gradient, n.p.get("strokeWidth")) {
-                    // A border has one colour: only a lone stroke can use it, a stack becomes masked rings.
-                    (Some(c), _, Some(Value::Object(s))) if strokes.len() == 1 => {
+                    // A border has one colour and lies inside the box: only a lone inner stroke can use it, the rest become masked rings.
+                    (Some(c), _, Some(Value::Object(s))) if strokes.len() == 1 && matches!(n.s("strokeAlignment"), Some("inner" | "inside")) => {
                         for side in ["top", "right", "bottom", "left"] {
                             if let Some(w) = s.get(side).and_then(num).filter(|w| *w > 0.0) {
                                 let _ = write!(css, "border-{side}:{w}px solid {c};");
@@ -586,6 +586,14 @@ mod tests {
         for (align, inset) in [("inner", "0px 0px 0px 0px"), ("outer", "-4px 0px 0px -2px"), ("center", "-2px 0px 0px -1px")] {
             let (_, h) = rect_html(json!({"fill": "#ffffff", "stroke": ["#ff0000", "#0000ff80"], "strokeWidth": {"top": 4, "left": 2}, "strokeAlignment": align}));
             assert!(h.contains(&format!("inset:{inset};padding:4px 0px 0px 2px;")), "{align}: {h}");
+        }
+        // A lone per-side stroke is a CSS border only when inner; centered (the default) and outer rings reach out of the box.
+        let w = json!({"top": 4, "left": 2});
+        let (s, _) = rect_html(json!({"fill": "#ffffff", "stroke": "#000000", "strokeWidth": w.clone(), "strokeAlignment": "inner"}));
+        assert!(s.contains("border-top:4px solid #000000;") && s.contains("border-left:2px solid #000000;"), "{s}");
+        for (align, inset) in [(None, "-2px 0px 0px -1px"), (Some("outer"), "-4px 0px 0px -2px")] {
+            let (s, h) = rect_html(json!({"fill": "#ffffff", "stroke": "#000000", "strokeWidth": w.clone(), "strokeAlignment": align}));
+            assert!(!s.contains("border-") && h.contains(&format!("inset:{inset};padding:4px 0px 0px 2px;")), "{align:?}: {h}");
         }
         // Layer blur: CSS takes the standard deviation, half the radius.
         let (s, _) = rect_html(json!({"fill": "#ff0000", "effect": {"type": "blur", "radius": 4}}));
