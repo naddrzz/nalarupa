@@ -30,9 +30,12 @@ jobs:
         working-directory: core
       - run: bun install --frozen-lockfile && bun run typecheck && bun run smoke && bun run editor-check && bun run mcp-check && bun run doc-check && bun run script-check && bun run chat-check && bun run mcp-install-check && bun run drag-check && bun run viewport-check && bun run issues-check
         working-directory: app
+      # Step timeouts: a hung suite fails its step, which claude-ci-fix picks up, instead of cancelling the job.
       - run: bash scripts/wl-run.sh bun run e2e && bash scripts/wl-run.sh bun run file-e2e
+        timeout-minutes: 15
         working-directory: app
       - run: bash scripts/wl-run.sh bun run editor-e2e
+        timeout-minutes: 15
         working-directory: app
       - uses: actions/upload-artifact@v4
         if: always()
@@ -42,8 +45,8 @@ jobs:
     # The release platform, and the only place a11y-check (UI Automation), window-check and exe-check can run.
     # No GPU on hosted runners: GPUI falls back to the WARP software rasterizer.
     runs-on: windows-latest
-    timeout-minutes: 50
-    continue-on-error: true # experimental until it has proven stable
+    # Required like checks: the merge gate waits for it, and a failure starts claude-ci-fix.
+    timeout-minutes: 60
     defaults: { run: { shell: bash } }
     steps:
       - uses: actions/checkout@v4
@@ -66,19 +69,24 @@ jobs:
           if (-not ($mode | Where-Object { $_.CurrentHorizontalResolution -eq 1920 -and $_.CurrentVerticalResolution -eq 1080 })) { throw 'Display resolution was not set to 1920x1080' }
       - run: bun run e2e
         working-directory: app
+        timeout-minutes: 10
       # A GUI suite after a failed build waits for a core that never comes and times the whole job out.
       - if: ${{ !cancelled() && steps.core.outcome == 'success' }}
         run: bun run editor-e2e
         working-directory: app
+        timeout-minutes: 10
       - if: ${{ !cancelled() && steps.core.outcome == 'success' }}
         run: bun run file-e2e
         working-directory: app
+        timeout-minutes: 10
       - if: ${{ !cancelled() && steps.core.outcome == 'success' }}
         run: bun run a11y-check && bun run motion-check && bun run window-check
         working-directory: app
+        timeout-minutes: 10
       - if: ${{ !cancelled() && steps.core.outcome == 'success' }}
         run: bun run build && bun run exe-check && bun run window-check dist/nalarupa.exe
         working-directory: app
+        timeout-minutes: 10
       - uses: actions/upload-artifact@v4
         if: always()
         with: { name: screenshots-windows, path: app/screenshots/, retention-days: 7 }
