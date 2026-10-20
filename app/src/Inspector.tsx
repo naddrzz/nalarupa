@@ -148,16 +148,16 @@ export function Inspector({ version, selection, select, toast }: Props) {
     if (!ok) toast(BAD_VALUE, true)
     return ok
   }
-  /** Free-text commit: a value the renderer cannot use reverts the field instead of being stored. */
-  const setChecked = (prop: string, check: (v: string) => unknown) => (v: string) => {
+  /** Free-text commit: a value the renderer cannot use reverts the field instead of being stored. `also` is applied when the value is not empty. */
+  const setChecked = (prop: string, check: (v: string) => unknown, also: Record<string, unknown> = {}) => (v: string) => {
     const value = check(v)
-    if (value !== undefined) return update({ [prop]: value })
+    if (value !== undefined) return update({ [prop]: value, ...(value === null ? {} : also) })
     toast(BAD_VALUE, true)
     return false
   }
   /** Fill / stroke commit: a color the renderer cannot read would leave the layer unpainted, so reject it. */
-  const setPaint = (prop: 'fill' | 'stroke', vars: Record<string, any>) => (v: string) => {
-    if (validPaint(v, vars)) return void update({ [prop]: parse(v) })
+  const setPaint = (prop: 'fill' | 'stroke', vars: Record<string, any>, also: Record<string, unknown> = {}) => (v: string) => {
+    if (validPaint(v, vars)) return void update({ [prop]: parse(v), ...(v.trim() ? also : {}) })
     toast('Unable to apply that color. Use a hex such as #FF6A3D, a $variable, or leave it empty for none.', true)
     return false
   }
@@ -378,8 +378,8 @@ export function Inspector({ version, selection, select, toast }: Props) {
         <Section title="Stroke & corners">
           <Row>
             {stroke ? <Swatch color={stroke} /> : null}
-            <Field name="Stroke color" value={str(n.stroke)} mono onCommit={setPaint('stroke', vars)} placeholder="#000000" />
-            <Field name="Stroke width" value={str(n.strokeWidth ?? '')} width={58} onCommit={setChecked('strokeWidth', (v) => strokeWidthOf(v, vars))} placeholder="1" testId="inspector-stroke-width" />
+            <Field name="Stroke color" value={str(n.stroke)} mono onCommit={setPaint('stroke', vars, n.strokeWidth == null ? { strokeWidth: 1 } : {})} placeholder="#000000" testId="inspector-stroke" />
+            <Field name="Stroke width" value={str(n.strokeWidth ?? '')} width={58} onCommit={setChecked('strokeWidth', (v) => strokeWidthOf(v, vars), n.stroke == null ? { stroke: '#000000' } : {})} placeholder="1" testId="inspector-stroke-width" />
           </Row>
           {n.type !== 'ellipse' && n.type !== 'path' ? (
             typeof (n.cornerRadius ?? 0) === 'number'
