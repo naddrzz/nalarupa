@@ -24,11 +24,13 @@ if (!process.argv.includes('--child')) {
   const data = mkdtempSync(join(tmpdir(), 'nalarupa-chat-'))
   // A stand-in `claude` that runs long and prints nothing: a running agent without a login (a shell script, so not on Windows).
   // When `replay.txt` exists next to it, it prints those lines first (`sleep <s>` pauses) and exits.
+  // Like the real CLI it reads the whole prompt from stdin before it answers (exiting first would break the core's pipe write).
   // When `stale.flag` exists, it fails a `--resume` of the id saved below like the real CLI does for a session it has lost.
   const bin = join(data, 'bin')
   mkdirSync(bin)
   const stale = '{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["No conversation found with session ID: 11111111-2222-3333-4444-555555555555"]}'
   const stub = '#!/bin/bash\nf="$(dirname "$0")/replay.txt"\n' +
+    'if [ -f "$f" ] || [ -f "$(dirname "$0")/stale.flag" ]; then cat >/dev/null; fi\n' +
     `if [ -f "$(dirname "$0")/stale.flag" ]; then case " $* " in *" --resume 11111111-2222-3333-4444-555555555555 "*) echo '${stale}'; exit 1;; esac; fi\n` +
     'if [ -f "$f" ]; then while IFS= read -r l; do case "$l" in sleep*) sleep "${l#sleep }";; *) printf \'%s\\n\' "$l";; esac; done < "$f"; exit 0; fi\nexec sleep 60\n'
   if (!windows) writeFileSync(join(bin, 'claude'), stub, { mode: 0o755 })
