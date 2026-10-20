@@ -254,7 +254,7 @@ fn commit(n: &mut RNode, ax: usize, v: f64, fonts: &mut Fonts) {
 }
 
 /// Text box: auto = intrinsic (ceil), fixed-width = width × ceil(lines), fixed-width-height = as set.
-/// Lines wrap at ceil(width); a fixed width of 0 breaks at every opportunity.
+/// Lines wrap at ceil(width); a fixed width of 0 breaks at every word boundary but never inside a word.
 fn text_bounds(n: &mut RNode, fonts: &mut Fonts) {
     let st = TextStyle::of(n);
     let line_h = fonts.metrics(&st).line_h;
@@ -446,5 +446,7 @@ mod tests {
         // fixed-width without a width wraps at 0: one word per line.
         let z = lay(json!({"type":"text","id":"z","content":"a b c","textGrowth":"fixed-width"}));
         assert_eq!(z.lines.len(), 3);
+        let w = lay(json!({"type":"text","id":"w","content":"one two three","textGrowth":"fixed-width"}));
+        assert_eq!(w.lines.len(), 3, "a word is never split without a width");
     }
 }

@@ -273,7 +273,8 @@ impl Fonts {
     }
 
     /// Greedy UAX #14 line breaking (CJK breaks between ideographs); `\n` always breaks,
-    /// trailing spaces hang, words wider than `max_w` break between clusters. No hyphenation.
+    /// trailing spaces hang, words wider than `max_w` break between clusters unless `max_w` is 0
+    /// (no width at all: one word per line). No hyphenation.
     pub fn wrap(&mut self, text: &str, max_w: f64, st: &TextStyle) -> Vec<Line> {
         let mut out = Vec::new();
         for para in text.split('\n') {
@@ -295,7 +296,7 @@ impl Fonts {
                     lines.push((start, end, true));
                     (start, line_w) = (end, 0.0);
                 }
-                if end == start && w(end, te) > max_w + FIT_EPS {
+                if end == start && max_w > 0.0 && w(end, te) > max_w + FIT_EPS {
                     for i in cl.partition_point(|c| c.0 < end)..cl.partition_point(|c| c.0 < te) {
                         let (b, a) = (cl[i].0, cl[i].1 * st.size + st.letter_spacing);
                         if b > start && line_w + a > max_w + FIT_EPS {
@@ -623,7 +624,7 @@ mod tests {
         assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["hello world", "again"]);
         assert!(lines[0].soft && !lines[1].soft);
         assert!((lines[0].width - w).abs() < 1e-6, "trailing space hangs");
-        // CJK breaks between ideographs; zero width puts one cluster per line.
+        // CJK breaks between ideographs; zero width puts one word (here one ideograph) per line.
         let cjk = f.wrap("漢字かな", 0.0, &st);
         assert_eq!(cjk.len(), 4);
         let hard = f.wrap("a\nb", 1000.0, &st);
@@ -632,5 +633,8 @@ mod tests {
         let abc = f.width("abc", &st);
         let long = f.wrap("abcdefgh", abc + 0.5, &st);
         assert_eq!(long.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["abc", "def", "gh"]);
+        // Zero width breaks only at word boundaries, never inside a word.
+        let zero = f.wrap("one two three", 0.0, &st);
+        assert_eq!(zero.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["one", "two", "three"]);
     }
 }
