@@ -1,9 +1,10 @@
-import { forwardRef, useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode, type Ref } from 'react'
+import { createContext, forwardRef, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode, type Ref } from 'react'
 import type { EventPayload } from '@gpuix/native'
 import { useGpuixRequired, type ImgInstance, type PublicInstance } from '@gpuix/react'
 import { ICONS, type IconName } from './icons'
 import { C, DPR, FONT, MONO } from './theme'
 import type { Rect } from './geometry'
+import type { Mods } from './Canvas'
 
 /** Screen-space SVG markup inside `box` (rotated outlines and the vector-edit overlay): GPUI cannot rotate divs, so it paints as an <img>. */
 export function SvgOverlay({ body, box, testId }: { body: string; box: Rect; testId?: string }) {
@@ -43,6 +44,16 @@ export function FocusRing({ radius = 6, inset }: { radius?: number; inset?: bool
 }
 
 type Handler = (e: EventPayload) => void
+type Shortcut = (key: string, mods: Mods) => boolean
+
+/** A focused element owns the keyboard (keys go only to it): the keys it does not use are the editor's shortcuts
+ *  (Delete, Ctrl+Z, Escape). Pass this on from `onKeyDown`. */
+export const forwardKey = (onShortcut: Shortcut, e: EventPayload) => {
+  const m = e.modifiers
+  onShortcut((e.key ?? '').toLowerCase(), { mod: !!(m?.ctrl || m?.cmd), shift: !!m?.shift, alt: !!m?.alt })
+}
+/** The editor's shortcuts for the buttons beneath it: a button keeps keyboard focus after a click. */
+export const ShortcutScope = createContext<Shortcut | null>(null)
 type PressableProps = {
   onClick?: () => void; testId?: string; role?: string; label?: string; selected?: boolean; expanded?: boolean
   /** -1 leaves the Tab order (a parent owns the keyboard path, e.g. a tree row's chevron). */
@@ -61,6 +72,7 @@ export const Pressable = forwardRef<PublicInstance, PressableProps>(function Pre
   ref,
 ) {
   const { ref: own, on, clear } = useRing(ref)
+  const shortcut = useContext(ShortcutScope)
   const radius = typeof style?.borderRadius === 'number' ? style.borderRadius : 6
   return (
     <div
@@ -80,7 +92,9 @@ export const Pressable = forwardRef<PublicInstance, PressableProps>(function Pre
       onKeyDown={(e) => {
         onKeyDown?.(e)
         const k = (e.key ?? '').toLowerCase()
-        if ((k === 'enter' || k === 'space') && !e.isHeld) onClick?.()
+        if (k === 'enter' || k === 'space') {
+          if (!e.isHeld) onClick?.()
+        } else if (shortcut) forwardKey(shortcut, e)
       }}
       style={{ cursor: 'pointer', ...style, ...(on ? { position: 'relative' } : {}) }}
     >
