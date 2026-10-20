@@ -29,14 +29,12 @@ const until = async (ok: () => Promise<boolean>, ms = 3000) => {
   }
   return r
 }
-// The canvas takes the keys back from an unmounted control within about a second (App.tsx), so a Ctrl+Z sent
-// meanwhile reaches nothing: resend it until `ok`. Safe to repeat, a key sent with no focus does nothing.
-const undoWhen = async (ok: () => Promise<boolean>) => {
-  for (let i = 0; i < 12; i++) {
-    await app.call('keystrokes', { keys: 'ctrl-z' })
-    if (await until(ok, 300)) return true
-  }
-  return false
+// The canvas takes the keys back from an unmounted control within about a second (App.tsx). Wait that out, then
+// send one Ctrl+Z: resending could undo an earlier edit when the first one only shows up late in the render.
+const undoAfterHandBack = async (ok: () => Promise<boolean>) => {
+  await sleep(1300)
+  await app.call('keystrokes', { keys: 'ctrl-z' })
+  return until(ok, 5000)
 }
 const val = async (testId: string) => {
   const e = await app.getByTestId(testId).element()
@@ -184,7 +182,7 @@ try {
   const rectsBefore = await rectsNow()
   await app.getByText('Delete').click()
   assert(await until(async () => (await rectsNow()) === rectsBefore - 1), 'the Inspector Delete button deletes the layer')
-  assert(await undoWhen(async () => (await rectsNow()) === rectsBefore), 'Ctrl+Z works right after the Inspector Delete button unmounted')
+  assert(await undoAfterHandBack(async () => (await rectsNow()) === rectsBefore), 'Ctrl+Z works right after the Inspector Delete button unmounted')
   await sleep(600)
   await rectRow.click()
   assert(await until(async () => (await count('inspector-visibility')) > 0), 'the Layers row selects the restored layer')
@@ -592,14 +590,14 @@ try {
   assert(await until(async () => (await paths()) === paths0 + 1), 'Ctrl+D duplicates the layer selected in the Layers panel')
   await app.call('keystrokes', { keys: 'delete' })
   assert(await until(async () => (await paths()) === paths0), 'Delete removes the layer selected in the Layers panel')
-  assert(await undoWhen(async () => (await paths()) === paths0 + 1), 'Ctrl+Z works right after Delete unmounted the focused Layers row')
+  assert(await undoAfterHandBack(async () => (await paths()) === paths0 + 1), 'Ctrl+Z works right after Delete unmounted the focused Layers row')
   await app.call('keystrokes', { keys: 'ctrl-y' })
   assert(await until(async () => (await paths()) === paths0), 'Ctrl+Y redoes the Layers-row Delete')
   await app.getByTestId('layers').getByText('Path').click()
   await sleep(300)
   await app.call('keystrokes', { keys: 'ctrl-x' })
   assert(await until(async () => (await paths()) === paths0 - 1), 'Ctrl+X cuts the layer selected in the Layers panel')
-  assert(await undoWhen(async () => (await paths()) === paths0), 'Ctrl+Z works right after Ctrl+X unmounted the focused Layers row')
+  assert(await undoAfterHandBack(async () => (await paths()) === paths0), 'Ctrl+Z works right after Ctrl+X unmounted the focused Layers row')
   await app.getByTestId('layers').getByText('Path').click()
   await sleep(300)
   assert(await count('size-label'), 'clicking a Layers row selects it')
