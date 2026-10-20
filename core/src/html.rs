@@ -468,11 +468,36 @@ impl Html<'_> {
             Some(v @ Value::Object(_)) => vec![v],
             _ => vec![],
         };
-        shadows.extend(effects.into_iter().filter(|e| e["type"] == "shadow" && e["enabled"] != false).filter_map(|e| {
-            // Defaults: opaque black, no blur; an invalid color is transparent.
+        // (inner, offset x, offset y, blur, colour). Defaults: opaque black, no blur; an invalid color is transparent.
+        let list: Vec<(bool, f64, f64, f64, String)> = effects.into_iter().filter(|e| e["type"] == "shadow" && e["enabled"] != false).filter_map(|e| {
             let c = css_color(e["color"].as_str().unwrap_or("#000000"))?;
-            Some(format!("{}{}px {}px {}px {c}", if e["shadowType"] == "inner" { "inset " } else { "" }, num(&e["offset"]["x"]).unwrap_or(0.0), num(&e["offset"]["y"]).unwrap_or(0.0), num(&e["blur"]).unwrap_or(0.0)))
-        }));
+            Some((e["shadowType"] == "inner", num(&e["offset"]["x"]).unwrap_or(0.0), num(&e["offset"]["y"]).unwrap_or(0.0), num(&e["blur"]).unwrap_or(0.0), c))
+        }).collect();
+        // The box has no shadow of its own to follow: text and groups cast the shadow of their glyphs and children,
+        // and CSS cannot draw an inner shadow there.
+        let mut filters: Vec<String> = Vec::new();
+        let gradient_text = n.ty == "text" && fills(n.p.get("fill")).first().is_some_and(|f| f["type"] == "gradient");
+        if matches!(n.ty.as_str(), "text" | "group" | "icon") {
+            let outer = list.iter().filter(|s| !s.0);
+            if n.ty == "text" && !gradient_text {
+                let t: Vec<String> = outer.map(|(_, x, y, b, c)| format!("{x}px {y}px {b}px {c}")).collect();
+                if !t.is_empty() {
+                    let _ = write!(css, "text-shadow:{};", t.join(","));
+                }
+            } else {
+                // A text-shadow would show through gradient text, whose colour is transparent. `drop-shadow()` takes
+                // the standard deviation, half the blur radius.
+                let outer: Vec<_> = outer.collect();
+                if let [(_, x, y, b, c)] = outer[..] {
+                    filters.push(format!("drop-shadow({x}px {y}px {}px {c})", b / 2.0));
+                } else if !outer.is_empty() {
+                    // Chained `drop-shadow()`s would cast shadows of the earlier shadows: every one needs the original alpha.
+                    filters.push(shadow_filter(&outer));
+                }
+            }
+        } else {
+            shadows.extend(list.iter().map(|(inner, x, y, b, c)| format!("{}{x}px {y}px {b}px {c}", if *inner { "inset " } else { "" })));
+        }
         // Overlays would cover the element's own inset shadows (inner strokes and shadows): paint those above them.
         if !under.is_empty() {
             let inner: Vec<String> = shadows.iter().filter(|s| s.starts_with("inset ")).cloned().collect();
@@ -492,7 +517,10 @@ impl Html<'_> {
         // CSS `blur()` takes the standard deviation, which is half the radius.
         let blur = crate::svg::Effects::of(n).blur;
         if blur > 0.0 {
-            let _ = write!(css, "filter:blur({}px);", (blur * 100.0).round() / 100.0);
+            filters.push(format!("blur({}px)", (blur * 100.0).round() / 100.0));
+        }
+        if !filters.is_empty() {
+            let _ = write!(css, "filter:{};", filters.join(" "));
         }
         under
     }
@@ -527,7 +555,14 @@ impl Html<'_> {
         if !deco.is_empty() {
             let _ = write!(css, "text-decoration:{};", deco.join(" "));
         }
-        if let Some(c) = fills(n.p.get("fill")).first().and_then(|f| f.as_str().map(str::to_string).or_else(|| f["color"].as_str().map(str::to_string))).and_then(|c| css_color(&c)) {
+        let gradient = fills(n.p.get("fill")).first().and_then(|f| f.as_object().filter(|o| o.get("type").and_then(Value::as_str) == Some("gradient"))).and_then(gradient_css);
+        if let Some(g) = gradient {
+            let _ = write!(css, "background:{g};-webkit-background-clip:text;background-clip:text;color:transparent;");
+            // Decorations default to the transparent colour; an opaque one lets the clipped gradient show through them.
+            if !deco.is_empty() {
+                css.push_str("text-decoration-color:#000000;");
+            }
+        } else if let Some(c) = fills(n.p.get("fill")).first().and_then(|f| f.as_str().map(str::to_string).or_else(|| f["color"].as_str().map(str::to_string))).and_then(|c| css_color(&c)) {
             let _ = write!(css, "color:{c};");
         }
         // Like shapes, text takes the top width; CSS has no inner stroke, so it paints centered.
@@ -548,6 +583,21 @@ impl Html<'_> {
             }
         }
     }
+}
+
+/// One `filter` casting every outer shadow from the element's own alpha (unlike chained `drop-shadow()`s, which
+/// shadow each other), as an inline SVG filter. Its blur is the standard deviation, half the radius.
+fn shadow_filter(shadows: &[&(bool, f64, f64, f64, String)]) -> String {
+    let mut f = String::new();
+    for (i, (_, x, y, b, c)) in shadows.iter().enumerate() {
+        let _ = write!(f, "<feGaussianBlur in=\"SourceAlpha\" stdDeviation=\"{}\"/><feOffset dx=\"{x}\" dy=\"{y}\" result=\"o{i}\"/><feFlood flood-color=\"{c}\"/><feComposite in2=\"o{i}\" operator=\"in\" result=\"s{i}\"/>", b / 2.0);
+    }
+    let merge: String = (0..shadows.len()).rev().map(|i| format!("<feMergeNode in=\"s{i}\"/>")).collect();
+    // The region must hold every offset, blurred shadow: a percentage of the element would clip big ones. The element's
+    // size is not known here, so it starts a margin before the origin and runs far past any element.
+    let m = shadows.iter().map(|(_, x, y, b, _)| x.abs().max(y.abs()) + b * 1.5).fold(0.0, f64::max).ceil() + 1.0;
+    let svg = format!("<svg xmlns=\"http://www.w3.org/2000/svg\"><filter id=\"s\" filterUnits=\"userSpaceOnUse\" x=\"-{m}\" y=\"-{m}\" width=\"100000\" height=\"100000\" color-interpolation-filters=\"sRGB\">{f}<feMerge>{merge}<feMergeNode in=\"SourceGraphic\"/></feMerge></filter></svg>");
+    format!("url('data:image/svg+xml,{}#s')", svg.replace('%', "%25").replace('<', "%3C").replace('>', "%3E").replace('#', "%23").replace('"', "%22"))
 }
 
 pub fn file_name(p: &Path) -> String {
@@ -634,6 +684,36 @@ mod tests {
         // An unparseable stop colour stays as transparent black, like the canvas.
         let (s, _) = rect_html(json!({"fill": grad(json!({"colors": [{"color": "#ff0000", "position": 0}, {"color": "transparent", "position": 1}]}))}));
         assert!(s.contains("linear-gradient(-90deg,#ff0000 0%,rgba(0, 0, 0, 0) 100%)"), "{s}");
+    }
+
+    /// Text and groups cast the shadow of their glyphs and children; gradient text keeps its fill.
+    #[test]
+    fn text_and_group_shadows_follow_their_shapes() {
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        e.load_template("empty");
+        let sh = json!({"type": "shadow", "offset": {"x": 6, "y": 6}, "blur": 4, "color": "#ff0000"});
+        let grad = json!({"type": "gradient", "gradientType": "linear", "colors": [{"color": "#ff0000", "position": 0}, {"color": "#0000ff", "position": 1}]});
+        let id = e.insert_root(json!({"type": "frame", "layout": "none", "width": 300, "height": 200, "children": [
+            {"type": "text", "name": "t", "content": "Hi", "fontSize": 40, "fill": "#0000ff", "effect": sh},
+            {"type": "text", "name": "g", "content": "Grad", "fontSize": 40, "fill": grad, "effect": sh},
+            {"type": "text", "name": "g2", "content": "Grad", "fontSize": 40, "fill": grad, "underline": true, "effect": [sh, sh]},
+            {"type": "group", "name": "grp", "effect": [sh, {"type": "blur", "radius": 4}], "children": [{"type": "ellipse", "width": 60, "height": 60, "fill": "#00aa00"}]}
+        ]})).unwrap();
+        let h = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
+        let style = |name: &str| h.split(&format!("data-name=\"{name}\" style=\"")).nth(1).unwrap().split('"').next().unwrap().to_string();
+        let (t, g, g2, grp) = (style("t"), style("g"), style("g2"), style("grp"));
+        assert!(t.contains("text-shadow:6px 6px 4px #ff0000;") && t.contains("color:#0000ff;") && !t.contains("box-shadow"), "{t}");
+        // Gradient text is clipped to its glyphs, so its shadow is a filter that follows them.
+        assert!(g.contains("background:linear-gradient(-0deg,#ff0000 0%,#0000ff 100%);-webkit-background-clip:text;background-clip:text;color:transparent;"), "{g}");
+        assert!(g.contains("filter:drop-shadow(6px 6px 2px #ff0000);") && !g.contains("text-shadow") && !g.contains("box-shadow"), "{g}");
+        // Several shadows all start from the element's alpha, so they are one SVG filter, not a chain of `drop-shadow()`s.
+        assert!(g2.contains("filter:url('data:image/svg+xml,%3Csvg") && g2.contains("%3CfeMergeNode in=%22SourceGraphic%22/%3E") && !g2.contains("drop-shadow"), "{g2}");
+        // The filter region grows with the offset and blur (6 + 1.5 * 4, rounded up, plus one) instead of a share of the element.
+        assert!(g2.contains("filterUnits=%22userSpaceOnUse%22 x=%22-13%22 y=%22-13%22"), "{g2}");
+        // The decoration needs a colour of its own: the text colour is transparent.
+        assert!(g2.contains("text-decoration:underline;") && g2.contains("text-decoration-color:#000000;") && !g.contains("text-decoration"), "{g2}");
+        assert!(grp.contains("filter:drop-shadow(6px 6px 2px #ff0000) blur(2px);") && !grp.contains("box-shadow"), "{grp}");
     }
 
     /// Fixed-size children keep their main-axis size in an overflowing auto layout, as on the canvas.
