@@ -230,6 +230,20 @@ const kid = call('insert', { parent: frame, node: rect({ name: 'kid', flipX: tru
 const kidSvg = readFileSync(call('export', { ids: [kid], format: 'svg', path: out })[0], 'utf8')
 assert(kidSvg.includes('width="100" height="60" viewBox="500 500 100 60"'), `a flipped child of a frame exports its painted box: ${kidSvg.slice(0, 160)}`)
 
+// HTML export reserves the rotated bounding box of a child in an auto layout, like the canvas does.
+{
+  const row = call('insert', { parent: 'document', node: { type: 'frame', name: 'row', layout: 'horizontal', x: 10, y: 10, width: 300, height: 120, padding: 10, gap: 10, fill: '#eeeeee' } }).id
+  const sq = (name: string, extra: object = {}) => call('insert', { parent: row, node: { type: 'rectangle', name, width: 60, height: 60, fill: '#ff0000', ...extra } }).id
+  const [rot, next] = [sq('rot', { rotation: 45 }), sq('next')]
+  const [r, n] = call('boxes', { ids: [rot, next] })
+  const bbox = n.x - r.x - 10 // the canvas leaves the rotated bounding box (60 * sqrt 2) between them
+  const html = readFileSync(call('export', { ids: [row], format: 'html-css', path: join(out, 'tilted.html') })[0], 'utf8')
+  const wrapper = html.match(/<div style="position:relative;flex-shrink:0;width:([\d.]+)px;height:([\d.]+)px;">\n<div data-name="rot"/)
+  assert(Math.abs(bbox - 60 * Math.SQRT2) < 0.01, `the canvas places a 45deg square by its bounding box: ${bbox}`)
+  assert(wrapper && Math.abs(Number(wrapper[1]) - bbox) < 0.01 && Math.abs(Number(wrapper[2]) - bbox) < 0.01, `html wraps the rotated child in its ${bbox} bounding box: ${html}`)
+  assert(/data-name="next" style="width:60px;/.test(html), `the unrotated sibling stays a plain flex item: ${html}`)
+}
+
 // A gradient stroke on a horizontal or vertical line exports a usable gradient: a box-sized gradientTransform
 // of a flat box is singular and browsers paint nothing.
 for (const [name, gradientType, box] of [['hline', 'linear', { x: 20, y: 50, width: 160, height: 0 }], ['vline', 'linear', { x: 100, y: 20, width: 0, height: 160 }], ['hradial', 'radial', { x: 20, y: 50, width: 160, height: 0 }]] as const) {
