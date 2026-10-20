@@ -111,6 +111,29 @@ impl Doc {
         Some((parent, *ip.last().unwrap()))
     }
 
+    /// The ids in `ids` that sit inside none of the other listed layers, in their given order.
+    /// One walk of the document, whatever the number of ids.
+    pub fn outermost(&self, ids: &[String]) -> Vec<String> {
+        let listed: std::collections::HashSet<&str> = ids.iter().map(String::as_str).collect();
+        let mut nested = std::collections::HashSet::new();
+        fn visit<'a>(nodes: &'a [Value], under: bool, listed: &std::collections::HashSet<&str>, nested: &mut std::collections::HashSet<&'a str>) {
+            for n in nodes {
+                let id = n["id"].as_str().unwrap_or_default();
+                if under {
+                    nested.insert(id);
+                }
+                if let Some(kids) = n["children"].as_array() {
+                    visit(kids, under || listed.contains(id), listed, nested);
+                }
+            }
+        }
+        visit(self.children(), false, &listed, &mut nested);
+        ids.iter()
+            .filter(|id| !nested.contains(id.as_str()) && !id.match_indices('/').any(|(i, _)| listed.contains(&id[..i])))
+            .cloned()
+            .collect()
+    }
+
     pub fn all_ids(&self) -> Vec<String> {
         let mut out = Vec::new();
         walk(self.children(), &mut |n| {

@@ -4,7 +4,7 @@ import { tryCall, type Box, type Layer } from './core'
 import type { Mods } from './Canvas'
 import { nodeIcon } from './icons'
 import { C, LEFT_W } from './theme'
-import { FocusRing, Icon, IconButton, Pressable, Segmented, setKeyboardFocus, T, useKeyboardFocusId, type Toast } from './ui'
+import { FocusRing, forwardKey, Icon, IconButton, Pressable, Segmented, setKeyboardFocus, ShortcutScope, T, useKeyboardFocusId, type Toast } from './ui'
 
 export function LeftPanel(props: {
   version: number; selection: string[]; select: (ids: string[]) => void; focus: (id: string) => void; present: (id?: string) => void
@@ -27,12 +27,6 @@ const ROW_H = 28
 // A slide row is the 14 px number, an 8 px gap and the framed thumbnail: 14 + 8 + (196 + 4) = 222 px,
 // inside the 223 px the panel leaves after its border and the rows' 12 px padding.
 const THUMB_W = 196
-
-// A row owns the keyboard after a click: the keys it does not use are the editor's shortcuts (Delete, Ctrl+Z, Escape).
-const forwardKey = (onShortcut: (key: string, mods: Mods) => boolean, e: { key?: string; modifiers?: { ctrl?: boolean; cmd?: boolean; shift?: boolean; alt?: boolean } }) => {
-  const m = e.modifiers
-  onShortcut((e.key ?? '').toLowerCase(), { mod: !!(m?.ctrl || m?.cmd), shift: !!m?.shift, alt: !!m?.alt })
-}
 
 function Layers({ version, selection, select, focus, hover, onShortcut }: { version: number; selection: string[]; select: (ids: string[]) => void; focus: (id: string) => void; hover?: (id: string | null) => void; onShortcut: (key: string, mods: Mods) => boolean }) {
   const layers = useMemo(() => tryCall<Row[]>('layers') ?? [], [version])
@@ -86,14 +80,14 @@ function Layers({ version, selection, select, focus, hover, onShortcut }: { vers
     else n.delete(id)
     return n
   })
-  const focusRow = (id: string | undefined) => {
+  const focusRow = (id: string | undefined, ring = true) => {
     const el = id ? rowEls.current.get(id) : undefined
     if (!id || !el) return
     setCursor(id)
     renderer.focusElement?.(el.id)
     el.scrollIntoView?.()
     // GPUIX fires no onFocus for programmatic focus, so the ring is moved here.
-    setKeyboardFocus(el.id)
+    if (ring) setKeyboardFocus(el.id)
   }
   // Click or Enter/Space: Ctrl toggles the row, Shift adds the range from the first selected row.
   const pick = (id: string, row: number, m?: { ctrl?: boolean; cmd?: boolean; shift?: boolean }) => {
@@ -252,6 +246,8 @@ function Layers({ version, selection, select, focus, hover, onShortcut }: { vers
                 }}
               >
                 {l.children ? (
+                  // The row forwards the keys that bubble up from the chevron: no second forward from the button.
+                  <ShortcutScope value={null}>
                   <Pressable
                     onClick={() => setExpanded(l.id, !l.expanded)}
                     // Out of the Tab order: Left and Right on the row expand and collapse.
@@ -271,6 +267,7 @@ function Layers({ version, selection, select, focus, hover, onShortcut }: { vers
                   >
                     <Icon name={l.expanded ? 'chevronDown' : 'chevronRight'} size={12} color={C.ghost} />
                   </Pressable>
+                  </ShortcutScope>
                 ) : <div style={{ width: 14, flexShrink: 0 }} />}
                 <Icon name={nodeIcon(l.type, l.reusable)} size={13} color={l.reusable || l.type === 'ref' ? C.component : C.ghost} />
                 {renaming?.id === l.id ? (
@@ -281,9 +278,9 @@ function Layers({ version, selection, select, focus, hover, onShortcut }: { vers
                       autoFocus
                       value={renaming.draft}
                       onChange={(e) => rename(live.current && { ...live.current, draft: e.value ?? '' })}
-                      onSubmit={(e) => commitRename(e.value)}
+                      onSubmit={(e) => { commitRename(e.value); focusRow(l.id, false) }}
                       onBlur={() => commitRename()}
-                      onKeyDown={(e) => { if ((e.key ?? '').toLowerCase() === 'escape') rename(null) }}
+                      onKeyDown={(e) => { if ((e.key ?? '').toLowerCase() === 'escape') { rename(null); focusRow(l.id, false) } }}
                       style={{ flexGrow: 1, minWidth: 0, fontSize: 12, color: C.text }}
                     />
                   </div>
@@ -322,7 +319,7 @@ function Layers({ version, selection, select, focus, hover, onShortcut }: { vers
   )
 }
 
-function Slides({ version, selection, select, focus, present, toast, onShortcut }: { version: number; selection: string[]; select: (ids: string[]) => void; focus: (id: string) => void; present: (id?: string) => void; toast: Toast; onShortcut: (key: string, mods: Mods) => boolean }) {
+function Slides({ version, selection, select, focus, present, toast }: { version: number; selection: string[]; select: (ids: string[]) => void; focus: (id: string) => void; present: (id?: string) => void; toast: Toast }) {
   const frames = useMemo(() => (tryCall<Box[]>('frames') ?? []).filter((f) => f.type === 'frame'), [version])
   // Thumbnails are rendered by the core (PNG) at a small scale, a few per tick so a long deck neither
   // freezes the UI nor stops at a cap; a row shows a placeholder until its thumbnail is ready.
@@ -372,8 +369,6 @@ function Slides({ version, selection, select, focus, present, toast, onShortcut 
                 label={`Slide ${i + 1}: ${f.name}`}
                 selected={active}
                 onClick={() => { select([f.id]); focus(f.id) }}
-                // Enter and Space activate the thumbnail (Pressable); the other keys are shortcuts.
-                onKeyDown={(e) => { if (!['enter', 'space'].includes((e.key ?? '').toLowerCase())) forwardKey(onShortcut, e) }}
                 style={{ display: 'flex', flexDirection: 'row', gap: 8, paddingTop: 6, paddingBottom: 6, borderRadius: 6 }}
               >
                 <T size={11} color={C.ghost} style={{ width: 14, flexShrink: 0 }}>{String(i + 1)}</T>

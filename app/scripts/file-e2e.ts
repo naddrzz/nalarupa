@@ -96,6 +96,14 @@ try {
   await until(() => (readFileSync(saved, 'utf8').match(/"rectangle"/g) ?? []).length === 3, 'Save in the prompt wrote the third rectangle')
   await rectsAre(0, 'the empty canvas replaced the document')
 
+  // Presenting a document without slides still says how to leave.
+  await app.getByTestId('tab-slides').click()
+  await app.getByTestId('present-from-slides').click()
+  await app.getByText('No slides: add top-level frames · Esc to exit').waitFor({ timeoutMs: 10000 })
+  await app.getByTestId('presentation').press('escape')
+  await until(async () => !(await app!.getByTestId('presentation').count()), 'Escape leaves the empty presentation')
+  await app.getByTestId('tab-layers').click()
+
   // A saved document opens without a prompt; Don't save drops the edit and leaves the file as it was.
   await app.getByTestId('home').click()
   await recent.click()
@@ -119,6 +127,7 @@ try {
   await app.getByTestId('home').click()
   await app.getByTestId('template-blank').waitFor()
   assert(!(await recent.count()), 'a vanished recent file is hidden')
+  assert(await app.getByText('No recent files yet.').count(), 'Home says so when every recent file has vanished')
 
   // At the minimum window height (1100×680) Home and the agent's empty state scroll, so nothing stays out of reach.
   const dir = process.env.XDG_RUNTIME_DIR

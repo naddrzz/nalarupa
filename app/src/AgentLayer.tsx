@@ -103,7 +103,7 @@ export function AgentLayer({ cam, w, h, version, chatOpen }: { cam: Cam; w: numb
   // 60 fps while anything animates; idle otherwise (under reduced motion only while a fade is due).
   useEffect(() => {
     const t = setInterval(() => {
-      if (needsFrame(performance.now(), REDUCED_MOTION, live.length)) setFrame((f) => (f + 1) % 1_000_000)
+      if (needsFrame(performance.now(), REDUCED_MOTION, live.length, lastFrame.current)) setFrame((f) => (f + 1) % 1_000_000)
     }, 16)
     return () => clearInterval(t)
   }, [live.length])

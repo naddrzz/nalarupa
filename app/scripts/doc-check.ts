@@ -134,6 +134,25 @@ call('delete', { ids: ['sld03'] })
 assert(ids() === 'sld01,sld02', 'delete removes the slide')
 call('undo')
 assert(ids() === 'sld01,sld02,sld03', 'undo brings it back')
+// A layer selected together with its own descendant (either order) is deleted whole, in one undo step.
+const nest = call('insert', { parent: 'document', node: { type: 'frame', name: 'Nest', x: 0, y: 0, width: 400, height: 300, layout: 'none' } }).id
+const nestKid = call('insert', { parent: nest, node: { type: 'rectangle', name: 'Kid', x: 10, y: 10, width: 50, height: 50 } }).id
+for (const order of [[nest, nestKid], [nestKid, nest]]) {
+  call('delete', { ids: order })
+  assert(!call('boxes', { ids: [nest, nestKid] }).length, 'delete removes a layer selected with its descendant')
+  call('undo')
+  assert(call('boxes', { ids: [nest, nestKid] }).length === 2, 'one undo restores the layer and its child')
+}
+throws(() => call('delete', { ids: [nest, 'nope01'] }), /node not found: nope01/, 'delete still rejects an unknown id')
+assert(call('boxes', { ids: [nest] }).length === 1, 'a rejected delete leaves the layers in place')
+call('delete', { ids: [nest] })
+// An instance selected with one of its rendered descendants ("inst/child") goes whole too.
+const comp = call('insert', { parent: 'document', node: { type: 'frame', name: 'Comp', reusable: true, x: 0, y: 400, width: 100, height: 100, layout: 'none' } }).id
+const compKid = call('insert', { parent: comp, node: { type: 'rectangle', name: 'CompKid', x: 0, y: 0, width: 20, height: 20 } }).id
+const inst = call('insert', { parent: 'document', node: { type: 'ref', ref: comp, x: 200, y: 400 } }).id
+call('delete', { ids: [inst, `${inst}/${compKid}`] })
+assert(!call('boxes', { ids: [inst] }).length, 'delete removes an instance selected with its descendant')
+call('delete', { ids: [comp] })
 throws(() => call('png'), /id required/, 'png without an id')
 throws(() => call('no_such_command'), /unknown command/, 'unknown command')
 
@@ -210,6 +229,20 @@ const frame = call('insert', { parent: 'document', node: { type: 'frame', width:
 const kid = call('insert', { parent: frame, node: rect({ name: 'kid', flipX: true, x: 150, y: 20 }) }).id
 const kidSvg = readFileSync(call('export', { ids: [kid], format: 'svg', path: out })[0], 'utf8')
 assert(kidSvg.includes('width="100" height="60" viewBox="500 500 100 60"'), `a flipped child of a frame exports its painted box: ${kidSvg.slice(0, 160)}`)
+
+// A gradient stroke on a horizontal or vertical line exports a usable gradient: a box-sized gradientTransform
+// of a flat box is singular and browsers paint nothing.
+for (const [name, gradientType, box] of [['hline', 'linear', { x: 20, y: 50, width: 160, height: 0 }], ['vline', 'linear', { x: 100, y: 20, width: 0, height: 160 }], ['hradial', 'radial', { x: 20, y: 50, width: 160, height: 0 }]] as const) {
+  const id = call('insert', { parent: 'document', node: { type: 'line', name, ...box, strokeWidth: 20, stroke: { type: 'gradient', gradientType, rotation: 90, colors: [{ color: '#ff0000', position: 0 }, { color: '#0000ff', position: 1 }] } } }).id
+  const svg = readFileSync(call('export', { ids: [id], format: 'svg', path: out })[0], 'utf8')
+  assert(/<(linear|radial)Gradient [^>]*gradientUnits="userSpaceOnUse"[^>]*>/.test(svg) && /stroke="url\(#[^)]+\)"/.test(svg) && !svg.includes('gradientTransform') && !/\de-\d/.test(svg), `${name} gradient stroke has no singular matrix: ${svg.slice(0, 300)}`)
+}
+{
+  // A rotated radial gradient on a flat box keeps the full half-length as its radius.
+  const id = call('insert', { parent: 'document', node: { type: 'line', name: 'hradial45', x: 20, y: 50, width: 160, height: 0, strokeWidth: 20, stroke: { type: 'gradient', gradientType: 'radial', rotation: 45, colors: [{ color: '#ff0000', position: 0 }, { color: '#0000ff', position: 1 }] } } }).id
+  const svg = readFileSync(call('export', { ids: [id], format: 'svg', path: out })[0], 'utf8')
+  assert(/<radialGradient [^>]* r="80"/.test(svg), `a rotated flat radial gradient keeps its radius: ${svg.slice(0, 300)}`)
+}
 
 // Settings persist to the data folder; the API key is never read back.
 call('settings_set', { key: 'anthropic_api_key', value: 'sk-test-not-real' })

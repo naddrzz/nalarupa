@@ -1,0 +1,25 @@
+name: heartbeat
+# GitHub runs cron schedules late or not at all under load: retry-claude's 30-minute cron fired about every 4 hours
+# and auto-merge's 15-minute one twice in 6 hours, so stuck PRs and limit-failed Claude runs sat for hours. This job
+# stays up for 5.5 hours, starting auto-merge every 15 minutes and retry-claude every 30, then starts the next
+# heartbeat. Its own cron only restarts the chain if it broke; a second one waits in the queue and replaces nothing.
+on:
+  schedule: [{ cron: "0 */6 * * *" }]
+  workflow_dispatch:
+
+concurrency: { group: heartbeat, cancel-in-progress: false }
+permissions: { contents: read }
+
+jobs:
+  beat:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 345
+    steps:
+      - env: { GH_TOKEN: "${{ secrets.GH_PAT }}", R: "${{ github.repository }}" }
+        run: |
+          for i in $(seq 0 21); do
+            gh workflow run auto-merge.yml -R "$R" --ref dev || echo "::warning::could not start auto-merge"
+            if [ $((i % 2)) = 0 ]; then gh workflow run retry-claude.yml -R "$R" --ref dev || echo "::warning::could not start retry-claude"; fi
+            sleep 900
+          done
+          gh workflow run heartbeat.yml -R "$R" --ref dev
