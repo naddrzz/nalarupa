@@ -267,6 +267,16 @@ TakeScreenshot([s])`,
     throw new Error(`deck PDF has ${pages} pages, expected 4 (kept as screenshots/deck.pdf)`)
   }
   console.log('deck PDF:', pdfPath, `${pages} pages`)
+  // With every slide hidden the deck has nothing to export: the toast names that, not the export folder.
+  // (Hidden nodes drop out of Get visits, so the ids are read first and restored by id.)
+  const ids = (await mcp('execute', { input: 'Print(JSON.stringify(Get(n => n.type === "frame" ? n.id : undefined).filter(Boolean)))' })).match(/\[[^\]]*\]/)![0]
+  await mcp('execute', { input: `${ids}.forEach(id => Update(id, {enabled:false}))` })
+  await sleep(500)
+  await app.getByTestId('export-deck-pdf').click()
+  await until(async () => /No visible slides to export/.test(await app!.getByTestId('toast').textContent().catch(() => '')), 'the "No visible slides to export" toast')
+  await app.getByTestId('toast-dismiss').click()
+  await mcp('execute', { input: `${ids}.forEach(id => Update(id, {enabled:true}))` })
+  await sleep(500)
 
   // A long frame name must not move its row: layer names and slide labels start at the same x as the
   // others, and a slide label ends inside the panel (ellipsized, not clipped by it).

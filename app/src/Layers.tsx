@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
-import { tryCall, type Box, type Layer } from './core'
+import { call, tryCall, type Box, type Layer } from './core'
 import type { Mods } from './Canvas'
 import { nodeIcon } from './icons'
 import { C, LEFT_W } from './theme'
@@ -346,9 +346,15 @@ function Slides({ version, selection, select, focus, present, toast }: { version
   }, [frames])
   // Empty ids = every top-level frame, in document order; saved next to the document as <title>.pdf.
   const exportPdf = () => {
-    const files = tryCall<string[]>('export', { ids: [], format: 'pdf', path: '' })
-    if (files) toast(`Exported ${files[0]}`)
-    else toast('Unable to export. Check that the export folder is writable and try again.', true)
+    try {
+      toast(`Exported ${call<string[]>('export', { ids: [], format: 'pdf', path: '' })[0]}`)
+    } catch (e) {
+      const why = (e as Error).message
+      console.error('[core] export:', why)
+      // An empty (or all-hidden) deck is not a folder problem: name the cause instead of the generic hint.
+      if (why.startsWith('nothing to export')) toast('No visible slides to export. Show a slide or add a frame first.', true)
+      else toast('Unable to export. Check that the export folder is writable and try again.', true)
+    }
   }
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}>
