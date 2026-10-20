@@ -347,7 +347,7 @@ export function Inspector({ version, selection, select, toast }: Props) {
           <Segmented
             label="Text resizing"
             value={(n.textGrowth ?? 'auto') as string}
-            onChange={(v) => update(v === 'auto' ? { textGrowth: null, width: null, height: null } : { textGrowth: v, width: n.width ?? Math.round(box.w) })}
+            onChange={(v) => update(v === 'auto' ? { textGrowth: null, width: null, height: null } : { textGrowth: v, width: n.width ?? Math.round(box.w), ...(v === 'fixed-width-height' && (box.h > 0 || isMode(n.height, 'fill_container')) ? { height: isMode(n.height, 'fill_container') ? n.height : Math.round(box.h) } : {}) })}
             options={[{ value: 'auto', label: 'Auto' }, { value: 'fixed-width', label: 'Wrap' }, { value: 'fixed-width-height', label: 'Fixed' }]}
           />
         </Section>
