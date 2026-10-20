@@ -63,11 +63,11 @@ async function settles(inserts: number) {
     // Bun.$ sometimes never finishes reading grim's ~6 MB output under load, so spawn it directly and
     // fail fast when it stalls instead of hanging until the job's timeout.
     const grab = async () => {
-      const p = Bun.spawn(['grim', '-t', 'ppm', '-'], { stdout: 'pipe', stderr: 'ignore' })
+      const p = Bun.spawn(['grim', '-t', 'ppm', '-'], { stdout: 'pipe', stderr: 'inherit' })
       const timer = setTimeout(() => p.kill(), 10000)
       try {
         const ppm = await new Response(p.stdout).arrayBuffer()
-        if ((await p.exited) !== 0) throw new Error('motion-check: grim did not return a screenshot (killed after 10 s or failed)')
+        if ((await p.exited) !== 0 || !ppm.byteLength) throw new Error('motion-check: grim did not return a screenshot (killed after 10 s or failed)')
         return new Uint8Array(ppm)
       } finally {
         clearTimeout(timer)
