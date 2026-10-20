@@ -202,7 +202,7 @@ for (const name of ['NA', 'NB', 'NG']) {
   assert(line.includes('position:absolute;') && !line.includes('position:relative'), `html keeps nested ${name} absolute: ${line}`)
 }
 // Shapes inlined as SVG paint outside their box (caps, outer strokes, shadows): the inline svg must not clip them.
-for (const [type, extra] of [['line', { height: 0, strokeLinecap: 'round' }], ['polygon', { height: 40, strokeAlignment: 'outer' }], ['path', { height: 40, geometry: 'M0 0 L100 0' }], ['ellipse', { height: 40, innerRadius: 0.5, strokeAlignment: 'outer' }]] as const) {
+for (const [type, extra] of [['line', { height: 0, strokeLinecap: 'round' }], ['polygon', { height: 40, polygonCount: 5, strokeAlignment: 'outer' }], ['path', { height: 40, geometry: 'M0 0 L100 0' }], ['ellipse', { height: 40, innerRadius: 0.5, strokeAlignment: 'outer' }]] as const) {
   const id = call('insert', { parent: 'document', node: { type, x: 20, y: 40, width: 100, stroke: '#cc0000', strokeWidth: 20, effect: { type: 'shadow', shadowType: 'outer', offset: { x: 10, y: 10 }, blur: 4, color: '#00000080' }, ...extra } }).id
   const out2 = readFileSync(call('export', { ids: [id], format: 'html-css', path: join(out, `${type}-overflow.html`) })[0], 'utf8')
   assert(/<svg [^>]*style="overflow:visible"/.test(out2), `html ${type} svg does not clip its stroke and shadow: ${out2.slice(0, 400)}`)
