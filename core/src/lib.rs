@@ -218,7 +218,8 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
         }
         "delete" => {
             let mut e = engine();
-            let targets = ids(&req["ids"]);
+            // A selected descendant of a selected layer goes with it; deleting it separately would fail.
+            let targets = editor::top_only(&e.doc, &ids(&req["ids"]));
             e.edit_or_drag(|d| targets.iter().try_for_each(|id| d.delete(id)))?;
             Ok(state(&e))
         }

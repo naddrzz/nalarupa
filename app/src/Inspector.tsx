@@ -137,6 +137,10 @@ function TextContent({ value, onSubmit }: { value: string; onSubmit: (v: string)
 }
 
 export function Inspector({ version, selection, select, toast }: Props) {
+  const remove = () => {
+    if (tryCall('delete', { ids: selection }) !== null) select([])
+    else toast('Unable to delete the selection. Select the layers again and try again.', true)
+  }
   const infos = useMemo(() => selection.map((id) => ({ id, ...tryCall('node', { id }) }) as Info).filter((i) => i.node), [selection, version])
   const update = (props: Record<string, unknown>, coalesce?: string) => {
     const ok = tryCall('update', { ids: selection, props, coalesce }) !== null
@@ -185,7 +189,7 @@ export function Inspector({ version, selection, select, toast }: Props) {
         <T color={C.text}>{`Instance child ${selection[0]}`}</T>
         <Row>
           <Button icon="copy" onClick={() => tryCall('duplicate', { ids: selection })}>Duplicate</Button>
-          <Button icon="trash" danger onClick={() => { tryCall('delete', { ids: selection }); select([]) }}>Delete</Button>
+          <Button icon="trash" danger onClick={remove}>Delete</Button>
         </Row>
       </div>
     )
@@ -399,7 +403,7 @@ export function Inspector({ version, selection, select, toast }: Props) {
         ) : null}
         <Row gap={6}>
           <Button icon="copy" onClick={() => { const r = tryCall('duplicate', { ids: selection }); if (r?.ids) select(r.ids) }}>Duplicate</Button>
-          <Button icon="trash" danger onClick={() => { tryCall('delete', { ids: selection }); select([]) }}>Delete</Button>
+          <Button icon="trash" danger onClick={remove}>Delete</Button>
         </Row>
         <Row gap={6}>
           <Button onClick={() => tryCall('reorder', { ids: selection, dir: 'up' })}>Bring forward</Button>

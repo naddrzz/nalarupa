@@ -208,9 +208,7 @@ export function App() {
     const t = TOOLS.find((x) => x.key === key) ?? (key === 'a' ? TOOLS[1] : undefined)
     if (t && !m.mod && !m.shift && !m.alt) return setTool(t.tool), true
     if ((key === 'delete' || key === 'backspace') && has) {
-      tryCall('delete', { ids: sel })
-      select([])
-      return true
+      return run('delete', { ids: sel }, () => select([]))
     }
     if (m.mod && key === 'z') return tryCall(m.shift ? 'redo' : 'undo'), true
     if (m.mod && key === 'y') return tryCall('redo'), true
@@ -221,10 +219,7 @@ export function App() {
     }
     if (m.mod && key === 'c' && has) return copySelection(), true
     if (m.mod && key === 'x' && has) {
-      if (copySelection()) {
-        tryCall('delete', { ids: sel })
-        select([])
-      }
+      if (copySelection()) run('delete', { ids: sel }, () => select([]))
       return true
     }
     if (m.mod && key === 'v') {
