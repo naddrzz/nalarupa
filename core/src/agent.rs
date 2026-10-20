@@ -982,8 +982,31 @@ fn clip_ends(s: &str, n: usize) -> String {
     format!("{}\n…\n{}", s[..head].trim_end(), s[tail..].trim_start())
 }
 
-/// MCP client config for one agent's Claude Code process (per-agent URL = attribution).
-fn claude_mcp_config(agent: &str) -> Result<std::path::PathBuf, String> {
+/// MCP client config for one run of an agent's Claude Code process (per-agent URL = attribution). Deleted when the run
+/// ends, however it ends: the CLI reads it only at start, and its port belongs to this process alone.
+struct McpConfig(PathBuf);
+
+impl Drop for McpConfig {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// A config older than this was left by a session that died before its run ended.
+const MCP_CONFIG_STALE: Duration = Duration::from_secs(86_400);
+
+/// Deletes the configs of dead sessions; younger ones may belong to another running instance.
+fn sweep_mcp_configs(dir: &Path) {
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if name.starts_with("claude-code-mcp-") && name.ends_with(".json") && entry.metadata().and_then(|m| m.modified()).is_ok_and(|t| t.elapsed().is_ok_and(|age| age > MCP_CONFIG_STALE)) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+fn claude_mcp_config(agent: &str) -> Result<McpConfig, String> {
     let (port, dir) = {
         let e = engine();
         (e.mcp_port, e.data_dir.clone())
@@ -991,10 +1014,13 @@ fn claude_mcp_config(agent: &str) -> Result<std::path::PathBuf, String> {
     if port == 0 {
         return Err("the MCP server is not running".into());
     }
-    let path = dir.join(format!("claude-code-mcp-{agent}.json"));
+    sweep_mcp_configs(&dir);
+    // One file per run: the agent id is reused, so a concurrent run of it must not share (and delete) the file.
+    static NEXT_RUN: AtomicUsize = AtomicUsize::new(0);
+    let path = dir.join(format!("claude-code-mcp-{agent}-{}-{}.json", std::process::id(), NEXT_RUN.fetch_add(1, Ordering::Relaxed)));
     let cfg = json!({"mcpServers": {"nalarupa": {"type": "http", "url": format!("http://127.0.0.1:{port}/mcp/{agent}")}}});
     std::fs::write(&path, cfg.to_string()).map_err(|e| e.to_string())?;
-    Ok(path)
+    Ok(McpConfig(path))
 }
 
 /// What the CLI reports for a `--resume` id it has no session for.
@@ -1017,7 +1043,7 @@ fn run_claude_code(p: &Profile, prompt: &str, child: bool, model: Option<String>
     // The prompt goes in on stdin: as an argument a long message or selection overflows the OS limit.
     cmd.arg("-p")
         .args(["--output-format", "stream-json", "--verbose", "--include-partial-messages", "--strict-mcp-config"])
-        .arg("--mcp-config").arg(&cfg)
+        .arg("--mcp-config").arg(&cfg.0)
         // Pre-allowed set: the canvas tools plus web search/fetch. Every other tool asks the
         // user through our MCP permission tool (a permission card).
         .args(["--allowedTools", "mcp__nalarupa,WebSearch,WebFetch"])
@@ -1352,6 +1378,39 @@ mod tests {
         assert_eq!(exit_error("exit status: 1", "boom\n", true), "");
         assert_eq!(exit_error("exit status: 1", " \n", false), "claude exited with exit status: 1");
         assert_eq!(exit_error("exit status: 1", "boom\n", false), "claude exited with exit status: 1: boom");
+    }
+
+    /// The per-agent MCP config goes with its run; only configs of dead sessions (a day old) are swept.
+    #[test]
+    fn mcp_config_is_removed_with_its_run() {
+        let _busy = agent_busy();
+        let dir = std::env::temp_dir().join(format!("nalarupa-test-mcp-{:x}", crate::doc::random_u64()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (old_dir, old_port) = {
+            let mut e = engine();
+            (std::mem::replace(&mut e.data_dir, dir.clone()), std::mem::replace(&mut e.mcp_port, 4321))
+        };
+        let (stale, fresh, other) = (dir.join("claude-code-mcp-dead.json"), dir.join("claude-code-mcp-live.json"), dir.join("settings.json"));
+        for f in [&stale, &fresh, &other] {
+            std::fs::write(f, "{}").unwrap();
+        }
+        let old = SystemTime::now() - MCP_CONFIG_STALE - Duration::from_secs(60);
+        std::fs::File::options().write(true).open(&stale).unwrap().set_modified(old).unwrap();
+        std::fs::File::options().write(true).open(&other).unwrap().set_modified(old).unwrap();
+        let cfg = claude_mcp_config("a1");
+        {
+            let mut e = engine();
+            e.data_dir = old_dir;
+            e.mcp_port = old_port;
+        }
+        let cfg = cfg.unwrap();
+        assert!(cfg.0.exists() && fresh.exists() && other.exists());
+        assert!(!stale.exists(), "a config left by a dead session is swept");
+        assert!(std::fs::read_to_string(&cfg.0).unwrap().contains("4321/mcp/a1"));
+        let path = cfg.0.clone();
+        drop(cfg);
+        assert!(!path.exists(), "the run's own config is deleted when it ends");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Stop drops the queued prompts and says so, so the chat does not keep promising to send them.
