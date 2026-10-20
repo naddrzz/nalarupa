@@ -6,7 +6,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { tryCall, type Box } from './core'
 import { FADE_DELAY, FADE_DUR, FADE_IN, GONE, PILL_MS, PRESENCE, cursorFaded, needsFrame, profileOf, store, type CursorState } from './agents'
 import { ICONS } from './icons'
-import { painted, turned, type M, type Rect } from './geometry'
+import { painted, shimmerHalves, turned, type M, type Rect } from './geometry'
 import { SvgOverlay } from './ui'
 import { C, FONT, REDUCED_MOTION } from './theme'
 import type { Cam } from './Canvas'
@@ -103,7 +103,7 @@ export function AgentLayer({ cam, w, h, version, chatOpen }: { cam: Cam; w: numb
   // 60 fps while anything animates; idle otherwise (under reduced motion only while a fade is due).
   useEffect(() => {
     const t = setInterval(() => {
-      if (needsFrame(performance.now(), REDUCED_MOTION, live.length)) setFrame((f) => (f + 1) % 1_000_000)
+      if (needsFrame(performance.now(), REDUCED_MOTION, live.length, lastFrame.current)) setFrame((f) => (f + 1) % 1_000_000)
     }, 16)
     return () => clearInterval(t)
   }, [live.length])
@@ -229,15 +229,17 @@ export function AgentLayer({ cam, w, h, version, chatOpen }: { cam: Cam; w: numb
       if (m) {
         // Document units: the turned box with the band sliding along its own x axis.
         const [bd, o] = [band / cam.zoom, pos / cam.zoom]
-        const half = (id: string, a: number, z: number) => `<linearGradient id="${id}"><stop offset="0" stop-color="#fff" stop-opacity="${a}"/><stop offset="1" stop-color="#fff" stop-opacity="${z}"/></linearGradient>`
-        return spun(n, m, `<defs><clipPath id="k"><rect x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}"/></clipPath>${half('a', 0, 0.45)}${half('b', 0.45, 0)}</defs>`
+        const grad = `<linearGradient id="a"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset="0.5" stop-color="#fff" stop-opacity="0.45"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>`
+        // One rect with a peaked gradient: two adjacent rects would blend their shared edge twice, a seam.
+        return spun(n, m, `<defs><clipPath id="k"><rect x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}"/></clipPath>${grad}</defs>`
           + `<g clip-path="url(#k)"><rect x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}" fill="#000" fill-opacity="0.25"/>`
-          + `<rect x="${n.x + o}" y="${n.y}" width="${bd / 2}" height="${n.h}" fill="url(#a)"/><rect x="${n.x + o + bd / 2}" y="${n.y}" width="${bd / 2}" height="${n.h}" fill="url(#b)"/></g>`, 'agent-shimmer-turned', `p${n.id}`)
+          + `<rect x="${n.x + o}" y="${n.y}" width="${bd}" height="${n.h}" fill="url(#a)"/></g>`, 'agent-shimmer-turned', `p${n.id}`)
       }
       return (
         <div key={`p${n.id}`} style={{ position: 'absolute', left: X, top: Y, width: W, height: H, overflow: 'hidden', backgroundColor: '#00000040', pointerEvents: 'none' }}>
-          <div style={{ position: 'absolute', left: pos, top: 0, width: band / 2, height: H, background: { type: 'linear-gradient', angle: 90, stops: [{ color: '#FFFFFF00', position: 0 }, { color: '#FFFFFF73', position: 1 }] } }} />
-          <div style={{ position: 'absolute', left: pos + band / 2, top: 0, width: band / 2, height: H, background: { type: 'linear-gradient', angle: 90, stops: [{ color: '#FFFFFF73', position: 0 }, { color: '#FFFFFF00', position: 1 }] } }} />
+          {shimmerHalves(X + pos, band).map(([left, width], k) => (
+            <div key={k} style={{ position: 'absolute', left: left - X, top: 0, width, height: H, background: { type: 'linear-gradient', angle: 90, stops: k ? [{ color: '#FFFFFF73', position: 0 }, { color: '#FFFFFF00', position: 1 }] : [{ color: '#FFFFFF00', position: 0 }, { color: '#FFFFFF73', position: 1 }] } }} />
+          ))}
         </div>
       )
     }

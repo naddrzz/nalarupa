@@ -1,9 +1,9 @@
 // Save and reopen through the real window: `bun scripts/file-e2e.ts`
 // Draw → Save (toolbar) → Home lists it under Recent → reopen shows the drawing; a second Save keeps the
 // same file; Home asks before it replaces unsaved edits (Cancel / Escape / Back, Save, a failed Save, Don't save); a recent file that vanished from disk is no longer offered; a very long recent name is cut inside its row; Home and the agent's empty state scroll in a minimum-height window (Linux, where the window can be resized). No OS file dialogs involved.
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync, renameSync, rmSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync, renameSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { launch } from '@gpuix/react/automation'
 
 const assert = (ok: unknown, msg: string) => {
@@ -96,6 +96,14 @@ try {
   await until(() => (readFileSync(saved, 'utf8').match(/"rectangle"/g) ?? []).length === 3, 'Save in the prompt wrote the third rectangle')
   await rectsAre(0, 'the empty canvas replaced the document')
 
+  // Presenting a document without slides still says how to leave.
+  await app.getByTestId('tab-slides').click()
+  await app.getByTestId('present-from-slides').click()
+  await app.getByText('No slides: add top-level frames · Esc to exit').waitFor({ timeoutMs: 10000 })
+  await app.getByTestId('presentation').press('escape')
+  await until(async () => !(await app!.getByTestId('presentation').count()), 'Escape leaves the empty presentation')
+  await app.getByTestId('tab-layers').click()
+
   // A saved document opens without a prompt; Don't save drops the edit and leaves the file as it was.
   await app.getByTestId('home').click()
   await recent.click()
@@ -115,10 +123,29 @@ try {
   assert((readFileSync(saved, 'utf8').match(/"rectangle"/g) ?? []).length === 3, "Don't save left the file untouched")
 
   // A recent file deleted from disk is not offered any more.
+  const long = join(dirname(saved), `${'Quarterly planning deck for the entire organisation including every single department '.repeat(2).trim()}.nala`)
+  copyFileSync(saved, long)
   rmSync(saved)
   await app.getByTestId('home').click()
   await app.getByTestId('template-blank').waitFor()
   assert(!(await recent.count()), 'a vanished recent file is hidden')
+  assert(await app.getByText('No recent files yet.').count(), 'Home says so when every recent file has vanished')
+
+  // A long title ellipsizes in the space that is left: the unsaved dot keeps its 6×6 size beside it.
+  await app.close()
+  writeFileSync(join(data, 'settings.json'), JSON.stringify({ recent: [long] }))
+  app = await launch({ command: 'bun', args: ['app.tsx'], cwd: join(import.meta.dir, '..'), env: { ...process.env, GPUIX_BACKGROUND: '1', NALARUPA_DATA: data, HOME: data, USERPROFILE: data } })
+  await app.getByTestId(`recent-${basename(long)}`).waitFor({ timeoutMs: 30000 })
+  await app.getByTestId(`recent-${basename(long)}`).click()
+  await app.getByTestId('canvas').waitFor()
+  assert(!(await app.getByTestId('unsaved-dot').count()), 'a freshly opened document shows no unsaved dot')
+  const lc = await app.getByTestId('canvas').bounds()
+  await app.getByTestId('tool-rectangle').click()
+  await app.mouse.drag({ x: lc.x + lc.width / 2 - 60, y: lc.y + lc.height / 2 - 40 }, { x: lc.x + lc.width / 2 + 60, y: lc.y + lc.height / 2 + 40 }, { steps: 5 })
+  await until(async () => (await app!.getByTestId('unsaved-dot').count()) === 1, 'an edit shows the unsaved dot beside the long title')
+  const dot = await app.getByTestId('unsaved-dot').bounds()
+  assert(Math.round(dot.width) === 6 && Math.round(dot.height) === 6, `the unsaved dot keeps 6×6 beside a long title (got ${dot.width}×${dot.height})`)
+  rmSync(long)
 
   // A very long recent name is cut inside its row, and at the minimum window height (1100×680, sway only) Home and the agent's empty state scroll, so nothing stays out of reach.
   const dir = process.env.XDG_RUNTIME_DIR

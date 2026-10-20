@@ -1,9 +1,10 @@
-import { forwardRef, useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode, type Ref } from 'react'
+import { createContext, forwardRef, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode, type Ref } from 'react'
 import type { EventPayload } from '@gpuix/native'
 import { useGpuixRequired, type ImgInstance, type PublicInstance } from '@gpuix/react'
 import { ICONS, type IconName } from './icons'
 import { C, DPR, FONT, MONO } from './theme'
 import type { Rect } from './geometry'
+import type { Mods } from './Canvas'
 
 /** Screen-space SVG markup inside `box` (rotated outlines and the vector-edit overlay): GPUI cannot rotate divs, so it paints as an <img>. */
 export function SvgOverlay({ body, box, testId }: { body: string; box: Rect; testId?: string }) {
@@ -37,17 +38,27 @@ export const useKeyboardFocusId = () => useSyncExternalStore(subscribeFocus, () 
  *  child of a positioned element. (A spread box-shadow does not work: GPUI paints shadows as a filled
  *  box, which showed as a solid block behind transparent buttons.) `inset` draws it on the element's own
  *  edge, for elements that clip their overflow or sit flush against their neighbours. */
-export function FocusRing({ radius = 6, inset }: { radius?: number; inset?: boolean }) {
+export function FocusRing({ radius = 6, inset, testId }: { radius?: number; inset?: boolean; testId?: string }) {
   const o = inset ? 0 : -3
-  return <div style={{ position: 'absolute', left: o, top: o, right: o, bottom: o, borderRadius: radius - o, borderWidth: 2, borderColor: C.focus, pointerEvents: 'none' }} />
+  return <div testId={testId} style={{ position: 'absolute', left: o, top: o, right: o, bottom: o, borderRadius: radius - o, borderWidth: 2, borderColor: C.focus, pointerEvents: 'none' }} />
 }
 
 type Handler = (e: EventPayload) => void
+type Shortcut = (key: string, mods: Mods) => boolean
+
+/** A focused element owns the keyboard (keys go only to it): the keys it does not use are the editor's shortcuts
+ *  (Delete, Ctrl+Z, Escape). Pass this on from `onKeyDown`. */
+export const forwardKey = (onShortcut: Shortcut, e: EventPayload) => {
+  const m = e.modifiers
+  onShortcut((e.key ?? '').toLowerCase(), { mod: !!(m?.ctrl || m?.cmd), shift: !!m?.shift, alt: !!m?.alt })
+}
+/** The editor's shortcuts for the buttons beneath it: a button keeps keyboard focus after a click. */
+export const ShortcutScope = createContext<Shortcut | null>(null)
 type PressableProps = {
   onClick?: () => void; testId?: string; role?: string; label?: string; selected?: boolean; expanded?: boolean
   /** -1 leaves the Tab order (a parent owns the keyboard path, e.g. a tree row's chevron). */
   tabIndex?: number
-  style?: Record<string, unknown>; children?: ReactNode | ((focused: boolean) => ReactNode)
+  style?: Record<string, unknown>; focusTestId?: string; children?: ReactNode | ((focused: boolean) => ReactNode)
   // Passed in by `asChild` wrappers (Tooltip.Trigger) and composed with our own focus handling.
   onMouseEnter?: Handler; onMouseLeave?: Handler; onMouseDown?: Handler; onFocus?: Handler; onBlur?: Handler; onKeyDown?: Handler
 }
@@ -57,10 +68,11 @@ type PressableProps = {
  * a role and name for screen readers, and a focus ring while focused from the keyboard.
  */
 export const Pressable = forwardRef<PublicInstance, PressableProps>(function Pressable(
-  { onClick, testId, role = 'button', label, selected, expanded, tabIndex = 0, style, children, onMouseEnter, onMouseLeave, onMouseDown, onFocus, onBlur, onKeyDown },
+  { onClick, testId, role = 'button', label, selected, expanded, tabIndex = 0, style, focusTestId, children, onMouseEnter, onMouseLeave, onMouseDown, onFocus, onBlur, onKeyDown },
   ref,
 ) {
   const { ref: own, on, clear } = useRing(ref)
+  const shortcut = useContext(ShortcutScope)
   const radius = typeof style?.borderRadius === 'number' ? style.borderRadius : 6
   return (
     <div
@@ -80,12 +92,14 @@ export const Pressable = forwardRef<PublicInstance, PressableProps>(function Pre
       onKeyDown={(e) => {
         onKeyDown?.(e)
         const k = (e.key ?? '').toLowerCase()
-        if ((k === 'enter' || k === 'space') && !e.isHeld) onClick?.()
+        if (k === 'enter' || k === 'space') {
+          if (!e.isHeld) onClick?.()
+        } else if (shortcut) forwardKey(shortcut, e)
       }}
       style={{ cursor: 'pointer', ...style, ...(on ? { position: 'relative' } : {}) }}
     >
       {typeof children === 'function' ? children(on) : children}
-      {on ? <FocusRing radius={radius} /> : null}
+      {on ? <FocusRing radius={radius} testId={focusTestId} /> : null}
     </div>
   )
 })
@@ -102,22 +116,39 @@ export function useRing<T extends PublicInstance>(forwarded?: Ref<T>) {
     else if (forwarded) (forwarded as { current: T | null }).current = v
   }, [forwarded])
   const on = id !== null && el.current?.id === id
-  return { ref, on, clear: () => setKeyboardFocus(null) }
+  return { ref, el, on, clear: () => setKeyboardFocus(null) }
 }
+
+// GPUIX tracks a text field's focus handle on two nested divs, so GPUI's tab-stop list holds the field
+// twice and `focusPrevious` from it lands on the field again: Shift+Tab never leaves. Each field keeps a
+// `back` stop (a focusable div that is no tab stop) right before it; focusing that and walking back from
+// it reaches the stop before the field.
+const backStops = new Map<number, number>()
+/** Host id of the `back` stop that sits before the text field `fieldId`, if it is one. */
+export const backStopOf = (fieldId: number | null | undefined) => (fieldId == null ? undefined : backStops.get(fieldId))
+const noKey = () => {}
 
 /** Focus state of a text field: `ring` is true while it has focus, from the mouse or Tab. GPUIX sends no
  *  focus event for Tab, nor any for a click while its window is inactive (the background e2e window), so
  *  a press on `container` (the field's box; a press on the field bubbles to it) asks the renderer what
  *  has focus, as Tab does in `app.tsx`. Spread `ref`, `onFocus` and `onBlur` on the field, `onMouseDown`
- *  on its container, and draw a `FocusRing` while `ring`. */
+ *  on its container, and draw a `FocusRing` while `ring`. Render `back` right before the field. */
 export function useFieldRing(onFocus?: Handler, onBlur?: Handler) {
   const renderer = useGpuixRequired()
   const [focus, setFocus] = useState(false)
   const el = useRef<PublicInstance | null>(null)
   const { ref: own, on } = useRing()
   const ref = useCallback((v: PublicInstance | null) => { el.current = v; own(v) }, [own])
+  const stop = useRef<PublicInstance | null>(null)
+  useLayoutEffect(() => {
+    const field = el.current?.id
+    if (field === undefined || stop.current === null) return
+    backStops.set(field, stop.current.id)
+    return () => void backStops.delete(field)
+  })
   return {
     ref,
+    back: <div ref={stop} onKeyDown={noKey} style={{ position: 'absolute', width: 0, height: 0 }} />,
     ring: focus || on,
     onFocus: (e: EventPayload) => { setFocus(true); onFocus?.(e) },
     // Leave the id alone when it already names another element: Tab sets it before the blur arrives.
@@ -141,12 +172,13 @@ export function T({ children, size = 12, color = C.text, weight, mono, grow, sty
 }
 
 export const IconButton = forwardRef<PublicInstance, {
-  icon: IconName; onClick?: () => void; active?: boolean; title?: string; testId?: string; color?: string; size?: number
-}>(function IconButton({ icon, onClick, active, title, testId, color, size = 28 }, ref) {
+  icon: IconName; onClick?: () => void; active?: boolean; title?: string; testId?: string; focusTestId?: string; color?: string; size?: number
+}>(function IconButton({ icon, onClick, active, title, testId, focusTestId, color, size = 28 }, ref) {
   return (
     <Pressable
       ref={ref}
       testId={testId}
+      focusTestId={focusTestId}
       label={title}
       selected={active}
       onClick={onClick}
@@ -206,6 +238,7 @@ function TextInput({ value, mono, onFocus, onBlur, ...rest }: {
             <T mono={mono} color={C.text} grow style={{ whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>{value}</T>
           </div>
         ) : null}
+        {field.back}
         <input
           {...rest}
           ref={field.ref}
@@ -283,8 +316,8 @@ function scrubMove(e: EventPayload) {
  * Number field: drag the label to scrub, Up/Down ±step (Shift ×10), Enter/blur
  * commits. `onCommit` gets a coalescing key: one focus session or one scrub = one undo step.
  */
-export function NumField({ label, name = label, value, mixed, onCommit, step = 1, testId, width }: {
-  label: string; value: number; mixed?: boolean; onCommit: (v: number, coalesce: string) => void; step?: number; testId?: string; width?: number
+export function NumField({ label, name = label, value, mixed, onCommit, step = 1, min, max, testId, width }: {
+  label: string; value: number; mixed?: boolean; onCommit: (v: number, coalesce: string) => void; step?: number; min?: number; max?: number; testId?: string; width?: number
   /** Accessible name when the visible label is a letter or symbol ("W", "↻"). */
   name?: string
 }) {
@@ -299,6 +332,8 @@ export function NumField({ label, name = label, value, mixed, onCommit, step = 1
   const key = () => (session.current ??= `field:${testId ?? label}:${++gesture}`)
   const commit = (v: number, k = key()) => {
     if (!Number.isFinite(v)) return setDraft(shown)
+    // The draft shows what is stored: a value the caller would clamp never changes `shown`, so nothing would resync it.
+    v = Math.min(max ?? Infinity, Math.max(min ?? -Infinity, v))
     latest.current = fmt(v)
     setDraft(latest.current)
     onCommit(v, k)
@@ -352,7 +387,8 @@ export function NumField({ label, name = label, value, mixed, onCommit, step = 1
 /**
  * A dropdown's trigger. A press outside the open dropdown that lands on the trigger is left to the
  * trigger's own click (which closes it): closing in `onMouseDownOutside` too made that click reopen
- * it, and the old workaround (ignore clicks for 500 ms) swallowed a quick reopen.
+ * it, and the old workaround (ignore clicks for 500 ms) swallowed a quick reopen. `restore` hands keyboard
+ * focus back to the trigger when the dropdown closes from the keyboard (its panel unmounts with the focus).
  */
 export function useTrigger() {
   const renderer = useGpuixRequired()
@@ -362,7 +398,12 @@ export function useTrigger() {
     const [x, y] = [e.x ?? -1, e.y ?? -1]
     return !!b && x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height
   }
-  return { ref, hit }
+  const restore = () => {
+    if (!ref.current) return
+    renderer.focusElement?.(ref.current.id)
+    setKeyboardFocus(ref.current.id)
+  }
+  return { ref, hit, restore }
 }
 
 /** Small toggle chip (checkbox semantics). */
@@ -410,6 +451,7 @@ export function Segmented<V extends string>({ value, options, onChange, label }:
         <Pressable
           key={o.value}
           testId={o.testId}
+          focusTestId={o.testId ? `${o.testId}-focus` : undefined}
           role="tab"
           label={o.name ?? o.label}
           selected={o.value === value}

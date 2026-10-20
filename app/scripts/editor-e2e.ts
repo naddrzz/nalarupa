@@ -324,6 +324,9 @@ try {
   await app.call('keystrokes', { keys: 'ctrl-a C a r d s enter' })
   await sleep(400)
   assert(await app.getByText('Cards').count(), 'layer renamed from the layers panel')
+  // Enter in the rename field hands the keys back to the Layers row, which passes shortcuts on.
+  await app.call('keystrokes', { keys: 'escape' })
+  assert(await until(async () => !(await count('size-label'))), 'Escape clears the selection after a layer rename')
   await shot('08-renamed')
 
   // An unfocused Inspector field shows the start of a value wider than itself (GPUIX scrolls a set input to
@@ -443,6 +446,13 @@ try {
   assert(!(await count('toast')), 'a valid hex color is applied without an error')
   await canvas.press('ctrl-z')
   await sleep(300)
+  // A number the core clamps is shown as stored (100 %, radius 0), not as typed: the stored value does not change, so nothing else resyncs the field.
+  await typeInto('inspector-opacity', 'ctrl-a 5 0 0')
+  await typeInto('inspector-radius', 'ctrl-a - 4')
+  await app.getByTestId('inspector-name').click()
+  await sleep(700)
+  assert(await until(async () => !(await app.getByText('500').count())), 'an opacity above 100 no longer shows the typed 500')
+  assert(await until(async () => !(await app.getByText('-4').count())), 'a negative radius no longer shows the typed -4')
 
   // Handle centers (canvas px), tl, tr, br, bl. Each sits 12 px in at radius 0 and slides toward the middle
   // (80 px for a 180×160 box) as the radius grows: inset = 12 + radius·68/80.
@@ -481,7 +491,8 @@ try {
   await sleep(400)
   await shot('12-frame-renamed')
   assert(await app.getByTestId('layers').getByText('Home').count(), 'frame renamed from its canvas title')
-  await canvas.press('ctrl-z')
+  // Keys go to the focused element: Enter in the title field must hand the keyboard back to the canvas.
+  await app.call('keystrokes', { keys: 'ctrl-z' })
   await sleep(400)
   assert(await app.getByTestId('layers').getByText('Desktop').count(), 'one undo step reverts the title rename')
 
@@ -560,6 +571,37 @@ try {
   await app.call('keystrokes', { keys: 'escape' })
   assert(await until(async () => !(await count('size-label'))), 'Escape clears the selection from a Layers row')
 
+  // A clicked toolbar or Inspector button owns the keyboard too: the editor shortcuts still work.
+  const rects0 = await rectRows()
+  await app.getByTestId('tool-rectangle').click()
+  await app.mouse.drag(at(500, 420), at(560, 470), { steps: 5 })
+  assert(await until(async () => (await rectRows()) === rects0 + 1), 'the Rectangle tool draws a rectangle')
+  await app.getByTestId('fit').click()
+  await sleep(300)
+  await app.call('keystrokes', { keys: 'ctrl-z' })
+  assert(await until(async () => (await rectRows()) === rects0), 'Ctrl+Z undoes after a click on a toolbar button')
+  await app.call('keystrokes', { keys: 'ctrl-y' })
+  assert(await until(async () => (await rectRows()) === rects0 + 1), 'Ctrl+Y redoes after a click on a toolbar button')
+  await app.mouse.click(at(530, 445))
+  assert(await until(async () => (await count('align-left')) > 0), 'clicking the rectangle selects it')
+  await app.getByTestId('align-left').click()
+  await sleep(300)
+  await app.call('keystrokes', { keys: 'delete' })
+  assert(await until(async () => (await rectRows()) === rects0), 'Delete removes the selection after a click on an Inspector button')
+  await app.getByTestId('tool-hand').click()
+  await sleep(300)
+  await app.call('keystrokes', { keys: 'r' })
+  await sleep(300)
+  await app.mouse.drag(at(500, 420), at(560, 470), { steps: 5 })
+  assert(await until(async () => (await rectRows()) === rects0 + 1), 'a tool key switches tools after a click on a toolbar button')
+  await app.getByTestId('tool-ellipse').click()
+  await sleep(300)
+  await app.call('keystrokes', { keys: 'escape' })
+  await sleep(300)
+  assert(!(await count('size-label')), 'Escape clears the selection after a click on a toolbar tool button')
+  await app.call('keystrokes', { keys: 'ctrl-z' })
+  assert(await until(async () => (await rectRows()) === rects0), 'Ctrl+Z still works after Escape from a toolbar tool button')
+
   // The in-place text editor opens over a rotated text layer (centered on its painted box), not beside it.
   await app.getByTestId('tool-text').click()
   await app.mouse.click(at(300, 200))
@@ -569,6 +611,12 @@ try {
   assert(await until(async () => !(await count('text-editor')) && (await app.getByTestId('layers').getByText('Text').count()) > 0), 'the text tool creates a text layer')
   await app.getByTestId('layers').getByText('Text').click()
   await sleep(300)
+  // Text resizing > Fixed freezes the current size: the layer keeps its height instead of collapsing to 0.
+  const [tw0, th0] = await size()
+  assert(th0 > 0, `an auto text layer has a height (${tw0} × ${th0})`)
+  await app.getByText('Fixed').click()
+  await sleep(600)
+  assert(await until(async () => (await size()).join() === [tw0, th0].join()), `Text resizing > Fixed keeps the ${tw0} × ${th0} size (got ${(await size()).join(' × ')})`)
   const trot = await app.getByTestId('inspector-rotation').bounds()
   await app.mouse.click({ x: trot.x + trot.width - 10, y: trot.y + trot.height / 2 })
   await sleep(500)
@@ -589,6 +637,9 @@ try {
   )
   await app.call('keystrokes', { keys: 'escape' })
   assert(await until(async () => !(await count('text-editor'))), 'Escape ends the text edit')
+  assert(await until(async () => (await count('size-label')) > 0), 'the text layer stays selected after Escape')
+  await app.call('keystrokes', { keys: 'escape' })
+  assert(await until(async () => !(await count('size-label'))), 'Escape clears the selection after a text edit (the canvas has the keys)')
 
   // A child of a rotated or flipped frame follows the pointer: the drag delta is turned into the frame's space first.
   await app.getByTestId('tool-frame').click()
@@ -619,6 +670,35 @@ try {
   await sleep(400)
   await dragRight('flipped')
   await shot('16-rotated-parent-drag')
+  await canvas.press('delete')
+  await sleep(300)
+
+  // A layer dragged onto a frame that sits beside it in the same parent moves into that frame, and back out when the pointer leaves it.
+  await app.getByTestId('tool-frame').click()
+  await app.mouse.drag(at(400, 400), at(560, 560), { steps: 5 })
+  await sleep(300)
+  const card = await app.getByTestId('selection-box').bounds()
+  await app.getByTestId('tool-rectangle').click()
+  await app.mouse.drag(at(640, 420), at(690, 470), { steps: 5 })
+  await sleep(300)
+  const rect = await app.getByTestId('selection-box').bounds()
+  const sameBox = (b: typeof card, to: typeof card) => Math.abs(b.x - to.x) <= 2 && Math.abs(b.y - to.y) <= 2 && Math.abs(b.width - to.width) <= 2
+  // The box of the dragged layer's parent (Shift+Enter); Enter picks the layer again, and the poll waits for its own box.
+  const parentBox = async () => {
+    await canvas.press('shift-enter')
+    const b = (await until(async () => (await count('selection-box')) > 0)) ? await app.getByTestId('selection-box').bounds() : null
+    await canvas.press('enter')
+    await until(async () => (await count('selection-box')) > 0 && Math.abs(((await app.getByTestId('selection-box').all())[0]?.bounds.width ?? NaN) - rect.width) <= 2)
+    return b
+  }
+  await app.mouse.drag(at(665, 445), at(480, 480), { steps: 8 })
+  assert(await until(async () => { const b = await parentBox(); return !!b && sameBox(b, card) }, 6000), 'dragging a layer onto a sibling frame moves it into that frame')
+  await app.mouse.drag(at(480, 480), at(665, 445), { steps: 8 })
+  assert(await until(async () => { const b = await parentBox(); return !!b && !sameBox(b, card) }, 6000), 'dragging it back out into the shared parent leaves the frame')
+  await canvas.press('delete')
+  await sleep(300)
+  await app.mouse.click(at(420, 540))
+  await sleep(300)
   await canvas.press('delete')
   await sleep(300)
 

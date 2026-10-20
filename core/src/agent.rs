@@ -486,10 +486,36 @@ fn path_allowed(file: &Path, tool: &str, workspace: Option<&Path>, document: Opt
     inside(workspace) || (tool == "Read" && inside(skills))
 }
 
-/// Absolute path with `.` and `..` resolved lexically, so `dir/../../x` cannot pass as inside `dir`.
+/// Absolute path with `.` and `..` resolved, so `dir/../../x` cannot pass as inside `dir`, and symlinks
+/// resolved too: the deepest existing ancestor is canonicalized (the OS follows links and `..` there),
+/// the not-yet-existing rest is appended lexically. A dangling link (it cannot be canonicalized) is followed
+/// by hand; a link loop resolves to the empty path, which is inside nothing. Nothing resolvable is left lexical.
 fn normalize(p: &Path) -> PathBuf {
+    resolve(p, 0)
+}
+
+fn resolve(p: &Path, depth: u32) -> PathBuf {
+    if depth > 40 {
+        return PathBuf::new();
+    }
+    let abs = std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
+    for a in abs.ancestors() {
+        let Ok(rest) = abs.strip_prefix(a) else { continue };
+        if let Ok(base) = std::fs::canonicalize(a) {
+            return lexical(&base.join(rest));
+        }
+        if let Ok(target) = std::fs::read_link(a) {
+            let next = a.parent().unwrap_or(a).join(target);
+            return resolve(&if rest.as_os_str().is_empty() { next } else { next.join(rest) }, depth + 1);
+        }
+    }
+    lexical(&abs)
+}
+
+/// `.` and `..` resolved without touching the disk.
+fn lexical(p: &Path) -> PathBuf {
     let mut out = PathBuf::new();
-    for c in std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf()).components() {
+    for c in p.components() {
         match c {
             std::path::Component::ParentDir => {
                 out.pop();
@@ -1408,5 +1434,32 @@ mod tests {
         assert!(!ok("C:/work/site/app.pen", "Write") && ok("C:/work/site/app.pen", "Read"));
         assert!(ok("C:/home/.claude/skills/x/SKILL.md", "Read") && !ok("C:/home/.claude/skills/x/SKILL.md", "Edit"));
         assert!(!path_allowed(Path::new("C:/work/site/a.txt"), "Write", None, None, Some(skills)), "no document folder, nothing allowed");
+    }
+
+    /// A symlink inside the workspace does not make its target (outside, or the open document) count as inside.
+    #[cfg(unix)]
+    #[test]
+    fn permission_paths_follow_symlinks() {
+        let base = std::env::temp_dir().join(format!("nalarupa-test-links-{:x}", crate::doc::random_u64()));
+        let (ws, out) = (base.join("project"), base.join("outside"));
+        std::fs::create_dir_all(&ws).unwrap();
+        std::fs::create_dir_all(&out).unwrap();
+        let doc = ws.join("design.nala");
+        std::fs::write(&doc, "").unwrap();
+        std::os::unix::fs::symlink(&out, ws.join("link")).unwrap();
+        std::os::unix::fs::symlink(&doc, ws.join("alias.nala")).unwrap();
+        let ok = |f: PathBuf, tool: &str| path_allowed(&f, tool, Some(&ws), Some(&doc), None);
+        assert!(ok(ws.join("sub/new.txt"), "Write"), "a plain new file in the workspace stays allowed");
+        assert!(!ok(ws.join("link/x.txt"), "Write"), "new file through a link to outside");
+        assert!(!ok(ws.join("link/../escape.txt"), "Write"), "`..` after a link leaves the target's folder");
+        assert!(!ok(ws.join("alias.nala"), "Edit"), "link to the open document");
+        assert!(ok(ws.join("alias.nala"), "Read"));
+        std::os::unix::fs::symlink(out.join("missing.txt"), ws.join("dangling.txt")).unwrap();
+        std::os::unix::fs::symlink(out.join("newdir"), ws.join("dangling-dir")).unwrap();
+        std::os::unix::fs::symlink(ws.join("loop"), ws.join("loop")).unwrap();
+        assert!(!ok(ws.join("dangling.txt"), "Write"), "dangling link to a file outside");
+        assert!(!ok(ws.join("dangling-dir/x.txt"), "Write"), "dangling link to a folder outside");
+        assert!(!ok(ws.join("loop"), "Write"), "link loop");
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

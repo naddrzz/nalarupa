@@ -51,6 +51,8 @@ jobs:
             2. Reproduce it locally with the same command (core: cargo test --release; app checks from app/;
                GUI checks as `bash scripts/wl-run.sh bun run <check>`), find the root cause and fix it. Fix the code,
                not the check, unless the check itself is wrong; never skip or weaken a check to get green.
+               A failure in the windows job cannot be reproduced on this Linux runner: fix it from the log, run what does
+               run here, and say in the PR comment that Windows CI verifies it.
                If the failure is outside this repo's control (runner down, network), make no commit and explain.
             3. Run the full set before pushing: (cd core && cargo build --release && cargo test --release) && (cd app &&
                bun run typecheck && bun run smoke && bun run editor-check && bun run mcp-check && bun run doc-check &&
