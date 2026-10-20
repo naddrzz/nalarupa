@@ -14,6 +14,10 @@ const assert = (ok: unknown, msg: string) => {
   if (!ok) throw new Error(`editor-e2e failed: ${msg}`)
 }
 
+// The core takes the next free port of 47700–47719 when another Nalarupa already holds one; this window's is the new one.
+const mcpCall = (port: number, body: object) => fetch(`http://127.0.0.1:${port}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, ...body }) })
+const ports = async () => (await Promise.all(Array.from({ length: 20 }, (_, i) => 47700 + i).map((p) => mcpCall(p, { method: 'tools/list' }).then(() => p, () => 0)))).filter(Boolean)
+const portsBefore = new Set(await ports())
 const app = await launch({ command: 'bun', args: ['app.tsx'], cwd: join(import.meta.dir, '..'), env: { ...process.env, GPUIX_BACKGROUND: '1' } })
 // GPUIX can't capture on Linux; there the window runs under a headless Wayland compositor, so grab it with grim.
 const shot = (name: string) => process.platform === 'linux' ? Bun.$`grim ${join(out, `editor-${name}.png`)}`.quiet() : app.screenshot({ path: join(out, `editor-${name}.png`) })
@@ -446,6 +450,28 @@ try {
   assert(!(await count('toast')), 'a valid hex color is applied without an error')
   await canvas.press('ctrl-z')
   await sleep(300)
+  // No width, no stroke: each stroke field fills in the other's placeholder default, in one undo step.
+  const fresh = (await ports()).filter((p) => !portsBefore.has(p))
+  assert(fresh.length === 1, `expected one new MCP port, found ${fresh.join(', ') || 'none'}`)
+  const port = fresh[0]
+  const stroked = async () => {
+    const res: any = await (await mcpCall(port, { method: 'tools/call', params: { name: 'execute', arguments: { input: 'Get(undefined, n => { if (n.name === "Rectangle") Print(JSON.stringify({ stroke: n.stroke ?? "", strokeWidth: n.strokeWidth ?? "" })) })' } } })).json()
+    return String(res.result?.content?.[0]?.text ?? '').split('\n').filter((l) => l.startsWith('{')).pop() ?? ''
+  }
+  const settled = (stroke: string, width: number | string) => until(async () => (await stroked()) === JSON.stringify({ stroke, strokeWidth: width }))
+  assert(await settled('', ''), `a new rectangle has no stroke (${await stroked()})`)
+  await typeInto('inspector-stroke', 'ctrl-a # 0 0 F F F F')
+  await app.getByTestId('inspector-name').click()
+  await sleep(700)
+  assert(await settled('#00FFFF', 1), `a stroke color alone adds the 1 px width its placeholder shows (${await stroked()})`)
+  await canvas.press('ctrl-z')
+  assert(await settled('', ''), 'one undo step reverts the stroke color and its default width')
+  await typeInto('inspector-stroke-width', 'ctrl-a 6')
+  await app.getByTestId('inspector-name').click()
+  await sleep(700)
+  assert(await settled('#000000', 6), `a stroke width alone adds the black its placeholder shows (${await stroked()})`)
+  await canvas.press('ctrl-z')
+  assert(await settled('', ''), 'one undo step reverts the stroke width and its default color')
   // A number the core clamps is shown as stored (100 %, radius 0), not as typed: the stored value does not change, so nothing else resyncs the field.
   await typeInto('inspector-opacity', 'ctrl-a 5 0 0')
   await typeInto('inspector-radius', 'ctrl-a - 4')
