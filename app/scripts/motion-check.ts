@@ -60,8 +60,21 @@ async function settles(inserts: number) {
     const frame = `Get(n => n.type === "frame" ? n.id : undefined)[0]`
     // Whole-screen grab: count the rectangle's green pixels (fully opaque is exactly 0x22ff55; a frozen slide
     // frame is a lighter green), so no window or camera geometry is needed. Overlays are other colours.
+    // Bun.$ sometimes never finishes reading grim's ~6 MB output under load, so spawn it directly and
+    // fail fast when it stalls instead of hanging until the job's timeout.
+    const grab = async () => {
+      const p = Bun.spawn(['grim', '-t', 'ppm', '-'], { stdout: 'pipe', stderr: 'inherit' })
+      const timer = setTimeout(() => p.kill(), 10000)
+      try {
+        const ppm = await new Response(p.stdout).arrayBuffer()
+        if ((await p.exited) !== 0 || !ppm.byteLength) throw new Error('motion-check: grim did not return a screenshot (killed after 10 s or failed)')
+        return new Uint8Array(ppm)
+      } finally {
+        clearTimeout(timer)
+      }
+    }
     const green = async () => {
-      const ppm = new Uint8Array(await Bun.$`grim -t ppm -`.quiet().arrayBuffer())
+      const ppm = await grab()
       let [exact, close] = [0, 0]
       for (let k = ppm.length - 3; k >= 15; k -= 3) {
         const [r, g, b] = [ppm[k], ppm[k + 1], ppm[k + 2]]
