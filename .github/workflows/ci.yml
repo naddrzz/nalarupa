@@ -31,7 +31,10 @@ jobs:
       - run: bun install --frozen-lockfile && bun run typecheck && bun run smoke && bun run editor-check && bun run mcp-check && bun run doc-check && bun run script-check && bun run chat-check && bun run mcp-install-check && bun run drag-check && bun run viewport-check && bun run issues-check
         working-directory: app
       # Step timeouts: a hung suite fails its step, which claude-ci-fix picks up, instead of cancelling the job.
-      - run: bash scripts/wl-run.sh bun run e2e && bash scripts/wl-run.sh bun run file-e2e
+      - run: bash scripts/wl-run.sh bun run e2e
+        timeout-minutes: 15
+        working-directory: app
+      - run: bash scripts/wl-run.sh bun run file-e2e
         timeout-minutes: 15
         working-directory: app
       - run: bash scripts/wl-run.sh bun run editor-e2e
@@ -83,11 +86,23 @@ jobs:
         working-directory: app
         timeout-minutes: 10
       - if: ${{ !cancelled() && steps.display.outcome == 'success' }}
-        run: bun run a11y-check && bun run motion-check && bun run window-check
+        run: bun run a11y-check
         working-directory: app
         timeout-minutes: 10
       - if: ${{ !cancelled() && steps.display.outcome == 'success' }}
-        run: bun run build && bun run exe-check && bun run window-check dist/nalarupa.exe
+        run: bun run motion-check
+        working-directory: app
+        timeout-minutes: 10
+      - if: ${{ !cancelled() && steps.display.outcome == 'success' }}
+        run: bun run window-check
+        working-directory: app
+        timeout-minutes: 10
+      - if: ${{ !cancelled() && steps.display.outcome == 'success' }}
+        run: bun run build && bun run exe-check
+        working-directory: app
+        timeout-minutes: 10
+      - if: ${{ !cancelled() && steps.display.outcome == 'success' }}
+        run: bun run window-check dist/nalarupa.exe
         working-directory: app
         timeout-minutes: 10
       - uses: actions/upload-artifact@v4
