@@ -291,5 +291,17 @@ try {
 } finally {
   rmSync(deepDir, { recursive: true, force: true })
 }
+// One very long line (pasted minified JSON, a base64 blob) lays out in linear time: quadruple the text,
+// about quadruple the time (it was ~14x, 160k characters took 9 s).
+const layoutMs = (chars: number) => {
+  call('new', { template: 'empty' })
+  call('paste', { html: '', text: 'lorem ipsum '.repeat(chars / 12), targets: [] })
+  const t0 = performance.now()
+  call('frames')
+  return performance.now() - t0
+}
+layoutMs(10000) // warm the font and shaping caches
+const [short, long] = [layoutMs(40000), layoutMs(160000)]
+assert(long < short * 9 && long < 4000, `a long single line lays out in linear time (40k chars ${short.toFixed(0)} ms, 160k ${long.toFixed(0)} ms)`)
 console.log('smoke ok — MCP at', init.mcpUrl)
 process.exit(0)
