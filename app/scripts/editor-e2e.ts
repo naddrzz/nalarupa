@@ -663,6 +663,9 @@ try {
     await sleep(400)
     const [x1, y1] = await center()
     assert(Math.abs(x1 - x0 - 60) <= 2 && Math.abs(y1 - y0) <= 2, `a child of a ${what} frame follows the pointer (${x0},${y0} → ${x1},${y1})`)
+    // The arrow keys nudge it on screen the same way: Shift+Right five times (50 px) goes right, not along the frame's own x axis.
+    for (let i = 0; i < 5; i++) await canvas.press('shift-right')
+    assert(await until(async () => { const [x2, y2] = await center(); return x2 - x1 > 5 && Math.abs(y2 - y1) <= 2 }, 4000), `Shift+Right moves a child of a ${what} frame right on screen (${x1},${y1} → ${(await center()).join(',')})`)
     await canvas.press('shift-enter')
   }
   await dragRight('rotated')

@@ -14,7 +14,7 @@ import { Home } from './Home'
 import { Present } from './Present'
 import { C, LEFT_W, REDUCED_MOTION, RIGHT_W, TOP_H } from './theme'
 import { Icon, IconButton, Pressable, Segmented, ShortcutScope, T, type Toast } from './ui'
-import { centerOffset } from './geometry'
+import { centerOffset, inParent, type M } from './geometry'
 import type { IconName } from './icons'
 
 let flips = 0
@@ -262,18 +262,23 @@ export function App() {
     const nudge: Record<string, [number, number]> = { left: [-1, 0], right: [1, 0], up: [0, -1], down: [0, 1] }
     if (nudge[key] && has) {
       // Inside auto layout arrows reorder along the layout axis (Alt: to the end); elsewhere they nudge.
-      const free: string[] = []
+      const free = new Map<string, string[]>()
       for (const id of sel) {
         const info = nodeOf(id)
         const layout = info?.node?.layoutPosition !== 'absolute' ? info?.parentLayout : 'none'
-        if (!layout || layout === 'none') free.push(id)
+        if (!layout || layout === 'none') free.set(parentOf(id), [...(free.get(parentOf(id)) ?? []), id])
         else if ((layout === 'vertical') === (key === 'up' || key === 'down')) {
           const later = key === 'right' || key === 'down'
           tryCall('reorder', { ids: [id], dir: m.alt ? (later ? 'front' : 'back') : later ? 'up' : 'down' })
         }
       }
       const s = m.shift ? 10 : 1
-      if (free.length) tryCall('move_by', { ids: free, dx: nudge[key][0] * s, dy: nudge[key][1] * s })
+      // `move_by` works in the parent's space: turn the screen delta into it (rotated or flipped frames).
+      for (const [parent, ids] of free) {
+        const pm: M | null = parent === 'document' ? null : nodeOf(parent)?.box?.m ?? null
+        const [dx, dy] = inParent(pm, nudge[key][0] * s, nudge[key][1] * s)
+        tryCall('move_by', { ids, dx, dy })
+      }
       return true
     }
     return false
