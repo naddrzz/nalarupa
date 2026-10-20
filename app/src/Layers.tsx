@@ -74,6 +74,34 @@ function Layers({ version, selection, select, focus, hover, onShortcut }: { vers
   }, [layers, open])
   // The Tab stop: the last row focused or clicked while it is visible, else the first selected row.
   const tabStop = (visible.find((v) => v.id === cursor) ?? visible.find((v) => selection.includes(v.id)) ?? visible[0])?.id
+  // A selection made elsewhere (canvas click, marquee, undo) scrolls the list to its first row, without
+  // moving keyboard focus. The list is virtual, so a row far off screen has no element: scroll by index,
+  // and again until the row is mounted, as the list may not have taken the new rows yet. Waits for the
+  // row to exist (a new node can be selected before its layer does).
+  const listEl = useRef<PublicInstance | null>(null)
+  const scrolledFor = useRef<string[] | null>(null)
+  const scrollTimer = useRef<ReturnType<typeof setInterval>>(undefined)
+  useEffect(() => () => clearInterval(scrollTimer.current), [])
+  useEffect(() => {
+    if (scrolledFor.current === selection) return
+    const at = visible.findIndex((v) => selection.includes(v.id))
+    clearInterval(scrollTimer.current)
+    if (at < 0) return
+    scrolledFor.current = selection
+    // The list's anchor is [first row, px scrolled into it, viewport px]; rows are ROW_H tall.
+    const shown = () => {
+      const t = listEl.current && renderer.getListScrollTop?.(listEl.current.id)
+      return !!t && at >= t[0] + (t[1] > 0 ? 1 : 0) && at < t[0] + Math.floor((t[2] - 12) / ROW_H)
+    }
+    const go = () => {
+      const done = shown()
+      if (!done && listEl.current) renderer.scrollToItem?.(listEl.current.id, at)
+      return done
+    }
+    if (go()) return
+    let tries = 0
+    scrollTimer.current = setInterval(() => { if (go() || ++tries >= 20) clearInterval(scrollTimer.current) }, 100)
+  }, [selection, visible])
   const setExpanded = (id: string, on: boolean) => setOpen((s) => {
     const n = new Set(s)
     if (on) n.add(id)
@@ -161,7 +189,7 @@ function Layers({ version, selection, select, focus, hover, onShortcut }: { vers
       onMouseUp={finish}
       onMouseLeave={() => setHover(null)}
     >
-      <virtual-list estimatedItemHeight={28} style={{ flexGrow: 1, minHeight: 0, paddingTop: 6, paddingBottom: 6 }}>
+      <virtual-list ref={listEl} estimatedItemHeight={28} style={{ flexGrow: 1, minHeight: 0, paddingTop: 6, paddingBottom: 6 }}>
         {visible.map((l, row) => {
           const active = selection.includes(l.id)
           const mark = dropAt?.id === l.id ? dropAt.pos : null

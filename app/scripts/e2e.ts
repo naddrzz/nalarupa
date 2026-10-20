@@ -628,6 +628,35 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
     await until(async () => (await app!.getByText('result row 119').count()) > 0, 'the last line of a long tool result')
   }
 
+  // A layer selected on the canvas scrolls the (virtual) Layers list to its row: here the last of 150 rows (the first inserted).
+  await mcp('execute', {
+    input: `
+pos = FindEmptySpace({width: 1000, height: 600, padding: 100, direction: "right"})
+f = Insert(document, {type:"frame", name:"Many", x: pos.x, y: 0, width:1000, height:600, fill:"#FFFFFF", layout:"none"})
+Insert(f, {type:"rectangle", name:"Backdrop", x:0, y:0, width:1000, height:600, fill:"#DDDDDD"})
+for (let i = 0; i < 149; i++) Insert(f, {type:"rectangle", name:"Chip " + i, x:(i % 15) * 12, y:Math.floor(i / 15) * 12, width:10, height:10, fill:"#888888"})`,
+  })
+  await sleep(1500)
+  await app.getByTestId('tab-layers').click()
+  const layersBox = (await app.getByTestId('layers').bounds())!
+  const rowShown = async (name: string) => {
+    const b = await app!.getByTestId('layers').getByText(name).bounds().catch(() => null)
+    return !!b && b.y >= layersBox.y && b.y + b.height <= layersBox.y + layersBox.height
+  }
+  await until(async () => (await app!.getByTestId('layers').getByText('Many').count()) > 0, 'the Many frame row')
+  await app.getByTestId('layers').getByText('Many').click()
+  await app.getByTestId('canvas').press('shift-2')
+  await sleep(1200)
+  if (await rowShown('Backdrop')) throw new Error('the Backdrop row is on screen before it is selected: the list is too short to test scrolling')
+  // The frame is selected, and a click on a selected node keeps it: clear the selection first.
+  await app.getByTestId('canvas').press('escape')
+  await sleep(300)
+  const cv = (await app.getByTestId('canvas').bounds())!
+  await app.mouse.click({ x: cv.x + cv.width / 2, y: cv.y + cv.height / 2 })
+  await until(async () => (await mcp('get_editor_state', {})).split('\n').some((l) => l.startsWith('- Selection') && l.includes('"Backdrop"')), 'the canvas click to select Backdrop')
+  await until(async () => await rowShown('Backdrop'), 'the Layers list scrolled to the layer selected on the canvas')
+  await shot('05b-layers-follow-selection')
+
   await app.getByTestId('present').click()
   await sleep(1500)
   await shot('06-present')
