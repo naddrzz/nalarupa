@@ -422,13 +422,15 @@ impl Html<'_> {
             }
             // No stroke without a width; alignment defaults to center. Every stroke is painted, bottom to top.
             let strokes = fills(n.p.get("stroke"));
+            let blends = strokes.iter().any(|s| blend_mode(s["blendMode"].as_str()).is_some());
             for paint in &strokes {
                 let stroke = paint.as_str().map(str::to_string).or_else(|| paint["color"].as_str().map(str::to_string)).and_then(|c| css_color(&c));
                 let gradient = paint.as_object().filter(|o| o.get("type").and_then(Value::as_str) == Some("gradient")).and_then(gradient_css);
-                // A blending stroke is a masked ring too: only an overlay can blend with the layers beneath.
-                if let (Some(b), Some(w)) = (blend_mode(paint["blendMode"].as_str()), n.p.get("strokeWidth")) {
+                // A blending stroke is a masked ring too: only an overlay can blend with the layers beneath. Once one
+                // is, every stroke is, so the stack keeps its order (a border or box-shadow would paint below it).
+                if let (true, Some(w)) = (blends, n.p.get("strokeWidth")) {
                     if let Some(l) = gradient.clone().or_else(|| stroke.clone().map(|c| format!("linear-gradient({c},{c})"))) {
-                        under += &stroke_overlay(&l, w, n.s("strokeAlignment"), Some(b)).unwrap_or_default();
+                        under += &stroke_overlay(&l, w, n.s("strokeAlignment"), blend_mode(paint["blendMode"].as_str())).unwrap_or_default();
                         continue;
                     }
                 }
@@ -494,7 +496,8 @@ impl Html<'_> {
         if fx.blur > 0.0 {
             let _ = write!(css, "filter:blur({}px);", (fx.blur * 100.0).round() / 100.0);
         }
-        if fx.backdrop > 0.0 {
+        // Like the canvas, a node below full opacity shows no background blur.
+        if fx.backdrop > 0.0 && n.f("opacity").unwrap_or(1.0) >= 1.0 {
             let b = (fx.backdrop * 100.0).round() / 100.0;
             let _ = write!(css, "backdrop-filter:blur({b}px);-webkit-backdrop-filter:blur({b}px);");
         }
@@ -619,6 +622,11 @@ mod tests {
         // Background blur is a backdrop filter with the standard deviation, like layer blur.
         let (s, _) = rect_html(json!({"fill": "#ffffff40", "effect": {"type": "background_blur", "radius": 16}}));
         assert!(s.contains("backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);"), "{s}");
+        let (s, _) = rect_html(json!({"fill": "#ffffff40", "opacity": 0.5, "effect": {"type": "background_blur", "radius": 16}}));
+        assert!(!s.contains("backdrop-filter"), "{s}");
+        // A blending stroke makes the whole stack rings, so a plain stroke above it stays above it.
+        let (s, h) = rect_html(json!({"fill": "#ffffff", "stroke": [{"type": "color", "color": "#00ffff", "blendMode": "screen"}, "#ff0000"], "strokeWidth": 6}));
+        assert!(!s.contains("box-shadow") && h.matches("mask-composite:exclude").count() == 2 && h.find("mix-blend-mode:screen") < h.find("#ff0000"), "{h}");
         // Every stroke is painted, the topmost first in the box-shadow list.
         let (s, _) = rect_html(json!({"fill": "#ffffff", "stroke": ["#ff0000", "#0000ff80"], "strokeWidth": 10, "strokeAlignment": "inner"}));
         assert!(s.contains("box-shadow:inset 0 0 0 10px rgba(0, 0, 255, 0.502),inset 0 0 0 10px #ff0000;"), "{s}");
