@@ -177,6 +177,7 @@ export function Canvas(props: {
   const renderer = useGpuixRequired()
   // An in-place editor unmounts while it holds focus: Enter or Escape hands the keys back to the canvas.
   const refocus = () => void (ring.el.current && renderer.focusElement?.(ring.el.current.id))
+  const textEl = useRef<PublicInstance>(null)
 
   // Tell the core what the user sees, so the agent's editor state marks visible frames.
   useEffect(() => {
@@ -200,6 +201,21 @@ export function Canvas(props: {
   const [editing, setEditing] = useState<{ id: string; box: Box; value: string; size: number } | null>(null)
   const editLive = useRef(editing)
   editLive.current = editing
+  // The editor opens with its text selected, so typing replaces it. GPUIX has no select-on-focus, so once the
+  // field holds focus the select-all chord goes through its input pipeline (sent while the canvas still held
+  // focus it would select every layer). Polls until focus lands, however late; closing the editor stops it.
+  const editId = editing?.id
+  useEffect(() => {
+    if (!editId) return
+    const timer = setInterval(() => {
+      const el = textEl.current
+      if (el && renderer.getFocusedElementId?.() === el.id) {
+        clearInterval(timer)
+        ;(renderer as unknown as { simulateKeystrokes?(keys: string): void }).simulateKeystrokes?.(process.platform === 'darwin' ? 'cmd-a' : 'ctrl-a')
+      }
+    }, 25)
+    return () => clearInterval(timer)
+  }, [editId, renderer])
   const [renaming, setRenaming] = useState<{ id: string; draft: string } | null>(null)
   const renameLive = useRef(renaming)
   renameLive.current = renaming
@@ -1491,6 +1507,7 @@ export function Canvas(props: {
         return (
           <div style={{ position: 'absolute', left: x - 2, top: y - 2, width: Math.max(80, editing.box.w * cam.zoom + 40), borderWidth: 1.5, borderColor: C.select, backgroundColor: '#FFFFFFEE', borderRadius: 3, padding: 2 }}>
             <textarea
+              ref={textEl}
               testId="text-editor"
               aria-label="Text content"
               autoFocus
