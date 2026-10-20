@@ -199,11 +199,12 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             let (dx, dy) = (req["dx"].as_f64().unwrap_or(0.0), req["dy"].as_f64().unwrap_or(0.0));
             let targets = ids(&req["ids"]);
             e.sync();
-            let pos: Vec<(String, f64, f64)> = targets.iter().filter_map(|id| {
-                let n = e.doc.find(id)?;
+            // A moved layer carries its descendants: one that is also listed would move twice.
+            let pos: Vec<(String, f64, f64)> = e.doc.outermost(&targets).into_iter().filter_map(|id| {
+                let n = e.doc.find(&id)?;
                 let x = n["x"].as_f64().unwrap_or(0.0);
                 let y = n["y"].as_f64().unwrap_or(0.0);
-                Some((id.clone(), x, y))
+                Some((id, x, y))
             }).collect();
             e.edit_or_drag(|d| pos.iter().try_for_each(|(id, x, y)| d.update(id, &json!({"x": editor::num(x + dx), "y": editor::num(y + dy)}))))?;
             Ok(state(&e))
