@@ -57,8 +57,9 @@ const text = (r: any) => r.content.map((c: any) => c.text ?? '').join('')
     const j = await r.json()
     assert(r.status === 200 && j.error?.code === -32602, `arguments ${JSON.stringify(args)} is -32602 with HTTP 200 (got ${r.status} ${JSON.stringify(j)})`)
   }
-  const mixed = await (await post(JSON.stringify([tc(1, {}), tc(2, 'x'), tc(3, null), tc(4, undefined)]))).json()
-  assert(mixed.length === 4 && !mixed[0].error && mixed[1].error?.code === -32602 && !mixed[2].error && !mixed[3].error, `a bad call does not take its batch down: ${JSON.stringify(mixed).slice(0, 300)}`)
+  const mixedRes = await post(JSON.stringify([tc(1, {}), tc(2, 'x'), tc(3, null), tc(4, undefined)]))
+  const mixed = await mixedRes.json()
+  assert(mixedRes.status === 200 && mixed.length === 4 && !mixed[0].error && mixed[1].error?.code === -32602 && !mixed[2].error && !mixed[3].error, `a bad call does not take its batch down: ${JSON.stringify(mixed).slice(0, 300)}`)
 
   // initialize echoes the client's protocol version and names the server.
   const init = await rpc({ id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26' } })
