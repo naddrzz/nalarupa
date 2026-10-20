@@ -108,6 +108,14 @@ assert(store.items.some((i) => i.kind === 'queued'), 'queued prompt shows a bubb
 applyEvents([{ type: 'agent', kind: 'dequeued' }], 0)
 assert(!store.items.some((i) => i.kind === 'queued'), 'dequeued drops the queued bubble')
 assert(store.items.some((i) => i.kind === 'note' && /discarded/.test(i.text)), 'dequeued says the prompt was discarded')
+// A queued bubble stays through the cook's "Iterating…" message, even when its text is a substring of it, and goes when the queue runs.
+resetChat()
+applyEvents([{ type: 'agent', kind: 'queued', text: 'more' }, { type: 'agent', kind: 'user', text: 'Iterating more on the design…' }], 0)
+assert(store.items.some((i) => i.kind === 'queued'), 'an unrelated user message keeps the queued bubble')
+applyEvents([{ type: 'agent', kind: 'queued', text: 'design' }, { type: 'agent', kind: 'user', text: 'more' }], 0)
+assert(store.items.filter((i) => i.kind === 'queued').length === 2, 'a user message equal to one of several queued texts keeps the queue')
+applyEvents([{ type: 'agent', kind: 'user', text: 'more\n\ndesign' }], 0)
+assert(!store.items.some((i) => i.kind === 'queued'), 'the merged queue as a user message drops the bubbles')
 // The typewriter keeps typing the final reply when `done` adds a usage row below it (and a note is no later message either).
 resetChat()
 applyEvents([{ type: 'agent', kind: 'text_delta', text: 'All done.', agent: { id: 'a0', name: 'Agent 0', color: '#ffffff' } }], 0)
@@ -195,6 +203,7 @@ resetChat()
   assert(!needsFrame(3000, true, 0) && needsFrame(6000, true, 0) && !needsFrame(7000, true, 0), 'reduced motion: a finished cursor repaints only while it fades out')
   store.pills.set('a', { text: 'hi', at: 5000 })
   assert(needsFrame(6000, true, 0) && !needsFrame(8500, true, 0), 'reduced motion: a pill repaints until it expires')
+  assert(needsFrame(8001, true, 0, 7990) && !needsFrame(8001, true, 0, 8001), 'reduced motion: a pill still on screen at its expiry gets one more repaint')
   store.pills.clear()
   store.cursors.clear()
 }
