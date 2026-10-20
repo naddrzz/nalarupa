@@ -390,7 +390,12 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
         "live" => {
             let mut e = engine();
             e.sync();
-            let out: Vec<Value> = e.renderer.flat().filter(|f| f.placeholder || f.pending).map(rect).collect();
+            // `clip` is the canvas box its clipping ancestors leave visible; the overlay must not paint outside it.
+            let out: Vec<Value> = e.renderer.live().into_iter().map(|(f, clip)| {
+                let mut v = rect(f);
+                v["clip"] = clip.map_or(Value::Null, |(x, y, w, h)| json!({"x": x, "y": y, "w": w, "h": h}));
+                v
+            }).collect();
             Ok(Value::Array(out))
         }
         "reduce_motion" => {

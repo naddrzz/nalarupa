@@ -76,6 +76,15 @@ for (const url of ['nalarupa:pending-image-1-ab', 'pencil:pending-1']) {
   assert(call('live').length === 0, `a leftover ${url} does not shimmer forever after open`)
   assert(node('pr').node.fill.url === '', `open drops the leftover ${url}`)
 }
+
+// A pending image inside a clipping frame reports the box the frame leaves visible, so its shimmer is cut there.
+exec('p = Insert(document, {type:"frame", name:"Clip", x:100, y:100, width:300, height:200, layout:"none", clip:true}); Insert(p, {type:"rectangle", name:"Img", x:150, y:50, width:400, height:300, fill:{type:"image", url:"nalarupa:pending-qa"}}); Insert(document, {type:"rectangle", name:"Free", x:600, y:0, width:50, height:50, fill:{type:"image", url:"nalarupa:pending-qa"}})')
+{
+  const lv = call('live')
+  const img = lv.find((n: any) => n.name === 'Img')
+  assert(JSON.stringify(img?.clip) === '{"x":100,"y":100,"w":300,"h":200}', `a pending image in a clip frame carries the frame's box (${JSON.stringify(img?.clip)})`)
+  assert(lv.find((n: any) => n.name === 'Free')?.clip === null, 'an unclipped pending image has no clip box')
+}
 call('open', { path: b })
 
 // Open failures leave the open document alone.

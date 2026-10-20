@@ -89,7 +89,7 @@ export function AgentLayer({ cam, w, h, version, chatOpen }: { cam: Cam; w: numb
   const lastFrame = useRef(performance.now())
   const boxes = useRef(new Map<string, Box>())
   const glowPhase = useRef(new Map<string, number>())
-  const live = useMemo(() => tryCall<(Box & { placeholder?: boolean; pending?: boolean })[]>('live') ?? [], [version])
+  const live = useMemo(() => tryCall<(Box & { placeholder?: boolean; pending?: boolean; clip?: Rect | null })[]>('live') ?? [], [version])
 
   store.viewCenter = { x: cam.x + w / 2 / cam.zoom, y: cam.y + h / 2 / cam.zoom }
 
@@ -212,7 +212,7 @@ export function AgentLayer({ cam, w, h, version, chatOpen }: { cam: Cam; w: numb
   }
 
   // ── placeholder "generating" glow + pending-image shimmer ─────────────────
-  const liveEls = live.map((n) => {
+  const liveEl = (n: (typeof live)[number]) => {
     const pb = painted(n)
     const X = sx(pb.x)
     const Y = sy(pb.y)
@@ -286,6 +286,19 @@ export function AgentLayer({ cam, w, h, version, chatOpen }: { cam: Cam; w: numb
           )}
         </div>
       </Fragment>
+    )
+  }
+  // Inside a clipping frame the overlay is cut to what the frame leaves visible: an outer box at that rect
+  // holds a layer-sized box shifted back, so the overlay keeps its own coordinates.
+  const liveEls = live.map((n) => {
+    const el = liveEl(n)
+    const c = n.clip
+    if (!el || !c) return el
+    const [cx, cy] = [sx(c.x), sy(c.y)]
+    return (
+      <div key={el.key} style={{ position: 'absolute', left: cx, top: cy, width: c.w * cam.zoom, height: c.h * cam.zoom, overflow: 'hidden', pointerEvents: 'none' }}>
+        <div style={{ position: 'absolute', left: -cx, top: -cy, width: w, height: h, pointerEvents: 'none' }}>{el}</div>
+      </div>
     )
   })
 
