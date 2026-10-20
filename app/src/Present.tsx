@@ -63,7 +63,7 @@ export function Present({ w, h, start, version, animating, exit }: { w: number; 
       {/* Not mounted without a slide, so deleting the last one does not leave its bitmap on screen. */}
       {slide ? <img ref={img} objectFit="fill" style={{ position: 'absolute', left: 0, top: 0, width: w, height: h }} /> : null}
       <div style={{ position: 'absolute', right: 16, bottom: 12, paddingLeft: 8, paddingRight: 8, height: 22, borderRadius: 6, backgroundColor: '#00000099', display: 'flex', alignItems: 'center' }}>
-        <T size={11} color={C.muted}>{slides.length ? `${at + 1} / ${slides.length} · Esc to exit` : 'No slides: add top-level frames'}</T>
+        <T size={11} color={C.muted}>{slides.length ? `${at + 1} / ${slides.length} · Esc to exit` : 'No slides: add top-level frames · Esc to exit'}</T>
       </div>
     </div>
   )
