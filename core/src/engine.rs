@@ -788,12 +788,13 @@ impl Engine {
                 }
                 let Some(path) = args["path"].as_str() else { return ToolOut::err("path is required") };
                 let p = Path::new(path);
-                let res = if p.exists() {
-                    self.open(p)
+                // A missing file is created on disk first, so a failed create leaves the open document alone.
+                let created = if p.exists() {
+                    Ok(())
                 } else {
-                    self.load_template("empty");
-                    self.save(Some(path)).map(|_| ())
+                    Doc::from_json(&json!({"version": crate::doc::FORMAT_VERSION, "children": []}).to_string()).and_then(|d| d.save(p))
                 };
+                let res = created.and_then(|_| self.open(p));
                 match res {
                     Ok(()) => {
                         self.emit(json!({"type": "document_opened"}));
