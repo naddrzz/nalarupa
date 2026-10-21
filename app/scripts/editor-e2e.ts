@@ -708,6 +708,7 @@ try {
   await app.getByTestId('tool-text').click()
   await app.mouse.click(at(300, 330))
   await app.getByTestId('text-editor').waitFor({ timeoutMs: 6000 })
+  await sleep(500) // autoFocus lands a frame after the element exists and focus cannot be read
   await app.call('keystrokes', { keys: 'ctrl-a W o r l d' })
   await sleep(300)
   await app.call('keystrokes', { keys: 'escape' })
