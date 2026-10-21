@@ -192,7 +192,7 @@ assert(htmlOf({ fill: ['#ff0000', '#0000ff80'] }).includes('background:linear-gr
 assert(htmlOf({ fill: grad({ opacity: 0.4 }) }).includes('rgba(255, 0, 0, 0.400) 0%'), 'html applies gradient fill opacity')
 assert(htmlOf({ fill: grad({ gradientType: 'angular' }) }).includes('conic-gradient(from -90deg at 50% 50%'), 'html exports an angular gradient as conic')
 assert(htmlOf({ fill: grad({ size: { height: 0.5 } }) }).includes('x1=%220.75%22 y1=%220.5%22 x2=%220.25%22'), 'html exports a shortened linear gradient as an svg background')
-assert(htmlOf({ fill: grad({ gradientType: 'radial', rotation: 45, size: { width: 0.3, height: 0.8 } }) }).includes('radialGradient'), 'html exports a rotated radial gradient as an svg background')
+assert(htmlOf({ fill: grad({ gradientType: 'radial', rotation: 45, size: { width: 0.3, height: 0.8 } }) }).includes('matrix(0.106066 -0.106066 0.282843 0.282843 0.5 0.5)'), 'html exports a rotated radial gradient as an svg background with the canvas ellipse')
 assert(htmlOf({ fill: '#ff0000', effect: { type: 'blur', radius: 4 } }).includes('filter:blur(2px)'), 'html exports layer blur')
 assert(/padding:12px;background:linear-gradient/.test(htmlOf({ fill: '#ffff00', stroke: grad(), strokeWidth: 12 })), 'html exports a gradient stroke')
 // A bottom fill or stroke with a blend mode blends with the layers beneath the element: an overlay with mix-blend-mode
