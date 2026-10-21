@@ -53,6 +53,14 @@ export const shimmerHalves = (pos: number, band: number): [[number, number], [nu
   return [[a, mid - a], [mid, b - mid]]
 }
 
+/** Corner radii [tl, tr, br, bl] as painted under a flip or half turn `m` (a mirrored node has its corners mirrored). */
+export const flipRadii = (r: number[], m: M | null | undefined): number[] => {
+  const [a, b, c, d] = r
+  const [x, y] = [!!m && m[0] < 0, !!m && m[3] < 0]
+  const [tl, tr, br, bl] = x ? [b, a, d, c] : [a, b, c, d]
+  return y ? [bl, br, tr, tl] : [tl, tr, br, bl]
+}
+
 /** SVG path of a box with corner radii [tl, tr, br, bl] (as `cornerRadius`), or of the ellipse inscribed in it. */
 export const outline = (x: number, y: number, w: number, h: number, r: number[] | 'ellipse'): string => {
   if (r === 'ellipse') return `M${x} ${y + h / 2}A${w / 2} ${h / 2} 0 0 1 ${x + w} ${y + h / 2}A${w / 2} ${h / 2} 0 0 1 ${x} ${y + h / 2}Z`

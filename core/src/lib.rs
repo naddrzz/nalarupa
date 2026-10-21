@@ -400,12 +400,14 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
         "live" => {
             let mut e = engine();
             e.sync();
-            // `clip` is the canvas box its clipping ancestors leave visible (with its corner radii `r`); the overlay must
-            // not paint outside it. `radius` is the node's own [tl, tr, br, bl] (an ellipse is round by its type).
-            let out: Vec<Value> = e.renderer.live().into_iter().map(|(f, clip, r)| {
+            // `clip` is the canvas box its clipping ancestors leave visible; the overlay must not paint outside it. `cuts` are
+            // those ancestors that round their corners (box `x y w h` and radii `r`), each of which cuts it too. `radius` is the
+            // node's own [tl, tr, br, bl] (an ellipse is round by its type).
+            let out: Vec<Value> = e.renderer.live().into_iter().map(|(f, clip, cuts)| {
                 let mut v = rect(f);
                 v["radius"] = json!(f.radius);
-                v["clip"] = clip.map_or(Value::Null, |(x, y, w, h)| json!({"x": x, "y": y, "w": w, "h": h, "r": r}));
+                v["clip"] = clip.map_or(Value::Null, |(x, y, w, h)| json!({"x": x, "y": y, "w": w, "h": h}));
+                v["cuts"] = Value::Array(cuts.into_iter().map(|((x, y, w, h), r)| json!({"x": x, "y": y, "w": w, "h": h, "r": r})).collect());
                 v
             }).collect();
             Ok(Value::Array(out))
