@@ -148,13 +148,11 @@ fn fit(n: &mut RNode, ax: usize, fonts: &mut Fonts) {
     for k in &mut n.kids {
         fit(k, ax, fonts);
     }
-    if let Some(d) = dir(n).filter(|_| sizing(n, ax) == Sizing::Fit) {
+    if let Some(d) = dir(n).filter(|_| hugs(n, ax)) {
         let sized: Vec<f64> = n.kids.iter().filter(|k| in_flow(k) && sizing(k, ax) != Sizing::Fill).map(|k| outer(k, ax)).collect();
-        if !sized.is_empty() {
-            let content = if d == ax { sized.iter().sum::<f64>() + gap(n) * (sized.len() - 1) as f64 } else { sized.iter().copied().fold(0.0, f64::max) };
-            let v = content + pad(n, ax);
-            commit(n, ax, v, fonts);
-        }
+        let content = if d == ax { sized.iter().sum::<f64>() + gap(n) * (sized.len() - 1) as f64 } else { sized.iter().copied().fold(0.0, f64::max) };
+        let v = content + pad(n, ax);
+        commit(n, ax, v, fonts);
     }
     if n.ty == "group" {
         group_bounds(n);
