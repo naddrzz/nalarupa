@@ -138,21 +138,32 @@ fn gradient_css(o: &serde_json::Map<String, Value>) -> Option<String> {
     let mut stops: Vec<(f64, String)> = o.get("colors").and_then(Value::as_array).into_iter().flatten().map(|c| {
         let position = num(&c["position"]).unwrap_or(0.0).clamp(0.0, 1.0);
         let col = c["color"].as_str().and_then(|s| css_color_alpha(s, opacity)).unwrap_or_else(|| "rgba(0, 0, 0, 0)".into());
-        (position, format!("{col} {}%", position * 100.0))
+        (position, col)
     }).collect();
     if stops.is_empty() {
         return None;
     }
     stops.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let stops: Vec<String> = stops.into_iter().map(|(_, stop)| stop).collect();
     let rot = o.get("rotation").and_then(num).unwrap_or(0.0);
     let pt = |k: &str, a: &str, d: f64| o.get(k).and_then(|v| v.get(a)).and_then(num).unwrap_or(d);
     let at = |k: &str| pt("center", k, 0.5) * 100.0;
-    Some(match o.get("gradientType").and_then(Value::as_str) {
-        // The canvas ellipse spans `size` of the box; CSS radii are box percentages. A rotated ellipse is
-        // approximated by its bounding half-extents (exact at multiples of 90deg).
+    let kind = o.get("gradientType").and_then(Value::as_str);
+    // CSS has no shifted or resized linear gradient, nor a rotated ellipse (a multiple of 90deg or a circle needs none).
+    let quarter = (rot / 90.0 - (rot / 90.0).round()).abs() < 1e-9;
+    let (rw, rh) = (pt("size", "width", 1.0), pt("size", "height", 1.0));
+    let beyond_css = match kind {
+        Some("radial") => !quarter && rw != rh,
+        Some("angular") => false,
+        _ => at("x") != 50.0 || at("y") != 50.0 || rh != 1.0,
+    };
+    if beyond_css {
+        return Some(svg_gradient(kind == Some("radial"), (at("x") / 100.0, at("y") / 100.0), (rw, rh), rot, &stops));
+    }
+    let stops: Vec<String> = stops.into_iter().map(|(p, c)| format!("{c} {}%", p * 100.0)).collect();
+    Some(match kind {
+        // The canvas ellipse spans `size` of the box; CSS radii are box percentages.
         Some("radial") => {
-            let (rx, ry) = (pt("size", "width", 1.0) / 2.0, pt("size", "height", 1.0) / 2.0);
+            let (rx, ry) = (rw / 2.0, rh / 2.0);
             let (sn, cs) = (-rot).to_radians().sin_cos();
             let r = |a: f64, b: f64| (a.hypot(b) * 100.0).max(1e-4);
             format!("radial-gradient({}% {}% at {}% {}%,{})", r(rx * cs, ry * sn), r(rx * sn, ry * cs), at("x"), at("y"), stops.join(","))
@@ -161,6 +172,30 @@ fn gradient_css(o: &serde_json::Map<String, Value>) -> Option<String> {
         Some("angular") => format!("conic-gradient(from {}deg at {}% {}%,{})", -rot, at("x"), at("y"), stops.join(",")),
         _ => format!("linear-gradient({}deg,{})", -rot, stops.join(",")),
     })
+}
+
+/// A gradient as an SVG background over the unit box, stretched to the element, with the geometry of `svg.rs`:
+/// the frame (rotated CCW, then scaled with the box) is `size` wide and tall around `center`.
+fn svg_gradient(radial: bool, (cx, cy): (f64, f64), (w, h): (f64, f64), rot: f64, stops: &[(f64, String)]) -> String {
+    let half = |v: f64| if v == 0.0 { 1e-6 } else { v / 2.0 };
+    let (rx, ry) = (half(w), half(h));
+    let (sn, cs) = (-rot).to_radians().sin_cos();
+    let (up, right) = ((ry * sn, -ry * cs), (rx * cs, rx * sn));
+    let stops: String = stops.iter().map(|(p, c)| format!("<stop offset=\"{}\" stop-color=\"{c}\"/>", px(*p))).collect();
+    let g = if radial {
+        format!(
+            "<radialGradient id=\"g\" cx=\"0\" cy=\"0\" r=\"1\" gradientTransform=\"matrix({} {} {} {} {} {})\">{stops}</radialGradient>",
+            px(right.0), px(right.1), px(-up.0), px(-up.1), px(cx), px(cy)
+        )
+    } else {
+        format!(
+            "<linearGradient id=\"g\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\">{stops}</linearGradient>",
+            px(cx - up.0), px(cy - up.1), px(cx + up.0), px(cy + up.1)
+        )
+    };
+    let svg = format!("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 1 1\" preserveAspectRatio=\"none\"><defs>{g}</defs><rect width=\"1\" height=\"1\" fill=\"url(#g)\"/></svg>");
+    let uri = svg.replace('%', "%25").replace('"', "%22").replace('<', "%3C").replace('>', "%3E").replace('#', "%23");
+    format!("url('data:image/svg+xml,{uri}') 0 0/100% 100% no-repeat")
 }
 
 /// A gradient stroke: the gradient fills a box moved out by `reach` of each side width, masked down to its per-side ring.
@@ -741,6 +776,13 @@ mod tests {
         // Radial gradients carry center and size; stops are sorted like the canvas.
         let (s, _) = rect_html(json!({"fill": grad(json!({"gradientType": "radial", "rotation": 0, "center": {"x": 0.3, "y": 0.4}, "size": {"width": 0.5, "height": 1.0}, "colors": [{"color": "#0000ff", "position": 1.5}, {"color": "#ff0000", "position": 0}]}))}));
         assert!(s.contains("radial-gradient(25% 50% at 30% 40%,#ff0000 0%,#0000ff 100%)"), "{s}");
+        // A shortened or shifted linear gradient and a rotated ellipse are SVG backgrounds with the canvas geometry.
+        let (s, _) = rect_html(json!({"fill": grad(json!({"size": {"height": 0.5}}))}));
+        assert!(s.contains("data:image/svg+xml,%3Csvg") && s.contains("x1=%220.75%22 y1=%220.5%22 x2=%220.25%22 y2=%220.5%22"), "{s}");
+        let (s, _) = rect_html(json!({"fill": grad(json!({"center": {"x": 0.25, "y": 0.5}}))}));
+        assert!(s.contains("x1=%220.75%22 y1=%220.5%22 x2=%22-0.25%22 y2=%220.5%22"), "{s}");
+        let (s, _) = rect_html(json!({"fill": grad(json!({"gradientType": "radial", "rotation": 45, "size": {"width": 0.3, "height": 0.8}}))}));
+        assert!(s.contains("radialGradient") && s.contains("matrix(0.106066 -0.106066 0.282843 0.282843 0.5 0.5)"), "{s}");
         // An unparseable stop colour stays as transparent black, like the canvas.
         let (s, _) = rect_html(json!({"fill": grad(json!({"colors": [{"color": "#ff0000", "position": 0}, {"color": "transparent", "position": 1}]}))}));
         assert!(s.contains("linear-gradient(-90deg,#ff0000 0%,rgba(0, 0, 0, 0) 100%)"), "{s}");
