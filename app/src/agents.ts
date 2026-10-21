@@ -19,7 +19,7 @@ export type ChatItem =
   | { kind: 'note'; id: number; text: string }
   | { kind: 'error'; id: number; agent?: Profile; text: string }
   | { kind: 'usage'; id: number; agent: Profile; durationMs: number; usage: any; stopped: boolean }
-  | { kind: 'external'; id: number; text: string }
+  | { kind: 'external'; id: number; text: string; error?: boolean }
   /** The agent waits for the user to allow a tool (permission card). */
   | { kind: 'permission'; id: number; reqId: string; agent: Profile; tool: string; input: any }
 
@@ -239,7 +239,7 @@ export function applyEvents(events: any[], now: number): boolean {
         store.items.push({ kind: 'error', id: nextId++, agent: p, text: ev.text })
         break
       case 'external':
-        store.items.push({ kind: 'external', id: nextId++, text: ev.text })
+        store.items.push({ kind: 'external', id: nextId++, text: ev.text, error: ev.error === true })
         break
       case 'permission':
         store.items.push({ kind: 'permission', id: nextId++, reqId: ev.id, agent: p ?? FALLBACK, tool: ev.tool, input: ev.input ?? {} })
