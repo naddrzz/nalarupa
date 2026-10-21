@@ -567,6 +567,13 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
   if (standIn) {
     await app.getByTestId('agent-send').click()
     await until(async () => (await app!.getByText('make the title bigger').count()) > 0, 'the composer draft to survive the Design tab and be sent')
+    // While it runs, a template pick from Home is refused at once: no "Save changes first?" prompt for a switch that cannot happen.
+    await app.getByTestId('agent-stop').waitFor()
+    await app.getByTestId('home').click()
+    await app.getByTestId('template-empty').click()
+    await app.getByText('Stop the agent before opening another document.').waitFor({ timeoutMs: 10000 })
+    if (await app.getByTestId('unsaved-prompt').count()) throw new Error('Home asked to save changes before refusing a switch while the agent runs')
+    await app.getByTestId('home-back').click()
     await until(async () => !(await app!.getByTestId('agent-stop').count()), 'the stand-in agent to finish', 20000)
   }
   // "1×" also appears in the agent cook button, so click the narrowest match: the segment.
