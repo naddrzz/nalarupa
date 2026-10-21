@@ -208,7 +208,8 @@ function Layers({ version, selection, select, focus, hover, onShortcut }: { vers
                   // The rename field's keys bubble here too.
                   if (renaming) return
                   const k = (e.key ?? '').toLowerCase()
-                  if (k === 'enter' || k === 'space') {
+                  // Ctrl/Cmd+Enter is an editor shortcut (Present); Ctrl+Space still toggles the row.
+                  if (k === 'space' || (k === 'enter' && !(e.modifiers?.ctrl || e.modifiers?.cmd))) {
                     // The chevron handles its own Enter/Space: select only when the row itself has focus.
                     if (!e.isHeld && renderer.getFocusedElementId?.() === rowEls.current.get(l.id)?.id) select(pick(l.id, row, e.modifiers))
                   } else if (k === 'up' || k === 'down') focusRow(visible[row + (k === 'up' ? -1 : 1)]?.id)
