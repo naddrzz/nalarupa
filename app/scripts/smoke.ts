@@ -18,16 +18,16 @@ for (const [pos, band] of [[10.4, 100.3], [-33.5, 77], [0.5, 1], [120.49, 55.51]
 }
 
 // The agent cursor's target lies on the node as painted: a 900x30 bar turned 90° is a thin vertical bar, and
-// a point picked in its unturned box would land far to the side.
-{
-  const bar = { x: 300, y: 420, w: 900, h: 30, m: own(90, false, false) }
+// a point picked in its unturned box would land far to the side. Flipped and turned-and-flipped nodes too.
+for (const [deg, fx, fy] of [[90, false, false], [0, true, false], [0, false, true], [30, true, false], [-120, true, true]] as const) {
+  const bar = { x: 300, y: 420, w: 900, h: 30, m: own(deg, fx, fy) }
   const p = painted(bar)
   for (const [u, v] of [[0, 0], [1, 1], [0.5, 0.5], [0.2, 0.9], [0.9, 0.1]]) {
     const [x, y] = pointIn(bar, u, v)
-    assert(x >= p.x - 1e-6 && x <= p.x + p.w + 1e-6 && y >= p.y - 1e-6 && y <= p.y + p.h + 1e-6, `cursor target (${u}, ${v}) is on the painted bar: ${x},${y} vs ${JSON.stringify(p)}`)
+    assert(x >= p.x - 1e-6 && x <= p.x + p.w + 1e-6 && y >= p.y - 1e-6 && y <= p.y + p.h + 1e-6, `cursor target (${u}, ${v}) is on the painted bar (${deg}°, flipX ${fx}, flipY ${fy}): ${x},${y} vs ${JSON.stringify(p)}`)
   }
-  assert(pointIn({ x: 5, y: 7, w: 10, h: 20 }, 0.5, 0.5).join() === '10,17', 'an unturned node keeps its box centre')
 }
+  assert(pointIn({ x: 5, y: 7, w: 10, h: 20 }, 0.5, 0.5).join() === '10,17', 'an unturned node keeps its box centre')
 
 const init = call('init')
 assert(init.mcpPort > 0, 'MCP server started')
