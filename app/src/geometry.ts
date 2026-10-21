@@ -53,6 +53,13 @@ export const shimmerHalves = (pos: number, band: number): [[number, number], [nu
   return [[a, mid - a], [mid, b - mid]]
 }
 
+/** SVG path of a box with corner radii [tl, tr, br, bl] (as `cornerRadius`), or of the ellipse inscribed in it. */
+export const outline = (x: number, y: number, w: number, h: number, r: number[] | 'ellipse'): string => {
+  if (r === 'ellipse') return `M${x} ${y + h / 2}A${w / 2} ${h / 2} 0 0 1 ${x + w} ${y + h / 2}A${w / 2} ${h / 2} 0 0 1 ${x} ${y + h / 2}Z`
+  const [a, b, c, d] = r
+  return `M${x + a} ${y}H${x + w - b}A${b} ${b} 0 0 1 ${x + w} ${y + b}V${y + h - c}A${c} ${c} 0 0 1 ${x + w - c} ${y + h}H${x + d}A${d} ${d} 0 0 1 ${x} ${y + h - d}V${y + a}A${a} ${a} 0 0 1 ${x + a} ${y}Z`
+}
+
 /** Where a box is painted (its rotated/flipped corners' bounds). */
 export const painted = (b: Rect & { m?: M | null }): Rect => (b.m ? bounds(corners(b, b.m)) : b)
 

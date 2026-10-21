@@ -82,8 +82,19 @@ exec('p = Insert(document, {type:"frame", name:"Clip", x:100, y:100, width:300, 
 {
   const lv = call('live')
   const img = lv.find((n: any) => n.name === 'Img')
-  assert(JSON.stringify(img?.clip) === '{"x":100,"y":100,"w":300,"h":200}', `a pending image in a clip frame carries the frame's box (${JSON.stringify(img?.clip)})`)
+  assert(JSON.stringify(img?.clip) === '{"x":100,"y":100,"w":300,"h":200,"r":[0,0,0,0]}', `a pending image in a clip frame carries the frame's box (${JSON.stringify(img?.clip)})`)
   assert(lv.find((n: any) => n.name === 'Free')?.clip === null, 'an unclipped pending image has no clip box')
+}
+
+// A round pending image reports its corner radii and its clipping frame's, so the shimmer is cut to that shape.
+exec('Insert(document, {type:"rectangle", name:"Pill", x:0, y:600, width:100, height:100, cornerRadius:[50,50,10,0], fill:{type:"image", url:"nalarupa:pending-qa"}}); p = Insert(document, {type:"frame", name:"Rounded", x:300, y:600, width:100, height:100, layout:"none", clip:true, cornerRadius:30}); Insert(p, {type:"rectangle", name:"InRounded", x:0, y:0, width:100, height:100, fill:{type:"image", url:"nalarupa:pending-qa"}})')
+{
+  const lv = call('live')
+  const pill = lv.find((n: any) => n.name === 'Pill')
+  assert(JSON.stringify(pill?.radius) === '[50,50,10,0]', `a pending image reports its corner radii (${JSON.stringify(pill?.radius)})`)
+  const inner = lv.find((n: any) => n.name === 'InRounded')
+  assert(JSON.stringify(inner?.clip?.r) === '[30,30,30,30]', `a pending image in a rounded clip frame carries the frame's radii (${JSON.stringify(inner?.clip)})`)
+  assert(JSON.stringify(lv.find((n: any) => n.name === 'Img')?.clip?.r) === '[0,0,0,0]', 'a square clip frame has no radii')
 }
 call('open', { path: b })
 
