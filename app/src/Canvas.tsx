@@ -1096,7 +1096,7 @@ export function Canvas(props: {
     // Inside the selection's frame the selection drags as is; a click without drag narrows to the target.
     const [fx, fy] = frame ? unapply(frame.m, dx, dy) : [0, 0]
     const inside = !shift && !label && !!frame && fx >= frame.box.x && fy >= frame.box.y && fx <= frame.box.x + frame.box.w && fy <= frame.box.y + frame.box.h
-    if ((!target || isArtboard(chain, target)) && !inside) return marqueeFrom(false)
+    if ((!target || (!label && isArtboard(chain, target))) && !inside) return marqueeFrom(false)
     // Double-clicking a path edits its points.
     if (target && tryCall('node', { id: target })?.node?.type === 'path' && doublePress(e, target)) return penEnter(target, 'move')
     if (target && (e.clickCount ?? 1) >= 2) {
