@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { call, renderPixels } from '../src/core'
 import { applyEvents, barAgents, changing, cursorFaded, imageSrc, lastContentId, needsFrame, poke, resetChat, restoreChat, spinning, store } from '../src/agents'
-import { shimmerHalves } from '../src/geometry'
+import { own, painted, pointIn, shimmerHalves } from '../src/geometry'
 import { FRAME_LABEL_TEXT, INDICATOR_TICK_MS, ellipsisAt, ellipsisPadAt, pulseAt } from '../src/theme'
 
 const assert = (ok: unknown, msg: string) => {
@@ -15,6 +15,18 @@ const assert = (ok: unknown, msg: string) => {
 for (const [pos, band] of [[10.4, 100.3], [-33.5, 77], [0.5, 1], [120.49, 55.51]]) {
   const [l, r] = shimmerHalves(pos, band)
   assert([...l, ...r].every(Number.isInteger) && l[0] + l[1] === r[0], `shimmer halves meet on a whole pixel (pos ${pos}, band ${band}: ${l} | ${r})`)
+}
+
+// The agent cursor's target lies on the node as painted: a 900x30 bar turned 90° is a thin vertical bar, and
+// a point picked in its unturned box would land far to the side.
+{
+  const bar = { x: 300, y: 420, w: 900, h: 30, m: own(90, false, false) }
+  const p = painted(bar)
+  for (const [u, v] of [[0, 0], [1, 1], [0.5, 0.5], [0.2, 0.9], [0.9, 0.1]]) {
+    const [x, y] = pointIn(bar, u, v)
+    assert(x >= p.x - 1e-6 && x <= p.x + p.w + 1e-6 && y >= p.y - 1e-6 && y <= p.y + p.h + 1e-6, `cursor target (${u}, ${v}) is on the painted bar: ${x},${y} vs ${JSON.stringify(p)}`)
+  }
+  assert(pointIn({ x: 5, y: 7, w: 10, h: 20 }, 0.5, 0.5).join() === '10,17', 'an unturned node keeps its box centre')
 }
 
 const init = call('init')
