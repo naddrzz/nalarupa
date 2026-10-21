@@ -33,7 +33,7 @@ const subscribeFocus = (f: () => void) => {
 }
 /** Host id that has keyboard focus, or null. */
 export const useKeyboardFocusId = () => useSyncExternalStore(subscribeFocus, () => keyboardFocusId)
-/** True while focus came from the keyboard (Tab); a mouse press clears it. */
+/** True while an element holds the keyboard focus id (Tab, or a text field press); a Pressable press clears it. */
 export const hasKeyboardFocus = () => keyboardFocusId !== null
 
 /** Keyboard focus ring: a 2 px outline 3 px outside the element, drawn over it. Render it as the last
