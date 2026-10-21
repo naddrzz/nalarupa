@@ -137,6 +137,12 @@ fn init(n: &mut RNode, fonts: &mut Fonts) {
     }
 }
 
+/// Whether a fit_content size on this axis follows the children (a frame with a layout and an in-flow, non-fill child).
+/// Anything else keeps the value in `fit_content(N)`.
+pub fn hugs(n: &RNode, ax: usize) -> bool {
+    dir(n).is_some() && sizing(n, ax) == Sizing::Fit && n.kids.iter().any(|k| in_flow(k) && sizing(k, ax) != Sizing::Fill)
+}
+
 /// Post-order: a fit_content node with a layout hugs its in-flow, non-fill children.
 fn fit(n: &mut RNode, ax: usize, fonts: &mut Fonts) {
     for k in &mut n.kids {
