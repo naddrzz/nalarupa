@@ -93,7 +93,7 @@ export const Pressable = forwardRef<PublicInstance, PressableProps>(function Pre
         onKeyDown?.(e)
         const k = (e.key ?? '').toLowerCase()
         // Ctrl/Cmd+Enter is an editor shortcut (Present), not a click.
-        const combo = !!(e.modifiers?.ctrl || e.modifiers?.cmd)
+        const combo = k === 'enter' && !!(e.modifiers?.ctrl || e.modifiers?.cmd)
         if ((k === 'enter' || k === 'space') && !combo) {
           if (!e.isHeld) onClick?.()
         } else if (shortcut) forwardKey(shortcut, e)
