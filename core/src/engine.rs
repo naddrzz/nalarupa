@@ -306,6 +306,16 @@ impl Engine {
         }
     }
 
+    /// A rolled-back script took its inserted nodes with it: their slides have nothing to paint and
+    /// no clock, so they would only end after `SLIDE_WAIT` while `animating` stays true.
+    pub fn forget_gone_slides(&mut self) {
+        let doc = &self.doc;
+        let preview = self.preview.as_ref();
+        let here = |id: &str| doc.find(id).is_some() || preview.is_some_and(|p| p.find(id).is_some());
+        self.renderer.slides.retain(|s| here(&s.id));
+        self.slid.retain(|id| here(id));
+    }
+
     /// Settled slides go back into the cached view at the next sync (the document is unchanged).
     pub fn expire_slides(&mut self) {
         if self.renderer.expire_slides() {
