@@ -206,5 +206,6 @@ if (import.meta.main) {
   eq([resizeCursor('e', null), resizeCursor('e', m), resizeCursor('ne', null), resizeCursor('ne', m)], ['ew-resize', 'ns-resize', 'nesw-resize', 'nwse-resize'], 'cursors turn with the box')
   eq(turnAroundCenter(0, 0, 100, 50, 0, 90, false, false), [25, 75], 'turning keeps the center put')
   eq(turnAroundCenter(0, 0, 100, 50, 0, 90, false, false, 10, 20), [15, 105], 'a group turns around its box center, not its origin')
+  eq([flipRadii([1, 2, 3, 4], null), flipRadii([1, 2, 3, 4], [-1, 0, 0, 1, 0, 0]), flipRadii([1, 2, 3, 4], [1, 0, 0, -1, 0, 0]), flipRadii([1, 2, 3, 4], [-1, 0, 0, -1, 0, 0])], [[1, 2, 3, 4], [2, 1, 4, 3], [4, 3, 2, 1], [3, 4, 1, 2]], 'a flip mirrors the corners, a half turn swaps them diagonally')
   console.log('geometry ok')
 }
