@@ -1,7 +1,8 @@
 // Core checks for the canvas editing commands (no window): `bun scripts/editor-check.ts`
-import { call } from '../src/core'
+import { call, renderPixels } from '../src/core'
 import { inParent } from '../src/geometry'
 import { nodeIcon } from '../src/icons'
+import { effectOf } from '../src/Inspector'
 
 const assert = (ok: unknown, msg: string) => {
   if (!ok) throw new Error(`editor-check failed: ${msg}`)
@@ -272,6 +273,18 @@ for (let i = 0; i < 5; i++) call('drop_target', { x: 5500, y: 500, w: 10, h: 10,
 const per = (performance.now() - t0) / 5
 assert(call<{ id: string }>('drop_target', { x: 5500, y: 500, w: 10, h: 10, ignore: [] }).id === BF, 'drop_target finds the big frame among 1,500 layers')
 assert(per < 25, `drop_target with 1,500 layers took ${per.toFixed(1)} ms per call`)
+
+// The Inspector Effect field only takes a shadow color the core paints: #RGB, #RRGGBB, #RRGGBBAA (not #RGBA, which is drawn as nothing).
+const shadow = (color: string) => ({ type: 'shadow', blur: 0, offset: { x: 60, y: 60 }, color })
+const SH = call('insert', { parent: 'document', node: { type: 'rectangle', x: 100, y: 100, width: 100, height: 100, fill: '#ffffff' } }).id
+for (const color of ['#000', '#00000077', '#ff000055']) {
+  assert(effectOf(JSON.stringify(shadow(color)), {}), `the Effect field accepts the shadow color ${color}`)
+  call('update', { ids: [SH], props: { effect: shadow(color) } })
+  const p = renderPixels(300, 300, 0, 0, 1, 0xffffff)!
+  const o = (230 * 300 + 230) * 4
+  assert(p[o] + p[o + 1] + p[o + 2] < 765, `the core paints a ${color} shadow`)
+}
+assert(effectOf(JSON.stringify(shadow('#0007')), {}) === undefined, 'the Effect field rejects #RGBA, which the core does not paint')
 
 // Every layer type that has its own look gets its own Layers/Inspector icon (only rectangle uses the square).
 const icons = Object.fromEntries(['frame', 'group', 'rectangle', 'ellipse', 'text', 'icon', 'line', 'note', 'prompt', 'context', 'script', 'browser'].map((t) => [t, nodeIcon(t)]))

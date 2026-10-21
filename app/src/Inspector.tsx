@@ -97,14 +97,14 @@ function fontWeightOf(v: string, vars: Record<string, any>): unknown {
 }
 
 /** An effect object (or non-empty list of them) of a type the renderer knows, with fields it can read: lengths for blur / radius / offset, a hex or $color for the shadow color. */
-function effectOf(v: string, vars: Record<string, any>): unknown {
+export function effectOf(v: string, vars: Record<string, any>): unknown {
   const t = v.trim()
   if (t === '') return null
   const p = parse(t)
   const optional = (x: unknown, ok: (x: unknown) => boolean) => x === undefined || ok(x)
   const len = (x: unknown) => lengthVar(vars)(x)
   const coord = (x: unknown) => (typeof x === 'number' && Number.isFinite(x)) || isVar(x, vars)
-  const hue = (x: unknown) => typeof x === 'string' && (/^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(x.trim()) || isVar(x.trim(), vars, ['color']))
+  const hue = (x: unknown) => typeof x === 'string' && (/^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(x.trim()) || isVar(x.trim(), vars, ['color']))
   const one = (e: any) => {
     if (!e || typeof e !== 'object' || Array.isArray(e) || !EFFECT_TYPES.includes(e.type)) return false
     if (e.type !== 'shadow') return optional(e.radius, len)
