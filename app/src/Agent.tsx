@@ -54,6 +54,11 @@ function toolLabel(name: string, running: boolean) {
   return short.charAt(0).toUpperCase() + short.slice(1)
 }
 
+/** What a refused or failed call reads as: its running label, "Designing failed" / "Could not open document". */
+function failedLabel(name: string) {
+  return name === 'open_document' ? 'Could not open document' : `${toolLabel(name, true)} failed`
+}
+
 function duration(ms: number) {
   const s = Math.max(1, Math.round(ms / 1000))
   return s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`
@@ -771,7 +776,7 @@ const Item = memo(function Item({ m, isLast, expanded, toggle }: { m: ChatItem; 
       return (
         <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, paddingTop: 3, paddingBottom: 3 }}>
           <Icon name="plug" size={11} color={C.ghost} />
-          <T size={11} color={C.ghost}>{`External agent · ${toolLabel(m.text, false)}`}</T>
+          <T size={11} color={C.ghost}>{`External agent · ${m.error ? failedLabel(m.text) : toolLabel(m.text, false)}`}</T>
         </div>
       )
     case 'permission':

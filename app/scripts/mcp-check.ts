@@ -114,6 +114,15 @@ const text = (r: any) => r.content.map((c: any) => c.text ?? '').join('')
   assert(!(await tool('open_document', { path: doc })).isError, 'open_document reopens it')
   assert((await tool('spawn_agents', { agents: [] })).isError, 'external agents cannot spawn agents')
 
+  // The chat logs each external call once it is over, flagged when it failed or was refused.
+  const external = () => call<any>('poll').events.filter((e: any) => e.type === 'agent' && e.kind === 'external').map((e: any) => `${e.text}:${e.error}`)
+  external() // drop the earlier calls
+  await tool('execute', { input: 'Insert(document, {type:"frame", width:10, height:10}); nope()' })
+  await tool('open_document', { path: join(data, 'saved.pen', 'x.pen') })
+  await tool('get_style')
+  const got = external().join()
+  assert(got === 'execute:true,open_document:true,get_style:false', `external calls are logged with their outcome: ${got}`)
+
   // Each /mcp/<agent-id> keeps its own execute globals: B reusing `page` must not redirect A.
   const as = async (agent: string, input: string) => {
     const r = (await rpc({ id: agent, method: 'tools/call', params: { name: 'execute', arguments: { input } } }, `/mcp/${agent}`)).result
