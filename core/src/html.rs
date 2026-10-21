@@ -362,7 +362,7 @@ impl Html<'_> {
         }
         // Shapes CSS cannot draw are inlined as SVG, which carries their own paint.
         let as_svg = matches!(n.ty.as_str(), "path" | "polygon" | "line") || n.ty == "ellipse" && (n.f("innerRadius").unwrap_or(0.0) > 0.0 || n.f("sweepAngle").is_some_and(|s| s.abs() < 360.0));
-        let under = if as_svg { String::new() } else { self.paint_css(n, &mut css) };
+        let (under, over) = if as_svg { Default::default() } else { self.paint_css(n, &mut css) };
         let attrs = self.attrs(n);
         match n.ty.as_str() {
             "text" => {
@@ -450,6 +450,7 @@ impl Html<'_> {
                 for k in &n.kids {
                     self.node(k, Some(n));
                 }
+                self.out.push_str(&over);
                 let _ = writeln!(self.out, "</div>");
             }
         }
@@ -467,10 +468,13 @@ impl Html<'_> {
     }
 
     /// Background, radius, stroke, shadows and blur. Returns the overlay boxes (translucent image fills, gradient
-    /// strokes) that go first inside the element.
-    fn paint_css(&mut self, n: &RNode, css: &mut String) -> String {
+    /// strokes) that go first inside the element, and the one that goes after its children (the inner stroke of a
+    /// clipping frame, which is drawn above them).
+    fn paint_css(&mut self, n: &RNode, css: &mut String) -> (String, String) {
         let mut shadows: Vec<String> = Vec::new();
+        let mut above: Vec<String> = Vec::new();
         let mut under = String::new();
+        let mut over = String::new();
         if n.ty != "text" && n.ty != "icon" {
             let layers = fill_layers(n);
             // CSS lists the topmost background first. A translucent image cannot be a background layer: it and
@@ -514,7 +518,20 @@ impl Html<'_> {
                             }
                         }
                     }
-                    (Some(c), _, Some(w @ Value::Object(_))) => under += &stroke_overlay(&format!("linear-gradient({c},{c})"), w, n.s("strokeAlignment"), None).unwrap_or_default(),
+                    (Some(c), _, Some(w @ Value::Object(s))) => {
+                        let (grad, align) = (format!("linear-gradient({c},{c})"), n.s("strokeAlignment"));
+                        if n.ty == "frame" && n.b("clip") && !matches!(align, Some("outer" | "outside")) {
+                            // The inner part of the ring is drawn after the children, which would cover it below them; a centered stroke
+                            // keeps its outer half where it was (overflow clips it).
+                            let half = if matches!(align, Some("inner" | "inside")) { w.clone() } else { Value::Object(s.iter().map(|(k, v)| (k.clone(), Value::from(num(v).unwrap_or(0.0) / 2.0))).collect()) };
+                            over += &stroke_overlay(&grad, &half, Some("inner"), None).unwrap_or_default().replace("z-index:-1;", "");
+                            if !matches!(align, Some("inner" | "inside")) {
+                                under += &stroke_overlay(&grad, &half, Some("outer"), None).unwrap_or_default();
+                            }
+                        } else {
+                            under += &stroke_overlay(&grad, w, align, None).unwrap_or_default();
+                        }
+                    }
                     (Some(c), _, Some(v)) => {
                         if let Some(w) = num(v).filter(|w| *w > 0.0) {
                             // The first box-shadow is the topmost, so each stroke goes in front of the ones below it.
@@ -523,7 +540,10 @@ impl Html<'_> {
                                 Some("outer" | "outside") => vec![format!("0 0 0 {w}px {c}")],
                                 _ => vec![format!("inset 0 0 0 {}px {c}", w / 2.0), format!("0 0 0 {}px {c}", w / 2.0)],
                             };
-                            shadows.splice(0..0, own);
+                            // An inset shadow paints below the children: a clipping frame draws it in an overlay after them.
+                            let (inside, rest): (Vec<_>, Vec<_>) = own.into_iter().partition(|s| n.ty == "frame" && n.b("clip") && s.starts_with("inset "));
+                            above.splice(0..0, inside);
+                            shadows.splice(0..0, rest);
                         }
                     }
                     (None, Some(g), Some(w)) => under += &stroke_overlay(&g, w, n.s("strokeAlignment"), None).unwrap_or_default(),
@@ -566,6 +586,13 @@ impl Html<'_> {
         } else {
             shadows.extend(list.iter().map(|(inner, x, y, b, c)| format!("{}{x}px {y}px {b}px {c}", if *inner { "inset " } else { "" })));
         }
+        if !above.is_empty() {
+            let _ = writeln!(over, "<div style=\"position:absolute;inset:0;border-radius:inherit;pointer-events:none;box-shadow:{};\"></div>", above.join(","));
+        }
+        // The overlays after the children stack against this box.
+        if !over.is_empty() && !css.contains("position:") {
+            css.push_str("position:relative;");
+        }
         // Overlays would cover the element's own inset shadows (inner strokes and shadows): paint those above them.
         if !under.is_empty() {
             let inner: Vec<String> = shadows.iter().filter(|s| s.starts_with("inset ")).cloned().collect();
@@ -600,7 +627,7 @@ impl Html<'_> {
             let b = (fx.backdrop * 100.0).round() / 100.0;
             let _ = write!(css, "backdrop-filter:blur({b}px);-webkit-backdrop-filter:blur({b}px);");
         }
-        under
+        (under, over)
     }
 
     fn text_css(&mut self, n: &RNode, css: &mut String) {
@@ -786,6 +813,39 @@ mod tests {
         // An unparseable stop colour stays as transparent black, like the canvas.
         let (s, _) = rect_html(json!({"fill": grad(json!({"colors": [{"color": "#ff0000", "position": 0}, {"color": "transparent", "position": 1}]}))}));
         assert!(s.contains("linear-gradient(-90deg,#ff0000 0%,rgba(0, 0, 0, 0) 100%)"), "{s}");
+    }
+
+    /// The inner stroke of a clipping frame is drawn above its children, so it is an overlay after them, not a box-shadow under them.
+    #[test]
+    fn clipping_frame_strokes_above_children() {
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        e.load_template("empty");
+        let kid = json!({"type": "rectangle", "name": "kid", "x": 0, "y": 0, "width": 100, "height": 100, "fill": "#ff0000"});
+        let mut html = |clip: bool, align: &str| {
+            let frame = json!({"type": "frame", "layout": "none", "clip": clip, "width": 100, "height": 100, "fill": "#eeeeee", "stroke": "#0000ff", "strokeWidth": 10, "strokeAlignment": align, "children": [kid.clone()]});
+            let id = e.insert_root(frame).unwrap();
+            super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap()
+        };
+        let h = html(true, "inner");
+        let overlay = "<div style=\"position:absolute;inset:0;border-radius:inherit;pointer-events:none;box-shadow:inset 0 0 0 10px #0000ff;\"></div>";
+        assert!(h.find("#ff0000") < h.find(overlay) && h.matches("box-shadow").count() == 1, "{h}");
+        // The outer half of a centered stroke stays on the frame, which overflow does not clip.
+        let h = html(true, "center");
+        assert!(h.contains("box-shadow:0 0 0 5px #0000ff;") && h.find("#ff0000") < h.find("box-shadow:inset 0 0 0 5px #0000ff;"), "{h}");
+        // Without clip the children sit inside the stroke as before.
+        let h = html(false, "inner");
+        assert!(h.contains("box-shadow:inset 0 0 0 10px #0000ff;") && !h.contains("pointer-events"), "{h}");
+        // A per-side stroke that cannot be a border is a masked ring: its inner part goes after the children too (a lone one is a border, which no child covers).
+        let mut ring = |align: &str| {
+            let frame = json!({"type": "frame", "layout": "none", "clip": true, "width": 100, "height": 100, "stroke": ["#0000ff", "#00ff00"], "strokeWidth": {"top": 10, "right": 10, "bottom": 10, "left": 10}, "strokeAlignment": align, "children": [kid.clone()]});
+            let id = e.insert_root(frame).unwrap();
+            super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap()
+        };
+        let h = ring("inner");
+        assert!(h.find("#ff0000") < h.find("padding:10px;") && !h.contains("z-index:-1"), "{h}");
+        let h = ring("center");
+        assert!(h.find("#ff0000") < h.find("inset:0px;padding:5px;") && h.contains("inset:-5px;padding:5px;") && h.matches("z-index:-1").count() == 2, "{h}");
     }
 
     /// A frame whose fill blends with the backdrop paints its overlay in tree order: flow children must be positioned to stay above it.
