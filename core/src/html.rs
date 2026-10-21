@@ -294,6 +294,11 @@ impl Html<'_> {
             // In a wrapper the laid-out size is final: fill and fit have no flow left to resolve against.
             let fixed = slot.map(|_| (Value::from(px(n.w)), Value::from(px(n.h))));
             let (wv, hv) = (fixed.as_ref().map(|f| &f.0).or(n.p.get("width")), fixed.as_ref().map(|f| &f.1).or(n.p.get("height")));
+            // fit_content(N) on a node with nothing to hug is N (the laid-out size); the CSS keyword would collapse it to 0.
+            let (wl, hl) = (Value::from(px(n.w)), Value::from(px(n.h)));
+            let is_fit = |v: Option<&Value>| v.and_then(Value::as_str).is_some_and(|s| s.starts_with("fit_content"));
+            let wv = if is_fit(wv) && !crate::layout::hugs(n, 0) { Some(&wl) } else { wv };
+            let hv = if is_fit(hv) && !crate::layout::hugs(n, 1) { Some(&hl) } else { hv };
             css += &size_css(wv, "width", parent_dir, true, n.w);
             css += &size_css(hv, "height", parent_dir, false, n.h);
             if matches!(n.ty.as_str(), "rectangle" | "ellipse" | "icon" | "polygon" | "line" | "path") {
@@ -816,6 +821,29 @@ mod tests {
         let id = e.insert_root(json!({"type": "frame", "width": 100, "height": 60, "layout": "horizontal", "children": [{"type": "group", "children": [{"type": "rectangle", "width": 80, "height": 20, "fill": "#ff0000"}]}]})).unwrap();
         let g = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
         assert!(g.contains("width:80px;flex-shrink:0;"), "{g}");
+    }
+
+    /// `fit_content(N)` on a node with nothing to hug is N, like the canvas; only a layout frame with children hugs.
+    #[test]
+    fn fit_content_fallback_is_exported_as_pixels() {
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        e.load_template("empty");
+        let id = e.insert_root(json!({"type": "frame", "name": "root", "layout": "none", "width": 300, "height": 200, "children": [
+            {"type": "frame", "name": "row", "layout": "horizontal", "width": "fit_content", "height": "fit_content", "gap": 10, "padding": 10, "x": 10, "y": 10, "children": [
+                {"type": "frame", "name": "A", "layout": "none", "width": "fit_content(40)", "height": "fit_content(40)", "fill": "#00aa00"},
+                {"type": "rectangle", "name": "B", "width": "fit_content(60)", "height": "fit_content(30)", "fill": "#ff0000"}]},
+            {"type": "frame", "name": "E", "layout": "vertical", "x": 0, "y": 100, "width": "fit_content(25)", "height": "fit_content", "children": [
+                {"type": "rectangle", "width": "fill_container", "height": 10}]}]})).unwrap();
+        let h = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
+        let line = |name: &str| h.lines().find(|l| l.contains(&format!("data-name=\"{name}\""))).unwrap().to_string();
+        let (a, b, row, empty) = (line("A"), line("B"), line("row"), line("E"));
+        assert!(a.contains("width:40px;") && a.contains("height:40px;") && !a.contains("fit-content"), "{a}");
+        assert!(b.contains("width:60px;") && b.contains("height:30px;") && !b.contains("fit-content"), "{b}");
+        // The row hugs its children.
+        assert!(row.contains("width:fit-content;") && row.contains("height:fit-content;"), "{row}");
+        // Its only child fills the width, so nothing hugs there and the fallback is the size; the height still hugs.
+        assert!(empty.contains("width:25px;") && empty.contains("height:fit-content;"), "{empty}");
     }
 
     /// A rotated or flipped child of an auto layout takes its bounding box in the flow, like the canvas.

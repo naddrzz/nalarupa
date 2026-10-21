@@ -137,18 +137,22 @@ fn init(n: &mut RNode, fonts: &mut Fonts) {
     }
 }
 
+/// Whether a fit_content size on this axis follows the children (a frame with a layout and an in-flow, non-fill child).
+/// Anything else keeps the value in `fit_content(N)`.
+pub fn hugs(n: &RNode, ax: usize) -> bool {
+    dir(n).is_some() && sizing(n, ax) == Sizing::Fit && n.kids.iter().any(|k| in_flow(k) && sizing(k, ax) != Sizing::Fill)
+}
+
 /// Post-order: a fit_content node with a layout hugs its in-flow, non-fill children.
 fn fit(n: &mut RNode, ax: usize, fonts: &mut Fonts) {
     for k in &mut n.kids {
         fit(k, ax, fonts);
     }
-    if let Some(d) = dir(n).filter(|_| sizing(n, ax) == Sizing::Fit) {
+    if let Some(d) = dir(n).filter(|_| hugs(n, ax)) {
         let sized: Vec<f64> = n.kids.iter().filter(|k| in_flow(k) && sizing(k, ax) != Sizing::Fill).map(|k| outer(k, ax)).collect();
-        if !sized.is_empty() {
-            let content = if d == ax { sized.iter().sum::<f64>() + gap(n) * (sized.len() - 1) as f64 } else { sized.iter().copied().fold(0.0, f64::max) };
-            let v = content + pad(n, ax);
-            commit(n, ax, v, fonts);
-        }
+        let content = if d == ax { sized.iter().sum::<f64>() + gap(n) * (sized.len() - 1) as f64 } else { sized.iter().copied().fold(0.0, f64::max) };
+        let v = content + pad(n, ax);
+        commit(n, ax, v, fonts);
     }
     if n.ty == "group" {
         group_bounds(n);
