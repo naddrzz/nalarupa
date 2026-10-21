@@ -151,6 +151,20 @@ call('undo')
 call('reorder', { ids: [A], dir: 'front' })
 assert(call<B[]>('children_boxes', { id: F }).at(-1)!.id === A, 'bring to front')
 call('undo')
+{
+  // One step up/down on a block that touches the end of the stack keeps the selected layers' relative order.
+  const RF = call('insert', { node: { type: 'frame', name: 'RF', x: 2000, y: 0, width: 500, height: 300, layout: 'none' } }).id
+  const r: Record<string, string> = {}
+  for (const n of ['A', 'B', 'C', 'D']) r[n] = call('insert', { parent: RF, node: { type: 'rectangle', name: n, x: 0, y: 0, width: 10, height: 10 } }).id
+  const order = () => call<B[]>('children_boxes', { id: RF }).map((k) => Object.keys(r).find((n) => r[n] === k.id)).join('')   // bottom → top
+  assert(order() === 'ABCD', `reorder fixture (${order()})`)
+  call('reorder', { ids: [r.C, r.D], dir: 'up' })
+  assert(order() === 'ABCD', `bring forward at the front keeps the order (${order()})`)
+  call('reorder', { ids: [r.A, r.B], dir: 'down' })
+  assert(order() === 'ABCD', `send backward at the back keeps the order (${order()})`)
+  call('reorder', { ids: [r.B, r.C], dir: 'up' })
+  assert(order() === 'ADBC', `bring forward moves a free block one step (${order()})`)
+}
 
 // Clipboard: copy → paste lands in place next to the visible source; text and SVG paste.
 const clip = call('copy', { ids: [A] })
