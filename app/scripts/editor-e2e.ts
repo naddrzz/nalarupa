@@ -546,6 +546,13 @@ try {
   await app.call('keystrokes', { keys: 'ctrl-z' })
   await sleep(400)
   assert(await app.getByTestId('layers').getByText('Desktop').count(), 'one undo step reverts the title rename')
+  // A single press on the title of an artboard with children selects it (it used to start a marquee and clear the selection).
+  await canvas.press('escape')
+  await sleep(300)
+  assert(!(await app.getByTestId('inspector-name').count()), 'nothing is selected before the title press')
+  await app.mouse.click(await app.getByTestId('frame-label').center())
+  assert(await until(async () => !!(await app.getByTestId('inspector-name').count())), 'pressing the title of a frame with children selects it')
+  await sleep(500)
 
   // Pen tool (vector editing): click = corner, drag = curve handles, clicking the first point closes.
   await canvas.press('escape')
