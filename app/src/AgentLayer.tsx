@@ -6,7 +6,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { tryCall, type Box } from './core'
 import { FADE_DELAY, FADE_DUR, FADE_IN, GONE, PILL_MS, PRESENCE, cursorFaded, needsFrame, profileOf, store, type CursorState } from './agents'
 import { ICONS } from './icons'
-import { painted, shimmerHalves, turned, type M, type Rect } from './geometry'
+import { painted, pointIn, shimmerHalves, turned, type M, type Rect } from './geometry'
 import { SvgOverlay } from './ui'
 import { C, FONT, REDUCED_MOTION } from './theme'
 import type { Cam } from './Canvas'
@@ -50,9 +50,10 @@ const ARROW = 'M4.037 4.688a.495.495 0 0 1 .651-.651l16 6.5a.5.5 0 0 1-.063.947l
 const ARROW_FILL = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="${ARROW}" fill="#000"/></svg>`
 const ARROW_OUTLINE = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="${ARROW}" fill="#000" stroke="#000" stroke-width="3" stroke-linejoin="round"/></svg>`
 
-/** Point inside a box, biased toward the middle (average of two uniforms). */
+/** Point on a node as painted (turned or flipped included), biased toward the middle (average of two uniforms). */
 function pickTarget(b: Box) {
-  return { x: b.x + (b.w * (Math.random() + Math.random())) / 2, y: b.y + (b.h * (Math.random() + Math.random())) / 2 }
+  const [x, y] = pointIn(b, (Math.random() + Math.random()) / 2, (Math.random() + Math.random()) / 2)
+  return { x, y }
 }
 
 /** Move an agent's cursor toward a node; "kept" when it was already visible (flash waits for it). */
