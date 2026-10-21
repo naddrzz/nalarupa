@@ -3,7 +3,7 @@
 // usage rows, queued prompts, parallel agents.
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { call, tryCall } from './core'
-import { barAgents, changing, imageSrc, lastContentId, profileOf, resetChat, restoreChat, spinning, store, type Author, type ChatItem } from './agents'
+import { barAgents, changing, imageSrc, lastContentId, profileOf, resetChat, restoreChat, rowTickMs, spinning, store, type Author, type ChatItem } from './agents'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import * as SelectPrimitive from '@gpuix/react/select'
 import { C, FONT, INDICATOR_TICK_MS, MONO, REDUCED_MOTION, ellipsisAt, ellipsisPadAt, pulseAt } from './theme'
@@ -657,13 +657,15 @@ function ModelPicker({ settingsOpen, toast }: { settingsOpen: boolean; toast: To
 }
 
 function Planning() {
-  useTick(REDUCED_MOTION ? 400 : INDICATOR_TICK_MS, true)
+  const ms = rowTickMs(false, true, REDUCED_MOTION, INDICATOR_TICK_MS)
+  useTick(ms, ms > 0)
   return <T size={12} color={C.ghost}>{`Planning next moves${dots()}`}</T>
 }
 
 const Item = memo(function Item({ m, isLast, expanded, toggle }: { m: ChatItem; isLast: boolean; expanded: boolean; toggle: (id: number) => void; tick: number }) {
   const typing = m.kind === 'assistant' && isLast && (revealed.get(m.id) ?? 0) < m.text.split(/(\s+)/).length
-  useTick(typing ? 16 : REDUCED_MOTION ? 400 : INDICATOR_TICK_MS, typing || spinning(m))
+  const ms = rowTickMs(typing, spinning(m), REDUCED_MOTION, INDICATOR_TICK_MS)
+  useTick(ms, ms > 0)
   switch (m.kind) {
     case 'user':
     case 'queued':
