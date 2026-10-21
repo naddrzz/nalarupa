@@ -299,11 +299,15 @@ const redAt = (x: number, y: number) => {
   const o = (y * 600 + x) * 4
   return p[o] === 255 && p[o + 1] === 0 && p[o + 2] === 0
 }
+let rootId = ''
+let midId = ''
 const clipped = () => {
   call('new', { template: 'empty' })
   const root = ins('document', { type: 'frame', name: 'root', x: 0, y: 0, width: 600, height: 300, layout: 'none', fill: '#ffffff' })
   const clip = ins(root, { type: 'frame', name: 'P', layout: 'none', clip: true, x: 50, y: 50, width: 100, height: 100, fill: '#eeeeee' })
   const mid = ins(clip, { type: 'frame', name: 'C', layout: 'none', x: 10, y: 10, width: 120, height: 80, fill: '#dddddd' })
+  rootId = root
+  midId = mid
   ins(mid, { type: 'rectangle', name: 'R', x: 0, y: 0, width: 300, height: 50, fill: '#ff0000' })
   assert(!redAt(300, 70), 'a clipping frame cuts its overflowing descendant')
   return clip
@@ -312,6 +316,18 @@ call('update', { ids: [clipped()], props: { clip: false } })
 assert(redAt(300, 70), 'turning clip off repaints the overflow')
 call('unwrap', { ids: [clipped()] })
 assert(redAt(300, 70), 'unwrapping a clipping frame repaints the overflow')
+// Turning clip on, or moving a container out of a clipping frame, repaints too.
+const unclipped = () => {
+  const clip = clipped()
+  call('update', { ids: [clip], props: { clip: false } })
+  assert(redAt(300, 70), 'an unclipped frame shows its overflowing descendant')
+  return clip
+}
+call('update', { ids: [unclipped()], props: { clip: true } })
+assert(!redAt(300, 70), 'turning clip on repaints the cut overflow')
+clipped()
+call('reparent', { ids: [midId], parent: rootId })
+assert(redAt(300, 70), 'moving a container out of a clipping frame repaints its overflow')
 // One very long line (pasted minified JSON, a base64 blob) lays out in linear time: quadruple the text,
 // about quadruple the time (it was ~14x, 160k characters took 9 s).
 const layoutMs = (chars: number) => {

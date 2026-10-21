@@ -842,12 +842,14 @@ fn changed_nodes(old: &Layer, new: &Layer, out: &mut Vec<Rect>) {
         }
     }
     changed.extend(old.flat.iter().filter(|o| !seen.contains(o.id.as_str())));
-    // A clip frame that changed or went away cuts (or stops cutting) its descendants, whose own
-    // signatures stay the same: repaint wherever they reach.
-    let clips: Vec<&str> = changed.iter().filter(|f| f.clip).map(|f| f.id.as_str()).collect();
+    // A clip frame that changed or went away cuts (or stops cutting) its descendants, and a node
+    // moved under another parent changes which clips cut its own: their signatures stay the same,
+    // so repaint wherever they reach.
+    let mut roots: HashSet<&str> = changed.iter().filter(|f| f.clip).map(|f| f.id.as_str()).collect();
+    roots.extend(new.flat.iter().filter(|f| before.get(f.id.as_str()).is_some_and(|o| o.parent != f.parent)).map(|f| f.id.as_str()));
     for layer in [old, new] {
         for (i, f) in layer.flat.iter().enumerate() {
-            if clips.contains(&f.id.as_str()) {
+            if roots.contains(f.id.as_str()) {
                 changed.extend(layer.flat[i + 1..].iter().take_while(|d| d.depth > f.depth));
             }
         }
