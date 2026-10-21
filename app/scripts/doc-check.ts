@@ -193,6 +193,12 @@ assert(htmlOf({ fill: grad({ opacity: 0.4 }) }).includes('rgba(255, 0, 0, 0.400)
 assert(htmlOf({ fill: grad({ gradientType: 'angular' }) }).includes('conic-gradient(from -90deg at 50% 50%'), 'html exports an angular gradient as conic')
 assert(htmlOf({ fill: '#ff0000', effect: { type: 'blur', radius: 4 } }).includes('filter:blur(2px)'), 'html exports layer blur')
 assert(/padding:12px;background:linear-gradient/.test(htmlOf({ fill: '#ffff00', stroke: grad(), strokeWidth: 12 })), 'html exports a gradient stroke')
+// A bottom fill or stroke with a blend mode blends with the layers beneath the element: an overlay with mix-blend-mode
+// outside any isolated box, not a background (background-blend-mode only blends the element's own layers).
+const blendHtml = htmlOf({ fill: [{ type: 'color', color: '#00ffff', blendMode: 'multiply' }] })
+assert(blendHtml.includes('mix-blend-mode:multiply;') && !blendHtml.includes('background-blend-mode') && !blendHtml.includes('isolation') && !blendHtml.includes('z-index'), `html blends a lone fill with the backdrop: ${blendHtml}`)
+assert(/padding:6px;background:linear-gradient\(#00ffff,#00ffff\);mix-blend-mode:screen;/.test(htmlOf({ fill: '#ffffff', stroke: { type: 'color', color: '#00ffff', blendMode: 'screen' }, strokeWidth: 6 })), 'html blends a stroke with the backdrop')
+assert(htmlOf({ fill: '#ffffff40', effect: { type: 'background_blur', radius: 16 } }).includes('backdrop-filter:blur(8px)'), 'html exports background blur as a backdrop filter')
 // A no-layout frame or group inside a no-layout frame stays absolute (a later position:relative would shift it).
 const nested = (type: string, name: string, y: number) => ({ type, name, ...(type === 'frame' ? { layout: 'none' } : {}), x: 20, y, width: 100, height: 50, children: [{ type: 'rectangle', x: 5, y: 5, width: 20, height: 20, fill: '#ff0000' }] })
 const nestRoot = call('insert', { parent: 'document', node: { type: 'frame', layout: 'none', x: 0, y: 0, width: 300, height: 300, children: [nested('frame', 'NA', 20), nested('frame', 'NB', 150), nested('group', 'NG', 250)] } }).id

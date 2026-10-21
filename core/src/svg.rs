@@ -257,7 +257,8 @@ pub(crate) struct Effects {
     shadows: Vec<Shadow>,
     /// Layer blur sigma (radius / 2; several blurs compound).
     pub(crate) blur: f64,
-    backdrop: f64,
+    /// Background blur sigma (the largest of several).
+    pub(crate) backdrop: f64,
 }
 
 impl Effects {

@@ -164,7 +164,7 @@ fn gradient_css(o: &serde_json::Map<String, Value>) -> Option<String> {
 }
 
 /// A gradient stroke: the gradient fills a box moved out by `reach` of each side width, masked down to its per-side ring.
-fn stroke_overlay(grad: &str, w: &Value, alignment: Option<&str>) -> Option<String> {
+fn stroke_overlay(grad: &str, w: &Value, alignment: Option<&str>, blend: Option<&str>) -> Option<String> {
     let sides = match w {
         Value::Object(s) => ["top", "right", "bottom", "left"].map(|k| s.get(k).and_then(num).unwrap_or(0.0).max(0.0)),
         v => [num(v).filter(|w| *w > 0.0)?; 4],
@@ -177,14 +177,54 @@ fn stroke_overlay(grad: &str, w: &Value, alignment: Option<&str>) -> Option<Stri
     };
     let px = |f: f64| if sides.iter().all(|w| *w == sides[0]) { format!("{}px", sides[0] * f + 0.0) } else { sides.map(|w| format!("{}px", w * f + 0.0)).join(" ") };
     let (inset, pad) = (px(-reach), px(1.0));
+    let blend = blend.map(|b| format!("mix-blend-mode:{b};")).unwrap_or_default();
     Some(format!(
-        "<div style=\"{}inset:{inset};padding:{pad};background:{grad};-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);mask-composite:exclude;\"></div>\n",
+        "<div style=\"{}inset:{inset};padding:{pad};background:{grad};{blend}-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);mask-composite:exclude;\"></div>\n",
         OVERLAY
     ))
 }
 
 /// Overlay boxes sit above the node's own background and below its children.
 const OVERLAY: &str = "position:absolute;z-index:-1;border-radius:inherit;pointer-events:none;";
+
+/// The fills bottom to top as CSS layers, with the paint's opacity where CSS cannot fold it into the layer, and its blend mode.
+fn fill_layers(n: &RNode) -> Vec<(String, f64, Option<&'static str>)> {
+    let mut layers: Vec<(String, f64, Option<&'static str>)> = Vec::new();
+    for f in fills(n.p.get("fill")) {
+        let first = layers.len();
+        match f {
+            Value::String(s) => layers.extend(css_color(s).map(|c| (format!("linear-gradient({c},{c})"), 1.0, None))),
+            Value::Object(o) => match o.get("type").and_then(Value::as_str).unwrap_or("color") {
+                "color" => layers.extend(o.get("color").and_then(Value::as_str).and_then(css_color).map(|c| (format!("linear-gradient({c},{c})"), 1.0, None))),
+                "gradient" => layers.extend(gradient_css(o).map(|g| (g, 1.0, None))),
+                "image" => {
+                    let url = o.get("url").and_then(Value::as_str).unwrap_or("");
+                    if !url.is_empty() {
+                        let size = match o.get("mode").and_then(Value::as_str) {
+                            Some("fit") => "contain",
+                            Some("fill") => "cover",
+                            _ => "100% 100%",
+                        };
+                        let opacity = o.get("opacity").and_then(num).unwrap_or(1.0).clamp(0.0, 1.0);
+                        layers.push((format!("url('{}') center/{size} no-repeat", esc(url)), opacity, None));
+                    }
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+        // The paint just pushed (if any) blends with what is under it.
+        if let Some(l) = layers.get_mut(first) {
+            l.2 = blend_mode(f["blendMode"].as_str());
+        }
+    }
+    layers
+}
+
+/// A bottom fill or a stroke with a blend mode blends with what lies beneath the element, not just its own layers.
+fn blends_backdrop(n: &RNode) -> bool {
+    n.ty != "text" && n.ty != "icon" && (fill_layers(n).first().is_some_and(|l| l.2.is_some()) || fills(n.p.get("stroke")).iter().any(|s| blend_mode(s["blendMode"].as_str()).is_some()))
+}
 
 fn size_css(v: Option<&Value>, prop: &str, parent_dir: Option<&str>, horiz_axis: bool, measured: f64) -> String {
     let main_axis = match parent_dir {
@@ -245,6 +285,9 @@ impl Html<'_> {
         } else if absolute {
             let p = parent.unwrap();
             let _ = write!(css, "position:absolute;left:{}px;top:{}px;", n.x - p.x, n.y - p.y);
+        } else if parent.is_some_and(blends_backdrop) {
+            // The parent's blending overlays are not behind its content: a child must be positioned to paint above them.
+            css += "position:relative;";
         }
         let text_auto = n.ty == "text" && n.s("textGrowth").unwrap_or("auto") == "auto";
         if !text_auto {
@@ -318,7 +361,7 @@ impl Html<'_> {
                     match n.s("layout").unwrap_or("horizontal") {
                         // An absolute frame already contains its children; a later position:relative would override it.
                         "none" => {
-                            if !absolute {
+                            if !absolute && !css.contains("position:") {
                                 css += "position:relative;";
                             }
                         }
@@ -354,7 +397,7 @@ impl Html<'_> {
                         css += "overflow:hidden;";
                     }
                 } else if n.ty == "group" {
-                    if !absolute {
+                    if !absolute && !css.contains("position:") {
                         css += "position:relative;";
                     }
                     css += &size_css(Some(&Value::from(n.w)), "width", parent_dir, true, n.w);
@@ -389,39 +432,11 @@ impl Html<'_> {
         let mut shadows: Vec<String> = Vec::new();
         let mut under = String::new();
         if n.ty != "text" && n.ty != "icon" {
-            // Bottom to top, with the paint's opacity where CSS cannot fold it into the layer, and its blend mode.
-            let mut layers: Vec<(String, f64, Option<&str>)> = Vec::new();
-            for f in fills(n.p.get("fill")) {
-                let first = layers.len();
-                match f {
-                    Value::String(s) => layers.extend(css_color(s).map(|c| (format!("linear-gradient({c},{c})"), 1.0, None))),
-                    Value::Object(o) => match o.get("type").and_then(Value::as_str).unwrap_or("color") {
-                        "color" => layers.extend(o.get("color").and_then(Value::as_str).and_then(css_color).map(|c| (format!("linear-gradient({c},{c})"), 1.0, None))),
-                        "gradient" => layers.extend(gradient_css(o).map(|g| (g, 1.0, None))),
-                        "image" => {
-                            let url = o.get("url").and_then(Value::as_str).unwrap_or("");
-                            if !url.is_empty() {
-                                let size = match o.get("mode").and_then(Value::as_str) {
-                                    Some("fit") => "contain",
-                                    Some("fill") => "cover",
-                                    _ => "100% 100%",
-                                };
-                                let opacity = o.get("opacity").and_then(num).unwrap_or(1.0).clamp(0.0, 1.0);
-                                layers.push((format!("url('{}') center/{size} no-repeat", esc(url)), opacity, None));
-                            }
-                        }
-                        _ => {}
-                    },
-                    _ => {}
-                }
-                // The paint just pushed (if any) blends with what is under it.
-                if let Some(l) = layers.get_mut(first) {
-                    l.2 = blend_mode(f["blendMode"].as_str());
-                }
-            }
+            let layers = fill_layers(n);
             // CSS lists the topmost background first. A translucent image cannot be a background layer: it and
-            // every fill above it become overlays.
-            let split = layers.iter().position(|l| l.1 < 1.0).unwrap_or(layers.len());
+            // every fill above it become overlays, and so do all fills when the bottom one blends with the backdrop
+            // (a background only blends with its own layers).
+            let split = if layers.first().is_some_and(|l| l.2.is_some()) { 0 } else { layers.iter().position(|l| l.1 < 1.0).unwrap_or(layers.len()) };
             if split > 0 {
                 let _ = write!(css, "background:{};", layers[..split].iter().rev().map(|l| l.0.as_str()).collect::<Vec<_>>().join(","));
                 if layers[..split].iter().any(|l| l.2.is_some()) {
@@ -438,9 +453,18 @@ impl Html<'_> {
             }
             // No stroke without a width; alignment defaults to center. Every stroke is painted, bottom to top.
             let strokes = fills(n.p.get("stroke"));
+            let blends = strokes.iter().any(|s| blend_mode(s["blendMode"].as_str()).is_some());
             for paint in &strokes {
                 let stroke = paint.as_str().map(str::to_string).or_else(|| paint["color"].as_str().map(str::to_string)).and_then(|c| css_color(&c));
                 let gradient = paint.as_object().filter(|o| o.get("type").and_then(Value::as_str) == Some("gradient")).and_then(gradient_css);
+                // A blending stroke is a masked ring too: only an overlay can blend with the layers beneath. Once one
+                // is, every stroke is, so the stack keeps its order (a border or box-shadow would paint below it).
+                if let (true, Some(w)) = (blends, n.p.get("strokeWidth")) {
+                    if let Some(l) = gradient.clone().or_else(|| stroke.clone().map(|c| format!("linear-gradient({c},{c})"))) {
+                        under += &stroke_overlay(&l, w, n.s("strokeAlignment"), blend_mode(paint["blendMode"].as_str())).unwrap_or_default();
+                        continue;
+                    }
+                }
                 match (stroke, gradient, n.p.get("strokeWidth")) {
                     // A border has one colour and lies inside the box: only a lone inner stroke can use it, the rest become masked rings.
                     (Some(c), _, Some(Value::Object(s))) if strokes.len() == 1 && matches!(n.s("strokeAlignment"), Some("inner" | "inside")) => {
@@ -450,7 +474,7 @@ impl Html<'_> {
                             }
                         }
                     }
-                    (Some(c), _, Some(w @ Value::Object(_))) => under += &stroke_overlay(&format!("linear-gradient({c},{c})"), w, n.s("strokeAlignment")).unwrap_or_default(),
+                    (Some(c), _, Some(w @ Value::Object(_))) => under += &stroke_overlay(&format!("linear-gradient({c},{c})"), w, n.s("strokeAlignment"), None).unwrap_or_default(),
                     (Some(c), _, Some(v)) => {
                         if let Some(w) = num(v).filter(|w| *w > 0.0) {
                             // The first box-shadow is the topmost, so each stroke goes in front of the ones below it.
@@ -462,7 +486,7 @@ impl Html<'_> {
                             shadows.splice(0..0, own);
                         }
                     }
-                    (None, Some(g), Some(w)) => under += &stroke_overlay(&g, w, n.s("strokeAlignment")).unwrap_or_default(),
+                    (None, Some(g), Some(w)) => under += &stroke_overlay(&g, w, n.s("strokeAlignment"), None).unwrap_or_default(),
                     _ => {}
                 }
             }
@@ -513,18 +537,28 @@ impl Html<'_> {
             if !css.contains("position:") {
                 css.push_str("position:relative;");
             }
-            css.push_str("isolation:isolate;");
+            // Overlays that blend with the backdrop go in the page's stacking order, not in a box of their own.
+            if blends_backdrop(n) {
+                under = under.replace("z-index:-1;", "");
+            } else {
+                css.push_str("isolation:isolate;");
+            }
         }
         if !shadows.is_empty() {
             let _ = write!(css, "box-shadow:{};", shadows.join(","));
         }
         // CSS `blur()` takes the standard deviation, which is half the radius.
-        let blur = crate::svg::Effects::of(n).blur;
-        if blur > 0.0 {
-            filters.push(format!("blur({}px)", (blur * 100.0).round() / 100.0));
+        let fx = crate::svg::Effects::of(n);
+        if fx.blur > 0.0 {
+            filters.push(format!("blur({}px)", (fx.blur * 100.0).round() / 100.0));
         }
         if !filters.is_empty() {
             let _ = write!(css, "filter:{};", filters.join(" "));
+        }
+        // Like the canvas, a node below full opacity shows no background blur.
+        if fx.backdrop > 0.0 && n.f("opacity").unwrap_or(1.0) >= 1.0 {
+            let b = (fx.backdrop * 100.0).round() / 100.0;
+            let _ = write!(css, "backdrop-filter:blur({b}px);-webkit-backdrop-filter:blur({b}px);");
         }
         under
     }
@@ -657,6 +691,23 @@ mod tests {
         assert!(s.contains("background:linear-gradient(#00ffff,#00ffff),linear-gradient(#ffee00,#ffee00);background-blend-mode:multiply,normal;"), "{s}");
         let (_, h) = rect_html(json!({"fill": ["#ffee00", img.clone(), {"type": "color", "color": "#00ffff", "blendMode": "screen"}]}));
         assert!(h.contains("mix-blend-mode:screen;"), "{h}");
+        // A bottom fill that blends is an overlay in the page's stacking order (no background, no isolation, no negative z-index),
+        // so it blends with the layers beneath the element; fills above it follow as overlays.
+        let (s, h) = rect_html(json!({"fill": [{"type": "color", "color": "#00ffff", "blendMode": "multiply"}, "#ff000080"]}));
+        assert!(!s.contains("background") && !s.contains("isolation") && !h.contains("z-index"), "{h}");
+        assert!(h.contains("background:linear-gradient(#00ffff,#00ffff);opacity:1;mix-blend-mode:multiply;") && h.find("#00ffff") < h.find("rgba(255, 0, 0, 0.502)"), "{h}");
+        // A blending stroke is a masked ring with the blend mode.
+        let (s, h) = rect_html(json!({"fill": "#ffffff", "stroke": {"type": "color", "color": "#00ffff", "blendMode": "screen"}, "strokeWidth": 6}));
+        assert!(s.contains("background:linear-gradient(#ffffff,#ffffff);") && !s.contains("border") && !s.contains("isolation"), "{s}");
+        assert!(h.contains("padding:6px;background:linear-gradient(#00ffff,#00ffff);mix-blend-mode:screen;") && !h.contains("z-index"), "{h}");
+        // Background blur is a backdrop filter with the standard deviation, like layer blur.
+        let (s, _) = rect_html(json!({"fill": "#ffffff40", "effect": {"type": "background_blur", "radius": 16}}));
+        assert!(s.contains("backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);"), "{s}");
+        let (s, _) = rect_html(json!({"fill": "#ffffff40", "opacity": 0.5, "effect": {"type": "background_blur", "radius": 16}}));
+        assert!(!s.contains("backdrop-filter"), "{s}");
+        // A blending stroke makes the whole stack rings, so a plain stroke above it stays above it.
+        let (s, h) = rect_html(json!({"fill": "#ffffff", "stroke": [{"type": "color", "color": "#00ffff", "blendMode": "screen"}, "#ff0000"], "strokeWidth": 6}));
+        assert!(!s.contains("box-shadow") && h.matches("mask-composite:exclude").count() == 2 && h.find("mix-blend-mode:screen") < h.find("#ff0000"), "{h}");
         // Every stroke is painted, the topmost first in the box-shadow list.
         let (s, _) = rect_html(json!({"fill": "#ffffff", "stroke": ["#ff0000", "#0000ff80"], "strokeWidth": 10, "strokeAlignment": "inner"}));
         assert!(s.contains("box-shadow:inset 0 0 0 10px rgba(0, 0, 255, 0.502),inset 0 0 0 10px #ff0000;"), "{s}");
@@ -688,6 +739,25 @@ mod tests {
         // An unparseable stop colour stays as transparent black, like the canvas.
         let (s, _) = rect_html(json!({"fill": grad(json!({"colors": [{"color": "#ff0000", "position": 0}, {"color": "transparent", "position": 1}]}))}));
         assert!(s.contains("linear-gradient(-90deg,#ff0000 0%,rgba(0, 0, 0, 0) 100%)"), "{s}");
+    }
+
+    /// A frame whose fill blends with the backdrop paints its overlay in tree order: flow children must be positioned to stay above it.
+    #[test]
+    fn children_stay_above_a_blending_fill() {
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        e.load_template("empty");
+        let kid = json!({"type": "rectangle", "name": "kid", "width": 20, "height": 20, "fill": "#ff0000"});
+        let frame = |fill: serde_json::Value| json!({"type": "frame", "layout": "horizontal", "width": 100, "height": 60, "fill": fill, "children": [kid.clone()]});
+        let mut html = |fill: serde_json::Value| {
+            let id = e.insert_root(frame(fill)).unwrap();
+            super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap()
+        };
+        let h = html(json!({"type": "color", "color": "#00ffff", "blendMode": "multiply"}));
+        let line = h.lines().find(|l| l.contains("data-name=\"kid\"")).unwrap();
+        assert!(line.contains("position:relative;") && h.contains("mix-blend-mode:multiply;"), "{h}");
+        let h = html(json!("#00ffff"));
+        assert!(!h.lines().find(|l| l.contains("data-name=\"kid\"")).unwrap().contains("position:relative;"), "{h}");
     }
 
     /// Text and groups cast the shadow of their glyphs and children; gradient text keeps its fill.
