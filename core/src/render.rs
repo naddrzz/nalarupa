@@ -981,11 +981,14 @@ fn prepare_layer(cx: &mut Ctx, index: usize, hash: u64, hidden: &HashSet<String>
     // Per depth: this node or an ancestor is rotated or flipped.
     let mut turned: Vec<bool> = Vec::new();
     let mut mats: Vec<Option<[f64; 6]>> = Vec::new();
+    // Per depth: this node or an ancestor is hidden while it slides.
+    let mut sliding: Vec<bool> = Vec::new();
     root.visit(&mut |n, depth| {
         stack.truncate(depth);
         index.truncate(depth + 1);
         turned.truncate(depth);
         mats.truncate(depth);
+        sliding.truncate(depth);
         let rotated = is_turned(n);
         turned.push(rotated || turned.last() == Some(&true));
         let parent_m = mats.last().copied().flatten();
@@ -1000,7 +1003,9 @@ fn prepare_layer(cx: &mut Ctx, index: usize, hash: u64, hidden: &HashSet<String>
             sig.push_str(k);
             sig.push_str(&v.to_string());
         }
-        if hidden.contains(&n.id) {
+        // The whole subtree: when the slide ends, descendants that overflow the node repaint too.
+        sliding.push(hidden.contains(&n.id) || sliding.last() == Some(&true));
+        if sliding[depth] {
             sig.push_str("|sliding");
         }
         flat.push(Flat {
@@ -1497,6 +1502,39 @@ pub(crate) mod tests {
         sync(&mut r);
         let px = frame(&mut r);
         assert!(red(&px, 150, 101) && !red(&px, 150, 152), "settled in the cached view at its own place");
+    }
+
+    /// A settled slide repaints the node's descendants, also where they overflow its box.
+    #[test]
+    fn settled_slide_repaints_overflowing_children() {
+        let before = Doc::from_json(r##"{"version":"2.19","children":[{"type":"frame","id":"f","x":0,"y":0,"width":500,"height":400,"layout":"none","fill":"#ffffff"}]}"##).unwrap();
+        let after = Doc::from_json(
+            r##"{"version":"2.19","children":[{"type":"frame","id":"f","x":0,"y":0,"width":500,"height":400,"layout":"none","fill":"#ffffff","children":[
+            {"type":"frame","id":"c","x":100,"y":100,"width":100,"height":100,"layout":"none","fill":"#334455","children":[
+                {"type":"rectangle","id":"b","x":80,"y":20,"width":100,"height":50,"fill":"#22ff55"}]}]}]}"##,
+        )
+        .unwrap();
+        let (mut fonts, mut assets) = offline();
+        let mut r = Renderer::default();
+        let mut sync = |r: &mut Renderer, doc: &Doc| {
+            let mut cx = Ctx { doc, libs: &[], fonts: &mut fonts, assets: &mut assets };
+            let roots = r.shift_siblings(&mut cx);
+            let rebuilt = r.sync(&mut cx);
+            r.refresh_slides(&mut cx, &rebuilt, roots);
+        };
+        let frame = |r: &mut Renderer| r.render(500, 400, 0.0, 0.0, 1.0, [30, 30, 30], None, true).to_vec();
+        sync(&mut r, &before);
+        frame(&mut r);
+        r.slides.push(Slide::new("c"));
+        sync(&mut r, &after);
+        frame(&mut r);
+        r.slides[0].start = Some(Instant::now() - SLIDE_TIME);
+        assert!(r.expire_slides());
+        sync(&mut r, &after);
+        let px = frame(&mut r);
+        // The badge spans x 180..280, y 120..170: the part past the card's right edge (200) is the overflow.
+        let i = (150 * 500 + 250) * 4;
+        assert_eq!(px[i..i + 3], [0x22, 0xff, 0x55], "the overflowing part of the badge is back");
     }
 
     /// A sliding node stays in its frame's place in the stacking order: a top-level frame above
