@@ -627,6 +627,16 @@ try {
   await app.getByTestId('layers').getByText('Path').click()
   await sleep(300)
   assert(await count('size-label'), 'clicking a Layers row selects it')
+  // Ctrl+Enter presents from a focused Layers row or toolbar button, and does not toggle the row's selection.
+  for (const [what, id] of [['Layers row', ''], ['toolbar button', 'tool-rectangle']] as const) {
+    if (id) await app.getByTestId(id).click()
+    await sleep(300)
+    await app.call('keystrokes', { keys: 'ctrl-enter' })
+    assert(await until(async () => !!(await count('presentation'))), `Ctrl+Enter presents from a focused ${what}`)
+    await app.call('keystrokes', { keys: 'escape' })
+    assert(await until(async () => !(await count('presentation'))), `Escape leaves the presentation (${what})`)
+    if (!id) assert(await count('size-label'), 'Ctrl+Enter on a Layers row keeps the layer selected')
+  }
   await app.call('keystrokes', { keys: 'escape' })
   assert(await until(async () => !(await count('size-label'))), 'Escape clears the selection from a Layers row')
 
