@@ -76,6 +76,9 @@ pub struct AgentState {
     pub cook: (usize, String),
     /// Frames an AI Pen is still drawing into, one entry per running pen: its `placeholder` flag is the pen's to clear.
     pub pens: Vec<String>,
+    /// Frames the built-in agents flagged `placeholder` in this run: the only ones the run's end clears.
+    /// An external agent's frames are its own to clear.
+    flagged: Vec<String>,
 }
 
 pub struct Chat {
@@ -376,18 +379,37 @@ fn start_thread(p: Profile, prompt: String, child: Option<String>) {
     });
 }
 
-/// The run is over: frames still flagged `placeholder` (Stop, an error or a dead process came before the
-/// call that clears it) stop showing as "Generating". Silent and out of the undo history, like the AI Pen's own finish.
-fn clear_generating(e: &mut Engine) {
-    let mut stale = Vec::new();
-    crate::doc::walk(e.doc.children(), &mut |n| {
-        if n["placeholder"] == true && n["id"].as_str().is_some_and(|id| !e.agent.pens.iter().any(|p| p == id)) {
-            stale.push(n["id"].as_str().unwrap_or_default().to_string());
+/// An `execute` call of `agent` came out of `before`: remember the frames it newly flagged `placeholder`,
+/// when `agent` is a built-in one (see `clear_generating`).
+pub fn note_flagged(e: &mut Engine, agent: &str, before: &Value) {
+    if e.agent.profile(agent).is_none() {
+        return;
+    }
+    let mut old = std::collections::HashSet::new();
+    crate::doc::walk(before["children"].as_array().map(Vec::as_slice).unwrap_or(&[]), &mut |n| {
+        if n["placeholder"] == true {
+            old.insert(n["id"].as_str().unwrap_or_default());
         }
     });
+    let mut new = Vec::new();
+    crate::doc::walk(e.doc.children(), &mut |n| {
+        if n["placeholder"] == true && n["id"].as_str().is_some_and(|id| !old.contains(id)) {
+            new.push(n["id"].as_str().unwrap_or_default().to_string());
+        }
+    });
+    e.agent.flagged.extend(new);
+}
+
+/// The run is over: frames its agents flagged `placeholder` that are still flagged (Stop, an error or a dead
+/// process came before the call that clears it) stop showing as "Generating"; an external agent's frames keep
+/// their flag. Silent and out of the undo history, like the AI Pen's own finish.
+fn clear_generating(e: &mut Engine) {
+    let flagged = std::mem::take(&mut e.agent.flagged);
     let off = json!({"placeholder": false}).as_object().cloned().unwrap_or_default();
-    for id in stale {
-        e.apply_generated(&id, &off, true);
+    for id in flagged {
+        if e.doc.find(&id).is_some_and(|n| n["placeholder"] == true) && !e.agent.pens.contains(&id) {
+            e.apply_generated(&id, &off, true);
+        }
     }
 }
 
@@ -1464,21 +1486,38 @@ mod tests {
         assert!(take_queue(&mut engine()).is_none(), "the queue is empty after it is taken");
     }
 
-    /// A run that ends before the call that clears `placeholder` must not leave frames "Generating", except
-    /// the one an AI Pen is still drawing into.
+    /// A run that ends before the call that clears `placeholder` must not leave the frames its agents flagged
+    /// "Generating", except the one an AI Pen is still drawing into, and must not touch an external agent's frames.
     #[test]
     fn run_end_clears_stale_placeholders() {
         let mut e = engine();
         let old = e.doc.root.clone();
-        let frame = |name: &str| json!({"type": "frame", "name": name, "x": 0, "y": 0, "width": 100, "height": 100, "placeholder": true});
-        let (a, drawing) = (e.doc.insert("document", frame("A"), None).unwrap(), e.doc.insert("document", frame("B"), None).unwrap());
-        let nested = e.doc.insert(&a, frame("Nested"), None).unwrap();
+        e.agent.profiles.push(Profile { id: "agT".into(), name: "T".into(), color: "#000000".into(), parent: None });
+        let run = |e: &mut Engine, agent: &str, src: &str| {
+            let out = e.tool("execute", &json!({"input": src, "__agent": agent}));
+            assert!(!out.error, "{}", out.text);
+        };
+        let frame = "{type:'frame', width:100, height:100, placeholder:true";
+        run(&mut e, "agT", &format!("a = Insert(document, {frame}, name:'A'}})\nn = Insert(a, {frame}, name:'Nested'}})\nb = Insert(document, {frame}, name:'B'}})"));
+        run(&mut e, "external", &format!("Insert(document, {frame}, name:'External'}})"));
+        let id = |e: &Engine, name: &str| {
+            let mut found = String::new();
+            crate::doc::walk(e.doc.children(), &mut |n| {
+                if n["name"] == name {
+                    found = n["id"].as_str().unwrap_or_default().to_string();
+                }
+            });
+            found
+        };
+        let (a, nested, drawing, external) = (id(&e, "A"), id(&e, "Nested"), id(&e, "B"), id(&e, "External"));
         e.agent.pens.push(drawing.clone());
         clear_generating(&mut e);
         let flag = |e: &Engine, id: &str| e.doc.find(id).unwrap()["placeholder"] == true;
-        assert!(!flag(&e, &a) && !flag(&e, &nested), "stale flags are cleared, nested frames too");
+        assert!(!flag(&e, &a) && !flag(&e, &nested), "flags the built-in agent set are cleared, nested frames too");
         assert!(flag(&e, &drawing), "a frame an AI Pen draws into keeps its flag");
+        assert!(flag(&e, &external), "a frame an external agent flagged keeps its flag");
         e.agent.pens.clear();
+        e.agent.profiles.retain(|p| p.id != "agT");
         e.doc.root = old;
     }
 

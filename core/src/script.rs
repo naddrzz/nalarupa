@@ -840,6 +840,7 @@ fn finish(e: &mut Engine, prep: Prepared, result: Result<Map<String, Value>, Str
     if let Some(id) = &edit_id {
         e.script.failed.remove(id);
     }
+    crate::agent::note_flagged(e, &agent, &before);
     e.script.globals.entry(agent).or_default().extend(new_globals.clone());
     e.commit(before);
     let edit = json!({"type": "agent_edit", "ids": ex.touched, "read": ex.read});
