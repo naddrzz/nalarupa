@@ -13,7 +13,7 @@ import { AgentPanel } from './Agent'
 import { Home } from './Home'
 import { Present } from './Present'
 import { C, LEFT_W, REDUCED_MOTION, RIGHT_W, TOP_H } from './theme'
-import { Icon, IconButton, Pressable, Segmented, ShortcutScope, T, type Toast } from './ui'
+import { hasKeyboardFocus, Icon, IconButton, Pressable, Segmented, ShortcutScope, T, type Toast } from './ui'
 import { centerOffset, inParent, type M } from './geometry'
 import type { IconName } from './icons'
 
@@ -154,6 +154,12 @@ export function App() {
   const focusLayer = useCallback((id: string) => fitTo([id]), [fitTo])
   // Keys go back to the canvas once a prompt is sent: Space-pan and shortcuts work while the agent designs.
   const sent = useCallback(() => canvasEl.current && renderer.focusElement?.(canvasEl.current.id), [renderer])
+  // A clicked toolbar button keeps focus and eats Space (activate), so Space-pan would not start: a mouse pick
+  // hands the keys to the canvas, a keyboard pick (Enter/Space on a Tabbed-to button) leaves focus on the button.
+  const pickTool = (t: Tool) => {
+    setTool(t)
+    if (!hasKeyboardFocus()) sent()
+  }
 
   const zoomTo = (to: number) => {
     const z = Math.min(64, Math.max(0.02, to))
@@ -372,7 +378,7 @@ export function App() {
           {state.dirty ? <div testId="unsaved-dot" style={{ width: 6, height: 6, flexShrink: 0, borderRadius: 3, backgroundColor: C.accent }} /> : null}
         </div>
         {TOOLS.map((t) => (
-          <IconButton key={t.tool} icon={t.icon} title={t.label} testId={`tool-${t.tool}`} active={tool === t.tool} onClick={() => setTool(t.tool)} />
+          <IconButton key={t.tool} icon={t.icon} title={t.label} testId={`tool-${t.tool}`} active={tool === t.tool} onClick={() => pickTool(t.tool)} />
         ))}
         <div style={{ width: 1, height: 20, backgroundColor: C.border, marginLeft: 6, marginRight: 6 }} />
         <IconButton icon="undo" title="Undo (Ctrl+Z)" testId="undo" onClick={() => tryCall('undo')} />

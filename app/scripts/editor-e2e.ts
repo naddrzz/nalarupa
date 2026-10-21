@@ -841,6 +841,19 @@ try {
   assert(Math.abs(p1[0] - p0[0]) < 60 && Math.abs(p1[1] - p0[1]) < 60, `Ctrl+0 keeps the document point under the canvas middle (${p0.map(Math.round)} → ${p1.map(Math.round)})`)
   await canvas.press('shift-1')
   await sleep(300)
+  // A toolbar tool button picked with the mouse must not keep the keys: it would eat Space, and Space+drag would draw
+  // with the tool instead of panning. The selection box (still selected from Ctrl+A) shows whether the view moved.
+  const boxPos = async () => { const b = (await app.getByTestId('selection-box').all())[0].bounds!; return [Math.round(b.x), Math.round(b.y)] }
+  assert(await count('selection-box'), 'a layer is still selected before the Space-pan check')
+  await app.getByTestId('tool-rectangle').click()
+  await sleep(500)
+  const panFrom = await boxPos()
+  await app.call('keyDown', { key: 'space', isHeld: false })
+  await sleep(100)
+  await app.mouse.drag(at(300, 400), at(380, 450), { steps: 5 })
+  await app.call('keyUp', { key: 'space' })
+  assert(await until(async () => { const p = await boxPos(); return p[0] - panFrom[0] === 80 && p[1] - panFrom[1] === 50 }), `Space+drag pans after a tool is picked with its toolbar button (${panFrom} → ${await boxPos()})`)
+  await canvas.press('escape')
   await shot('10-final')
   console.log('editor-e2e ok — screenshots in', out)
 } finally {
