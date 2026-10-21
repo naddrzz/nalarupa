@@ -478,7 +478,20 @@ impl Html<'_> {
                             }
                         }
                     }
-                    (Some(c), _, Some(w @ Value::Object(_))) => under += &stroke_overlay(&format!("linear-gradient({c},{c})"), w, n.s("strokeAlignment"), None).unwrap_or_default(),
+                    (Some(c), _, Some(w @ Value::Object(s))) => {
+                        let (grad, align) = (format!("linear-gradient({c},{c})"), n.s("strokeAlignment"));
+                        if n.ty == "frame" && n.b("clip") && !matches!(align, Some("outer" | "outside")) {
+                            // The inner part of the ring is drawn after the children, which would cover it below them; a centered stroke
+                            // keeps its outer half where it was (overflow clips it).
+                            let half = if matches!(align, Some("inner" | "inside")) { w.clone() } else { Value::Object(s.iter().map(|(k, v)| (k.clone(), Value::from(num(v).unwrap_or(0.0) / 2.0))).collect()) };
+                            over += &stroke_overlay(&grad, &half, Some("inner"), None).unwrap_or_default().replace("z-index:-1;", "");
+                            if !matches!(align, Some("inner" | "inside")) {
+                                under += &stroke_overlay(&grad, &half, Some("outer"), None).unwrap_or_default();
+                            }
+                        } else {
+                            under += &stroke_overlay(&grad, w, align, None).unwrap_or_default();
+                        }
+                    }
                     (Some(c), _, Some(v)) => {
                         if let Some(w) = num(v).filter(|w| *w > 0.0) {
                             // The first box-shadow is the topmost, so each stroke goes in front of the ones below it.
@@ -535,10 +548,10 @@ impl Html<'_> {
         }
         if !above.is_empty() {
             let _ = writeln!(over, "<div style=\"position:absolute;inset:0;border-radius:inherit;pointer-events:none;box-shadow:{};\"></div>", above.join(","));
-            // The overlay stacks against this box.
-            if !css.contains("position:") {
-                css.push_str("position:relative;");
-            }
+        }
+        // The overlays after the children stack against this box.
+        if !over.is_empty() && !css.contains("position:") {
+            css.push_str("position:relative;");
         }
         // Overlays would cover the element's own inset shadows (inner strokes and shadows): paint those above them.
         if !under.is_empty() {
@@ -776,6 +789,16 @@ mod tests {
         // Without clip the children sit inside the stroke as before.
         let h = html(false, "inner");
         assert!(h.contains("box-shadow:inset 0 0 0 10px #0000ff;") && !h.contains("pointer-events"), "{h}");
+        // A per-side stroke that cannot be a border is a masked ring: its inner part goes after the children too (a lone one is a border, which no child covers).
+        let mut ring = |align: &str| {
+            let frame = json!({"type": "frame", "layout": "none", "clip": true, "width": 100, "height": 100, "stroke": ["#0000ff", "#00ff00"], "strokeWidth": {"top": 10, "right": 10, "bottom": 10, "left": 10}, "strokeAlignment": align, "children": [kid.clone()]});
+            let id = e.insert_root(frame).unwrap();
+            super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap()
+        };
+        let h = ring("inner");
+        assert!(h.find("#ff0000") < h.find("padding:10px;") && !h.contains("z-index:-1"), "{h}");
+        let h = ring("center");
+        assert!(h.find("#ff0000") < h.find("inset:0px;padding:5px;") && h.contains("inset:-5px;padding:5px;") && h.matches("z-index:-1").count() == 2, "{h}");
     }
 
     /// A frame whose fill blends with the backdrop paints its overlay in tree order: flow children must be positioned to stay above it.
