@@ -267,6 +267,22 @@ TakeScreenshot([s])`,
   await mcp('execute', { input: `Delete(Get(n => n.name === "SpinImg" ? n.id : undefined)[0]); Delete(Get(n => n.name === "SpinGen" ? n.id : undefined)[0])` })
   await sleep(300)
 
+  // The shimmer of a round placeholder (ellipse, corner radius) or one inside a rounded clip frame is cut to that shape:
+  // it is drawn as a shaped overlay, while a plain rectangle keeps the cheap one.
+  await mcp('execute', { input: `Insert(document, {type:"ellipse", name:"RoundImg", x:300, y:300, width:200, height:200, fill:{type:"image", url:"nalarupa:pending-e2e-1", mode:"fill"}});
+Insert(document, {type:"rectangle", name:"PlainImg", x:300, y:600, width:200, height:100, fill:{type:"image", url:"nalarupa:pending-e2e-2", mode:"fill"}});
+Insert(document, {type:"frame", name:"RoundClip", x:600, y:300, width:200, height:200, cornerRadius:60, clip:true, layout:"none", fill:"#eeeeee", children:[{type:"rectangle", name:"ClipImg", x:0, y:0, width:200, height:200, fill:{type:"image", url:"nalarupa:pending-e2e-3", mode:"fill"}}]})` })
+  if (!(await poll(async () => (await app!.getByTestId('agent-shimmer-round').count()) === 2))) throw new Error(`${await app.getByTestId('agent-shimmer-round').count()} shaped shimmers for an ellipse and a rounded clip frame, expected 2`)
+  // Both are 200 × 200 and sit side by side (x 300 and 600, same y): equal boxes 1.5 widths apart, so neither is cut short or misplaced.
+  const [oval, clipped] = (await app.getByTestId('agent-shimmer-round').all()).map((n) => n.bounds!).sort((a, b) => a.x - b.x)
+  if (Math.abs(oval.width - clipped.width) > 3 || Math.abs(oval.height - clipped.height) > 3 || Math.abs(oval.height - oval.width) > 3
+    || Math.abs(clipped.x - oval.x - 1.5 * oval.width) > 4 || Math.abs(clipped.y - oval.y) > 3) {
+    throw new Error(`shaped shimmers at ${JSON.stringify(oval)} and ${JSON.stringify(clipped)}, expected two equal squares 1.5 widths apart on one row`)
+  }
+  await shot('05c-round-shimmer')
+  await mcp('execute', { input: `for (const id of Get(n => ["RoundImg", "PlainImg", "RoundClip"].includes(n.name) ? n.id : undefined)) Delete(id)` })
+  await sleep(300)
+
   // Slides tab → Export deck to PDF: one page per top-level frame (3 template slides + the MCP one).
   await app.getByText('Slides').click()
   await sleep(800)

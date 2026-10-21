@@ -95,6 +95,8 @@ pub struct Flat {
     pub m: Option<[f64; 6]>,
     /// Local bounds' offset from the origin (non-zero for groups) and the node's own effective rotation and flips.
     pub local: ([f64; 2], f64, bool, bool),
+    /// Corner radii [tl, tr, br, bl] of a rectangle or frame (zero for other types; an ellipse is round by its type).
+    pub radius: [f64; 4],
     /// Clips its children to its box (a `clip` frame), so they cannot be hit outside it.
     clip: bool,
     /// Own props, box, parent and sibling index: a change means this node must repaint.
@@ -616,14 +618,22 @@ impl Renderer {
     }
 
     /// Nodes that need animated overlays (placeholder frames, pending images), each with the canvas box its
-    /// clipping ancestors leave visible (`None` when nothing clips it). A node clipped away entirely is left out.
-    pub fn live(&self) -> Vec<(&Flat, Option<Rect>)> {
+    /// clipping ancestors leave visible (`None` when nothing clips it) and the box and painted corner radii of each of
+    /// those ancestors that rounds its corners (a rotated one is only its bounding box). A node clipped away entirely is left out.
+    pub fn live(&self) -> Vec<(&Flat, Option<Rect>, Vec<(Rect, [f64; 4])>)> {
         let canvas = |f: &Flat| {
             let m = f.m.unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
             let pts = [(f.x, f.y), (f.x + f.w, f.y), (f.x, f.y + f.h), (f.x + f.w, f.y + f.h)].map(|(x, y)| (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]));
             let lo = |g: fn(&(f64, f64)) -> f64| pts.iter().map(g).fold(f64::MAX, f64::min);
             let hi = |g: fn(&(f64, f64)) -> f64| pts.iter().map(g).fold(f64::MIN, f64::max);
             (lo(|p| p.0), lo(|p| p.1), hi(|p| p.0) - lo(|p| p.0), hi(|p| p.1) - lo(|p| p.1))
+        };
+        // A flipped frame paints its corners mirrored: the radii as they show on the canvas.
+        let shown = |f: &Flat| {
+            let [a, b, c, d] = f.radius;
+            let m = f.m.unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+            let (a, b, c, d) = if m[0] < 0.0 { (b, a, d, c) } else { (a, b, c, d) };
+            if m[3] < 0.0 { [d, c, b, a] } else { [a, b, c, d] }
         };
         let mut out = Vec::new();
         for layer in self.order.iter().filter_map(|id| self.layers.get(id)) {
@@ -632,14 +642,17 @@ impl Renderer {
                 path.truncate(f.depth);
                 if f.placeholder || f.pending {
                     // A rotated clipping frame is cut by its canvas bounding box (its corners may still show).
-                    let clip = path.iter().map(|&p| &layer.flat[p]).filter(|p| p.clip).map(canvas).reduce(|a, b| {
+                    let frames: Vec<&Flat> = path.iter().map(|&p| &layer.flat[p]).filter(|p| p.clip).collect();
+                    let clip = frames.iter().map(|p| canvas(p)).reduce(|a, b| {
                         let (x0, y0, x1, y1) = (a.0.max(b.0), a.1.max(b.1), (a.0 + a.2).min(b.0 + b.2), (a.1 + a.3).min(b.1 + b.3));
                         (x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0))
                     });
+                    let cuts: Vec<(Rect, [f64; 4])> = frames.iter().filter(|p| !p.m.is_some_and(|m| m[1].abs() > 1e-9 || m[2].abs() > 1e-9))
+                        .map(|p| (canvas(p), shown(p))).filter(|(_, r)| r.iter().any(|&v| v > 0.0)).collect();
                     let own = canvas(f);
                     let seen = clip.is_none_or(|c| c.2 > 0.0 && c.3 > 0.0 && c.0 < own.0 + own.2 && c.0 + c.2 > own.0 && c.1 < own.1 + own.3 && c.1 + c.3 > own.1);
                     if seen {
-                        out.push((f, clip));
+                        out.push((f, clip, cuts));
                     }
                 }
                 path.push(i);
@@ -1018,6 +1031,7 @@ fn prepare_layer(cx: &mut Ctx, index: usize, hash: u64, hidden: &HashSet<String>
             pending: crate::svg::fills(n.p.get("fill")).iter().any(|f| f["url"].as_str().is_some_and(is_pending_url)),
             m: mats[depth],
             local: ([n.bx, n.by], n.f("rotation").unwrap_or(0.0), n.b("flipX"), n.b("flipY")),
+            radius: if matches!(n.ty.as_str(), "rectangle" | "frame") { crate::svg::radii(n) } else { [0.0; 4] },
             clip: n.ty == "frame" && n.b("clip"),
             sig: fxhash(&sig),
             reach: if turned[depth] { f64::INFINITY } else { reach(&n.p) },
@@ -1287,9 +1301,41 @@ pub(crate) mod tests {
         let doc = Doc::from_json(&json).unwrap();
         let mut r = Renderer::default();
         sync(&mut r, &doc);
-        let live: Vec<_> = r.live().into_iter().map(|(f, c)| (f.id.as_str(), c)).collect();
+        let live: Vec<_> = r.live().into_iter().map(|(f, c, _)| (f.id.as_str(), c)).collect();
         // `img` sits at doc (250, 150) and sticks out of the frame (x 100..400, y 100..300).
         assert_eq!(live, [("img", Some((100.0, 100.0, 300.0, 200.0))), ("free", None)]);
+    }
+
+    /// A round placeholder is cut to its corners, and so is one inside rounded clipping frames (each of them, as painted).
+    #[test]
+    fn live_overlays_report_corner_radii() {
+        let pending = r##"{"type":"image","url":"nalarupa:pending-x"}"##;
+        let json = format!(r##"{{"version":"2.19","children":[
+            {{"type":"rectangle","id":"round","x":0,"y":0,"width":100,"height":100,"cornerRadius":[50,50,10,0],"fill":{pending}}},
+            {{"type":"ellipse","id":"oval","x":200,"y":0,"width":100,"height":100,"fill":{pending}}},
+            {{"type":"frame","id":"c","x":400,"y":0,"width":100,"height":100,"layout":"none","clip":true,"cornerRadius":30,"children":[
+                {{"type":"rectangle","id":"in","x":0,"y":0,"width":100,"height":100,"fill":{pending}}}]}},
+            {{"type":"frame","id":"tilt","x":600,"y":0,"width":100,"height":100,"layout":"none","clip":true,"cornerRadius":30,"rotation":10,"children":[
+                {{"type":"rectangle","id":"tin","x":0,"y":0,"width":100,"height":100,"fill":{pending}}}]}},
+            {{"type":"frame","id":"outer","x":800,"y":0,"width":100,"height":100,"layout":"none","clip":true,"cornerRadius":30,"children":[
+                {{"type":"frame","id":"inner","x":0,"y":0,"width":60,"height":60,"layout":"none","clip":true,"children":[
+                    {{"type":"rectangle","id":"deep","x":0,"y":0,"width":60,"height":60,"fill":{pending}}}]}}]}},
+            {{"type":"frame","id":"flip","x":1000,"y":0,"width":100,"height":100,"layout":"none","clip":true,"cornerRadius":[40,0,0,0],"flipX":true,"children":[
+                {{"type":"rectangle","id":"fin","x":0,"y":0,"width":100,"height":100,"fill":{pending}}}]}}]}}"##);
+        let doc = Doc::from_json(&json).unwrap();
+        let mut r = Renderer::default();
+        sync(&mut r, &doc);
+        let live: Vec<_> = r.live().into_iter().map(|(f, c, cuts)| (f.id.as_str(), f.radius, c.is_some(), cuts.into_iter().map(|c| c.1).collect::<Vec<_>>())).collect();
+        assert_eq!(live[..5], [
+            ("round", [50.0, 50.0, 10.0, 0.0], false, vec![]),
+            ("oval", [0.0; 4], false, vec![]),
+            ("in", [0.0; 4], true, vec![[30.0; 4]]),
+            ("tin", [0.0; 4], true, vec![]),
+            // The square inner frame leaves the outer frame's rounded corner in force.
+            ("deep", [0.0; 4], true, vec![[30.0; 4]]),
+        ]);
+        // A flipped frame's rounded corner is on the other side.
+        assert_eq!(live[5], ("fin", [0.0; 4], true, vec![[0.0, 40.0, 0.0, 0.0]]));
     }
 
     /// A group paints nothing of its own: a point in its box but on none of its children hits the layer below.

@@ -6,7 +6,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { tryCall, type Box } from './core'
 import { FADE_DELAY, FADE_DUR, FADE_IN, GONE, PILL_MS, PRESENCE, cursorFaded, needsFrame, profileOf, store, type CursorState } from './agents'
 import { ICONS } from './icons'
-import { painted, shimmerHalves, turned, type M, type Rect } from './geometry'
+import { flipRadii, outline, painted, shimmerHalves, turned, type M, type Rect } from './geometry'
 import { SvgOverlay } from './ui'
 import { C, FONT, REDUCED_MOTION } from './theme'
 import type { Cam } from './Canvas'
@@ -89,7 +89,7 @@ export function AgentLayer({ cam, w, h, version, chatOpen }: { cam: Cam; w: numb
   const lastFrame = useRef(performance.now())
   const boxes = useRef(new Map<string, Box>())
   const glowPhase = useRef(new Map<string, number>())
-  const live = useMemo(() => tryCall<(Box & { placeholder?: boolean; pending?: boolean; clip?: Rect | null })[]>('live') ?? [], [version])
+  const live = useMemo(() => tryCall<(Box & { placeholder?: boolean; pending?: boolean; radius: number[]; clip?: Rect | null; cuts: (Rect & { r: number[] })[] })[]>('live') ?? [], [version])
 
   store.viewCenter = { x: cam.x + w / 2 / cam.zoom, y: cam.y + h / 2 / cam.zoom }
 
@@ -134,15 +134,20 @@ export function AgentLayer({ cam, w, h, version, chatOpen }: { cam: Cam; w: numb
   const sy = (y: number) => (y - cam.y) * cam.zoom
   const rgb = (hex: string) => `#${hex.replace('#', '').slice(0, 6)}`
   /** Overlay of a rotated node: GPUI cannot rotate divs, so `body` is SVG in the node's own document units,
-   *  placed by the painted transform `m` and the camera, on an image over where the node is painted. */
-  const spun = (r: Rect, m: M, body: string, testId: string, key: string) => {
+   *  placed by the painted transform `m` and the camera, on an image over where the node is painted. `cut` is the paths
+   *  in screen px (clipping frames' rounded corners) that the overlay is cut to. */
+  const spun = (r: Rect, m: M, body: string, testId: string, key: string, cut: string[] = []) => {
     const p = painted({ ...r, m })
     const x = Math.floor(sx(p.x)) - 2
     const y = Math.floor(sy(p.y)) - 2
     const box = { x, y, w: Math.ceil(sx(p.x + p.w)) + 2 - x, h: Math.ceil(sy(p.y + p.h)) + 2 - y }
     const t = [m[0] * cam.zoom, m[1] * cam.zoom, m[2] * cam.zoom, m[3] * cam.zoom, (m[4] - cam.x) * cam.zoom, (m[5] - cam.y) * cam.zoom]
-    return <SvgOverlay key={key} testId={testId} box={box} body={`<g transform="matrix(${t.join(' ')})">${body}</g>`} />
+    const g = `<g transform="matrix(${t.join(' ')})">${body}</g>`
+    return <SvgOverlay key={key} testId={testId} box={box} body={cutDefs(cut) + cutTo(cut, g)} />
   }
+  /** Clip paths for each of `cut` (rounded clipping frames), and `body` cut to all of them. */
+  const cutDefs = (cut: string[]) => cut.map((d, i) => `<clipPath id="cut${i}"><path d="${d}"/></clipPath>`).join('')
+  const cutTo = (cut: string[], body: string) => cut.reduce((g, _, i) => `<g clip-path="url(#cut${i})">${g}</g>`, body)
 
   // ── flashes ───────────────────────────────────────────────────────────────
   const flashEls = []
@@ -222,6 +227,10 @@ export function AgentLayer({ cam, w, h, version, chatOpen }: { cam: Cam; w: numb
     const m = turned(n.m) ? n.m! : null
     // The node's own screen size: a turned node's painted bounds (W×H) are larger than its box.
     const [nw, nh] = [n.w * cam.zoom, n.h * cam.zoom]
+    // The node's own shape (round for an ellipse or a corner radius) and its clipping frame's rounded corners, in screen px.
+    // A flipped or half-turned node has its corners mirrored; a rotated one is drawn in its own space, where they are not.
+    const shape = (k: number) => (n.type === 'ellipse' ? 'ellipse' as const : (m ? n.radius : flipRadii(n.radius, n.m)).map((r) => r * k))
+    const cut = n.cuts.map((c) => outline(sx(c.x), sy(c.y), c.w * cam.zoom, c.h * cam.zoom, c.r.map((r) => r * cam.zoom)))
     if (n.pending) {
       const band = 0.5 * Math.max(nw, nh)
       const p = REDUCED_MOTION ? 0.5 : (now % 1600) / 1600
@@ -231,9 +240,21 @@ export function AgentLayer({ cam, w, h, version, chatOpen }: { cam: Cam; w: numb
         const [bd, o] = [band / cam.zoom, pos / cam.zoom]
         const grad = `<linearGradient id="a"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset="0.5" stop-color="#fff" stop-opacity="0.45"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>`
         // One rect with a peaked gradient: two adjacent rects would blend their shared edge twice, a seam.
-        return spun(n, m, `<defs><clipPath id="k"><rect x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}"/></clipPath>${grad}</defs>`
+        return spun(n, m, `<defs><clipPath id="k"><path d="${outline(n.x, n.y, n.w, n.h, shape(1))}"/></clipPath>${grad}</defs>`
           + `<g clip-path="url(#k)"><rect x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}" fill="#000" fill-opacity="0.25"/>`
-          + `<rect x="${n.x + o}" y="${n.y}" width="${bd}" height="${n.h}" fill="url(#a)"/></g>`, 'agent-shimmer-turned', `p${n.id}`)
+          + `<rect x="${n.x + o}" y="${n.y}" width="${bd}" height="${n.h}" fill="url(#a)"/></g>`, 'agent-shimmer-turned', `p${n.id}`, cut)
+      }
+      if (n.type === 'ellipse' || n.radius.some((r) => r > 0) || cut.length) {
+        // GPUI cannot cut a div to a round shape, so the same wash and band are SVG in screen px, on the part of the node in view.
+        const vis = [[X, Y, X + W, Y + H], [0, 0, w, h], ...(n.clip ? [[sx(n.clip.x), sy(n.clip.y), sx(n.clip.x + n.clip.w), sy(n.clip.y + n.clip.h)]] : [])]
+        const box = { x: Math.floor(Math.max(...vis.map((v) => v[0]))), y: Math.floor(Math.max(...vis.map((v) => v[1]))), w: 0, h: 0 }
+        box.w = Math.ceil(Math.min(...vis.map((v) => v[2]))) - box.x
+        box.h = Math.ceil(Math.min(...vis.map((v) => v[3]))) - box.y
+        if (box.w <= 0 || box.h <= 0) return null
+        const grad = `<linearGradient id="a"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset="0.5" stop-color="#fff" stop-opacity="0.45"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>`
+        return <SvgOverlay key={`p${n.id}`} testId="agent-shimmer-round" box={box} body={`<defs><clipPath id="k"><path d="${outline(X, Y, W, H, shape(cam.zoom))}"/></clipPath>${cutDefs(cut)}${grad}</defs>`
+          + cutTo(cut, `<g clip-path="url(#k)"><rect x="${X}" y="${Y}" width="${W}" height="${H}" fill="#000" fill-opacity="0.25"/>`
+          + `<rect x="${X + pos}" y="${Y}" width="${band}" height="${H}" fill="url(#a)"/></g>`)} />
       }
       return (
         <div key={`p${n.id}`} style={{ position: 'absolute', left: X, top: Y, width: W, height: H, overflow: 'hidden', backgroundColor: '#00000040', pointerEvents: 'none' }}>
