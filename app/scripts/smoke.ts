@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { call, renderPixels } from '../src/core'
-import { applyEvents, barAgents, changing, cursorFaded, imageSrc, lastContentId, needsFrame, poke, resetChat, restoreChat, spinning, store } from '../src/agents'
+import { applyEvents, barAgents, changing, cursorFaded, imageSrc, lastContentId, needsFrame, poke, resetChat, restoreChat, rowTickMs, spinning, store } from '../src/agents'
 import { shimmerHalves } from '../src/geometry'
 import { FRAME_LABEL_TEXT, INDICATOR_TICK_MS, ellipsisAt, ellipsisPadAt, pulseAt } from '../src/theme'
 
@@ -142,6 +142,9 @@ resetChat()
   const live = store.items.filter(changing)
   assert(live.length === 3 && live.map((i) => i.kind).join() === 'tool,thinking,assistant', `live chat rows ${live.map((i) => i.kind)}`)
   assert(store.items.filter(spinning).map((i) => i.kind).join() === 'tool,thinking', 'the ellipsis animates on the running tool and the live thinking only')
+  assert(store.items.filter(spinning).every((i) => rowTickMs(false, spinning(i), false, INDICATOR_TICK_MS) === INDICATOR_TICK_MS), 'a spinning row ticks at the indicator rate')
+  assert(rowTickMs(false, true, true, INDICATOR_TICK_MS) === 0, 'reduced motion: a running tool / thinking / planning row has no tick, its ellipsis is constant')
+  assert(rowTickMs(true, true, true, INDICATOR_TICK_MS) === 16 && rowTickMs(false, false, false, INDICATOR_TICK_MS) === 0, 'the typewriter still ticks; a still row never does')
   applyEvents([{ type: 'agent', kind: 'done', agent: ag }, { type: 'agent', kind: 'done', agent: { id: 'a1', name: 'Agent 1', color: '#ffffff' } }, { type: 'agent', kind: 'done', agent: { id: 'a2', name: 'Agent 2', color: '#ffffff' } }], 0)
   assert(!store.items.some(changing), 'a finished chat has no live row')
 }
