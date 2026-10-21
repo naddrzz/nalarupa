@@ -1517,7 +1517,7 @@ export function Canvas(props: {
               onChange={(ev) => setEditing((s) => (s ? { ...s, value: ev.value ?? '' } : s))}
               onSubmit={(ev) => { commitEdit(ev.value ?? editing.value); refocus() }}
               onBlur={() => commitEdit(editing.value)}
-              onKeyDown={(ev) => { if ((ev.key ?? '').toLowerCase() === 'escape') { editLive.current = null; setEditing(null); refocus() } }}
+              onKeyDown={(ev) => { if ((ev.key ?? '').toLowerCase() === 'escape') { commitEdit(editing.value); refocus() } }}
               style={{ fontSize: Math.max(10, Math.min(72, editing.size * cam.zoom)), color: '#111111', fontFamily: FONT, width: '100%' }}
             />
           </div>
