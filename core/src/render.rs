@@ -842,6 +842,16 @@ fn changed_nodes(old: &Layer, new: &Layer, out: &mut Vec<Rect>) {
         }
     }
     changed.extend(old.flat.iter().filter(|o| !seen.contains(o.id.as_str())));
+    // A clip frame that changed or went away cuts (or stops cutting) its descendants, whose own
+    // signatures stay the same: repaint wherever they reach.
+    let clips: Vec<&str> = changed.iter().filter(|f| f.clip).map(|f| f.id.as_str()).collect();
+    for layer in [old, new] {
+        for (i, f) in layer.flat.iter().enumerate() {
+            if clips.contains(&f.id.as_str()) {
+                changed.extend(layer.flat[i + 1..].iter().take_while(|d| d.depth > f.depth));
+            }
+        }
+    }
     // A rotated/flipped node paints outside its layout box: repaint the whole layer.
     if changed.iter().any(|f| f.reach.is_infinite()) {
         out.extend([old.paint, new.paint]);
