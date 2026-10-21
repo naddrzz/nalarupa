@@ -707,6 +707,24 @@ try {
   await app.call('keystrokes', { keys: 'escape' })
   assert(await until(async () => !(await count('size-label'))), 'Escape clears the selection after a text edit (the canvas has the keys)')
 
+  // Escape finishes a text edit like a click away does: the typed words stay, not the placeholder.
+  const contents = async () => {
+    const res: any = await (await mcpCall(port, { method: 'tools/call', params: { name: 'execute', arguments: { input: 'Print(JSON.stringify(Get(n => n.type === "text" ? n.content : undefined)))' } } })).json()
+    return String(res.result?.content?.[0]?.text ?? '')
+  }
+  await app.getByTestId('tool-text').click()
+  await app.mouse.click(at(300, 330))
+  await app.getByTestId('text-editor').waitFor({ timeoutMs: 6000 })
+  // autoFocus lands a frame after the element exists and focus cannot be read: click into the field so the keys have a target.
+  const tb = (await app.getByTestId('text-editor').bounds())!
+  await app.mouse.click({ x: tb.x + tb.width / 2, y: tb.y + tb.height / 2 })
+  await sleep(300)
+  await app.call('keystrokes', { keys: 'ctrl-a W o r l d' })
+  await sleep(300)
+  await app.call('keystrokes', { keys: 'escape' })
+  assert(await until(async () => !(await count('text-editor'))), 'Escape ends the new text layer edit')
+  assert(await until(async () => (await contents()).includes('"World"')), `Escape keeps the typed text (${await contents()})`)
+
   // A child of a rotated or flipped frame follows the pointer: the drag delta is turned into the frame's space first.
   await app.getByTestId('tool-frame').click()
   await app.mouse.drag(at(560, 80), at(800, 250), { steps: 5 })
