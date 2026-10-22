@@ -889,6 +889,31 @@ try {
   await app.call('keyUp', { key: 'space' })
   assert(await until(async () => { const p = await boxPos(); return p[0] - panFrom[0] === 80 && p[1] - panFrom[1] === 50 }), `Space+drag pans after a tool is picked with its toolbar button (${panFrom} → ${await boxPos()})`)
   await canvas.press('escape')
+
+  // A line is drawn from its stroke alone and a note from fixed colors: the Inspector offers a line its stroke fields and no Fill, a note no Fill.
+  await mcpCall(port, { method: 'tools/call', params: { name: 'execute', arguments: { input: 'Insert(document, {type:"line", name:"Inspect line", x:0, y:0, width:120, height:0, stroke:"#FF0000", strokeWidth:6}); Insert(document, {type:"note", name:"Inspect note", x:0, y:40, width:120, height:60, content:"hi"}); Insert(document, {type:"prompt", name:"Inspect prompt", x:0, y:120, width:120, height:60, content:"hi"}); Insert(document, {type:"context", name:"Inspect context", x:0, y:200, width:120, height:60, content:"hi"}); Insert(document, {type:"rectangle", name:"Inspect rect", x:0, y:280, width:120, height:60, fill:"#00FF00"})' } } })
+  await app.getByTestId('layers').getByText('Inspect line').waitFor({ timeoutMs: 6000 })
+  await app.getByTestId('layers').getByText('Inspect line').click()
+  assert(await until(async () => (await count('inspector-stroke')) > 0 && (await count('inspector-stroke-width')) > 0), 'a line shows its stroke color and width')
+  assert(!(await count('inspector-fill')), 'a line has no Fill field')
+  assert(!(await count('inspector-radius')) && !(await count('inspector-radii')), 'a line has no corner radius')
+  await app.getByTestId('layers').getByText('Inspect note').click()
+  assert(await until(async () => !(await count('inspector-stroke'))), 'a note has no stroke fields')
+  assert(!(await count('inspector-fill')), 'a note has no Fill field')
+  for (const name of ['prompt', 'context']) {
+    await app.getByTestId('layers').getByText(`Inspect ${name}`).click()
+    await sleep(500)
+    assert(!(await count('inspector-fill')), `a ${name} layer has no Fill field`)
+  }
+  // Mixed selections: Fill is hidden only when every selected layer ignores it.
+  await app.getByTestId('layers').getByText('Inspect line').click()
+  await app.getByTestId('layers').getByText('Inspect note').click({ modifiers: 'ctrl' })
+  assert(await until(async () => (await app.getByText('2 layers selected').count()) > 0), 'ctrl-click adds the note to the line selection')
+  assert(!(await count('inspector-fill')), 'a line and a note together have no Fill field')
+  await app.getByTestId('layers').getByText('Inspect rect').click({ modifiers: 'ctrl' })
+  assert(await until(async () => (await count('inspector-fill')) > 0), 'a line, a note and a rectangle together keep the Fill field')
+
+  await canvas.press('escape')
   await shot('10-final')
   console.log('editor-e2e ok — screenshots in', out)
 } finally {

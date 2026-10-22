@@ -9,6 +9,8 @@ type Props = { version: number; selection: string[]; select: (ids: string[]) => 
 type Info = { id: string; node: any; box: { w: number; h: number } | null; local: { bx: number; by: number } | null; parentLayout: string; variables: Record<string, any> }
 
 const str = (v: unknown) => (v === undefined || v === null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v))
+/** Drawn from fixed colors (notes) or from the stroke alone (a line): a fill does nothing. */
+const NO_FILL = ['line', 'note', 'prompt', 'context']
 const isMode = (v: unknown, mode: string) => typeof v === 'string' && v.startsWith(mode)
 let clicks = 0
 
@@ -365,7 +367,7 @@ export function Inspector({ version, selection, select, toast }: Props) {
         </Section>
       ) : null}
 
-      {all((i) => i.node.type !== 'group') ? (
+      {all((i) => i.node.type !== 'group') && !all((i) => NO_FILL.includes(i.node.type)) ? (
         <Section title="Fill">
           <Row>
             {fill ? <Swatch color={fill} /> : null}
@@ -374,14 +376,14 @@ export function Inspector({ version, selection, select, toast }: Props) {
         </Section>
       ) : null}
 
-      {!multi && ['frame', 'rectangle', 'ellipse', 'polygon', 'path'].includes(n.type) ? (
-        <Section title="Stroke & corners">
+      {!multi && ['frame', 'rectangle', 'ellipse', 'polygon', 'path', 'line'].includes(n.type) ? (
+        <Section title={n.type === 'line' ? 'Stroke' : 'Stroke & corners'}>
           <Row>
             {stroke ? <Swatch color={stroke} /> : null}
             <Field name="Stroke color" value={str(n.stroke)} mono onCommit={setPaint('stroke', vars, n.strokeWidth == null ? { strokeWidth: 1 } : {})} placeholder="#000000" testId="inspector-stroke" />
             <Field name="Stroke width" value={str(n.strokeWidth ?? '')} width={58} onCommit={setChecked('strokeWidth', (v) => strokeWidthOf(v, vars), n.stroke == null || (Array.isArray(n.stroke) && !n.stroke.length) ? { stroke: '#000000' } : {})} placeholder="1" testId="inspector-stroke-width" />
           </Row>
-          {n.type !== 'ellipse' && n.type !== 'path' ? (
+          {!['ellipse', 'path', 'line'].includes(n.type) ? (
             typeof (n.cornerRadius ?? 0) === 'number'
               ? <NumField label="R" name="Corner radius" value={n.cornerRadius ?? 0} onCommit={(v, k) => update({ cornerRadius: v || null }, k)} min={0} testId="inspector-radius" />
               : <Field label="R" name="Corner radius" value={str(n.cornerRadius)} onCommit={setChecked('cornerRadius', (v) => sides(v, vars, [1, 4]))} testId="inspector-radii" />
