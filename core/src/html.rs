@@ -647,8 +647,11 @@ impl Html<'_> {
         if let Some(a) = n.s("textAlign") {
             let _ = write!(css, "text-align:{a};");
         }
+        // Like the canvas, fixed-width text keeps its newlines and runs of spaces and breaks a word wider than the box.
         if n.s("textGrowth").unwrap_or("auto") == "auto" {
             css.push_str("white-space:pre;");
+        } else {
+            css.push_str("white-space:pre-wrap;overflow-wrap:anywhere;");
         }
         let mut deco = Vec::new();
         if n.b("underline") {
@@ -1083,5 +1086,24 @@ mod tests {
         // Stroke-only text does not take the inherited color as its fill.
         let hollow = e.insert_root(json!({"type": "text", "content": "Out", "fontSize": 50, "stroke": "#000000", "strokeWidth": 4})).unwrap();
         assert!(html(&mut e, &hollow).contains("color:transparent;-webkit-text-stroke:4px #000000;"));
+    }
+
+    /// Fixed-width text keeps its newlines and spaces and breaks long words like the canvas; auto-growth text stays on `pre`.
+    #[test]
+    fn fixed_width_text_wraps_like_the_canvas() {
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        e.load_template("empty");
+        let style_of = |e: &mut Engine, growth: &str| {
+            let id = e.insert_root(json!({"type": "text", "content": "a\n\nb   c", "fontSize": 16, "textGrowth": growth, "width": 100})).unwrap();
+            let html = super::html_document(e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
+            html.split("style=\"").nth(1).unwrap().split('"').next().unwrap().to_string()
+        };
+        for growth in ["fixed-width", "fixed-width-height"] {
+            let style = style_of(&mut e, growth);
+            assert!(style.contains("white-space:pre-wrap;overflow-wrap:anywhere;"), "{growth}: {style}");
+        }
+        let auto = style_of(&mut e, "auto");
+        assert!(auto.contains("white-space:pre;") && !auto.contains("overflow-wrap"), "{auto}");
     }
 }
