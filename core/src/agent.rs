@@ -693,48 +693,64 @@ pub fn load_chat(id: &str) -> Result<Value, String> {
 }
 
 /// `chat_delete`: remove a saved chat. Removing the current one starts a new conversation.
+/// The file goes first: when it cannot be removed the conversation stays as it was.
 pub fn delete_chat(id: &str) -> Result<(), String> {
     let _ops = chat_ops();
     let path = {
-        let mut e = engine();
+        let e = engine();
         let path = chat_path(&e.data_dir, id)?;
-        if e.agent.chat.as_ref().is_some_and(|c| c.id == id) {
-            if e.agent.running {
-                return Err("Stop the agent before removing the running chat.".into());
-            }
-            e.agent.clear();
+        if e.agent.running && e.agent.chat.as_ref().is_some_and(|c| c.id == id) {
+            return Err("Stop the agent before removing the running chat.".into());
         }
         path
     };
-    // Flushed after the lock drops: the chat is no longer current, so no later snapshot can bring the file back.
+    // Flushed first: a queued snapshot of this chat would bring the file back after the removal.
     flush_chat_saves();
     match std::fs::remove_file(path) {
-        Err(err) if err.kind() != std::io::ErrorKind::NotFound => Err(err.to_string()),
-        _ => Ok(()),
+        Err(err) if err.kind() != std::io::ErrorKind::NotFound => return Err(err.to_string()),
+        _ => {}
     }
+    // A prompt sent meanwhile keeps the chat: its next save writes the file again.
+    let mut e = engine();
+    if !e.agent.running && e.agent.chat.as_ref().is_some_and(|c| c.id == id) {
+        e.agent.clear();
+    }
+    Ok(())
 }
 
 /// `chat_clear`: delete every saved chat but a running one. True when the current chat went too.
+/// The current chat's files go last, so a failed removal leaves it listed and current.
 pub fn clear_chats() -> Result<bool, String> {
     let _ops = chat_ops();
-    let (dir, running, keep) = {
-        let mut e = engine();
-        let running = e.agent.running;
+    let (dir, running, current) = {
+        let e = engine();
         // Both the file and the temp file its writer renames over it: removing the temp file fails the next save.
-        let keep = running.then(|| e.agent.chat.as_ref().map(|c| [format!("{}.json", c.id), format!("{}.json.tmp", c.id)])).flatten();
-        if !running {
-            e.agent.clear();
-        }
-        (e.data_dir.clone(), running, keep)
+        let current = e.agent.chat.as_ref().map(|c| [format!("{}.json", c.id), format!("{}.json.tmp", c.id)]);
+        (e.data_dir.clone(), e.agent.running, current)
     };
-    // Flushed after the lock drops: only a running chat can still queue snapshots, and its file is kept.
+    // Flushed before the removal: only a running chat can still queue snapshots, and its file is kept.
     flush_chat_saves();
+    let mut last = Vec::new();
     for entry in std::fs::read_dir(dir.join("sessions")).into_iter().flatten().flatten() {
-        if !keep.as_ref().is_some_and(|k| k.iter().any(|f| entry.file_name().to_str() == Some(f.as_str()))) {
+        if current.as_ref().is_some_and(|k| k.iter().any(|f| entry.file_name().to_str() == Some(f.as_str()))) {
+            last.push(entry.path());
+        } else {
             std::fs::remove_file(entry.path()).map_err(|err| err.to_string())?;
         }
     }
-    Ok(!running)
+    if !running {
+        // The temp file before the file: a failure in between still leaves the chat listed.
+        last.sort_by_key(|path| !path.to_string_lossy().ends_with(".json.tmp"));
+        for path in last {
+            std::fs::remove_file(path).map_err(|err| err.to_string())?;
+        }
+    }
+    let mut e = engine();
+    let cleared = !running && !e.agent.running;
+    if cleared {
+        e.agent.clear();
+    }
+    Ok(cleared)
 }
 
 /// `spawn_agents`: start child agents that each design inside their container nodes.

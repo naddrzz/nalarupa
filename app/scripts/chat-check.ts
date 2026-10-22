@@ -1,6 +1,6 @@
 // Saved chat history through the core (no window): `bun scripts/chat-check.ts`
 // The chat list, loading, deleting and clearing the Agent panel's history menu relies on.
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { randomBytes } from 'node:crypto'
 import { delimiter, join } from 'node:path'
@@ -122,6 +122,19 @@ if (!windows) {
     call('agent_stop')
   }
   await until(() => !call('state').agentRunning, 'the agent stops')
+  // A file that cannot be removed (read-only folder; skipped as root, which ignores it) must leave the chat as it was.
+  if (process.getuid?.() !== 0) {
+    await until(() => existsSync(join(sessions, `${run}.json`)), 'the stopped chat is saved')
+    chmodSync(sessions, 0o555)
+    try {
+      throws(() => call('chat_delete', { id: run }), /denied|permission/i, 'deleting a chat whose file cannot be removed')
+      assert(list().current === run && ids() === run, 'a failed delete keeps the current chat and the history')
+      throws(() => call('chat_clear'), /denied|permission/i, 'clearing when a file cannot be removed')
+      assert(list().current === run, 'a failed clear keeps the current chat')
+    } finally {
+      chmodSync(sessions, 0o755)
+    }
+  }
 }
 
 // Saving a long chat full of screenshots must not stall the engine: a worker times a cheap core call (it needs the
