@@ -332,8 +332,9 @@ impl Html<'_> {
             // fit_content(N) on a node with nothing to hug is N (the laid-out size); the CSS keyword would collapse it to 0.
             let (wl, hl) = (Value::from(px(n.w)), Value::from(px(n.h)));
             let is_fit = |v: Option<&Value>| v.and_then(Value::as_str).is_some_and(|s| s.starts_with("fit_content"));
-            let wv = if is_fit(wv) && !crate::layout::hugs(n, 0) { Some(&wl) } else { wv };
-            let hv = if is_fit(hv) && !crate::layout::hugs(n, 1) { Some(&hl) } else { hv };
+            // A frame without a size is fit_content too; when it hugs a fill child CSS would size it from that child's content.
+            let wv = if is_fit(wv) && !crate::layout::hugs(n, 0) || crate::layout::hugs_fill(n, 0) { Some(&wl) } else { wv };
+            let hv = if is_fit(hv) && !crate::layout::hugs(n, 1) || crate::layout::hugs_fill(n, 1) { Some(&hl) } else { hv };
             css += &size_css(wv, "width", parent_dir, true, n.w);
             css += &size_css(hv, "height", parent_dir, false, n.h);
             if matches!(n.ty.as_str(), "rectangle" | "ellipse" | "icon" | "polygon" | "line" | "path") {
@@ -946,6 +947,21 @@ mod tests {
         assert!(row.contains("width:fit-content;") && row.contains("height:fit-content;"), "{row}");
         // Its only child fills the width, so nothing hugs there and the fallback is the size; the height still hugs.
         assert!(empty.contains("width:25px;") && empty.contains("height:fit-content;"), "{empty}");
+    }
+
+    /// A fit_content parent with a fill child gets the laid-out size: CSS would size it from the fill child's content.
+    #[test]
+    fn hugging_parent_of_a_fill_child_is_exported_as_pixels() {
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        e.load_template("empty");
+        let id = e.insert_root(json!({"type": "frame", "name": "Card", "layout": "vertical", "padding": 16, "gap": 8, "children": [
+            {"type": "rectangle", "name": "fill", "width": "fill_container", "height": 20, "fill": "#00ff00"},
+            {"type": "rectangle", "name": "btn", "width": 120, "height": 40, "fill": "#0000ff"}]})).unwrap();
+        let h = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
+        let card = h.lines().find(|l| l.contains("data-name=\"Card\"")).unwrap();
+        // The width has a fill child (152 = 120 + 2 * 16); the height has none and stays the browser's to hug.
+        assert!(card.contains("width:152px;") && !card.contains("fit-content") && !card.contains("height:"), "{card}");
     }
 
     /// A rotated or flipped child of an auto layout takes its bounding box in the flow, like the canvas.
