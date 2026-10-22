@@ -98,7 +98,15 @@ export function AgentLayer({ cam, w, h, version, chatOpen }: { cam: Cam; w: numb
   useEffect(() => {
     const ids = [...new Set(store.flashes.map((f) => f.nodeId))]
     if (!ids.length) return
-    for (const b of tryCall<Box[]>('boxes', { ids }) ?? []) boxes.current.set(b.id, b)
+    const found = tryCall<Box[]>('boxes', { ids })
+    if (!found) return
+    for (const b of found) boxes.current.set(b.id, b)
+    // A node that is gone (deleted, or its insert undone) takes its flash with it.
+    const gone = new Set(ids.filter((id) => !found.some((b) => b.id === id)))
+    if (gone.size) {
+      for (const id of gone) boxes.current.delete(id)
+      store.flashes = store.flashes.filter((f) => !gone.has(f.nodeId))
+    }
   }, [version])
 
   // 60 fps while anything animates; idle otherwise (under reduced motion only while a fade is due).

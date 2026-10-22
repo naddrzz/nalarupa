@@ -268,6 +268,14 @@ TakeScreenshot([s])`,
   await mcp('execute', { input: `Delete(Get(n => n.name === "SpinImg" ? n.id : undefined)[0]); Delete(Get(n => n.name === "SpinGen" ? n.id : undefined)[0])` })
   await sleep(300)
 
+  // A flash goes with its node: deleting the node while the flash shows removes the outline at once
+  // (it used to hang around the empty spot for the rest of the ~0.9 s flash).
+  await mcp('execute', { input: `Insert(document, {type:"rectangle", name:"SpinGone", x:300, y:600, width:400, height:160, rotation:-30, fill:"#ff3355"})` })
+  if (!(await poll(async () => (await app!.getByTestId('agent-flash-turned').count()) > 0))) throw new Error('no flash on the node to delete')
+  await mcp('execute', { input: `Delete(Get(n => n.name === "SpinGone" ? n.id : undefined)[0])` })
+  if (!(await poll(async () => (await app!.getByTestId('agent-flash-turned').count()) === 0, 400))) throw new Error('the flash of a deleted node is still on screen')
+  await sleep(300)
+
   // Slides tab → Export deck to PDF: one page per top-level frame (3 template slides + the MCP one).
   await app.getByText('Slides').click()
   await sleep(800)
