@@ -908,7 +908,7 @@ try {
   // Mixed selections: Fill is hidden only when every selected layer ignores it.
   await app.getByTestId('layers').getByText('Inspect line').click()
   await app.getByTestId('layers').getByText('Inspect note').click({ modifiers: 'ctrl' })
-  assert(await app.getByText('2 layers selected').count(), 'ctrl-click adds the note to the line selection')
+  assert(await until(async () => (await app.getByText('2 layers selected').count()) > 0), 'ctrl-click adds the note to the line selection')
   assert(!(await count('inspector-fill')), 'a line and a note together have no Fill field')
   await app.getByTestId('layers').getByText('Inspect rect').click({ modifiers: 'ctrl' })
   assert(await until(async () => (await count('inspector-fill')) > 0), 'a line, a note and a rectangle together keep the Fill field')
