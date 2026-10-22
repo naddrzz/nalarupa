@@ -78,7 +78,11 @@ fn pad(n: &RNode, ax: usize) -> f64 {
     if ax == 0 { p[1] + p[3] } else { p[0] + p[2] }
 }
 
+/// Main-axis gap; space_between/space_around ignore it everywhere (hug, fill share, placement).
 fn gap(n: &RNode) -> f64 {
+    if matches!(n.s("justifyContent"), Some("space_between" | "space_around")) {
+        return 0.0;
+    }
     n.f("gap").unwrap_or(0.0)
 }
 
@@ -361,7 +365,8 @@ mod tests {
                 {"type":"rectangle","id":"c","width":50,"height":40}]}));
         assert_eq!((n.w, n.h), (300.0, 100.0));
         let b = &n.kids[1];
-        assert_eq!(b.w, 300.0 - 20.0 - 100.0 - 20.0);
+        // space_between ignores the gap, so the fill child takes everything the others leave.
+        assert_eq!(b.w, 300.0 - 20.0 - 100.0);
         assert_eq!(b.h, 80.0);
         assert_eq!(n.kids[0].x, 20.0);
         assert_eq!(n.kids[0].y, 20.0 + 10.0 + 30.0);
@@ -420,6 +425,22 @@ mod tests {
         // Overflow makes the spacing negative instead of clamping.
         let n = row("space_between", 40.0);
         assert_eq!(n.kids.iter().map(|k| k.x).collect::<Vec<_>>(), [0.0, 10.0, 20.0]);
+    }
+
+    #[test]
+    fn space_with_fill_child_keeps_no_gap() {
+        for j in ["space_between", "space_around"] {
+            let n = lay(json!({"type":"frame","id":"f","width":300,"height":100,"gap":18,"justifyContent":j,"children":[
+                rect(json!(40), json!(20)), rect(json!("fill_container"), json!(20)), rect(json!(27), json!(20))]}));
+            assert_eq!(n.kids.iter().map(|k| (k.x, k.w)).collect::<Vec<_>>(), [(0.0, 40.0), (40.0, 233.0), (273.0, 27.0)], "{j}");
+        }
+        // start keeps the gap.
+        let n = lay(json!({"type":"frame","id":"f","width":300,"height":100,"gap":18,"children":[
+            rect(json!(40), json!(20)), rect(json!("fill_container"), json!(20)), rect(json!(27), json!(20))]}));
+        assert_eq!(n.kids.iter().map(|k| (k.x, k.w)).collect::<Vec<_>>(), [(0.0, 40.0), (58.0, 197.0), (273.0, 27.0)]);
+        // A fit row with space_between hugs the children without the gap, like the HTML export.
+        let n = lay(json!({"type":"frame","id":"f","gap":18,"justifyContent":"space_between","children":[rect(json!(40), json!(20)), rect(json!(27), json!(20))]}));
+        assert_eq!(n.w, 67.0);
     }
 
     #[test]
