@@ -1,11 +1,9 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
-import { existsSync, mkdirSync } from 'node:fs'
-import { homedir } from 'node:os'
-import { join } from 'node:path'
 import { useGpuixRequired, useWindowSize, type PublicInstance } from '@gpuix/react'
 import { call, tryCall, type Box, type State } from './core'
 import { applyEvents, store } from './agents'
 import { Canvas, fitCam, isMovable, type Cam, type Mods, type Tool } from './Canvas'
+import { defaultSavePath } from './paths'
 import { readClipboard, writeClipboard } from './clipboard'
 import { LeftPanel } from './Layers'
 import { Inspector } from './Inspector'
@@ -29,16 +27,6 @@ const TOOLS: { tool: Tool; icon: IconName; key: string; label: string }[] = [
   { tool: 'pen', icon: 'pen', key: 'p', label: 'Pen (P)' },
   { tool: 'hand', icon: 'hand', key: 'h', label: 'Hand (H)' },
 ]
-
-function defaultSavePath(title: string): string {
-  const dir = join(homedir(), 'Documents', 'Nalarupa')
-  mkdirSync(dir, { recursive: true })
-  const base = title.replace(/[\\/:*?"<>|]/g, '').trim() || 'Untitled'
-  for (let i = 0; ; i++) {
-    const p = join(dir, `${base}${i ? `-${i}` : ''}.nala`)
-    if (!existsSync(p)) return p
-  }
-}
 
 // The side panels ignore the camera: with stable props, panning and zooming re-render only the canvas.
 const Left = memo(LeftPanel)
@@ -142,7 +130,7 @@ export function App() {
   const save = (as = false) => {
     if (as) {
       renderer.promptForPaths?.({ directories: true, prompt: 'Save here' }).then((dirs) => {
-        if (dirs?.[0]) saveTo(join(dirs[0], `${state.title}.nala`))
+        if (dirs?.[0]) saveTo(defaultSavePath(state.title, dirs[0]))
       })
     } else saveTo(state.path ?? defaultSavePath(state.title))
   }
@@ -393,7 +381,7 @@ export function App() {
         <div style={{ width: 1, height: 20, backgroundColor: C.border, marginLeft: 6, marginRight: 6 }} />
         <IconButton icon="play" title="Present (Ctrl+Enter)" testId="present" onClick={() => present()} />
         <IconButton icon="save" title="Save (Ctrl+S)" testId="save" onClick={() => save()} />
-        <IconButton icon="open" title="Save as… (Ctrl+Shift+S)" onClick={() => save(true)} />
+        <IconButton icon="saveAs" title="Save as… (Ctrl+Shift+S)" onClick={() => save(true)} />
       </div>
       <div style={{ flexGrow: 1, minHeight: 0, display: 'flex', flexDirection: 'row' }}>
         <Left version={state.version} selection={selection} select={select} focus={focusLayer} present={present} toast={toast} hover={setHoverId} onShortcut={panelShortcut} />
