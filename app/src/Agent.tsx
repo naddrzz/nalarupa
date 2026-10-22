@@ -412,6 +412,7 @@ function ChatHistory({ running, toast, changed }: { running: boolean; toast: Toa
   const close = () => {
     setList(null)
     setConfirm(false)
+    setArmed(null)
   }
   // Core refusals ("Stop the agent before …") are shown as toasts.
   const act = <R,>(cmd: string, args: Record<string, unknown> = {}): R | null => {
