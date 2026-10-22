@@ -391,6 +391,7 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
   // the box looks as it did before it was focused. Linux only: grim, and sway for the window's origin.
   const dir = process.env.XDG_RUNTIME_DIR
   const sock = process.platform === 'linux' && dir ? readdirSync(dir).find((f) => f.startsWith('sway-ipc')) : undefined
+  if (process.platform === 'linux' && !sock) throw new Error('sway IPC socket not found in XDG_RUNTIME_DIR: run via scripts/wl-run.sh')
   if (sock) {
     type Node = { type: string; rect: { x: number; y: number }; nodes?: Node[]; floating_nodes?: Node[] }
     const windowOf = (n: Node): Node | undefined => n.type === 'floating_con' ? n : [...(n.nodes ?? []), ...(n.floating_nodes ?? [])].map(windowOf).find(Boolean)

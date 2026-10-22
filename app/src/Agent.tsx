@@ -93,6 +93,8 @@ function visibleText(it: Extract<ChatItem, { kind: 'assistant' }>, isLast: boole
 
 // The panel unmounts while the Design tab is open; what the user set up in it (draft, agent options, open cards) lives here.
 const kept = new Map<string, unknown>()
+// The mounted panel's draft setter: a pending tab cleanup must reach the panel that is on screen, not the one it started in.
+let liveSetDraft: (d: string) => void = () => {}
 function useKept<T>(key: string, init: () => T) {
   const [v, set] = useState<T>(() => {
     if (!kept.has(key)) kept.set(key, init())
@@ -117,6 +119,7 @@ function withoutTabKey(prev: string, next: string) {
 
 export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: number; running: boolean; mcpUrl: string; toast: Toast; onSent?: () => void }) {
   const [draft, setDraft] = useKept('draft', () => '')
+  liveSetDraft = setDraft
   const input = useFieldRing()
   const [settings, setSettings] = useKept('settings', () => false)
   const [parallel, setParallel] = useKept('parallel', () => '1')
@@ -268,7 +271,7 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
                 // The box drops the tab (and shows its placeholder again) only when the value it is given changes
                 // in a later frame than the tab itself, so the clean draft follows after a pause, unless typing went on.
                 const clean = withoutTabKey(draft, typed)
-                if (clean !== typed) setTimeout(() => { if (kept.get('draft') === typed) setDraft(clean) }, 100)
+                if (clean !== typed) setTimeout(() => { if (kept.get('draft') === typed) liveSetDraft(clean) }, 100)
               }}
               onSubmit={(e) => send(e.value ?? draft)}
               theme={{ caret: C.accent }}
