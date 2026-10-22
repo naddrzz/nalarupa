@@ -130,14 +130,15 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
   const lastId = lastContentId(items)
   const renderer = useGpuixRequired()
   const listEl = useRef<PublicInstance | null>(null)
-  const pinNext = useRef<number | null>(null) // item count at the last send, while the list still waits for its echo
+  const pinNext = useRef<number | null>(null) // id of the last row at the last send, while the list still waits for its echo
 
   const send = (text: string) => {
     const t = text.trim()
     if (!t) return
+    const lastRow = items[items.length - 1]?.id ?? -1 // read before the call: the echo may be pushed while it runs
     if (tryCall('agent_send', { text: t, parallel: Number(parallel), mode, designs, iterate: cookMode }) !== null) {
       setDraft('')
-      pinNext.current = items.length
+      pinNext.current = lastRow
       onSent?.()
     } else toast('Unable to start the agent. Check the backend in Agent settings and try again.', true)
   }
@@ -169,9 +170,10 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
   const rows = items.length + (planning ? 1 : 0)
   useEffect(() => {
     if (pinNext.current === null || !listEl.current || !rows) return
-    // A poll batch can append rows after the echo, so look for it among the rows added since the send.
-    if (items.slice(pinNext.current).some((i) => i.kind === 'user' || i.kind === 'queued')) pinNext.current = null
-    renderer.scrollToItem?.(listEl.current.id, rows - 1)
+    // A poll batch can append rows after the echo, so look for it among the rows added since the send (ids only grow).
+    if (items.some((i) => i.id > pinNext.current! && (i.kind === 'user' || i.kind === 'queued'))) pinNext.current = null
+    // One past the last row is the list's at-end anchor: unlike the last row's top, it stays at the end when that row grows (an expanded tool result).
+    renderer.scrollToItem?.(listEl.current.id, rows)
   }, [rows, renderer, items])
   const todos = store.todos
   const doneTodos = todos.filter((t) => t.status === 'completed').length
