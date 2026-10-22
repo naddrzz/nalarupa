@@ -889,6 +889,18 @@ try {
   await app.call('keyUp', { key: 'space' })
   assert(await until(async () => { const p = await boxPos(); return p[0] - panFrom[0] === 80 && p[1] - panFrom[1] === 50 }), `Space+drag pans after a tool is picked with its toolbar button (${panFrom} → ${await boxPos()})`)
   await canvas.press('escape')
+
+  // A line is drawn from its stroke alone and a note from fixed colors: the Inspector offers a line its stroke fields and no Fill, a note no Fill.
+  await mcpCall(port, { method: 'tools/call', params: { name: 'execute', arguments: { input: 'Insert(document, {type:"line", name:"Inspect line", x:0, y:0, width:120, height:0, stroke:"#FF0000", strokeWidth:6}); Insert(document, {type:"note", name:"Inspect note", x:0, y:40, width:120, height:60, content:"hi"})' } } })
+  await app.getByTestId('layers').getByText('Inspect line').waitFor({ timeoutMs: 6000 })
+  await app.getByTestId('layers').getByText('Inspect line').click()
+  assert(await until(async () => (await count('inspector-stroke')) > 0 && (await count('inspector-stroke-width')) > 0), 'a line shows its stroke color and width')
+  assert(!(await count('inspector-fill')), 'a line has no Fill field')
+  assert(!(await count('inspector-radius')) && !(await count('inspector-radii')), 'a line has no corner radius')
+  await app.getByTestId('layers').getByText('Inspect note').click()
+  assert(await until(async () => !(await count('inspector-stroke'))), 'a note has no stroke fields')
+  assert(!(await count('inspector-fill')), 'a note has no Fill field')
+  await canvas.press('escape')
   await shot('10-final')
   console.log('editor-e2e ok — screenshots in', out)
 } finally {
