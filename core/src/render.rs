@@ -220,7 +220,7 @@ impl Ctx<'_> {
     }
 
     pub fn tree_options(&self) -> usvg::Options<'static> {
-        let mut opt = usvg::Options { fontdb: Arc::clone(&self.fonts.db), font_resolver: self.fonts.resolver(), ..usvg::Options::default() };
+        let mut opt = usvg::Options { fontdb: Arc::clone(&self.fonts.db), font_resolver: self.fonts.resolver(), image_href_resolver: crate::svg::image_href_resolver(), ..usvg::Options::default() };
         opt.resources_dir = self.doc.dir();
         opt
     }
