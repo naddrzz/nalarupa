@@ -336,6 +336,10 @@ impl Html<'_> {
             let hv = if is_fit(hv) && !crate::layout::hugs(n, 1) { Some(&hl) } else { hv };
             css += &size_css(wv, "width", parent_dir, true, n.w);
             css += &size_css(hv, "height", parent_dir, false, n.h);
+            // Fixed-width text without a width wraps at width 0 on the canvas: one word per line.
+            if n.ty == "text" && wv.is_none() {
+                css += &size_css(Some(&Value::from(px(n.w))), "width", parent_dir, true, n.w);
+            }
             if matches!(n.ty.as_str(), "rectangle" | "ellipse" | "icon" | "polygon" | "line" | "path") {
                 if wv.is_none() {
                     css += &size_css(Some(&Value::from(n.w)), "width", parent_dir, true, n.w);
@@ -647,11 +651,14 @@ impl Html<'_> {
         if let Some(a) = n.s("textAlign") {
             let _ = write!(css, "text-align:{a};");
         }
-        // Like the canvas, fixed-width text keeps its newlines and runs of spaces and breaks a word wider than the box.
+        // Like the canvas, fixed-width text keeps its newlines and runs of spaces and breaks a word wider than the box,
+        // except in a box of width 0, where a word is never split.
         if n.s("textGrowth").unwrap_or("auto") == "auto" {
             css.push_str("white-space:pre;");
-        } else {
+        } else if n.w > 0.0 {
             css.push_str("white-space:pre-wrap;overflow-wrap:anywhere;");
+        } else {
+            css.push_str("white-space:pre-wrap;");
         }
         let mut deco = Vec::new();
         if n.b("underline") {
@@ -1103,6 +1110,10 @@ mod tests {
             let style = style_of(&mut e, growth);
             assert!(style.contains("white-space:pre-wrap;overflow-wrap:anywhere;"), "{growth}: {style}");
         }
+        // Without a width the box is 0 wide: one word per line, no split inside a word.
+        let id = e.insert_root(json!({"type": "text", "content": "one two", "fontSize": 16, "textGrowth": "fixed-width"})).unwrap();
+        let html = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
+        assert!(html.contains("width:0px;") && html.contains("white-space:pre-wrap;") && !html.contains("overflow-wrap"), "{html}");
         let auto = style_of(&mut e, "auto");
         assert!(auto.contains("white-space:pre;") && !auto.contains("overflow-wrap"), "{auto}");
     }
