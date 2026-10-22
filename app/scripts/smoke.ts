@@ -340,6 +340,31 @@ assert(!redAt(300, 70), 'turning clip on repaints the cut overflow')
 clipped()
 call('reparent', { ids: [midId], parent: rootId })
 assert(redAt(300, 70), 'moving a container out of a clipping frame repaints its overflow')
+// An image fill over the pixel budget is refused from its header, not decoded: a 12000 x 12000 grey PNG
+// (about 140 KB) took 3 s and 1.2 GB to render, a 30000 x 30000 one 19 s and 7 GB.
+{
+  const W = 12000
+  const be = (n: number) => Buffer.from([n >>> 24, (n >>> 16) & 255, (n >>> 8) & 255, n & 255])
+  const chunk = (type: string, data: Uint8Array) => {
+    const body = Buffer.concat([Buffer.from(type), data])
+    return Buffer.concat([be(data.length), body, be(Bun.hash.crc32(body))])
+  }
+  const bombDir = mkdtempSync(join(tmpdir(), 'nalarupa-bomb-'))
+  try {
+    const ihdr = Buffer.concat([be(W), be(W), Buffer.from([8, 0, 0, 0, 0])])
+    const idat = Bun.deflateSync(Buffer.alloc(W * (W + 1)))
+    const png = Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', idat), chunk('IEND', Buffer.alloc(0))])
+    await Bun.write(join(bombDir, 'bomb.png'), png)
+    call('new', { template: 'empty' })
+    call('insert', { parent: 'document', node: { type: 'rectangle', name: 'bomb', x: 0, y: 0, width: 200, height: 200, fill: { type: 'image', url: join(bombDir, 'bomb.png'), mode: 'fill' } } })
+    const t0 = performance.now()
+    renderPixels(320, 180, 0, 0, 1, 0xffffff)
+    const ms = performance.now() - t0
+    assert(ms < 1500, `an oversized image fill is refused without decoding (${ms.toFixed(0)} ms)`)
+  } finally {
+    rmSync(bombDir, { recursive: true, force: true })
+  }
+}
 // One very long line (pasted minified JSON, a base64 blob) lays out in linear time: quadruple the text,
 // about quadruple the time (it was ~14x, 160k characters took 9 s).
 const layoutMs = (chars: number) => {
