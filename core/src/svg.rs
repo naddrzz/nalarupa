@@ -20,6 +20,8 @@ pub struct Assets {
     icons: HashMap<String, Option<String>>,
     /// Image URLs whose download failed this session (not retried on every layer rebuild).
     failed: std::collections::HashSet<String>,
+    /// Whether a `data:` image is within the size limit, by url hash (its header is decoded once, not per use).
+    data_ok: HashMap<u64, bool>,
     /// Too-deep verdicts of SVG images, keyed by `deep_key` and valid while the stamp matches.
     deep: HashMap<String, (u64, bool)>,
     pub online: bool,
@@ -29,7 +31,7 @@ impl Assets {
     pub fn new(dir: PathBuf) -> Assets {
         let _ = std::fs::create_dir_all(dir.join("icons"));
         let _ = std::fs::create_dir_all(dir.join("images"));
-        Assets { dir, icons: HashMap::new(), failed: Default::default(), deep: HashMap::new(), online: true }
+        Assets { dir, icons: HashMap::new(), failed: Default::default(), data_ok: HashMap::new(), deep: HashMap::new(), online: true }
     }
 
     /// Icon at the default weight (200; only Material Symbols has weights).
@@ -70,10 +72,15 @@ impl Assets {
         svg
     }
 
-    /// Resolve an image fill url to a local file path usvg can load. An SVG nested deeper than
-    /// `MAX_SVG_DEPTH` counts as unavailable: usvg recurses per level and overflows the stack.
+    /// Resolve an image fill url to a local file path usvg can load. A raster image over
+    /// `MAX_IMAGE_PIXELS` is refused like a missing one: decoding it would freeze the render and
+    /// need gigabytes (a few KB of PNG can declare 30000 x 30000). An SVG nested deeper than
+    /// `MAX_SVG_DEPTH` counts as unavailable too: usvg recurses per level and overflows the stack.
     pub fn image(&mut self, url: &str, base: Option<&Path>) -> Option<String> {
         let href = self.resolve_image(url, base)?;
+        if !self.within_pixel_limit(&href, url) {
+            return None;
+        }
         let too_deep = match deep_key(&href) {
             None => false,
             Some((key, stamp)) => match self.deep.get(&key) {
@@ -86,6 +93,27 @@ impl Assets {
             },
         };
         (!too_deep).then_some(href)
+    }
+
+    /// Whether a raster image's declared size is within `MAX_IMAGE_PIXELS` (the verdict of a `data:` image is cached).
+    fn within_pixel_limit(&mut self, href: &str, url: &str) -> bool {
+        let is_data = href.starts_with("data:");
+        let key = fxhash(href);
+        if is_data {
+            if let Some(&ok) = self.data_ok.get(&key) {
+                return ok;
+            }
+        }
+        let size = href_size(href);
+        let ok = size.is_none_or(|(w, h)| w as u64 * h as u64 <= MAX_IMAGE_PIXELS);
+        if let (false, Some((w, h))) = (ok, size) {
+            let shown = if is_data { "<data URL>" } else { url };
+            eprintln!("image {shown}: {w}x{h} px is over the {} megapixel limit", MAX_IMAGE_PIXELS / 1_000_000);
+        }
+        if is_data {
+            self.data_ok.insert(key, ok);
+        }
+        ok
     }
 
     fn resolve_image(&mut self, url: &str, base: Option<&Path>) -> Option<String> {
@@ -126,6 +154,62 @@ impl Assets {
         let p = Path::new(rel);
         let full = if p.is_absolute() { p.to_path_buf() } else { base?.join(rel) };
         full.exists().then(|| full.to_string_lossy().replace('\\', "/"))
+    }
+}
+
+/// Largest raster image decoded, in pixels (RGBA: 400 MB).
+const MAX_IMAGE_PIXELS: u64 = 100_000_000;
+
+/// Declared pixel size of a raster image given as `Assets::image` returns it (a file path or a
+/// `data:` url), read from its header without decoding. None for SVG or anything unrecognised.
+fn href_size(href: &str) -> Option<(u32, u32)> {
+    if href.starts_with("data:") {
+        let (bytes, _) = data_url::DataUrl::process(href).ok()?.decode_to_vec().ok()?;
+        return image_size(&mut std::io::Cursor::new(bytes));
+    }
+    image_size(&mut std::io::BufReader::new(std::fs::File::open(href).ok()?))
+}
+
+/// Width and height from a PNG, GIF, JPEG or WebP header.
+fn image_size<R: std::io::BufRead + std::io::Seek>(r: &mut R) -> Option<(u32, u32)> {
+    use std::io::{Read, SeekFrom};
+    let mut head = [0u8; 24];
+    let n = r.read(&mut head).ok()?;
+    let be16 = |b: &[u8]| u16::from_be_bytes([b[0], b[1]]) as u32;
+    match head {
+        [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13, b'I', b'H', b'D', b'R', ..] if n >= 24 => Some((u32::from_be_bytes(head[16..20].try_into().ok()?), u32::from_be_bytes(head[20..24].try_into().ok()?))),
+        [b'G', b'I', b'F', b'8', ..] if n >= 10 => Some((u16::from_le_bytes([head[6], head[7]]) as u32, u16::from_le_bytes([head[8], head[9]]) as u32)),
+        [b'R', b'I', b'F', b'F', _, _, _, _, b'W', b'E', b'B', b'P', ..] => {
+            r.seek(SeekFrom::Start(0)).ok()?;
+            image_webp::WebPDecoder::new(r).ok().map(|d| d.dimensions())
+        }
+        [0xFF, 0xD8, ..] => {
+            r.seek(SeekFrom::Start(2)).ok()?;
+            // Walk the marker segments to the first start-of-frame (C0-CF but not DHT, JPG, DAC).
+            loop {
+                let mut m = [0u8; 2];
+                r.read_exact(&mut m).ok()?;
+                match m {
+                    [0xFF, 0xFF] => {
+                        r.seek(SeekFrom::Current(-1)).ok()?;
+                    }
+                    [0xFF, 0x01 | 0xD0..=0xD7] => {}
+                    [0xFF, 0xD9 | 0xDA] | [_, 0x00] => return None,
+                    [0xFF, t] => {
+                        let mut seg = [0u8; 7];
+                        r.read_exact(&mut seg[..2]).ok()?;
+                        let len = be16(&seg) as i64;
+                        if matches!(t, 0xC0..=0xCF) && !matches!(t, 0xC4 | 0xC8 | 0xCC) {
+                            r.read_exact(&mut seg[2..7]).ok()?;
+                            return Some((be16(&seg[5..]), be16(&seg[3..])));
+                        }
+                        r.seek(SeekFrom::Current(len - 2)).ok()?;
+                    }
+                    _ => return None,
+                }
+            }
+        }
+        _ => None,
     }
 }
 
@@ -1890,6 +1974,33 @@ mod tests {
         assert!(!legacy.exists() && Path::new(&path).exists());
         assert_eq!(assets.image(url, None).unwrap(), path);
         assert_eq!(image_ext(&[0xFF, 0xD8, 0xFF]), "jpg");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// An image declaring more than MAX_IMAGE_PIXELS is refused from its header alone (a 875 KB
+    /// PNG declaring 30000 x 30000 took 19 s and 7 GB to decode), like a missing file.
+    #[test]
+    fn oversized_images_are_refused() {
+        let dir = std::env::temp_dir().join(format!("nalarupa-big-{:x}", crate::doc::random_u64()));
+        let mut assets = Assets::new(dir.clone());
+        let png = |w: u32, h: u32| [&b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR"[..], &w.to_be_bytes(), &h.to_be_bytes()].concat();
+        let gif = |w: u16, h: u16| [&b"GIF89a"[..], &w.to_le_bytes(), &h.to_le_bytes()].concat();
+        // SOI, an APP0 segment, then SOF0 (precision 8, height, width).
+        let jpg = |w: u16, h: u16| [&[0xFF, 0xD8, 0xFF, 0xE0, 0, 4, 0, 0, 0xFF, 0xC0, 0, 11, 8][..], &h.to_be_bytes(), &w.to_be_bytes(), &[1, 1, 0x11, 0]].concat();
+        let cases = [("a.png", png(30000, 30000), false), ("b.png", png(8000, 8000), true), ("c.gif", gif(60000, 60000), false), ("d.jpg", jpg(20000, 20000), false), ("e.jpg", jpg(640, 480), true)];
+        assert_eq!(image_size(&mut std::io::Cursor::new(jpg(640, 480))), Some((640, 480)));
+        for (name, bytes, ok) in cases {
+            std::fs::write(dir.join(name), &bytes).unwrap();
+            assert_eq!(assets.image(name, Some(&dir)).is_some(), ok, "{name}");
+            let data = format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(&bytes));
+            assert_eq!(assets.image(&data, None).is_some(), ok, "{name} as data url");
+            let pct: String = bytes.iter().map(|b| format!("%{b:02X}")).collect();
+            assert_eq!(assets.image(&format!("data:image/png,{pct}"), None).is_some(), ok, "{name} as percent-encoded data url");
+        }
+        // Bytes that only start like a PNG are not read as one.
+        let mut bad = png(30000, 30000);
+        bad[5] = b'X';
+        assert_eq!(image_size(&mut std::io::Cursor::new(bad)), None);
         let _ = std::fs::remove_dir_all(dir);
     }
 
