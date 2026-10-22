@@ -739,6 +739,8 @@ pub fn clear_chats() -> Result<bool, String> {
         }
     }
     if !running {
+        // The temp file before the file: a failure in between still leaves the chat listed.
+        last.sort_by_key(|path| !path.to_string_lossy().ends_with(".json.tmp"));
         for path in last {
             std::fs::remove_file(path).map_err(|err| err.to_string())?;
         }
