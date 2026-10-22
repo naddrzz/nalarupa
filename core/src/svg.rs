@@ -1449,7 +1449,7 @@ impl<'a> Svg<'a> {
 /// Pixels of an image file (premultiplied RGBA, top row first), decoded by resvg's own decoders.
 /// The bytes go in as data (`text/plain` makes usvg sniff the format): usvg will not open a file
 /// without an extension, which is how downloaded images are cached.
-fn decode_image(path: &str) -> Option<tiny_skia::Pixmap> {
+pub(crate) fn decode_image(path: &str) -> Option<tiny_skia::Pixmap> {
     let data = base64::engine::general_purpose::STANDARD.encode(std::fs::read(path).ok()?);
     let svg = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1" height="1"><image xlink:href="data:text/plain;base64,{data}"/></svg>"#);
     let opts = resvg::usvg::Options { image_href_resolver: image_href_resolver(), ..Default::default() };
