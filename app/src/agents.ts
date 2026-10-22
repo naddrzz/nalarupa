@@ -289,6 +289,7 @@ export function resetChat() {
 /** Agent presence on the canvas is in document units: a new or opened document starts without the old one's cursors and flashes. */
 export function clearPresence() {
   store.cursors.clear()
+  store.pens.clear()
   store.flashes = []
   store.activity = []
 }

@@ -208,11 +208,11 @@ assert(store.cursors.size === 0, "a new conversation drops the old agents' canva
 resetChat()
 // A new or opened document drops the old one's canvas presence: cursors, flashes and pending flash requests.
 {
-  applyEvents([{ type: 'agent_activity', agent: 'external', ids: ['n1'], op: 'write' }], 0)
+  applyEvents([{ type: 'agent_activity', agent: 'external', ids: ['n1'], op: 'write' }, { type: 'pen', id: 'p1', x: 5, y: 5 }], 0)
   store.cursors.set('external', { profile: { id: 'external', name: 'External agent', color: '#607dff' }, x: 0, y: 0, tx: 0, ty: 0, appearAt: 0, lastActivity: 0, wobble: 0, phase: 0 })
   store.flashes.push({ nodeId: 'n1', start: 0, color: '#607dff', longHold: false })
   clearPresence()
-  assert(store.cursors.size === 0 && store.flashes.length === 0 && store.activity.length === 0, "a new or opened document drops the old document's cursors and flashes")
+  assert(store.cursors.size === 0 && store.flashes.length === 0 && store.activity.length === 0 && store.pens.size === 0, "a new or opened document drops the old document's cursors, pens and flashes")
   assert(!needsFrame(100, false, 0), 'no repaint is due once the presence is cleared')
 }
 // Reduced motion: a running agent repaints the canvas layer only for fades, not every frame of the run.
