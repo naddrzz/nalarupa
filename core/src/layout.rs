@@ -147,6 +147,12 @@ pub fn hugs(n: &RNode, ax: usize) -> bool {
     dir(n).is_some() && sizing(n, ax) == Sizing::Fit && n.kids.iter().any(|k| in_flow(k) && sizing(k, ax) != Sizing::Fill)
 }
 
+/// A hugging node with a fill child on this axis: the fill child gets what its siblings leave, but a CSS flex item adds
+/// its content width to a shrink-to-fit container, so `fit-content` would size the node differently from the canvas.
+pub fn hugs_fill(n: &RNode, ax: usize) -> bool {
+    hugs(n, ax) && n.kids.iter().any(|k| in_flow(k) && sizing(k, ax) == Sizing::Fill)
+}
+
 /// Post-order: a fit_content node with a layout hugs its in-flow, non-fill children.
 fn fit(n: &mut RNode, ax: usize, fonts: &mut Fonts) {
     for k in &mut n.kids {
