@@ -463,7 +463,12 @@ impl Engine {
         }
     }
 
+    /// Undo and redo are ignored during a drag: `drag_end` would otherwise push the pre-drag snapshot
+    /// as a new step over the swapped document.
     pub fn undo(&mut self) -> bool {
+        if self.drag_before.is_some() {
+            return false;
+        }
         let Some(prev) = self.undo.pop() else { return false };
         self.coalesce = None;
         self.redo.push(std::mem::replace(&mut self.doc.root, prev));
@@ -472,6 +477,9 @@ impl Engine {
     }
 
     pub fn redo(&mut self) -> bool {
+        if self.drag_before.is_some() {
+            return false;
+        }
         let Some(next) = self.redo.pop() else { return false };
         self.coalesce = None;
         self.undo.push(std::mem::replace(&mut self.doc.root, next));
@@ -1071,6 +1079,29 @@ mod tests {
         assert_eq!(xs(&e), [("U".into(), 100), ("AgentF".into(), 300)]);
         assert!(e.undo());
         assert_eq!(xs(&e), [("U".into(), 0), ("AgentF".into(), 300)]);
+        assert!(e.undo());
+        assert_eq!(xs(&e), [("U".into(), 0)]);
+        assert!(!e.undo());
+    }
+
+    /// Undo and redo during a drag do nothing, so the drag commits as one step on top of the history.
+    #[test]
+    fn undo_and_redo_are_ignored_during_a_drag() {
+        let mut e = Engine::new(std::env::temp_dir().join(format!("nalarupa-test-drag-undo-{}", std::process::id())));
+        e.load_template("empty");
+        e.doc.root["children"] = json!([{"id": "u", "type": "frame", "name": "U", "x": 0}]);
+        e.edit(|d| { d.root["children"][0]["x"] = json!(10); Ok(()) }).unwrap();
+        e.edit(|d| { d.root["children"][0]["x"] = json!(20); Ok(()) }).unwrap();
+        assert!(e.undo());
+        e.drag_before = Some(e.doc.root.clone());
+        e.doc.root["children"][0]["x"] = json!(50);
+        assert!(!e.undo() && !e.redo());
+        assert_eq!((e.undo.len(), e.redo.len()), (1, 1));
+        let before = e.drag_before.take().unwrap();
+        e.end_drag(before, false);
+        assert_eq!(xs(&e), [("U".into(), 50)]);
+        assert!(e.undo());
+        assert_eq!(xs(&e), [("U".into(), 10)]);
         assert!(e.undo());
         assert_eq!(xs(&e), [("U".into(), 0)]);
         assert!(!e.undo());
