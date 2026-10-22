@@ -721,6 +721,15 @@ for (let i = 0; i < 149; i++) Insert(f, {type:"rectangle", name:"Chip " + i, x:(
   await shot('06-present')
   await app.getByTestId('presentation').press('escape')
   await sleep(500)
+  // A new document starts without the external agent's cursor from the one before.
+  await mcp('execute', { input: 'Insert(document, {type:"rectangle", name:"Presence", x:100, y:100, width:300, height:200, fill:"#22ff55"})' })
+  await until(async () => (await app!.getByTestId('agent-cursor-external').count()) > 0, "the external agent's cursor")
+  await app.getByTestId('home').click()
+  await app.getByTestId('template-blank').click()
+  await app.getByTestId('unsaved-discard').click()
+  await until(async () => (await app!.getByTestId('canvas').count()) > 0, 'the new document')
+  await sleep(1500) // the old cursor, if kept, shows within a frame or two of the canvas
+  if (await app.getByTestId('agent-cursor-external').count()) throw new Error("the previous document's external agent cursor is still on the new canvas")
   console.log('e2e ok — screenshots in', out)
 } finally {
   await app?.close()

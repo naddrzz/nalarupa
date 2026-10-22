@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { useGpuixRequired, useWindowSize, type PublicInstance } from '@gpuix/react'
 import { call, tryCall, type Box, type State } from './core'
-import { applyEvents, store } from './agents'
+import { applyEvents, clearPresence, store } from './agents'
 import { Canvas, fitCam, isMovable, type Cam, type Mods, type Tool } from './Canvas'
 import { defaultSavePath } from './paths'
 import { readClipboard, writeClipboard } from './clipboard'
@@ -75,6 +75,7 @@ export function App() {
   }, [cw, ch])
 
   const openedDoc = useCallback(() => {
+    clearPresence()
     setSelection([])
     setOpened(true)
     setScreen('editor')
