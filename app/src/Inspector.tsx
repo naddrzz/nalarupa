@@ -144,6 +144,11 @@ export function Inspector({ version, selection, select, toast }: Props) {
     if (tryCall('delete', { ids: selection }) !== null) select([])
     else toast('Unable to delete the selection. Select the layers again and try again.', true)
   }
+  /** A descendant of an instance cannot be removed: the core takes `enabled:false` on its path as an override instead. */
+  const hide = () => {
+    if (tryCall('update', { ids: selection, props: { enabled: false } }) !== null) select([])
+    else toast('Unable to hide the selection. Select the layers again and try again.', true)
+  }
   const infos = useMemo(() => selection.map((id) => ({ id, ...tryCall('node', { id }) }) as Info).filter((i) => i.node), [selection, version])
   const update = (props: Record<string, unknown>, coalesce?: string) => {
     const ok = tryCall('update', { ids: selection, props, coalesce }) !== null
@@ -190,9 +195,9 @@ export function Inspector({ version, selection, select, toast }: Props) {
     return (
       <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
         <T color={C.text}>{`Instance child ${selection[0]}`}</T>
+        <T size={11} color={C.ghost}>A layer inside a component instance cannot be deleted or duplicated. Hide it for this instance instead; Ctrl+Z brings it back.</T>
         <Row>
-          <Button icon="copy" onClick={() => tryCall('duplicate', { ids: selection })}>Duplicate</Button>
-          <Button icon="trash" danger onClick={remove}>Delete</Button>
+          <Button icon="hidden" testId="hide-instance-child" onClick={hide}>Hide</Button>
         </Row>
       </div>
     )
