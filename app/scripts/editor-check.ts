@@ -3,13 +3,21 @@ import { call, renderPixels } from '../src/core'
 import { inParent } from '../src/geometry'
 import { ICONS, nodeIcon } from '../src/icons'
 import { defaultSavePath } from '../src/paths'
-import { mkdtempSync, readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { effectOf } from '../src/Inspector'
 
 const assert = (ok: unknown, msg: string) => {
   if (!ok) throw new Error(`editor-check failed: ${msg}`)
+}
+// The core reads NALARUPA_DATA through libc, which `process.env` writes don't reach: rerun in a child
+// with a fresh data folder so the saves below don't land in the real Recent list.
+if (!process.env.NALARUPA_CHECK_CHILD) {
+  const data = mkdtempSync(join(tmpdir(), 'nalarupa-editor-'))
+  const run = Bun.spawnSync([process.execPath, import.meta.path], { env: { ...process.env, NALARUPA_DATA: data, NALARUPA_CHECK_CHILD: '1' }, stdio: ['inherit', 'inherit', 'inherit'] })
+  rmSync(data, { recursive: true, force: true })
+  process.exit(run.exitCode ?? 1)
 }
 type B = { id: string; x: number; y: number; w: number; h: number; parent?: string | null }
 const box = (id: string): B => call<B[]>('boxes', { ids: [id] })[0]
@@ -312,18 +320,22 @@ assert(nodeIcon('path') === nodeIcon('polygon') && nodeIcon('frame', true) === '
 // Save as… into a folder that already holds <title>.nala picks a free name instead of replacing it.
 {
   const dir = mkdtempSync(join(tmpdir(), 'nala-saveas-'))
-  const first = defaultSavePath('Untitled', dir)
-  assert(first === join(dir, 'Untitled.nala'), `an empty folder gets the plain name (${first})`)
-  call('new', { template: 'empty' })
-  call('insert', { node: { type: 'frame', name: 'FIRST DOC' } })
-  call('save', { path: first })
-  const second = defaultSavePath('Untitled', dir)
-  assert(second === join(dir, 'Untitled-1.nala'), `an existing document is not reused (${second})`)
-  call('new', { template: 'empty' })
-  call('insert', { node: { type: 'frame', name: 'SECOND DOC' } })
-  call('save', { path: second })
-  assert(readFileSync(first, 'utf8').includes('FIRST DOC'), 'the first document is untouched')
-  assert(defaultSavePath('a/b:c', dir) === join(dir, 'abc.nala'), 'path characters are dropped from the title')
+  try {
+    const first = defaultSavePath('Untitled', dir)
+    assert(first === join(dir, 'Untitled.nala'), `an empty folder gets the plain name (${first})`)
+    call('new', { template: 'empty' })
+    call('insert', { node: { type: 'frame', name: 'FIRST DOC' } })
+    call('save', { path: first })
+    const second = defaultSavePath('Untitled', dir)
+    assert(second === join(dir, 'Untitled-1.nala'), `an existing document is not reused (${second})`)
+    call('new', { template: 'empty' })
+    call('insert', { node: { type: 'frame', name: 'SECOND DOC' } })
+    call('save', { path: second })
+    assert(readFileSync(first, 'utf8').includes('FIRST DOC'), 'the first document is untouched')
+    assert(defaultSavePath('a/b:c', dir) === join(dir, 'abc.nala'), 'path characters are dropped from the title')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 }
 assert(ICONS.saveAs !== ICONS.open, 'Save as… has its own icon, not the Open folder')
 
