@@ -890,6 +890,24 @@ try {
   assert(await until(async () => { const p = await boxPos(); return p[0] - panFrom[0] === 80 && p[1] - panFrom[1] === 50 }), `Space+drag pans after a tool is picked with its toolbar button (${panFrom} → ${await boxPos()})`)
   await canvas.press('escape')
 
+  // Escape mid-draw cancels it and a tool key mid-draw finishes the shape with the tool it began with: neither
+  // may fall through to a stray Text layer (the release read the current tool, which had become Move).
+  const drawTextRows = () => app.getByTestId('layers').getByText('Text').count()
+  const drawRects0 = await rectRows()
+  const drawTexts0 = await drawTextRows()
+  for (const [key, drawn] of [['escape', 0], ['v', 1]] as const) {
+    await app.getByTestId('tool-rectangle').click()
+    await sleep(300)
+    const drag = app.mouse.drag(at(700, 560), at(800, 640), { steps: 40 })
+    await sleep(400)
+    await app.call('keystrokes', { keys: key })
+    await drag
+    assert(await until(async () => (await rectRows()) === drawRects0 + drawn, 4000), `${key} mid-draw ${drawn ? 'finishes the rectangle' : 'creates nothing'} (${drawRects0} → ${await rectRows()} rectangle rows)`)
+    assert((await drawTextRows()) === drawTexts0, `${key} mid-draw leaves no stray Text layer`)
+    await canvas.press('escape')
+    await sleep(300)
+  }
+
   // A line is drawn from its stroke alone and a note from fixed colors: the Inspector offers a line its stroke fields and no Fill, a note no Fill.
   await mcpCall(port, { method: 'tools/call', params: { name: 'execute', arguments: { input: 'Insert(document, {type:"line", name:"Inspect line", x:0, y:0, width:120, height:0, stroke:"#FF0000", strokeWidth:6}); Insert(document, {type:"note", name:"Inspect note", x:0, y:40, width:120, height:60, content:"hi"}); Insert(document, {type:"prompt", name:"Inspect prompt", x:0, y:120, width:120, height:60, content:"hi"}); Insert(document, {type:"context", name:"Inspect context", x:0, y:200, width:120, height:60, content:"hi"}); Insert(document, {type:"rectangle", name:"Inspect rect", x:0, y:280, width:120, height:60, fill:"#00FF00"})' } } })
   await app.getByTestId('layers').getByText('Inspect line').waitFor({ timeoutMs: 6000 })
