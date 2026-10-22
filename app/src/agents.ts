@@ -286,6 +286,14 @@ export function resetChat() {
   store.cursors.clear()
 }
 
+/** Agent presence on the canvas is in document units: a new or opened document starts without the old one's cursors and flashes. */
+export function clearPresence() {
+  store.cursors.clear()
+  store.pens.clear()
+  store.flashes = []
+  store.activity = []
+}
+
 /** The newest item that is real chat content: a usage row or a note is not a "later message" for the typewriter. */
 export function lastContentId(items: ChatItem[]): number | undefined {
   for (let i = items.length - 1; i >= 0; i--) if (items[i].kind !== 'usage' && items[i].kind !== 'note') return items[i].id
