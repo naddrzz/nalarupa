@@ -106,6 +106,15 @@ function useKept<T>(key: string, init: () => T) {
   return [v, setKept] as const
 }
 
+/** `next` without the single Tab that GPUIX's textarea inserts when Tab (or Shift+Tab) moves focus out of it,
+ *  or `next` itself when it differs from `prev` by anything else. */
+function withoutTabKey(prev: string, next: string) {
+  if (next.length !== prev.length + 1) return next
+  let i = 0
+  while (i < prev.length && prev[i] === next[i]) i++
+  return next[i] === '\t' && next.slice(i + 1) === prev.slice(i) ? prev : next
+}
+
 export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: number; running: boolean; mcpUrl: string; toast: Toast; onSent?: () => void }) {
   const [draft, setDraft] = useKept('draft', () => '')
   const input = useFieldRing()
@@ -253,7 +262,14 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
               placeholder={running ? 'Queue a follow-up…' : 'Design anything…'}
               minRows={2}
               maxRows={8}
-              onChange={(e) => setDraft(e.value ?? '')}
+              onChange={(e) => {
+                const typed = e.value ?? ''
+                setDraft(typed)
+                // The box drops the tab (and shows its placeholder again) only when the value it is given changes
+                // in a later frame than the tab itself, so the clean draft follows after a pause, unless typing went on.
+                const clean = withoutTabKey(draft, typed)
+                if (clean !== typed) setTimeout(() => { if (kept.get('draft') === typed) setDraft(clean) }, 100)
+              }}
               onSubmit={(e) => send(e.value ?? draft)}
               theme={{ caret: C.accent }}
               style={{ fontSize: 13, color: C.text, fontFamily: FONT, width: '100%' }}

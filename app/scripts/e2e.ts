@@ -1,6 +1,6 @@
 // End-to-end check against the real GPU window: `bun scripts/e2e.ts`
 // Screenshots land in app/screenshots/. The window opens in the background.
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { launch } from '@gpuix/react/automation'
@@ -167,20 +167,21 @@ try {
   if ((await texts('TextHello')).length) throw new Error('the placeholder was kept in front of the typed text')
   for (const id of await texts('Hello')) await mcp('execute', { input: `Delete("${id}")` })
 
+  // Whole-screen pixels via grim (Linux only).
+  const grab = async () => {
+    const buf = Buffer.from(await Bun.$`grim -t ppm -`.quiet().arrayBuffer())
+    let p = 0
+    const head: string[] = []
+    while (head.length < 4) {
+      let t = ''
+      while (buf[p] > 32) t += String.fromCharCode(buf[p++])
+      p++
+      head.push(t)
+    }
+    return { w: +head[1], px: buf.subarray(p) }
+  }
   // A text field clicked into draws a focus ring. Linux only: grim.
   if (process.platform === 'linux') {
-    const grab = async () => {
-      const buf = Buffer.from(await Bun.$`grim -t ppm -`.quiet().arrayBuffer())
-      let p = 0
-      const head: string[] = []
-      while (head.length < 4) {
-        let t = ''
-        while (buf[p] > 32) t += String.fromCharCode(buf[p++])
-        p++
-        head.push(t)
-      }
-      return { w: +head[1], px: buf.subarray(p) }
-    }
     // The box around everything that changed on screen (the output, not the window, is what grim grabs). A
     // caret or the swap of a field's text stays within the input; its ring is 4+ px bigger on every side.
     const changedBox = async (before: Awaited<ReturnType<typeof grab>>) => {
@@ -384,6 +385,29 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
   if (!(await app.getByText('Step 32: lay out').count())) throw new Error('the Plan list lost todos')
   const canvasBox = (await app.getByTestId('canvas').bounds())!
   if (planField.y + planField.height > canvasBox.y + canvasBox.height) throw new Error(`32 todos pushed the composer to ${planField.y + planField.height}, below the window's bottom ${canvasBox.y + canvasBox.height}`)
+
+  // Tab and Shift+Tab out of the empty composer leave its placeholder painted (the textarea used to keep the
+  // Tab it was typed as, which hid the placeholder). GPUIX paints the placeholder itself, so compare pixels:
+  // the box looks as it did before it was focused. Linux only: grim, and sway for the window's origin.
+  const dir = process.env.XDG_RUNTIME_DIR
+  const sock = process.platform === 'linux' && dir ? readdirSync(dir).find((f) => f.startsWith('sway-ipc')) : undefined
+  if (sock) {
+    type Node = { type: string; rect: { x: number; y: number }; nodes?: Node[]; floating_nodes?: Node[] }
+    const windowOf = (n: Node): Node | undefined => n.type === 'floating_con' ? n : [...(n.nodes ?? []), ...(n.floating_nodes ?? [])].map(windowOf).find(Boolean)
+    const origin = windowOf(JSON.parse(await Bun.$`swaymsg -s ${join(dir!, sock)} -t get_tree`.text()))!.rect
+    const box = (await app.getByTestId('agent-input').bounds())!
+    const rows = (g: Awaited<ReturnType<typeof grab>>) => Array.from({ length: Math.floor(box.height) }, (_, i) => {
+      const from = ((Math.floor(origin.y + box.y) + i) * g.w + Math.floor(origin.x + box.x)) * 3
+      return g.px.subarray(from, from + Math.floor(box.width) * 3).toString('hex')
+    }).join()
+    const idle = rows(await grab())
+    for (const keys of ['tab', 'shift-tab']) {
+      await app.getByTestId('agent-input').click()
+      await sleep(300)
+      await app.call('keystrokes', { keys })
+      await until(async () => rows(await grab()) === idle, `the empty composer to show its placeholder after ${keys}`)
+    }
+  }
 
   // Shift+Tab leaves a text field backwards (GPUIX registers a field's focus handle twice, so GPUI's own
   // walk lands on the field again): from the composer it reaches the Plan toggle above it, which Enter
