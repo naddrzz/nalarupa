@@ -128,12 +128,16 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
   }
   const items = store.items
   const lastId = lastContentId(items)
+  const renderer = useGpuixRequired()
+  const listEl = useRef<PublicInstance | null>(null)
+  const pinNext = useRef(false)
 
   const send = (text: string) => {
     const t = text.trim()
     if (!t) return
     if (tryCall('agent_send', { text: t, parallel: Number(parallel), mode, designs, iterate: cookMode }) !== null) {
       setDraft('')
+      pinNext.current = true
       onSent?.()
     } else toast('Unable to start the agent. Check the backend in Agent settings and try again.', true)
   }
@@ -161,6 +165,13 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
     const last = items[items.length - 1]
     return !!last && ((last.kind === 'tool' && !last.running) || (last.kind === 'assistant' && !last.streaming) || last.kind === 'user')
   })()
+  // `followTail` only follows while the list is already at its end, so a message sent from further up re-pins it: once the echo (or queued row) joins the list, scroll to the last row.
+  const rows = items.length + (planning ? 1 : 0)
+  useEffect(() => {
+    if (!pinNext.current || !listEl.current || !rows) return
+    if (items[items.length - 1]?.kind === 'user' || items[items.length - 1]?.kind === 'queued') pinNext.current = false
+    renderer.scrollToItem?.(listEl.current.id, rows - 1)
+  }, [rows, renderer, items])
   const todos = store.todos
   const doneTodos = todos.filter((t) => t.status === 'completed').length
 
@@ -203,7 +214,7 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
           <T size={11} color={C.ghost}>Each agent gets a cursor on the canvas; what it writes appears while it writes it. Set Agents above 1× to split the work across several agents.</T>
         </div>
       ) : (
-        <virtual-list estimatedItemHeight={44} followTail alignment="bottom" style={{ flexGrow: 1, minHeight: 0, paddingTop: 8, paddingBottom: 8 }}>
+        <virtual-list ref={listEl} estimatedItemHeight={44} followTail alignment="bottom" style={{ flexGrow: 1, minHeight: 0, paddingTop: 8, paddingBottom: 8 }}>
           {items.map((m) => (
             <div key={m.id} style={{ paddingLeft: 12, paddingRight: 12 }}>
               {/* Items are mutated in place, so `tick` (the store version) is what re-renders one; only the live ones take it (a finished row never changes; `isLast` and the row's own ticks cover the rest). */}
