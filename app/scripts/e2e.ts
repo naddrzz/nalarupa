@@ -659,6 +659,32 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
     await app.getByText('Got editor state').waitFor({ timeoutMs: 15000 })
     await app.getByText('Got editor state').click()
     await until(async () => (await app!.getByText('result row 119').count()) > 0, 'the last line of a long tool result')
+
+    // Sending while scrolled up in the chat returns the list to the bottom: the echo and the reply are on screen, not off it.
+    // The list keeps rows past its viewport mounted, so "on screen" is the row's bounds being above the composer.
+    await until(async () => !!(await app!.getByTestId('agent-input').bounds()), 'the chat composer')
+    const composer = (await app.getByTestId('agent-input').bounds())!
+    const onScreen = async (text: string) => {
+      const b = await app!.getByText(text).bounds().catch(() => null) // throws while the row is not mounted
+      return !!b && b.y + b.height <= composer.y
+    }
+    await until(async () => {
+      await app!.mouse.wheel({ x: composer.x + 40, y: 300 }, 0, 600)
+      await sleep(200)
+      return !(await onScreen('result row 119'))
+    }, 'the chat to scroll up from its tail', 20000)
+    const oldReplies = new Set((await app.getByType('markdown').all()).map((n) => n.id))
+    writeFileSync(join(bin, 'claude'), `#!/bin/sh\necho '${delta('Echo: scrolled reply')}'\n`, { mode: 0o755 })
+    await app.getByTestId('agent-input').click()
+    await app.getByTestId('agent-input').fill('Sent while scrolled up')
+    await sleep(200)
+    await app.getByTestId('agent-send').click()
+    await until(() => onScreen('Sent while scrolled up'), 'the sent message on screen after sending from a scrolled-up chat')
+    // The reply is a markdown block (its text is not queryable): the one that was not mounted before the send.
+    await until(async () => {
+      const b = (await app!.getByType('markdown').all()).find((n) => !oldReplies.has(n.id))?.bounds
+      return !!b && b.height > 0 && b.y + b.height <= composer.y
+    }, 'the reply on screen after sending from a scrolled-up chat')
   }
 
   // A layer selected on the canvas scrolls the (virtual) Layers list to its row: here the last of 150 rows (the first inserted).
