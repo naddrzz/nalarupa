@@ -114,5 +114,22 @@ assert(!node(G), 'the layer is gone after the drag')
 call('undo')
 assert(node(G).x === 9, 'one undo brings the deleted layer back where it was before the drag')
 
+// Undo and redo during a drag are ignored: the drag still lands as one step on top of the history.
+call('new', { template: 'empty' })
+const H = call('insert', { parent: 'document', node: { type: 'frame', name: 'H', x: 0, y: 0, width: 100, height: 100, layout: 'none' } }).id
+call('update', { ids: [H], props: { x: 10 } })
+call('drag_begin')
+call('move_by', { ids: [H], dx: 5, dy: 0 })
+call('undo')
+call('redo')
+assert(node(H).x === 15, 'undo and redo do nothing while a drag runs')
+call('drag_end')
+call('undo')
+assert(node(H).x === 10, 'the drag is one undo step')
+call('undo')
+assert(node(H).x === 0, 'the edit before the drag is still its own step')
+call('undo')
+assert(!node(H), 'and the insert before that')
+
 console.log('drag-check ok')
 process.exit(0)
