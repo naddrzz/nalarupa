@@ -14,6 +14,7 @@ use std::io::Read;
 const MAX_BYTES: usize = 256 << 20;
 const MAX_DEPTH: usize = 64;
 const MAX_NODES: usize = 100_000;
+const TOO_BIG: &str = "bad Figma clipboard data: decompressed size exceeds 256 MB";
 
 /// The nodes of a Figma copy in paint order, positioned in Figma page coordinates, each with its
 /// Figma box (x, y, w, h); `None` when `html` is not Figma data.
@@ -57,10 +58,14 @@ fn message(b: &[u8]) -> Result<Value, String> {
 fn inflate(c: &[u8]) -> Result<Vec<u8>, String> {
     if c.starts_with(&[0x28, 0xb5, 0x2f, 0xfd]) {
         let mut out = Vec::new();
-        zstd::stream::read::Decoder::new(c).and_then(|d| d.take(MAX_BYTES as u64).read_to_end(&mut out)).map_err(|e| format!("bad Figma clipboard data: {e}"))?;
-        return Ok(out);
+        zstd::stream::read::Decoder::new(c).and_then(|d| d.take(MAX_BYTES as u64 + 1).read_to_end(&mut out)).map_err(|e| format!("bad Figma clipboard data: {e}"))?;
+        return if out.len() > MAX_BYTES { Err(TOO_BIG.into()) } else { Ok(out) };
     }
-    miniz_oxide::inflate::decompress_to_vec_with_limit(c, MAX_BYTES).map_err(|e| format!("bad Figma clipboard data: {e:?}"))
+    // Not `{e:?}`: DecompressError's Debug dumps the whole partial output buffer.
+    miniz_oxide::inflate::decompress_to_vec_with_limit(c, MAX_BYTES).map_err(|e| match e.status {
+        miniz_oxide::inflate::TINFLStatus::HasMoreOutput => TOO_BIG.into(),
+        _ => format!("bad Figma clipboard data: {e}"),
+    })
 }
 
 // ---- kiwi (github.com/evanw/kiwi) binary schema and message decoding ----
@@ -1461,6 +1466,21 @@ mod tests {
         assert_eq!(pick(&items[2], &["geometry", "stroke", "strokeWidth", "strokeLinecap", "strokeLinejoin", "width", "height"]),
             json!({"geometry": "M0 6 L5 11 L16 0", "stroke": "#16a34aff", "strokeWidth": 2.0, "strokeLinecap": "round", "strokeLinejoin": "round", "width": 16.0, "height": 11.0}));
         assert_eq!(pick(&items[3], &["type", "fill", "width"]), json!({"type": "ellipse", "fill": "#22c55eff", "width": 12.0}));
+    }
+
+    #[test]
+    fn inflate_errors_are_short() {
+        // Over the cap: the message must not carry the (huge) partial output.
+        let big = miniz_oxide::deflate::compress_to_vec(&vec![0u8; MAX_BYTES + 1], 1);
+        assert_eq!(inflate(&big).unwrap_err(), TOO_BIG);
+        let zbig = zstd::encode_all(std::io::repeat(0).take(MAX_BYTES as u64 + 1), 1).unwrap();
+        assert_eq!(inflate(&zbig).unwrap_err(), TOO_BIG);
+        // Corrupt and truncated streams get a plain description, not a byte dump.
+        let err = inflate(&[0xff; 6]).unwrap_err();
+        assert!(err.len() < 100 && !err.contains("output"), "{err}");
+        let err = inflate(&miniz_oxide::deflate::compress_to_vec(&[7u8; 1000], 6)[..5]).unwrap_err();
+        assert!(err.len() < 100 && !err.contains("output"), "{err}");
+        assert_eq!(inflate(&miniz_oxide::deflate::compress_to_vec(b"ok", 6)).unwrap(), b"ok");
     }
 
     #[test]
