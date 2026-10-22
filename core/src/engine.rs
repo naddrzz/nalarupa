@@ -463,7 +463,7 @@ impl Engine {
         }
     }
 
-    /// Undo and redo wait for the drag to end: `drag_end` would otherwise push the pre-drag snapshot
+    /// Undo and redo are ignored during a drag: `drag_end` would otherwise push the pre-drag snapshot
     /// as a new step over the swapped document.
     pub fn undo(&mut self) -> bool {
         if self.drag_before.is_some() {
@@ -1086,7 +1086,7 @@ mod tests {
 
     /// Undo and redo during a drag do nothing, so the drag commits as one step on top of the history.
     #[test]
-    fn undo_and_redo_wait_for_the_drag_to_end() {
+    fn undo_and_redo_are_ignored_during_a_drag() {
         let mut e = Engine::new(std::env::temp_dir().join(format!("nalarupa-test-drag-undo-{}", std::process::id())));
         e.load_template("empty");
         e.doc.root["children"] = json!([{"id": "u", "type": "frame", "name": "U", "x": 0}]);
