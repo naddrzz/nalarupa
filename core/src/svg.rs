@@ -68,8 +68,14 @@ impl Assets {
         svg
     }
 
-    /// Resolve an image fill url to a local file path usvg can load.
+    /// Resolve an image fill url to a local file path usvg can load. An SVG nested deeper than
+    /// `MAX_SVG_DEPTH` counts as unavailable: usvg recurses per level and overflows the stack.
     pub fn image(&mut self, url: &str, base: Option<&Path>) -> Option<String> {
+        let href = self.resolve_image(url, base)?;
+        (!svg_too_deep(&href)).then_some(href)
+    }
+
+    fn resolve_image(&mut self, url: &str, base: Option<&Path>) -> Option<String> {
         if url.is_empty() || url.starts_with("pencil:") {
             return None;
         }
@@ -108,6 +114,106 @@ impl Assets {
         let full = if p.is_absolute() { p.to_path_buf() } else { base?.join(rel) };
         full.exists().then(|| full.to_string_lossy().replace('\\', "/"))
     }
+}
+
+/// Deepest element nesting an SVG image may have; usvg's own parse overflows a 2 MiB stack at ~3500.
+const MAX_SVG_DEPTH: usize = 256;
+
+/// Whether the image behind a `data:` url or a file path is an SVG nested deeper than `MAX_SVG_DEPTH`.
+fn svg_too_deep(href: &str) -> bool {
+    let bytes = if let Some(rest) = href.strip_prefix("data:") {
+        let Some((head, payload)) = rest.split_once(',') else { return false };
+        let mime = head.split(';').next().unwrap_or("");
+        if matches!(mime, "image/png" | "image/jpeg" | "image/jpg" | "image/gif" | "image/webp") {
+            return false;
+        }
+        if head.ends_with(";base64") {
+            match base64::engine::general_purpose::STANDARD.decode(payload.trim()) {
+                Ok(b) => b,
+                Err(_) => return false,
+            }
+        } else {
+            percent_decode(payload)
+        }
+    } else if href.to_ascii_lowercase().ends_with(".svg") {
+        match std::fs::read(href) {
+            Ok(b) => b,
+            Err(_) => return false,
+        }
+    } else {
+        return false;
+    };
+    deeper_than(&bytes, MAX_SVG_DEPTH)
+}
+
+fn percent_decode(s: &str) -> Vec<u8> {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let hex = |c: u8| (c as char).to_digit(16);
+        match (b[i], b.get(i + 1).and_then(|&c| hex(c)), b.get(i + 2).and_then(|&c| hex(c))) {
+            (b'%', Some(h), Some(l)) => {
+                out.push((h * 16 + l) as u8);
+                i += 3;
+            }
+            (c, ..) => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// Whether markup nests elements deeper than `limit` (comments, CDATA, PIs and the doctype skipped).
+fn deeper_than(b: &[u8], limit: usize) -> bool {
+    let find = |from: usize, pat: &[u8]| b[from..].windows(pat.len()).position(|w| w == pat).map_or(b.len(), |p| from + p + pat.len());
+    let (mut i, mut depth) = (0, 0usize);
+    while i < b.len() {
+        if b[i] != b'<' {
+            i += 1;
+        } else if b[i..].starts_with(b"<!--") {
+            i = find(i + 4, b"-->");
+        } else if b[i..].starts_with(b"<![CDATA[") {
+            i = find(i + 9, b"]]>");
+        } else if b[i..].starts_with(b"<?") {
+            i = find(i + 2, b"?>");
+        } else if b[i..].starts_with(b"<!") {
+            // A doctype may hold an internal subset in brackets.
+            let (mut j, mut sq) = (i + 2, 0usize);
+            while j < b.len() && (b[j] != b'>' || sq > 0) {
+                match b[j] {
+                    b'[' => sq += 1,
+                    b']' => sq = sq.saturating_sub(1),
+                    _ => {}
+                }
+                j += 1;
+            }
+            i = j + 1;
+        } else {
+            let close = b.get(i + 1) == Some(&b'/');
+            let (mut j, mut quote) = (i + 1, 0u8);
+            while j < b.len() && (b[j] != b'>' || quote != 0) {
+                match (quote, b[j]) {
+                    (0, q @ (b'"' | b'\'')) => quote = q,
+                    (q, c) if q == c => quote = 0,
+                    _ => {}
+                }
+                j += 1;
+            }
+            if close {
+                depth = depth.saturating_sub(1);
+            } else if b[j.min(b.len()) - 1] != b'/' {
+                depth += 1;
+                if depth > limit {
+                    return true;
+                }
+            }
+            i = j + 1;
+        }
+    }
+    false
 }
 
 /// File extension for downloaded image bytes (resvg decodes by extension).
@@ -1720,6 +1826,26 @@ mod tests {
         assert_eq!(assets.image(url, None).unwrap(), path);
         assert_eq!(image_ext(&[0xFF, 0xD8, 0xFF]), "jpg");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// An SVG image nested thousands of levels deep overflows usvg's recursion (a segfault on the
+    /// next render): it is unavailable instead, whether it comes as base64, percent-encoded or a file.
+    #[test]
+    fn deeply_nested_svg_images_are_unavailable() {
+        let deep = |n: usize| format!(r#"<?xml version="1.0"?><!-- <g> --><svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">{}<rect width="5" height="5"/><path d="M0 0"/>{}</svg>"#, "<g id=\"a>\">".repeat(n), "</g>".repeat(n));
+        let mut assets = Assets::new(std::env::temp_dir().join("nalarupa-test-assets"));
+        let b64 = |s: &str| format!("data:image/svg+xml;base64,{}", base64::engine::general_purpose::STANDARD.encode(s));
+        assert!(assets.image(&b64(&deep(100)), None).is_some());
+        assert!(assets.image(&b64(&deep(6000)), None).is_none());
+        let pct = |s: &str| format!("data:image/svg+xml,{}", s.replace('%', "%25").replace('<', "%3C").replace('>', "%3E"));
+        assert!(assets.image(&pct(&deep(100)), None).is_some());
+        assert!(assets.image(&pct(&deep(6000)), None).is_none());
+        let file = std::env::temp_dir().join(format!("nalarupa-deep-{:x}.svg", crate::doc::random_u64()));
+        std::fs::write(&file, deep(6000)).unwrap();
+        assert!(assets.image(&file.to_string_lossy(), None).is_none());
+        std::fs::write(&file, deep(100)).unwrap();
+        assert!(assets.image(&file.to_string_lossy(), None).is_some());
+        let _ = std::fs::remove_file(file);
     }
 
     /// The non-separable blend modes rasterise to the W3C result in PNG export: a channel the
