@@ -151,14 +151,16 @@ impl AgentState {
         // Ids count up for the whole process, not per conversation: the script globals of an
         // earlier conversation's main agent stay keyed by its id. The fixed-width suffix keeps two counts from spelling one id.
         static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
-        let n = self.profiles.len();
         let used: Vec<&str> = self.profiles.iter().map(|p| p.name.as_str()).collect();
         let pick = (crate::doc::random_u64() as usize) % NAMES.len();
         // Names stay unique within a conversation: once all are taken, count up ("Surya 2").
         let name = (0..NAMES.len()).map(|i| NAMES[(pick + i) % NAMES.len()].to_string()).find(|n| !used.contains(&n.as_str())).unwrap_or_else(|| {
             (2..).map(|k| format!("{} {k}", NAMES[pick])).find(|n| !used.contains(&n.as_str())).unwrap_or_default()
         });
-        let p = Profile { id: format!("ag{}{:03x}", NEXT_ID.fetch_add(1, Ordering::Relaxed), crate::doc::random_u64() & 0xfff), name, color: COLORS[(pick + n * 5) % COLORS.len()].to_string(), parent };
+        // Colors tell agents apart on the canvas and in the chat: start at a random one, take the next not yet used.
+        let start = (crate::doc::random_u64() as usize) % COLORS.len();
+        let color = (0..COLORS.len()).map(|i| COLORS[(start + i) % COLORS.len()]).find(|c| !self.profiles.iter().any(|p| p.color == *c)).unwrap_or(COLORS[start]);
+        let p = Profile { id: format!("ag{}{:03x}", NEXT_ID.fetch_add(1, Ordering::Relaxed), crate::doc::random_u64() & 0xfff), name, color: color.to_string(), parent };
         self.profiles.push(p.clone());
         p
     }
@@ -1358,6 +1360,17 @@ mod tests {
         assert!(a.profiles.is_empty(), "a new conversation forgets the old agents");
         let fresh = a.new_profile(None);
         assert!(!old.contains(&fresh.id), "a new conversation's agent never takes an old id (its script globals are kept)");
+    }
+
+    #[test]
+    fn profile_colors_are_distinct_within_a_conversation() {
+        for _ in 0..200 {
+            let mut a = AgentState::default();
+            let mut colors: Vec<String> = (0..COLORS.len()).map(|_| a.new_profile(None).color).collect();
+            colors.sort();
+            colors.dedup();
+            assert_eq!(colors.len(), COLORS.len(), "agents of one conversation never share a color");
+        }
     }
 
     #[test]
