@@ -93,6 +93,10 @@ function visibleText(it: Extract<ChatItem, { kind: 'assistant' }>, isLast: boole
 
 // The panel unmounts while the Design tab is open; what the user set up in it (draft, agent options, open cards) lives here.
 const kept = new Map<string, unknown>()
+// The mounted panel's draft setter: a pending tab cleanup must reach the panel that is on screen, not the one it started in.
+let liveSetDraft: (d: string) => void = () => {}
+// The draft a Tab-out cleanup restores: still `typed` (the tabbed value) until the cleanup runs or typing goes on.
+let tabCleanup: { typed: string; clean: string } | null = null
 function useKept<T>(key: string, init: () => T) {
   const [v, set] = useState<T>(() => {
     if (!kept.has(key)) kept.set(key, init())
@@ -106,9 +110,20 @@ function useKept<T>(key: string, init: () => T) {
   return [v, setKept] as const
 }
 
+/** `next` without the single Tab that GPUIX's textarea inserts when Tab (or Shift+Tab) moves focus out of it,
+ *  or `next` itself when it differs from `prev` by anything else. */
+function withoutTabKey(prev: string, next: string) {
+  if (next.length !== prev.length + 1) return next
+  let i = 0
+  while (i < prev.length && prev[i] === next[i]) i++
+  return next[i] === '\t' && next.slice(i + 1) === prev.slice(i) ? prev : next
+}
+
 export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: number; running: boolean; mcpUrl: string; toast: Toast; onSent?: () => void }) {
   const [draft, setDraft] = useKept('draft', () => '')
+  liveSetDraft = setDraft
   const input = useFieldRing()
+  const tabbing = useRef(false)
   const [settings, setSettings] = useKept('settings', () => false)
   const [parallel, setParallel] = useKept('parallel', () => '1')
   const [mode, setMode] = useKept<'split' | 'side'>('mode', () => 'split')
@@ -253,7 +268,26 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
               placeholder={running ? 'Queue a follow-up…' : 'Design anything…'}
               minRows={2}
               maxRows={8}
-              onChange={(e) => setDraft(e.value ?? '')}
+              onKeyDown={(e) => { tabbing.current = e.key === 'tab' }}
+              onChange={(e) => {
+                const typed = e.value ?? ''
+                setDraft(typed)
+                // The box drops the tab (and shows its placeholder again) only when the value it is given changes
+                // in a later frame than the tab itself, so the clean draft follows after a pause, unless typing went on.
+                // Only the Tab key counts: a pasted tab is the user's text. A second Tab-out before the pause ends
+                // restores the draft the first one started from.
+                const tabbed = tabbing.current
+                tabbing.current = false
+                if (!tabbed) { tabCleanup = null; return }
+                const clean = tabCleanup?.typed === draft ? tabCleanup.clean : withoutTabKey(draft, typed)
+                if (clean === typed) return
+                const mine = tabCleanup = { typed, clean }
+                setTimeout(() => {
+                  if (tabCleanup !== mine) return
+                  tabCleanup = null
+                  if (kept.get('draft') === typed) liveSetDraft(clean)
+                }, 100)
+              }}
               onSubmit={(e) => send(e.value ?? draft)}
               theme={{ caret: C.accent }}
               style={{ fontSize: 13, color: C.text, fontFamily: FONT, width: '100%' }}
