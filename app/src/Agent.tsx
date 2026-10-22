@@ -130,14 +130,14 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
   const lastId = lastContentId(items)
   const renderer = useGpuixRequired()
   const listEl = useRef<PublicInstance | null>(null)
-  const pinNext = useRef(false)
+  const pinNext = useRef<number | null>(null) // item count at the last send, while the list still waits for its echo
 
   const send = (text: string) => {
     const t = text.trim()
     if (!t) return
     if (tryCall('agent_send', { text: t, parallel: Number(parallel), mode, designs, iterate: cookMode }) !== null) {
       setDraft('')
-      pinNext.current = true
+      pinNext.current = items.length
       onSent?.()
     } else toast('Unable to start the agent. Check the backend in Agent settings and try again.', true)
   }
@@ -168,8 +168,9 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
   // `followTail` only follows while the list is already at its end, so a message sent from further up re-pins it: once the echo (or queued row) joins the list, scroll to the last row.
   const rows = items.length + (planning ? 1 : 0)
   useEffect(() => {
-    if (!pinNext.current || !listEl.current || !rows) return
-    if (items[items.length - 1]?.kind === 'user' || items[items.length - 1]?.kind === 'queued') pinNext.current = false
+    if (pinNext.current === null || !listEl.current || !rows) return
+    // A poll batch can append rows after the echo, so look for it among the rows added since the send.
+    if (items.slice(pinNext.current).some((i) => i.kind === 'user' || i.kind === 'queued')) pinNext.current = null
     renderer.scrollToItem?.(listEl.current.id, rows - 1)
   }, [rows, renderer, items])
   const todos = store.todos
