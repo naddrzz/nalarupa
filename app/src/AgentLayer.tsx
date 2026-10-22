@@ -106,6 +106,7 @@ export function AgentLayer({ cam, w, h, version, chatOpen }: { cam: Cam; w: numb
     if (gone.size) {
       for (const id of gone) boxes.current.delete(id)
       store.flashes = store.flashes.filter((f) => !gone.has(f.nodeId))
+      setFrame((f) => (f + 1) % 1_000_000) // nothing else may be animating: repaint once so the outline goes
     }
   }, [version])
 
