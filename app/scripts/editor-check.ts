@@ -15,9 +15,14 @@ const assert = (ok: unknown, msg: string) => {
 // with a fresh data folder so the saves below don't land in the real Recent list.
 if (!process.env.NALARUPA_CHECK_CHILD) {
   const data = mkdtempSync(join(tmpdir(), 'nalarupa-editor-'))
-  const run = Bun.spawnSync([process.execPath, import.meta.path], { env: { ...process.env, NALARUPA_DATA: data, NALARUPA_CHECK_CHILD: '1' }, stdio: ['inherit', 'inherit', 'inherit'] })
-  rmSync(data, { recursive: true, force: true })
-  process.exit(run.exitCode ?? 1)
+  let exitCode = 1
+  try {
+    const run = Bun.spawnSync([process.execPath, import.meta.path], { env: { ...process.env, NALARUPA_DATA: data, NALARUPA_CHECK_CHILD: '1' }, stdio: ['inherit', 'inherit', 'inherit'] })
+    exitCode = run.exitCode ?? 1
+  } finally {
+    rmSync(data, { recursive: true, force: true })
+  }
+  process.exit(exitCode)
 }
 type B = { id: string; x: number; y: number; w: number; h: number; parent?: string | null }
 const box = (id: string): B => call<B[]>('boxes', { ids: [id] })[0]
