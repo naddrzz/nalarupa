@@ -130,13 +130,13 @@ fn css_color_alpha(v: &str, k: f64) -> Option<String> {
     Some(format!("rgba({}, {}, {}, {:.3})", p(0), p(2), p(4), a))
 }
 
-/// Whether a fill paints anything (the SVG export's rule: a paint with alpha above zero).
+/// Whether a fill paints anything in HTML: a paint with alpha above zero, of a type `fill_layers` draws (mesh gradients and shaders are not).
 fn visible_fill(n: &RNode) -> bool {
     fills(n.p.get("fill")).iter().any(|f| match f {
         Value::String(s) => color(s).is_some_and(|c| c.1 > 0.0),
         Value::Object(o) => match o.get("type").and_then(Value::as_str).unwrap_or("color") {
             "color" => o.get("color").and_then(Value::as_str).and_then(color).is_some_and(|c| c.1 > 0.0),
-            "gradient" | "image" | "mesh_gradient" | "shader" => o.get("opacity").and_then(num).unwrap_or(1.0) > 0.0,
+            "gradient" | "image" => o.get("opacity").and_then(num).unwrap_or(1.0) > 0.0,
             _ => false,
         },
         _ => false,
@@ -929,13 +929,14 @@ mod tests {
             node("none", "rectangle", json!({})),
             node("stroke", "rectangle", json!({"stroke": "#ff0000", "strokeWidth": 4})),
             node("clear", "ellipse", json!({"fill": "#ff000000"})),
+            node("mesh", "rectangle", json!({"fill": {"type": "mesh_gradient"}})),
             node("inner", "rectangle", json!({"effect": {"type": "shadow", "shadowType": "inner", "offset": {"x": 5, "y": 5}, "color": "#0000ff"}})),
             node("filled", "rectangle", json!({"fill": "#00ff00"})),
             node("box", "frame", json!({"layout": "none"}))
         ]})).unwrap();
         let h = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
         let style = |name: &str| h.split(&format!("data-name=\"{name}\" style=\"")).nth(1).unwrap().split('"').next().unwrap().to_string();
-        for name in ["none", "clear", "inner"] {
+        for name in ["none", "clear", "mesh", "inner"] {
             assert!(!style(name).contains("box-shadow"), "{name}: {}", style(name));
         }
         let s = style("stroke");
