@@ -954,6 +954,7 @@ name = "nalarupa-core"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "data-url",
  "dirs",
  "image-webp 0.1.3",
  "jpeg-encoder",

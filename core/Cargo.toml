@@ -25,6 +25,8 @@ rquickjs = { version = "0.14.0", features = ["parallel"] }
 ureq = { version = "3", features = ["json"] }
 tiny_http = "0.12"
 base64 = "0.22"
+# The decoder usvg uses for `data:` hrefs, so the size check sees what usvg would decode.
+data-url = "0.3"
 dirs = "6"
 # PDF: krilla-svg 0.8 draws usvg 0.47 trees (keep resvg, krilla-svg and usvg in step).
 krilla = { version = "0.8.2", default-features = false, features = ["raster-images"] }

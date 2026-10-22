@@ -20,6 +20,8 @@ pub struct Assets {
     icons: HashMap<String, Option<String>>,
     /// Image URLs whose download failed this session (not retried on every layer rebuild).
     failed: std::collections::HashSet<String>,
+    /// Whether a `data:` image is within the size limit, by url hash (its header is decoded once, not per use).
+    data_ok: HashMap<u64, bool>,
     pub online: bool,
 }
 
@@ -27,7 +29,7 @@ impl Assets {
     pub fn new(dir: PathBuf) -> Assets {
         let _ = std::fs::create_dir_all(dir.join("icons"));
         let _ = std::fs::create_dir_all(dir.join("images"));
-        Assets { dir, icons: HashMap::new(), failed: Default::default(), online: true }
+        Assets { dir, icons: HashMap::new(), failed: Default::default(), data_ok: HashMap::new(), online: true }
     }
 
     /// Icon at the default weight (200; only Material Symbols has weights).
@@ -73,13 +75,23 @@ impl Assets {
     /// need gigabytes (a few KB of PNG can declare 30000 x 30000).
     pub fn image(&mut self, url: &str, base: Option<&Path>) -> Option<String> {
         let href = self.locate(url, base)?;
-        if let Some((w, h)) = href_size(&href) {
-            if w as u64 * h as u64 > MAX_IMAGE_PIXELS {
-                eprintln!("image {url}: {w}x{h} px is over the {} megapixel limit", MAX_IMAGE_PIXELS / 1_000_000);
-                return None;
+        let is_data = href.starts_with("data:");
+        let key = fxhash(&href);
+        if is_data {
+            if let Some(&ok) = self.data_ok.get(&key) {
+                return ok.then_some(href);
             }
         }
-        Some(href)
+        let size = href_size(&href);
+        let ok = size.is_none_or(|(w, h)| w as u64 * h as u64 <= MAX_IMAGE_PIXELS);
+        if let (false, Some((w, h))) = (ok, size) {
+            let shown = if is_data { "<data URL>" } else { url };
+            eprintln!("image {shown}: {w}x{h} px is over the {} megapixel limit", MAX_IMAGE_PIXELS / 1_000_000);
+        }
+        if is_data {
+            self.data_ok.insert(key, ok);
+        }
+        ok.then_some(href)
     }
 
     fn locate(&mut self, url: &str, base: Option<&Path>) -> Option<String> {
@@ -129,9 +141,8 @@ const MAX_IMAGE_PIXELS: u64 = 100_000_000;
 /// Declared pixel size of a raster image given as `Assets::image` returns it (a file path or a
 /// `data:` url), read from its header without decoding. None for SVG or anything unrecognised.
 fn href_size(href: &str) -> Option<(u32, u32)> {
-    if let Some(rest) = href.strip_prefix("data:") {
-        let (_, b64) = rest.split_once(";base64,")?;
-        let bytes = base64::engine::general_purpose::STANDARD.decode(b64.trim()).ok()?;
+    if href.starts_with("data:") {
+        let (bytes, _) = data_url::DataUrl::process(href).ok()?.decode_to_vec().ok()?;
         return image_size(&mut std::io::Cursor::new(bytes));
     }
     image_size(&mut std::io::BufReader::new(std::fs::File::open(href).ok()?))
@@ -144,7 +155,7 @@ fn image_size<R: std::io::BufRead + std::io::Seek>(r: &mut R) -> Option<(u32, u3
     let n = r.read(&mut head).ok()?;
     let be16 = |b: &[u8]| u16::from_be_bytes([b[0], b[1]]) as u32;
     match head {
-        [0x89, b'P', b'N', b'G', ..] if n >= 24 => Some((u32::from_be_bytes(head[16..20].try_into().ok()?), u32::from_be_bytes(head[20..24].try_into().ok()?))),
+        [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13, b'I', b'H', b'D', b'R', ..] if n >= 24 => Some((u32::from_be_bytes(head[16..20].try_into().ok()?), u32::from_be_bytes(head[20..24].try_into().ok()?))),
         [b'G', b'I', b'F', b'8', ..] if n >= 10 => Some((u16::from_le_bytes([head[6], head[7]]) as u32, u16::from_le_bytes([head[8], head[9]]) as u32)),
         [b'R', b'I', b'F', b'F', _, _, _, _, b'W', b'E', b'B', b'P', ..] => {
             r.seek(SeekFrom::Start(0)).ok()?;
@@ -1809,7 +1820,13 @@ mod tests {
             assert_eq!(assets.image(name, Some(&dir)).is_some(), ok, "{name}");
             let data = format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(&bytes));
             assert_eq!(assets.image(&data, None).is_some(), ok, "{name} as data url");
+            let pct: String = bytes.iter().map(|b| format!("%{b:02X}")).collect();
+            assert_eq!(assets.image(&format!("data:image/png,{pct}"), None).is_some(), ok, "{name} as percent-encoded data url");
         }
+        // Bytes that only start like a PNG are not read as one.
+        let mut bad = png(30000, 30000);
+        bad[5] = b'X';
+        assert_eq!(image_size(&mut std::io::Cursor::new(bad)), None);
         let _ = std::fs::remove_dir_all(dir);
     }
 
