@@ -705,9 +705,13 @@ impl Html<'_> {
             let _ = write!(css, "text-decoration:{};", deco.join(" "));
         }
         // A gradient or image fill is the background clipped to the glyphs.
+        let mut fill_opacity = 1.0;
         let clip = fills(n.p.get("fill")).first().and_then(|f| f.as_object()).and_then(|o| match o.get("type").and_then(Value::as_str) {
             Some("gradient") => gradient_css(o),
-            Some("image") => image_layer(o).map(|l| l.0),
+            Some("image") => image_layer(o).map(|(l, a)| {
+                fill_opacity = a;
+                l
+            }),
             _ => None,
         });
         if let Some(g) = clip {
@@ -715,6 +719,10 @@ impl Html<'_> {
             // Decorations default to the transparent colour; an opaque one lets the clipped gradient show through them.
             if !deco.is_empty() {
                 css.push_str("text-decoration-color:#000000;");
+            }
+            // A background has no opacity of its own: the element takes it (a later declaration beats the node's), which fades a stroke too.
+            if fill_opacity < 1.0 {
+                let _ = write!(css, "opacity:{};", n.f("opacity").unwrap_or(1.0) * fill_opacity);
             }
         } else if let Some(c) = fills(n.p.get("fill")).first().and_then(|f| f.as_str().map(str::to_string).or_else(|| f["color"].as_str().map(str::to_string))).and_then(|c| css_color(&c)) {
             let _ = write!(css, "color:{c};");
@@ -1139,6 +1147,10 @@ mod tests {
         let id = e.insert_root(json!({"type": "text", "content": "IMG", "fontSize": 60, "fill": {"type": "image", "url": "pic.png", "mode": "fill"}})).unwrap();
         let h = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
         assert!(h.contains("background:url('pic.png') center/cover no-repeat;-webkit-background-clip:text;background-clip:text;color:transparent;"), "{h}");
+        // The image paint's opacity multiplies the node's, as the element is all a background can fade.
+        let id = e.insert_root(json!({"type": "text", "content": "IMG", "fontSize": 60, "opacity": 0.5, "fill": {"type": "image", "url": "pic.png", "mode": "fill", "opacity": 0.5}})).unwrap();
+        let h = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
+        assert!(h.contains("opacity:0.5;") && h.contains("color:transparent;opacity:0.25;"), "{h}");
     }
 
     /// A text stroke reaches the SVG and HTML exports (it was dropped before).
