@@ -151,6 +151,31 @@ fn drop_pending(v: &mut Value, inflight: &std::collections::HashSet<String>) {
     }
 }
 
+/// Copy every image fill whose url is a file directly in `from` into `<dir>/images` and point the url
+/// at the copy (`./images/<name>`, relative to the document). Missing files keep their url.
+fn localize_images(v: &mut Value, from: &Path, dir: &Path) -> Result<(), String> {
+    match v {
+        Value::Array(a) => a.iter_mut().try_for_each(|x| localize_images(x, from, dir)),
+        Value::Object(o) => {
+            if o.get("type").and_then(Value::as_str) == Some("image") {
+                if let Some(Value::String(url)) = o.get_mut("url") {
+                    let src = Path::new(url.as_str());
+                    if let (Some(name), true) = (src.file_name(), src.parent() == Some(from) && src.is_file()) {
+                        let dst = dir.join("images").join(name);
+                        if !dst.exists() {
+                            std::fs::create_dir_all(dir.join("images")).map_err(|e| e.to_string())?;
+                            std::fs::copy(src, &dst).map_err(|e| format!("cannot copy {}: {e}", src.display()))?;
+                        }
+                        *url = format!("./images/{}", name.to_string_lossy());
+                    }
+                }
+            }
+            o.values_mut().try_for_each(|x| localize_images(x, from, dir))
+        }
+        _ => Ok(()),
+    }
+}
+
 /// `ours` with the changes that turned `base` into `theirs` applied; where both changed the same
 /// value, `theirs` wins. Lists of nodes (`id`) merge per node, the rest as a whole.
 fn merge3(base: &Value, theirs: &Value, ours: &Value) -> Value {
@@ -638,7 +663,11 @@ impl Engine {
             None => self.doc.path.clone().ok_or("document has no path yet; pass a path to save")?,
         };
         self.doc.root["version"] = json!(crate::doc::FORMAT_VERSION);
-        self.doc.save(&target)?;
+        // Images generated while Untitled live in the data folder; the file refers to them next to itself.
+        let mut saved = Doc { root: self.doc.root.clone(), path: None };
+        localize_images(&mut saved.root, &self.data_dir.join("images"), target.parent().unwrap_or(Path::new("")))?;
+        saved.save(&target)?;
+        self.doc.root = saved.root;
         self.doc.path = Some(target.clone());
         self.saved = self.version;
         self.remember_recent(&target);
@@ -1055,6 +1084,37 @@ mod tests {
         assert!(e.set_setting("k", json!("new")).is_err());
         assert!(!blocker.exists(), "a failed rename must not leave the new settings in the temp file");
         assert_eq!(e.setting("k"), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An image generated while Untitled sits in the data folder: Save copies it next to the file and
+    /// refers to it relatively; the SVG export inlines it.
+    #[test]
+    fn save_localizes_generated_images_and_svg_export_embeds_them() {
+        let dir = std::env::temp_dir().join(format!("nalarupa-test-localize-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut e = Engine::new(dir.join("data"));
+        e.offline();
+        e.load_template("empty");
+        std::fs::create_dir_all(dir.join("data/images")).unwrap();
+        let pic = dir.join("data/images/abc.png");
+        std::fs::write(&pic, resvg::tiny_skia::Pixmap::new(2, 2).unwrap().encode_png().unwrap()).unwrap();
+        let url = pic.to_string_lossy().replace('\\', "/");
+        let id = e.insert_root(json!({"type": "frame", "x": 0, "y": 0, "width": 40, "height": 40, "layout": "none",
+            "fill": {"type": "image", "url": url, "mode": "fill"}})).unwrap();
+
+        let saved = dir.join("proj/doc.pen");
+        e.save(Some(saved.to_str().unwrap())).unwrap();
+        let file: Value = serde_json::from_str(&std::fs::read_to_string(&saved).unwrap()).unwrap();
+        assert_eq!(file["children"][0]["fill"]["url"], "./images/abc.png");
+        assert!(dir.join("proj/images/abc.png").is_file() && pic.is_file());
+        assert_eq!(e.doc.root["children"][0]["fill"]["url"], "./images/abc.png");
+
+        let out = dir.join("out");
+        let files = crate::html::export(&mut e, &[id], "svg", out.to_str().unwrap(), &json!({})).unwrap();
+        let svg = std::fs::read_to_string(&files[0]).unwrap();
+        assert!(svg.contains("xlink:href=\"data:image/png;base64,"), "{svg}");
+        assert!(!svg.contains("images/abc.png"), "{svg}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

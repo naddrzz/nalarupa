@@ -28,7 +28,7 @@ pub fn export(e: &mut Engine, ids: &[String], format: &str, out: &str, opts: &Va
                 let file = dir.join(format!("{}.{format}", id.replace('/', "_")));
                 let bytes = if format == "svg" {
                     let mut cx = e.ctx();
-                    cx.node_svg(id).ok_or_else(|| cx.missing(id))?.0.into_bytes()
+                    cx.export_svg(id).ok_or_else(|| cx.missing(id))?.into_bytes()
                 } else {
                     e.ctx().node_image(id, format, scale, quality)?
                 };

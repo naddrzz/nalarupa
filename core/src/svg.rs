@@ -375,6 +375,20 @@ fn image_ext(b: &[u8]) -> &'static str {
     }
 }
 
+/// The file at `href` (a `data:` URI stays as it is) as a `data:` URI.
+fn data_uri(href: &str) -> Option<String> {
+    if href.starts_with("data:") {
+        return Some(href.to_string());
+    }
+    let bytes = std::fs::read(href).ok()?;
+    let mime = match image_ext(&bytes) {
+        "jpg" => "jpeg",
+        "svg" => "svg+xml",
+        ext => ext,
+    };
+    Some(format!("data:image/{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(&bytes)))
+}
+
 pub fn fxhash(s: &str) -> u64 {
     s.bytes().fold(0xcbf29ce484222325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3))
 }
@@ -605,11 +619,13 @@ pub struct Svg<'a> {
     outline: Option<crate::shader::Outline>,
     /// How far the paints being built reach outside the node box (a stroke's outer half): image patterns grow by it so they do not tile there.
     pad: f64,
+    /// Inline image fills as `data:` URIs (SVG export) instead of linking local files (rendering).
+    pub embed: bool,
 }
 
 impl<'a> Svg<'a> {
     pub fn new(fonts: &'a mut Fonts, assets: &'a mut Assets, base: Option<PathBuf>) -> Self {
-        Svg { fonts, assets, base, defs: String::new(), out: String::new(), uid: 0, painted: Vec::new(), tag: false, skip: Default::default(), outline: None, pad: 0.0 }
+        Svg { fonts, assets, base, defs: String::new(), out: String::new(), uid: 0, painted: Vec::new(), tag: false, skip: Default::default(), outline: None, pad: 0.0, embed: false }
     }
 
     /// Wrap emitted nodes into a document. With `view` the output is cropped to that box (exports);
@@ -1124,7 +1140,8 @@ impl<'a> Svg<'a> {
                         },
                         "image" => {
                             let url = o.get("url").and_then(Value::as_str).unwrap_or("");
-                            match self.assets.image(url, self.base.as_deref()) {
+                            let href = self.assets.image(url, self.base.as_deref()).and_then(|h| if self.embed { data_uri(&h) } else { Some(h) });
+                            match href {
                                 Some(href) => {
                                     let aspect = match o.get("mode").and_then(Value::as_str) {
                                         Some("fill") => "xMidYMid slice",
