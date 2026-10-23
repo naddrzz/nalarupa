@@ -224,6 +224,26 @@ try {
   await shot('01c-alt-undo')
   assert(await until(async () => (await rectRows()) === 2), 'undo removes the Alt-drag copy in one step')
 
+  // Shift+click on the selected layer leaves it selected until release, then drops it; Shift+click on an unselected one adds it.
+  await app.mouse.click(at(400, 300))
+  await sleep(200)
+  await app.mouse.click(at(400, 300), { modifiers: 'shift' })
+  assert(await until(async () => !(await count('size-label'))), 'a Shift+click without a drag deselects the selected layer')
+  await app.mouse.click(at(400, 300), { modifiers: 'shift' })
+  assert(await until(async () => !!(await count('size-label'))), 'a Shift+click on an unselected layer selects it')
+  // Shift+drag moves the selected layer along its dominant axis only (100 px right, 20 px down → right) and keeps it selected.
+  const origin = async () => {
+    const r = (await app.getByTestId('selection-box').all())[0]?.bounds
+    return r ? [r.x, r.y] : [NaN, NaN]
+  }
+  const [sx0, sy0] = await origin()
+  await app.mouse.drag(at(400, 300), at(500, 320), { steps: 8, modifiers: 'shift' })
+  await sleep(400)
+  assert(await count('size-label'), 'a Shift+drag keeps the layer selected')
+  assert(await until(async () => { const [x, y] = await origin(); return x > sx0 + 20 && y === sy0 }), `a Shift+drag moves along the dominant axis only (${sx0},${sy0} → ${(await origin()).join(',')})`)
+  await canvas.press('ctrl-z')
+  assert(await until(async () => (await origin()).join() === [sx0, sy0].join()), 'one undo step reverts the Shift+drag')
+
   // Alt-hover: distances from the selection to the other rectangle.
   await app.mouse.click(at(400, 300))
   await sleep(200)
