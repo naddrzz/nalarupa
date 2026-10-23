@@ -828,6 +828,7 @@ fn finish(e: &mut Engine, prep: Prepared, result: Result<Map<String, Value>, Str
         Ok(g) => g,
         Err(err) => {
             e.doc.root = before;
+            e.forget_gone_slides();
             e.touch();
             e.keep_clean(was_clean);
             let id = edit_id.unwrap_or_else(|| format!("e{:x}", crate::doc::random_u64() & 0xffffff));
@@ -1563,6 +1564,26 @@ mod tests {
         "##}));
         assert!(!out.error, "{}", out.text);
         assert_eq!(e.renderer.slides.len(), 1, "the card carries its children along");
+    }
+
+    /// A rolled-back script's slides had no node to paint and no clock: `animating` stayed true
+    /// until `SLIDE_WAIT`. Slides of nodes that survive (an earlier call's) are kept.
+    #[test]
+    fn a_rolled_back_script_leaves_no_slides_behind() {
+        let mut e = engine();
+        let out = execute(&mut e, &json!({"input": r##"
+            root = Insert(document, {type:"frame", name:"Root", width:300, height:300, layout:"none"});
+            kept = Insert(root, {type:"rectangle", name:"Kept", width:10, height:10});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        assert_eq!(e.renderer.slides.len(), 1);
+        let out = execute(&mut e, &json!({"input": "Insert(root, {type:'rectangle', name:'R', width:10, height:10})\nthrow new Error('boom')"}));
+        assert!(out.error && out.text.contains("rolled back"), "{}", out.text);
+        assert_eq!(e.renderer.slides.len(), 1, "only the surviving node still slides");
+        assert!(e.renderer.slides.iter().all(|s| e.doc.find(&s.id).is_some()));
+        let out = execute(&mut e, &json!({"input": "Insert(root, {type:'rectangle', name:'R', width:10, height:10})"}));
+        assert!(!out.error, "{}", out.text);
+        assert_eq!(e.renderer.slides.len(), 2, "the retry slides its own node");
     }
 
     #[test]
