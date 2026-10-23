@@ -29,7 +29,7 @@ if (!process.argv.includes('--child')) {
   const bin = join(data, 'bin')
   mkdirSync(bin)
   const stale = '{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["No conversation found with session ID: 11111111-2222-3333-4444-555555555555"]}'
-  const stub = '#!/bin/bash\nf="$(dirname "$0")/replay.txt"\n' +
+  const stub = '#!/bin/bash\necho $$ > "$(dirname "$0")/claude.pid"\nf="$(dirname "$0")/replay.txt"\n' +
     'if [ -f "$f" ] || [ -f "$(dirname "$0")/stale.flag" ]; then cat >/dev/null; fi\n' +
     `if [ -f "$(dirname "$0")/stale.flag" ]; then case " $* " in *" --resume 11111111-2222-3333-4444-555555555555 "*) echo '${stale}'; exit 1;; esac; fi\n` +
     'if [ -f "$f" ]; then while IFS= read -r l; do case "$l" in sleep*) sleep "${l#sleep }";; *) printf \'%s\\n\' "$l";; esac; done < "$f"; exit 0; fi\nexec sleep 60\n'
@@ -227,6 +227,23 @@ if (!windows) {
   assert(JSON.parse(readFileSync(join(sessions, 'stale1.json'), 'utf8')).session === 'fresh', 'the saved chat keeps the new session id')
   rmSync(join(data, 'bin', 'stale.flag'))
   rmSync(join(data, 'bin', 'replay.txt'))
+  assert(call('chat_clear') === true, 'the chat is cleared again')
+}
+
+// Quitting the app stops its agents: `chat_flush` (what app.tsx calls on exit) kills the running `claude` child,
+// since nothing outlives the process to do it.
+if (!windows) {
+  call('chat_clear')
+  const pidFile = join(data, 'bin', 'claude.pid')
+  rmSync(pidFile, { force: true })
+  call('agent_send', { text: 'Design a pricing page' })
+  await until(() => call('state').agentRunning && existsSync(pidFile) && readFileSync(pidFile, 'utf8').trim() !== '', 'the agent starts the CLI')
+  const pid = Number(readFileSync(pidFile, 'utf8').trim())
+  const alive = () => { try { return process.kill(pid, 0) } catch { return false } }
+  assert(alive(), 'the CLI runs before quitting')
+  call('chat_flush')
+  assert(!alive(), 'quitting leaves no claude CLI running')
+  assert(!call('state').agentRunning, 'quitting ends the run')
   assert(call('chat_clear') === true, 'the chat is cleared again')
 }
 
