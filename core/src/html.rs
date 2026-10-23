@@ -74,13 +74,15 @@ pub fn html_document(e: &mut Engine, ids: &[String], opts: &Value) -> Result<Str
     let base = e.doc.dir();
     let mut body = String::new();
     let mut fonts = Vec::new();
+    let mut svg_ids = 0;
     for id in ids {
         let mut cx = e.ctx();
         let top = crate::render::top_index(cx.doc, id).ok_or_else(|| cx.missing(id))?;
         let root = cx.laid_out(top).ok_or_else(|| cx.missing(id))?;
         let n = find_rnode(&root, id).ok_or_else(|| cx.missing(id))?;
-        let mut h = Html { out: &mut body, names, ids: ids_attr, base: base.clone(), families: &mut fonts, fonts: &mut e.fonts, assets: &mut e.assets };
+        let mut h = Html { out: &mut body, names, ids: ids_attr, base: base.clone(), families: &mut fonts, fonts: &mut e.fonts, assets: &mut e.assets, svg_ids };
         h.node(n, None);
+        svg_ids = h.svg_ids;
     }
     if opts["includeHtmlScaffold"] == false {
         return Ok(body);
@@ -112,6 +114,8 @@ struct Html<'a> {
     families: &'a mut Vec<(String, u16)>,
     fonts: &'a mut crate::text::Fonts,
     assets: &'a mut crate::svg::Assets,
+    /// Ids used by the inline SVGs so far; the next one numbers its ids after them.
+    svg_ids: usize,
 }
 
 fn css_color(v: &str) -> Option<String> {
@@ -148,13 +152,14 @@ fn gradient_css(o: &serde_json::Map<String, Value>) -> Option<String> {
     let pt = |k: &str, a: &str, d: f64| o.get(k).and_then(|v| v.get(a)).and_then(num).unwrap_or(d);
     let at = |k: &str| pt("center", k, 0.5) * 100.0;
     let kind = o.get("gradientType").and_then(Value::as_str);
-    // CSS has no shifted or resized linear gradient, nor a rotated ellipse (a multiple of 90deg or a circle needs none).
+    // CSS has no shifted or resized linear gradient, nor a rotated ellipse (a multiple of 90deg or a circle needs none),
+    // and its linear gradient line is measured in pixels, so a slanted one differs from the canvas, which rotates the unit frame first.
     let quarter = (rot / 90.0 - (rot / 90.0).round()).abs() < 1e-9;
     let (rw, rh) = (pt("size", "width", 1.0), pt("size", "height", 1.0));
     let beyond_css = match kind {
         Some("radial") => !quarter && rw != rh,
         Some("angular") => false,
-        _ => at("x") != 50.0 || at("y") != 50.0 || rh != 1.0,
+        _ => !quarter || at("x") != 50.0 || at("y") != 50.0 || rh != 1.0,
     };
     if beyond_css {
         return Some(svg_gradient(kind == Some("radial"), (at("x") / 100.0, at("y") / 100.0), (rw, rh), rot, &stops));
@@ -217,6 +222,26 @@ fn stroke_overlay(grad: &str, w: &Value, alignment: Option<&str>, blend: Option<
         "<div style=\"{}inset:{inset};padding:{pad};background:{grad};{blend}-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);mask-composite:exclude;\"></div>\n",
         OVERLAY
     ))
+}
+
+/// How far the painted stroke reaches outside the box (the canvas's `Stroke::reach`): the widest side for a
+/// rectangle or frame, the top width for another shape; none for an inner stroke or without a visible paint.
+fn stroke_reach(n: &RNode) -> f64 {
+    let painted = fills(n.p.get("stroke")).iter().any(|p| p.as_str().or_else(|| p["color"].as_str()).is_some_and(|c| css_color(c).is_some()) || p.as_object().filter(|o| o.get("type").and_then(Value::as_str) == Some("gradient")).and_then(gradient_css).is_some());
+    let w = match n.p.get("strokeWidth") {
+        Some(Value::Object(s)) => {
+            let side = |k: &str| s.get(k).and_then(num).unwrap_or(0.0).max(0.0);
+            if matches!(n.ty.as_str(), "frame" | "rectangle") { ["top", "right", "bottom", "left"].into_iter().map(side).fold(0.0, f64::max) } else { side("top") }
+        }
+        Some(v) => num(v).unwrap_or(0.0).max(0.0),
+        None => 0.0,
+    };
+    match n.s("strokeAlignment") {
+        _ if !painted => 0.0,
+        Some("inner" | "inside") => 0.0,
+        Some("outer" | "outside") => w,
+        _ => w / 2.0,
+    }
 }
 
 /// Overlay boxes sit above the node's own background and below its children.
@@ -422,7 +447,9 @@ impl Html<'_> {
             let _ = write!(css, "transform:{};transform-origin:{}px {}px;", tf.trim_start(), px(-n.bx), px(-n.by));
         }
         // Shapes CSS cannot draw are inlined as SVG, which carries their own paint.
-        let as_svg = matches!(n.ty.as_str(), "path" | "polygon" | "line") || n.ty == "ellipse" && (n.f("innerRadius").unwrap_or(0.0) > 0.0 || n.f("sweepAngle").is_some_and(|s| s.abs() < 360.0));
+        // An icon with a paint other than a plain colour (gradient, image, mesh, shader) is drawn by the SVG exporter too.
+        let paint_icon = n.ty == "icon" && fills(n.p.get("fill")).iter().any(|f| f.is_object() && !matches!(f["type"].as_str(), None | Some("color")));
+        let as_svg = paint_icon || matches!(n.ty.as_str(), "path" | "polygon" | "line") || n.ty == "ellipse" &&(n.f("innerRadius").unwrap_or(0.0) > 0.0 || n.f("sweepAngle").is_some_and(|s| s.abs() < 360.0));
         let (under, over) = if as_svg { Default::default() } else { self.paint_css(n, &mut css) };
         let attrs = self.attrs(n);
         match n.ty.as_str() {
@@ -439,7 +466,7 @@ impl Html<'_> {
                     let _ = writeln!(self.out, "<p{attrs} style=\"{css}\">{}</p>", lines.join("<br>"));
                 }
             }
-            "icon" => {
+            "icon" if !as_svg => {
                 // No fill = invisible icon.
                 let fill = fills(n.p.get("fill")).first().and_then(|f| f.as_str().or_else(|| f["color"].as_str())).and_then(css_color);
                 let svg = match fill {
@@ -459,8 +486,9 @@ impl Html<'_> {
                 }
                 let mut shape = RNode::leaf(n.id.clone(), &n.ty, p, None);
                 (shape.x, shape.y, shape.w, shape.h) = (n.x, n.y, n.w, n.h);
-                let mut svg = crate::svg::Svg::new(self.fonts, self.assets, self.base.clone());
+                let mut svg = crate::svg::Svg::new(self.fonts, self.assets, self.base.clone()).start_ids(self.svg_ids);
                 svg.node(&shape);
+                self.svg_ids = svg.uid();
                 // An inline svg sits on the text baseline (display:block keeps a height-0 line in place) and browsers clip it to its viewport; caps, outer strokes and shadows paint past the box.
                 let svg = svg.finish(Some((n.x, n.y, n.w.max(1.0), n.h.max(1.0)))).replacen("<svg ", "<svg style=\"display:block;overflow:visible\" ", 1);
                 let _ = writeln!(self.out, "<div{attrs} style=\"{css}\">{svg}</div>");
@@ -654,7 +682,12 @@ impl Html<'_> {
                 }
             }
         } else {
-            shadows.extend(list.iter().map(|(inner, x, y, b, c)| format!("{}{x}px {y}px {b}px {c}", if *inner { "inset " } else { "" })));
+            // Like the canvas, a drop shadow is cast by the outline with the stroke's outer part: it spreads by that reach.
+            let reach = stroke_reach(n);
+            shadows.extend(list.iter().map(|(inner, x, y, b, c)| match (inner, reach > 0.0) {
+                (false, true) => format!("{x}px {y}px {b}px {reach}px {c}"),
+                _ => format!("{}{x}px {y}px {b}px {c}", if *inner { "inset " } else { "" }),
+            }));
         }
         if !above.is_empty() {
             let _ = writeln!(over, "<div style=\"position:absolute;inset:0;border-radius:inherit;pointer-events:none;box-shadow:{};\"></div>", above.join(","));
@@ -899,6 +932,11 @@ mod tests {
         assert!(s.contains("x1=%220.75%22 y1=%220.5%22 x2=%22-0.25%22 y2=%220.5%22"), "{s}");
         let (s, _) = rect_html(json!({"fill": grad(json!({"gradientType": "radial", "rotation": 45, "size": {"width": 0.3, "height": 0.8}}))}));
         assert!(s.contains("radialGradient") && s.contains("matrix(0.106066 -0.106066 0.282843 0.282843 0.5 0.5)"), "{s}");
+        // A linear gradient rotated off a quarter turn is an SVG background too (CSS measures its line in pixels); quarter turns stay CSS.
+        let (s, _) = rect_html(json!({"fill": grad(json!({"rotation": 60}))}));
+        assert!(s.contains("data:image/svg+xml,%3Csvg") && s.contains("linearGradient") && !s.contains("linear-gradient(-60deg"), "{s}");
+        let (s, _) = rect_html(json!({"fill": grad(json!({"rotation": 180}))}));
+        assert!(s.contains("linear-gradient(-180deg,#ff0000 0%,#0000ff 100%)"), "{s}");
         // An unparseable stop colour stays as transparent black, like the canvas.
         let (s, _) = rect_html(json!({"fill": grad(json!({"colors": [{"color": "#ff0000", "position": 0}, {"color": "transparent", "position": 1}]}))}));
         assert!(s.contains("linear-gradient(-90deg,#ff0000 0%,rgba(0, 0, 0, 0) 100%)"), "{s}");
@@ -935,6 +973,37 @@ mod tests {
         assert!(h.find("#ff0000") < h.find("padding:10px;") && !h.contains("z-index:-1"), "{h}");
         let h = ring("center");
         assert!(h.find("#ff0000") < h.find("inset:0px;padding:5px;") && h.contains("inset:-5px;padding:5px;") && h.matches("z-index:-1").count() == 2, "{h}");
+    }
+
+    /// The canvas casts a drop shadow from the outline with the stroke's outer part, so the shadow spreads by that reach
+    /// (an offset smaller than the stroke would hide under the stroke ring otherwise); inner shadows and inner strokes do not.
+    #[test]
+    fn drop_shadow_is_cast_from_the_stroked_outline() {
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        e.load_template("empty");
+        let mut html = |align: &str, width: serde_json::Value, shadow: serde_json::Value| {
+            let rect = json!({"type": "rectangle", "width": 100, "height": 50, "fill": "#ffffff", "stroke": "#000000", "strokeWidth": width, "strokeAlignment": align, "effect": shadow});
+            let id = e.insert_root(rect).unwrap();
+            super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap()
+        };
+        let drop = json!({"type": "shadow", "offset": {"x": 12, "y": 12}, "color": "#ff0000"});
+        let h = html("outer", json!(20), drop.clone());
+        assert!(h.contains("box-shadow:0 0 0 20px #000000,12px 12px 0px 20px #ff0000;"), "{h}");
+        let h = html("center", json!(20), drop.clone());
+        assert!(h.contains("box-shadow:inset 0 0 0 10px #000000,0 0 0 10px #000000,12px 12px 0px 10px #ff0000;"), "{h}");
+        // The widest side reaches furthest.
+        let h = html("outer", json!({"top": 2, "right": 8, "bottom": 4, "left": 6}), drop.clone());
+        assert!(h.contains("12px 12px 0px 8px #ff0000"), "{h}");
+        let h = html("inner", json!(20), drop.clone());
+        assert!(h.contains("box-shadow:inset 0 0 0 20px #000000,12px 12px 0px #ff0000;"), "{h}");
+        let h = html("outer", json!(20), json!({"type": "shadow", "shadowType": "inner", "offset": {"x": 12, "y": 12}, "color": "#ff0000"}));
+        assert!(h.contains("inset 12px 12px 0px #ff0000") && !h.contains("20px #ff0000"), "{h}");
+        // A gradient stroke without stops paints nothing, so it adds no reach.
+        let empty = json!({"type": "rectangle", "width": 100, "height": 50, "fill": "#ffffff", "stroke": {"type": "gradient", "colors": []}, "strokeWidth": 20, "strokeAlignment": "outer", "effect": drop.clone()});
+        let id = e.insert_root(empty).unwrap();
+        let h = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
+        assert!(h.contains("12px 12px 0px #ff0000") && !h.contains("20px #ff0000"), "{h}");
     }
 
     /// A frame whose fill blends with the backdrop paints its overlay in tree order: flow children must be positioned to stay above it.
@@ -1097,6 +1166,29 @@ mod tests {
             assert_eq!(html.matches("opacity:0.5;").count() + html.matches(" opacity=").count(), 1, "{ty}: {html}");
             assert!(html.contains("opacity:0.5;"), "{ty}: {html}");
         }
+    }
+
+    #[test]
+    fn html_icon_with_a_gradient_fill_is_drawn() {
+        let dir = std::env::temp_dir().join("nalarupa-test-icon-html");
+        let _ = std::fs::create_dir_all(dir.join("cache/icons"));
+        let _ = std::fs::write(dir.join("cache/icons/lucide_0.563-star.svg"), r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 15 9 22 9 17 14 19 22 12 18 5 22 7 14 2 9 9 9Z"/></svg>"#);
+        let mut e = Engine::new(dir);
+        e.offline();
+        e.load_template("empty");
+        let grad = |a: &str, b: &str| json!({"type": "gradient", "colors": [{"color": a, "position": 0}, {"color": b, "position": 1}]});
+        let icon = |fill: serde_json::Value| json!({"type": "icon", "icon": "star", "library": "lucide", "x": 0, "y": 0, "width": 80, "height": 80, "fill": fill});
+        let frame = json!({"type": "frame", "x": 0, "y": 0, "width": 200, "height": 100, "layout": "none", "children": [
+            icon(json!("#ff0000")), icon(grad("#ff0000", "#0000ff")), icon(grad("#00ff00", "#ffff00"))]});
+        let id = e.insert_root(frame).unwrap();
+        let h = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
+        // The solid icon stays an inline svg tinted by `color`; each gradient icon is painted with its own gradient.
+        assert!(h.contains("color:#ff0000"), "{h}");
+        assert_eq!(h.matches("<path").count(), 3, "{h}");
+        assert!(h.contains("stop-color=\"#0000ff\"") && h.contains("stop-color=\"#ffff00\""), "{h}");
+        // Ids are unique across the page, or the second icon would take the first one's gradient.
+        let ids: Vec<&str> = h.split(" id=\"").skip(1).map(|s| s.split('"').next().unwrap()).collect();
+        assert!(ids.len() >= 2 && ids.iter().all(|i| ids.iter().filter(|j| j == &i).count() == 1), "{ids:?}\n{h}");
     }
 
     #[test]
@@ -1268,6 +1360,19 @@ mod tests {
         for (growth, valign) in [("fixed-width-height", "top"), ("fixed-width", "middle"), ("auto", "bottom")] {
             let h = html(growth, valign);
             assert!(!h.contains("justify-content"), "{growth}/{valign}: {h}");
+        }
+    }
+
+    /// Newlines in text become `<br>`: `esc` drops control characters, so each line is escaped on its own.
+    #[test]
+    fn text_keeps_its_line_breaks() {
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        e.load_template("empty");
+        for growth in ["auto", "fixed-width"] {
+            let id = e.insert_root(json!({"type": "text", "content": "a\nb <i>\n\nc", "fontSize": 16, "textGrowth": growth, "width": 100})).unwrap();
+            let html = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
+            assert!(html.contains(">a<br>b &lt;i&gt;<br><br>c</p>"), "{growth}: {html}");
         }
     }
 }
