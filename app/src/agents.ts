@@ -55,7 +55,7 @@ export const store = {
   /** Latest assistant text per agent for the canvas pills: text + time it was said. */
   pills: new Map<string, { text: string; at: number }>(),
   /** Pending flash requests whose node boxes the canvas still has to resolve. */
-  activity: [] as { agent: string; ids: string[]; op: string }[],
+  activity: [] as { agent: string; ids: string[]; op: string; at: number }[],
   /** Camera center in doc units, so a fresh cursor can spawn near what the user sees. */
   viewCenter: { x: 0, y: 0 },
 }
@@ -75,6 +75,8 @@ export const FADE_DELAY = 5000
 export const FADE_DUR = 1500
 export const GONE = FADE_DELAY + FADE_DUR
 export const PILL_MS = 3000
+/** How long a flash request stays worth showing: older ones (queued while the canvas layer was not mounted, e.g. in Present) are dropped. */
+export const ACTIVITY_MS = 2000
 
 /**
  * Whether the agent layer must repaint now. Normally any agent presence animates every frame. Under
@@ -141,7 +143,8 @@ export function applyEvents(events: any[], now: number): boolean {
   let changed = false
   for (const ev of events) {
     if (ev.type === 'agent_activity') {
-      store.activity.push({ agent: ev.agent, ids: ev.ids ?? [], op: ev.op })
+      store.activity = store.activity.filter((a) => now - a.at < ACTIVITY_MS) // nothing drains the queue while Present is open
+      store.activity.push({ agent: ev.agent, ids: ev.ids ?? [], op: ev.op, at: now })
       changed = true
       continue
     }
@@ -292,6 +295,11 @@ export function clearPresence() {
   store.pens.clear()
   store.flashes = []
   store.activity = []
+}
+
+/** Take the pending flash requests that are still fresh; stale ones are discarded. */
+export function takeActivity(now: number) {
+  return store.activity.splice(0).filter((a) => now - a.at < ACTIVITY_MS)
 }
 
 /** The newest item that is real chat content: a usage row or a note is not a "later message" for the typewriter. */

@@ -4,7 +4,7 @@
 // Positions are kept in document units and projected with the camera every frame.
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { tryCall, type Box } from './core'
-import { FADE_DELAY, FADE_DUR, FADE_IN, GONE, PILL_MS, PRESENCE, cursorFaded, needsFrame, profileOf, store, type CursorState } from './agents'
+import { FADE_DELAY, FADE_DUR, FADE_IN, GONE, PILL_MS, PRESENCE, cursorFaded, needsFrame, profileOf, store, takeActivity, type CursorState } from './agents'
 import { ICONS } from './icons'
 import { painted, pointIn, shimmerHalves, turned, type M, type Rect } from './geometry'
 import { SvgOverlay } from './ui'
@@ -124,7 +124,7 @@ export function AgentLayer({ cam, w, h, version, chatOpen }: { cam: Cam; w: numb
 
   // New agent activity → flashes + cursor travel to the touched nodes.
   if (store.activity.length) {
-    const batch = store.activity.splice(0)
+    const batch = takeActivity(now)
     const ids = [...new Set(batch.flatMap((a) => a.ids.slice(-40)))]
     const found = new Map((tryCall<Box[]>('boxes', { ids }) ?? []).map((b) => [b.id, b]))
     for (const a of batch) {

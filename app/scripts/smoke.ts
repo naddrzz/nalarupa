@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { call, renderPixels } from '../src/core'
-import { applyEvents, barAgents, changing, clearPresence, cursorFaded, imageSrc, lastContentId, needsFrame, poke, resetChat, restoreChat, spinning, store } from '../src/agents'
+import { applyEvents, barAgents, changing, clearPresence, cursorFaded, imageSrc, lastContentId, needsFrame, poke, resetChat, restoreChat, spinning, store, takeActivity } from '../src/agents'
 import { own, painted, pointIn, shimmerHalves } from '../src/geometry'
 import { FRAME_LABEL_TEXT, INDICATOR_TICK_MS, ellipsisAt, ellipsisPadAt, pulseAt } from '../src/theme'
 
@@ -214,6 +214,15 @@ resetChat()
   clearPresence()
   assert(store.cursors.size === 0 && store.flashes.length === 0 && store.activity.length === 0 && store.pens.size === 0, "a new or opened document drops the old document's cursors, pens and flashes")
   assert(!needsFrame(100, false, 0), 'no repaint is due once the presence is cleared')
+}
+// Activity queued while the canvas layer is not mounted (Present) is stale once the editor is back: no cursor or flash for it.
+{
+  applyEvents([{ type: 'agent_activity', agent: 'external', ids: ['n1'], op: 'write' }], 1000)
+  applyEvents([{ type: 'agent_activity', agent: 'external', ids: ['n2'], op: 'write' }], 60000)
+  assert(store.activity.length === 1 && store.activity[0].ids[0] === 'n2', 'an unread flash request is pruned once it is stale')
+  assert(takeActivity(60100).length === 1 && store.activity.length === 0, 'a fresh flash request is taken and the queue emptied')
+  applyEvents([{ type: 'agent_activity', agent: 'external', ids: ['n3'], op: 'write' }], 70000)
+  assert(takeActivity(90000).length === 0 && store.activity.length === 0, 'a flash request that waited too long is dropped when drained')
 }
 // Reduced motion: a running agent repaints the canvas layer only for fades, not every frame of the run.
 {
