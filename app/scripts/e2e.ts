@@ -724,10 +724,25 @@ for (let i = 0; i < 149; i++) Insert(f, {type:"rectangle", name:"Chip " + i, x:(
   await until(async () => await rowShown('Backdrop'), 'the Layers list scrolled to the layer selected on the canvas')
   await shot('05b-layers-follow-selection')
 
+  const areaBefore = (await app.getByTestId('canvas').bounds())!
   await app.getByTestId('present').click()
   await sleep(1500)
   await shot('06-present')
   await app.getByTestId('presentation').press('escape')
+  if (process.platform === 'linux') {
+    // Leaving Present remounts the canvas: its first frames must show the document, not the unrendered
+    // image placeholder (31,34,48) that used to stay up until the 200 ms sharp-frame timer.
+    for (const end = Date.now() + 600; Date.now() < end;) {
+      const grab = Bun.spawn(['grim', '-t', 'ppm', '-'], { stdout: 'pipe' })
+      const ppm = new Uint8Array(await new Response(grab.stdout).arrayBuffer())
+      await grab.exited
+      let at = 0
+      for (let lines = 0; lines < 3;) if (ppm[at++] === 10) lines++
+      const width = Number(new TextDecoder().decode(ppm.slice(0, at)).split('\n')[1].split(' ')[0])
+      const k = at + (Math.round(areaBefore.y + areaBefore.height - 40) * width + Math.round(areaBefore.x + areaBefore.width / 2)) * 3
+      if (ppm[k] === 31 && ppm[k + 1] === 34 && ppm[k + 2] === 48) throw new Error('the canvas showed the image placeholder after leaving Present')
+    }
+  }
   await sleep(500)
   // A new document starts without the external agent's cursor from the one before.
   await mcp('execute', { input: 'Insert(document, {type:"rectangle", name:"Presence", x:100, y:100, width:300, height:200, fill:"#22ff55"})' })
