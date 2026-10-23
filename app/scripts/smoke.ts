@@ -101,6 +101,20 @@ call('tool', { name: 'execute', args: { input: 'Insert("sld01", {type:"rectangle
 assert(!call('state').animating, 'no slide-in under reduced motion')
 call('undo')
 call('reduce_motion', { on: false })
+// A finished agent design never comes back as "Generating": undo/redo of the step that cleared `placeholder` keeps it off.
+{
+  const ex = (input: string) => call('tool', { name: 'execute', args: { input, __agent: 'ag1' } })
+  const live = () => call('live').filter((l: any) => l.name === 'PhHero').length
+  ex('f = Insert(document, {type:"frame", name:"PhHero", x:5000, y:0, width:600, height:400, fill:"#ffffff", placeholder:true})')
+  ex('Insert(f, {type:"text", name:"PhT", content:"Hi", fontSize:40, fill:"#111111"})')
+  ex('Update(f, {placeholder:false})')
+  assert(live() === 0, 'a finished design is not generating')
+  call('undo')
+  assert(live() === 0, 'undo does not bring "Generating" back onto a finished design')
+  call('redo')
+  assert(live() === 0, 'redo does not either')
+  call('undo'); call('undo'); call('undo')
+}
 // Constants check only (style is unreadable under automation): the frame label style Canvas.tsx applies ellipsizes instead of slicing.
 assert(FRAME_LABEL_TEXT.textOverflow === 'ellipsis' && FRAME_LABEL_TEXT.overflow === 'hidden' && FRAME_LABEL_TEXT.whiteSpace === 'nowrap', 'canvas frame labels must ellipsize')
 
