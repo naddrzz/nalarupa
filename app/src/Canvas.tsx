@@ -44,9 +44,9 @@ type Quad = { pts: Pt[]; stroke: string; width: number; fill?: string }
 type Drag =
   | { mode: 'pan'; sx: number; sy: number; cam: Cam }
   | {
-      mode: 'move'; sx: number; sy: number; dx0: number; dy0: number; ids: string[]; narrow?: string; moved: boolean
+      mode: 'move'; sx: number; sy: number; dx0: number; dy0: number; ids: string[]; narrow?: string; toggle?: string; moved: boolean
       start: Rect; sentX: number; sentY: number; anchors: Pt[]; parent: string; pm: M | null; groupOf?: string; from?: string; mixed?: boolean; flow: boolean
-      container: Drop | null; index?: number; deferred?: Drop; dup?: { originals: string[]; offAt?: number }
+      container: Drop | null; index?: number; deferred?: Drop; lock?: 0 | 1; dup?: { originals: string[]; offAt?: number }
     }
   // `box` and the start point `f0` are in the selection frame's coordinates; `m` maps them to the canvas.
   | { mode: 'resize'; handle: Handle; f0: Pt; box: Rect; m: M | null; items: Item[]; anchors: Pt[] }
@@ -531,6 +531,13 @@ export function Canvas(props: {
 
   function moveTo(d: Extract<Drag, { mode: 'move' }>, dx: number, dy: number, m?: EventModifiers) {
     const ctrl = !!m?.ctrl
+    // Shift keeps the move on one axis (the dominant one at its first motion; releasing Shift frees it).
+    if (!m?.shift) d.lock = undefined
+    else {
+      d.lock ??= Math.abs(dx - d.dx0) >= Math.abs(dy - d.dy0) ? 1 : 0
+      if (d.lock === 1) dy = d.dy0
+      else dx = d.dx0
+    }
     setDup(d, !!m?.alt)
     const tx = Math.round(dx - d.dx0)
     const ty = Math.round(dy - d.dy0)
@@ -564,7 +571,7 @@ export function Canvas(props: {
     let [ox, oy] = [0, 0]
     let found: Guide[] = []
     if (snapOn && !d.flow) {
-      const r = snap(dragPoints({ ...d.start, x: d.start.x + tx, y: d.start.y + ty }), d.anchors, SNAP_PX / cam.zoom)
+      const r = snap(dragPoints({ ...d.start, x: d.start.x + tx, y: d.start.y + ty }), d.anchors, SNAP_PX / cam.zoom, [d.lock !== 0, d.lock !== 1])
       ;[ox, oy] = r.offset
       found = r.guides
     }
@@ -1108,13 +1115,15 @@ export function Canvas(props: {
       return
     }
     let ids = selection
-    if (!inside && target) {
-      ids = shift ? (selection.includes(target) ? selection.filter((s) => s !== target) : [...selection, target]) : [target]
+    // Shift adds an unselected layer on press; a selected one stays so it can drag, and leaves on a release without a drag.
+    const toggle = shift && target && selection.includes(target) ? target : undefined
+    if (!inside && target && !toggle) {
+      ids = shift ? [...selection, target] : [target]
       select(ids)
     }
     const narrow = !target || isArtboard(chain, target) ? '' : target
     drag.current = {
-      mode: 'move', sx, sy, dx0: dx, dy0: dy, ids: ids.filter((id) => !id.includes('/')), narrow: inside ? narrow : undefined, moved: false,
+      mode: 'move', sx, sy, dx0: dx, dy0: dy, ids: ids.filter((id) => !id.includes('/')), narrow: inside ? narrow : undefined, toggle, moved: false,
       start: { x: dx, y: dy, w: 0, h: 0 }, sentX: 0, sentY: 0, anchors: [], parent: 'document', pm: null, flow: false, container: null,
     }
   }
@@ -1206,6 +1215,7 @@ export function Canvas(props: {
     }
     if (d.mode === 'move') {
       if (!d.moved) {
+        if (d.toggle) return select(liveSel.current.filter((s) => s !== d.toggle))
         const next = d.narrow ? [d.narrow] : []
         if (d.narrow !== undefined && liveSel.current.join() !== next.join()) select(next)
         return
