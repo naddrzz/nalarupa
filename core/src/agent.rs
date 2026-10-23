@@ -638,7 +638,13 @@ const SHUTDOWN_WAIT: Duration = Duration::from_secs(3);
 pub fn shutdown() -> Result<(), String> {
     stop();
     let deadline = Instant::now() + SHUTDOWN_WAIT;
-    while engine().agent.active > 0 && Instant::now() < deadline {
+    // `running` outlasts `active` across a queued or iteration handoff, until the next thread has started.
+    while Instant::now() < deadline {
+        let e = engine();
+        if e.agent.active == 0 && !e.agent.running {
+            break;
+        }
+        drop(e);
         std::thread::sleep(Duration::from_millis(20));
     }
     flush_chat_saves().map_or(Ok(()), Err)
