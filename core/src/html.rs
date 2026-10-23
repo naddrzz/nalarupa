@@ -417,7 +417,7 @@ impl Html<'_> {
             "text" => {
                 self.text_css(n, &mut css);
                 let content = n.s("content").unwrap_or("");
-                let _ = writeln!(self.out, "<p{attrs} style=\"{css}\">{}</p>", esc(content).replace('\n', "<br>"));
+                let _ = writeln!(self.out, "<p{attrs} style=\"{css}\">{}</p>", content.split('\n').map(esc).collect::<Vec<_>>().join("<br>"));
             }
             "icon" => {
                 // No fill = invisible icon.
@@ -1230,5 +1230,18 @@ mod tests {
         assert!(html.contains("width:0px;") && html.contains("white-space:pre-wrap;") && !html.contains("overflow-wrap"), "{html}");
         let auto = style_of(&mut e, "auto");
         assert!(auto.contains("white-space:pre;") && !auto.contains("overflow-wrap"), "{auto}");
+    }
+
+    /// Newlines in text become `<br>`: `esc` drops control characters, so each line is escaped on its own.
+    #[test]
+    fn text_keeps_its_line_breaks() {
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        e.load_template("empty");
+        for growth in ["auto", "fixed-width"] {
+            let id = e.insert_root(json!({"type": "text", "content": "a\nb <i>\n\nc", "fontSize": 16, "textGrowth": growth, "width": 100})).unwrap();
+            let html = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
+            assert!(html.contains(">a<br>b &lt;i&gt;<br><br>c</p>"), "{growth}: {html}");
+        }
     }
 }
