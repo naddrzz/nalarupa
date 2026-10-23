@@ -400,10 +400,10 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
   const dir = process.env.XDG_RUNTIME_DIR
   const sock = process.platform === 'linux' && dir ? readdirSync(dir).find((f) => f.startsWith('sway-ipc')) : undefined
   if (process.platform === 'linux' && !sock) throw new Error('sway IPC socket not found in XDG_RUNTIME_DIR: run via scripts/wl-run.sh')
+  type Node = { type: string; rect: { x: number; y: number }; nodes?: Node[]; floating_nodes?: Node[] }
+  const windowOf = (n: Node): Node | undefined => n.type === 'floating_con' ? n : [...(n.nodes ?? []), ...(n.floating_nodes ?? [])].map(windowOf).find(Boolean)
+  const origin = sock ? windowOf(JSON.parse(await Bun.$`swaymsg -s ${join(dir!, sock)} -t get_tree`.text()))!.rect : { x: 0, y: 0 }
   if (sock) {
-    type Node = { type: string; rect: { x: number; y: number }; nodes?: Node[]; floating_nodes?: Node[] }
-    const windowOf = (n: Node): Node | undefined => n.type === 'floating_con' ? n : [...(n.nodes ?? []), ...(n.floating_nodes ?? [])].map(windowOf).find(Boolean)
-    const origin = windowOf(JSON.parse(await Bun.$`swaymsg -s ${join(dir!, sock)} -t get_tree`.text()))!.rect
     const box = (await app.getByTestId('agent-input').bounds())!
     const rows = (g: Awaited<ReturnType<typeof grab>>) => Array.from({ length: Math.floor(box.height) }, (_, i) => {
       const from = ((Math.floor(origin.y + box.y) + i) * g.w + Math.floor(origin.x + box.x)) * 3
@@ -733,14 +733,9 @@ for (let i = 0; i < 149; i++) Insert(f, {type:"rectangle", name:"Chip " + i, x:(
     // Leaving Present remounts the canvas: its first frames must show the document, not the unrendered
     // image placeholder (31,34,48) that used to stay up until the 200 ms sharp-frame timer.
     for (const end = Date.now() + 600; Date.now() < end;) {
-      const grab = Bun.spawn(['grim', '-t', 'ppm', '-'], { stdout: 'pipe' })
-      const ppm = new Uint8Array(await new Response(grab.stdout).arrayBuffer())
-      await grab.exited
-      let at = 0
-      for (let lines = 0; lines < 3;) if (ppm[at++] === 10) lines++
-      const width = Number(new TextDecoder().decode(ppm.slice(0, at)).split('\n')[1].split(' ')[0])
-      const k = at + (Math.round(areaBefore.y + areaBefore.height - 40) * width + Math.round(areaBefore.x + areaBefore.width / 2)) * 3
-      if (ppm[k] === 31 && ppm[k + 1] === 34 && ppm[k + 2] === 48) throw new Error('the canvas showed the image placeholder after leaving Present')
+      const g = await grab()
+      const k = (Math.round(origin.y + areaBefore.y + areaBefore.height - 40) * g.w + Math.round(origin.x + areaBefore.x + areaBefore.width / 2)) * 3
+      if (g.px[k] === 31 && g.px[k + 1] === 34 && g.px[k + 2] === 48) throw new Error('the canvas showed the image placeholder after leaving Present')
     }
   }
   await sleep(500)
