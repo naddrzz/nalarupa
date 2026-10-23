@@ -311,13 +311,20 @@ if (process.platform !== 'win32') {
     const doc = call('tool', { name: 'open_document', args: { path: a } })
     assert(doc.error && /Stop the agent/.test(doc.text), 'open_document while the agent runs')
     assert(call('frames').length === 0 && call('state').path === null, 'a refused switch keeps the document')
-    exec('Insert(document, {type:"frame", name:"Pricing", x:0, y:0, width:400, height:200, placeholder:true})')
-    assert(call('frames')[0].placeholder === true, 'the agent left a frame generating')
+    // The built-in agent flags one frame, an external agent (MCP) another: Stop clears only the former.
+    const agent = call('poll').events.find((ev: any) => ev.kind === 'start')?.agent.id
+    assert(agent, 'the running agent announces itself')
+    const frame = (name: string, x: number) => `Insert(document, {type:"frame", name:"${name}", x:${x}, y:0, width:400, height:200, placeholder:true})`
+    assert(!call('tool', { name: 'execute', args: { input: frame('Pricing', 0), __agent: agent } }).error, 'the agent flags a frame')
+    assert(!call('tool', { name: 'execute', args: { input: frame('External job', 500), __agent: 'external' } }).error, 'an external agent flags a frame')
+    assert(call('frames').every((f: any) => f.placeholder === true), 'both frames are generating')
   } finally {
     call('agent_stop')
   }
   await until(() => !call('state').agentRunning, 'the agent stops')
-  assert(call('frames')[0].placeholder === false && call('live').length === 0, 'Stop ends the "Generating" state of the frames the agent left')
+  const flag = (name: string) => call('frames').find((f: any) => f.name === name)?.placeholder
+  assert(flag('Pricing') === false, 'Stop ends the "Generating" state of the frames the agent left')
+  assert(flag('External job') === true && call('live').length === 1, 'Stop leaves a frame an external agent is still building generating')
   assert(call('agent_reset') === true && call('chat_list').current === null, 'new conversation once the agent has stopped')
   call('new', { template: 'slides' })
   assert(ids() === 'sld01,sld02,sld03', 'switching works again once the agent stopped')
