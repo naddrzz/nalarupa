@@ -360,6 +360,15 @@ fn px(v: f64) -> f64 {
     (v * 1e6).round() / 1e6 + 0.0
 }
 
+/// `justify-content` placing the text of a fixed-size box in the middle or at the bottom; none keeps it at the top.
+fn text_justify(n: &RNode) -> Option<&'static str> {
+    match (n.s("textGrowth"), n.s("textAlignVertical")) {
+        (Some("fixed-width-height"), Some("middle")) => Some("center"),
+        (Some("fixed-width-height"), Some("bottom")) => Some("flex-end"),
+        _ => None,
+    }
+}
+
 impl Html<'_> {
     fn node(&mut self, n: &RNode, parent: Option<&RNode>) {
         let in_flow = parent.is_some_and(|p| p.ty == "frame" && p.s("layout") != Some("none")) && n.s("layoutPosition") != Some("absolute");
@@ -409,6 +418,10 @@ impl Html<'_> {
             if n.ty == "text" && wv.is_none() {
                 css += &size_css(Some(&Value::from(px(n.w))), "width", parent_dir, true, n.w);
             }
+            // Likewise a fixed-size box without a height is as high as the layout made it (0 unless set), which middle and bottom text spills out of.
+            if n.ty == "text" && hv.is_none() && text_justify(n).is_some() {
+                css += &size_css(Some(&Value::from(px(n.h))), "height", parent_dir, false, n.h);
+            }
             if matches!(n.ty.as_str(), "rectangle" | "ellipse" | "icon" | "polygon" | "line" | "path") {
                 if wv.is_none() {
                     css += &size_css(Some(&Value::from(n.w)), "width", parent_dir, true, n.w);
@@ -442,8 +455,16 @@ impl Html<'_> {
         match n.ty.as_str() {
             "text" => {
                 self.text_css(n, &mut css);
-                let content = n.s("content").unwrap_or("");
-                let _ = writeln!(self.out, "<p{attrs} style=\"{css}\">{}</p>", content.split('\n').map(esc).collect::<Vec<_>>().join("<br>"));
+                // `esc` drops control characters, newlines too, so the lines are escaped one by one.
+                let lines = n.s("content").unwrap_or("").split('\n').map(esc).collect::<Vec<_>>();
+                // Like the canvas, only a fixed-size box places its text in the middle or at the bottom; overflow spills
+                // evenly (middle) or upward (bottom). The text stays direct content, as a gradient or image fill clips to
+                // it: a flex container wraps it in an anonymous item, and its newlines are kept by `pre-wrap`.
+                if let Some(j) = text_justify(n) {
+                    let _ = writeln!(self.out, "<p{attrs} style=\"{css}display:flex;flex-direction:column;justify-content:{j};\">{}</p>", lines.join("\n"));
+                } else {
+                    let _ = writeln!(self.out, "<p{attrs} style=\"{css}\">{}</p>", lines.join("<br>"));
+                }
             }
             "icon" if !as_svg => {
                 // No fill = invisible icon.
@@ -1316,6 +1337,30 @@ mod tests {
         assert!(html.contains("width:0px;") && html.contains("white-space:pre-wrap;") && !html.contains("overflow-wrap"), "{html}");
         let auto = style_of(&mut e, "auto");
         assert!(auto.contains("white-space:pre;") && !auto.contains("overflow-wrap"), "{auto}");
+    }
+
+    /// Middle and bottom text in a fixed-size box is placed like the canvas; other boxes keep the top.
+    #[test]
+    fn vertical_text_alignment_is_exported() {
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        e.load_template("empty");
+        // Without a height the box is 0 high on the canvas; the flex container needs that height to spill the text.
+        let id = e.insert_root(json!({"type": "text", "content": "a\nb", "fontSize": 16, "textGrowth": "fixed-width-height", "width": 100, "textAlignVertical": "middle", "fill": {"type": "gradient", "gradientType": "linear", "rotation": 0, "colors": [{"color": "#ff0000", "position": 0}, {"color": "#0000ff", "position": 1}]}})).unwrap();
+        let nh = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
+        assert!(nh.contains("height:0px;") && nh.contains("justify-content:center;\">a\nb</p>") && nh.contains("background-clip:text"), "{nh}");
+        let mut html = |growth: &str, valign: &str| {
+            let id = e.insert_root(json!({"type": "text", "content": "ab", "fontSize": 16, "textGrowth": growth, "width": 100, "height": 60, "textAlignVertical": valign})).unwrap();
+            super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap()
+        };
+        let mid = html("fixed-width-height", "middle");
+        assert!(mid.contains("display:flex;flex-direction:column;justify-content:center;\">ab</p>"), "{mid}");
+        let bottom = html("fixed-width-height", "bottom");
+        assert!(bottom.contains("justify-content:flex-end;"), "{bottom}");
+        for (growth, valign) in [("fixed-width-height", "top"), ("fixed-width", "middle"), ("auto", "bottom")] {
+            let h = html(growth, valign);
+            assert!(!h.contains("justify-content"), "{growth}/{valign}: {h}");
+        }
     }
 
     /// Newlines in text become `<br>`: `esc` drops control characters, so each line is escaped on its own.
