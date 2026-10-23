@@ -46,7 +46,7 @@ type Drag =
   | {
       mode: 'move'; sx: number; sy: number; dx0: number; dy0: number; ids: string[]; narrow?: string; toggle?: string; moved: boolean
       start: Rect; sentX: number; sentY: number; anchors: Pt[]; parent: string; pm: M | null; groupOf?: string; from?: string; mixed?: boolean; flow: boolean
-      container: Drop | null; index?: number; deferred?: Drop; dup?: { originals: string[]; offAt?: number }
+      container: Drop | null; index?: number; deferred?: Drop; lock?: 0 | 1; dup?: { originals: string[]; offAt?: number }
     }
   // `box` and the start point `f0` are in the selection frame's coordinates; `m` maps them to the canvas.
   | { mode: 'resize'; handle: Handle; f0: Pt; box: Rect; m: M | null; items: Item[]; anchors: Pt[] }
@@ -531,9 +531,11 @@ export function Canvas(props: {
 
   function moveTo(d: Extract<Drag, { mode: 'move' }>, dx: number, dy: number, m?: EventModifiers) {
     const ctrl = !!m?.ctrl
-    // Shift keeps the move on its dominant axis.
-    if (m?.shift) {
-      if (Math.abs(dx - d.dx0) >= Math.abs(dy - d.dy0)) dy = d.dy0
+    // Shift keeps the move on one axis (the dominant one at its first motion; releasing Shift frees it).
+    if (!m?.shift) d.lock = undefined
+    else {
+      d.lock ??= Math.abs(dx - d.dx0) >= Math.abs(dy - d.dy0) ? 1 : 0
+      if (d.lock === 1) dy = d.dy0
       else dx = d.dx0
     }
     setDup(d, !!m?.alt)
@@ -569,7 +571,7 @@ export function Canvas(props: {
     let [ox, oy] = [0, 0]
     let found: Guide[] = []
     if (snapOn && !d.flow) {
-      const r = snap(dragPoints({ ...d.start, x: d.start.x + tx, y: d.start.y + ty }), d.anchors, SNAP_PX / cam.zoom)
+      const r = snap(dragPoints({ ...d.start, x: d.start.x + tx, y: d.start.y + ty }), d.anchors, SNAP_PX / cam.zoom, [d.lock !== 0, d.lock !== 1])
       ;[ox, oy] = r.offset
       found = r.guides
     }
