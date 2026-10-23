@@ -103,7 +103,11 @@ call('undo')
 call('reduce_motion', { on: false })
 // A finished agent design never comes back as "Generating": undo/redo of the step that cleared `placeholder` keeps it off.
 {
-  const ex = (input: string) => call('tool', { name: 'execute', args: { input, __agent: 'ag1' } })
+  const ex = (input: string) => {
+    const out = call('tool', { name: 'execute', args: { input, __agent: 'ag1' } })
+    assert(!out.error, `execute failed: ${out.text}`)
+    return out
+  }
   const live = () => call('live').filter((l: any) => l.name === 'PhHero').length
   ex('f = Insert(document, {type:"frame", name:"PhHero", x:5000, y:0, width:600, height:400, fill:"#ffffff", placeholder:true})')
   ex('Insert(f, {type:"text", name:"PhT", content:"Hi", fontSize:40, fill:"#111111"})')
