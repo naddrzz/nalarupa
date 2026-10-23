@@ -913,6 +913,22 @@ try {
   await app.getByTestId('layers').getByText('Inspect rect').click({ modifiers: 'ctrl' })
   assert(await until(async () => (await count('inspector-fill')) > 0), 'a line, a note and a rectangle together keep the Fill field')
 
+  // A layer inside a component instance cannot be deleted or duplicated: the Inspector offers Hide (an `enabled:false` override) instead.
+  await mcpCall(port, { method: 'tools/call', params: { name: 'execute', arguments: { input: 'comp = Insert(document, {type:"frame", name:"Inst btn", x:700, y:700, width:120, height:40, reusable:true, fill:"#3366ff", layout:"none"}); Insert(comp, {type:"text", name:"Inst label", content:"Click", fontSize:16, fill:"#ffffff", x:10, y:10}); Insert(document, {type:"ref", name:"Inst copy", ref:comp, x:900, y:700})' } } })
+  await app.getByTestId('layers').getByText('Inst copy').waitFor({ timeoutMs: 6000 })
+  await app.getByTestId('layers').getByText('Inst copy').click()
+  await app.getByTestId('selection-box').waitFor({ timeoutMs: 6000 })
+  const inst = await app.getByTestId('selection-box').bounds()
+  const k = inst.width / 120
+  const label = { x: inst.x + 25 * k, y: inst.y + 20 * k }
+  await app.mouse.move(label) // GPUIX needs a hover before the click lands
+  await sleep(300)
+  await app.mouse.click(label, { modifiers: 'ctrl' })
+  assert(await until(async () => (await count('hide-instance-child')) > 0), 'ctrl-click on an instance picks its child, which offers Hide')
+  assert(!(await app.getByText('Duplicate').count()) && !(await app.getByText('Delete').count()), 'an instance child offers no Duplicate or Delete')
+  await app.getByTestId('hide-instance-child').click()
+  assert(await until(async () => !(await count('hide-instance-child'))), 'Hide clears the instance child selection')
+
   await canvas.press('escape')
   await shot('10-final')
   console.log('editor-e2e ok — screenshots in', out)

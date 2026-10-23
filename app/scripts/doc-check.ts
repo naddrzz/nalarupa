@@ -152,6 +152,16 @@ const compKid = call('insert', { parent: comp, node: { type: 'rectangle', name: 
 const inst = call('insert', { parent: 'document', node: { type: 'ref', ref: comp, x: 200, y: 400 } }).id
 call('delete', { ids: [inst, `${inst}/${compKid}`] })
 assert(!call('boxes', { ids: [inst] }).length, 'delete removes an instance selected with its descendant')
+call('undo')
+// A lone instance child cannot be deleted or duplicated; the Inspector's Hide is an `enabled:false` override on its path.
+const kidPath = `${inst}/${compKid}`
+throws(() => call('delete', { ids: [kidPath] }), /cannot delete descendants/, 'delete refuses an instance child')
+throws(() => call('duplicate', { ids: [kidPath] }), /node not found/, 'duplicate refuses an instance child')
+call('update', { ids: [kidPath], props: { enabled: false } })
+assert(!call('boxes', { ids: [kidPath] }).length, 'enabled:false hides the instance child')
+call('undo')
+assert(call('boxes', { ids: [kidPath] }).length === 1, 'one undo shows the instance child again')
+call('delete', { ids: [inst] })
 call('delete', { ids: [comp] })
 throws(() => call('png'), /id required/, 'png without an id')
 throws(() => call('no_such_command'), /unknown command/, 'unknown command')
