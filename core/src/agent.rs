@@ -629,8 +629,18 @@ fn flush_chat_saves() -> Option<String> {
     s.2.clone()
 }
 
-/// `chat_flush`: called as the app exits, since the writer is a detached thread the process does not wait for.
+/// How long `shutdown` waits for the stopped agents to end (their `claude` children are killed by a watcher thread that polls).
+const SHUTDOWN_WAIT: Duration = Duration::from_secs(3);
+
+/// `chat_flush`: called as the app exits. Stops the agents first and waits until their `claude` children are killed,
+/// since nothing outlives the process to do it (no run may go on without its canvas), then saves the chat:
+/// the writer is a detached thread the process does not wait for.
 pub fn shutdown() -> Result<(), String> {
+    stop();
+    let deadline = Instant::now() + SHUTDOWN_WAIT;
+    while engine().agent.active > 0 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
     flush_chat_saves().map_or(Ok(()), Err)
 }
 
