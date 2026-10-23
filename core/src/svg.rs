@@ -612,6 +612,16 @@ impl<'a> Svg<'a> {
         Svg { fonts, assets, base, defs: String::new(), out: String::new(), uid: 0, painted: Vec::new(), tag: false, skip: Default::default(), outline: None, pad: 0.0 }
     }
 
+    /// Number ids from `uid` on, so several inline SVGs in one page do not share ids; read back with `uid`.
+    pub fn start_ids(mut self, uid: usize) -> Self {
+        self.uid = uid;
+        self
+    }
+
+    pub fn uid(&self) -> usize {
+        self.uid
+    }
+
     /// Wrap emitted nodes into a document. With `view` the output is cropped to that box (exports);
     /// without, coordinates stay absolute (renderer cache).
     pub fn finish(self, view: Option<Rect>) -> String {

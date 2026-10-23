@@ -74,13 +74,15 @@ pub fn html_document(e: &mut Engine, ids: &[String], opts: &Value) -> Result<Str
     let base = e.doc.dir();
     let mut body = String::new();
     let mut fonts = Vec::new();
+    let mut svg_ids = 0;
     for id in ids {
         let mut cx = e.ctx();
         let top = crate::render::top_index(cx.doc, id).ok_or_else(|| cx.missing(id))?;
         let root = cx.laid_out(top).ok_or_else(|| cx.missing(id))?;
         let n = find_rnode(&root, id).ok_or_else(|| cx.missing(id))?;
-        let mut h = Html { out: &mut body, names, ids: ids_attr, base: base.clone(), families: &mut fonts, fonts: &mut e.fonts, assets: &mut e.assets };
+        let mut h = Html { out: &mut body, names, ids: ids_attr, base: base.clone(), families: &mut fonts, fonts: &mut e.fonts, assets: &mut e.assets, svg_ids };
         h.node(n, None);
+        svg_ids = h.svg_ids;
     }
     if opts["includeHtmlScaffold"] == false {
         return Ok(body);
@@ -112,6 +114,8 @@ struct Html<'a> {
     families: &'a mut Vec<(String, u16)>,
     fonts: &'a mut crate::text::Fonts,
     assets: &'a mut crate::svg::Assets,
+    /// Ids used by the inline SVGs so far; the next one numbers its ids after them.
+    svg_ids: usize,
 }
 
 fn css_color(v: &str) -> Option<String> {
@@ -410,7 +414,9 @@ impl Html<'_> {
             let _ = write!(css, "transform:{};transform-origin:{}px {}px;", tf.trim_start(), px(-n.bx), px(-n.by));
         }
         // Shapes CSS cannot draw are inlined as SVG, which carries their own paint.
-        let as_svg = matches!(n.ty.as_str(), "path" | "polygon" | "line") || n.ty == "ellipse" && (n.f("innerRadius").unwrap_or(0.0) > 0.0 || n.f("sweepAngle").is_some_and(|s| s.abs() < 360.0));
+        // An icon with a paint other than a plain colour (gradient, image, mesh, shader) is drawn by the SVG exporter too.
+        let paint_icon = n.ty == "icon" && fills(n.p.get("fill")).iter().any(|f| f.is_object() && !matches!(f["type"].as_str(), None | Some("color")));
+        let as_svg = paint_icon || matches!(n.ty.as_str(), "path" | "polygon" | "line") || n.ty == "ellipse" &&(n.f("innerRadius").unwrap_or(0.0) > 0.0 || n.f("sweepAngle").is_some_and(|s| s.abs() < 360.0));
         let (under, over) = if as_svg { Default::default() } else { self.paint_css(n, &mut css) };
         let attrs = self.attrs(n);
         match n.ty.as_str() {
@@ -419,7 +425,7 @@ impl Html<'_> {
                 let content = n.s("content").unwrap_or("");
                 let _ = writeln!(self.out, "<p{attrs} style=\"{css}\">{}</p>", content.split('\n').map(esc).collect::<Vec<_>>().join("<br>"));
             }
-            "icon" => {
+            "icon" if !as_svg => {
                 // No fill = invisible icon.
                 let fill = fills(n.p.get("fill")).first().and_then(|f| f.as_str().or_else(|| f["color"].as_str())).and_then(css_color);
                 let svg = match fill {
@@ -439,8 +445,9 @@ impl Html<'_> {
                 }
                 let mut shape = RNode::leaf(n.id.clone(), &n.ty, p, None);
                 (shape.x, shape.y, shape.w, shape.h) = (n.x, n.y, n.w, n.h);
-                let mut svg = crate::svg::Svg::new(self.fonts, self.assets, self.base.clone());
+                let mut svg = crate::svg::Svg::new(self.fonts, self.assets, self.base.clone()).start_ids(self.svg_ids);
                 svg.node(&shape);
+                self.svg_ids = svg.uid();
                 // An inline svg sits on the text baseline (display:block keeps a height-0 line in place) and browsers clip it to its viewport; caps, outer strokes and shadows paint past the box.
                 let svg = svg.finish(Some((n.x, n.y, n.w.max(1.0), n.h.max(1.0)))).replacen("<svg ", "<svg style=\"display:block;overflow:visible\" ", 1);
                 let _ = writeln!(self.out, "<div{attrs} style=\"{css}\">{svg}</div>");
@@ -1082,6 +1089,29 @@ mod tests {
             assert_eq!(html.matches("opacity:0.5;").count() + html.matches(" opacity=").count(), 1, "{ty}: {html}");
             assert!(html.contains("opacity:0.5;"), "{ty}: {html}");
         }
+    }
+
+    #[test]
+    fn html_icon_with_a_gradient_fill_is_drawn() {
+        let dir = std::env::temp_dir().join("nalarupa-test-icon-html");
+        let _ = std::fs::create_dir_all(dir.join("cache/icons"));
+        let _ = std::fs::write(dir.join("cache/icons/lucide_0.563-star.svg"), r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 15 9 22 9 17 14 19 22 12 18 5 22 7 14 2 9 9 9Z"/></svg>"#);
+        let mut e = Engine::new(dir);
+        e.offline();
+        e.load_template("empty");
+        let grad = |a: &str, b: &str| json!({"type": "gradient", "colors": [{"color": a, "position": 0}, {"color": b, "position": 1}]});
+        let icon = |fill: serde_json::Value| json!({"type": "icon", "icon": "star", "library": "lucide", "x": 0, "y": 0, "width": 80, "height": 80, "fill": fill});
+        let frame = json!({"type": "frame", "x": 0, "y": 0, "width": 200, "height": 100, "layout": "none", "children": [
+            icon(json!("#ff0000")), icon(grad("#ff0000", "#0000ff")), icon(grad("#00ff00", "#ffff00"))]});
+        let id = e.insert_root(frame).unwrap();
+        let h = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
+        // The solid icon stays an inline svg tinted by `color`; each gradient icon is painted with its own gradient.
+        assert!(h.contains("color:#ff0000"), "{h}");
+        assert_eq!(h.matches("<path").count(), 3, "{h}");
+        assert!(h.contains("stop-color=\"#0000ff\"") && h.contains("stop-color=\"#ffff00\""), "{h}");
+        // Ids are unique across the page, or the second icon would take the first one's gradient.
+        let ids: Vec<&str> = h.split(" id=\"").skip(1).map(|s| s.split('"').next().unwrap()).collect();
+        assert!(ids.len() >= 2 && ids.iter().all(|i| ids.iter().filter(|j| j == &i).count() == 1), "{ids:?}\n{h}");
     }
 
     #[test]
