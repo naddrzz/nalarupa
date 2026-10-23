@@ -148,13 +148,14 @@ fn gradient_css(o: &serde_json::Map<String, Value>) -> Option<String> {
     let pt = |k: &str, a: &str, d: f64| o.get(k).and_then(|v| v.get(a)).and_then(num).unwrap_or(d);
     let at = |k: &str| pt("center", k, 0.5) * 100.0;
     let kind = o.get("gradientType").and_then(Value::as_str);
-    // CSS has no shifted or resized linear gradient, nor a rotated ellipse (a multiple of 90deg or a circle needs none).
+    // CSS has no shifted or resized linear gradient, nor a rotated ellipse (a multiple of 90deg or a circle needs none),
+    // and its linear gradient line is measured in pixels, so a slanted one differs from the canvas, which rotates the unit frame first.
     let quarter = (rot / 90.0 - (rot / 90.0).round()).abs() < 1e-9;
     let (rw, rh) = (pt("size", "width", 1.0), pt("size", "height", 1.0));
     let beyond_css = match kind {
         Some("radial") => !quarter && rw != rh,
         Some("angular") => false,
-        _ => at("x") != 50.0 || at("y") != 50.0 || rh != 1.0,
+        _ => !quarter || at("x") != 50.0 || at("y") != 50.0 || rh != 1.0,
     };
     if beyond_css {
         return Some(svg_gradient(kind == Some("radial"), (at("x") / 100.0, at("y") / 100.0), (rw, rh), rot, &stops));
@@ -878,6 +879,11 @@ mod tests {
         assert!(s.contains("x1=%220.75%22 y1=%220.5%22 x2=%22-0.25%22 y2=%220.5%22"), "{s}");
         let (s, _) = rect_html(json!({"fill": grad(json!({"gradientType": "radial", "rotation": 45, "size": {"width": 0.3, "height": 0.8}}))}));
         assert!(s.contains("radialGradient") && s.contains("matrix(0.106066 -0.106066 0.282843 0.282843 0.5 0.5)"), "{s}");
+        // A linear gradient rotated off a quarter turn is an SVG background too (CSS measures its line in pixels); quarter turns stay CSS.
+        let (s, _) = rect_html(json!({"fill": grad(json!({"rotation": 60}))}));
+        assert!(s.contains("data:image/svg+xml,%3Csvg") && s.contains("linearGradient") && !s.contains("linear-gradient(-60deg"), "{s}");
+        let (s, _) = rect_html(json!({"fill": grad(json!({"rotation": 180}))}));
+        assert!(s.contains("linear-gradient(-180deg,#ff0000 0%,#0000ff 100%)"), "{s}");
         // An unparseable stop colour stays as transparent black, like the canvas.
         let (s, _) = rect_html(json!({"fill": grad(json!({"colors": [{"color": "#ff0000", "position": 0}, {"color": "transparent", "position": 1}]}))}));
         assert!(s.contains("linear-gradient(-90deg,#ff0000 0%,rgba(0, 0, 0, 0) 100%)"), "{s}");
