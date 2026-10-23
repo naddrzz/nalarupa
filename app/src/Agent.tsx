@@ -93,6 +93,10 @@ function visibleText(it: Extract<ChatItem, { kind: 'assistant' }>, isLast: boole
 
 // The panel unmounts while the Design tab is open; what the user set up in it (draft, agent options, open cards) lives here.
 const kept = new Map<string, unknown>()
+// The mounted panel's draft setter: a pending tab cleanup must reach the panel that is on screen, not the one it started in.
+let liveSetDraft: (d: string) => void = () => {}
+// The draft a Tab-out cleanup restores: still `typed` (the tabbed value) until the cleanup runs or typing goes on.
+let tabCleanup: { typed: string; clean: string } | null = null
 function useKept<T>(key: string, init: () => T) {
   const [v, set] = useState<T>(() => {
     if (!kept.has(key)) kept.set(key, init())
@@ -106,9 +110,20 @@ function useKept<T>(key: string, init: () => T) {
   return [v, setKept] as const
 }
 
+/** `next` without the single Tab that GPUIX's textarea inserts when Tab (or Shift+Tab) moves focus out of it,
+ *  or `next` itself when it differs from `prev` by anything else. */
+function withoutTabKey(prev: string, next: string) {
+  if (next.length !== prev.length + 1) return next
+  let i = 0
+  while (i < prev.length && prev[i] === next[i]) i++
+  return next[i] === '\t' && next.slice(i + 1) === prev.slice(i) ? prev : next
+}
+
 export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: number; running: boolean; mcpUrl: string; toast: Toast; onSent?: () => void }) {
   const [draft, setDraft] = useKept('draft', () => '')
+  liveSetDraft = setDraft
   const input = useFieldRing()
+  const tabbing = useRef(false)
   const [settings, setSettings] = useKept('settings', () => false)
   const [parallel, setParallel] = useKept('parallel', () => '1')
   const [mode, setMode] = useKept<'split' | 'side'>('mode', () => 'split')
@@ -128,12 +143,17 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
   }
   const items = store.items
   const lastId = lastContentId(items)
+  const renderer = useGpuixRequired()
+  const listEl = useRef<PublicInstance | null>(null)
+  const pinNext = useRef<number | null>(null) // id of the last row at the last send, while the list still waits for its echo
 
   const send = (text: string) => {
     const t = text.trim()
     if (!t) return
+    const lastRow = items[items.length - 1]?.id ?? -1 // read before the call: the echo may be pushed while it runs
     if (tryCall('agent_send', { text: t, parallel: Number(parallel), mode, designs, iterate: cookMode }) !== null) {
       setDraft('')
+      pinNext.current = lastRow
       onSent?.()
     } else toast('Unable to start the agent. Check the backend in Agent settings and try again.', true)
   }
@@ -161,6 +181,15 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
     const last = items[items.length - 1]
     return !!last && ((last.kind === 'tool' && !last.running) || (last.kind === 'assistant' && !last.streaming) || last.kind === 'user')
   })()
+  // `followTail` only follows while the list is already at its end, so a message sent from further up re-pins it: once the echo (or queued row) joins the list, scroll to the last row.
+  const rows = items.length + (planning ? 1 : 0)
+  useEffect(() => {
+    if (pinNext.current === null || !listEl.current || !rows) return
+    // A poll batch can append rows after the echo, so look for it among the rows added since the send (ids only grow).
+    if (items.some((i) => i.id > pinNext.current! && (i.kind === 'user' || i.kind === 'queued'))) pinNext.current = null
+    // One past the last row is the list's at-end anchor: unlike the last row's top, it stays at the end when that row grows (an expanded tool result).
+    renderer.scrollToItem?.(listEl.current.id, rows)
+  }, [rows, renderer, items])
   const todos = store.todos
   const doneTodos = todos.filter((t) => t.status === 'completed').length
 
@@ -203,7 +232,7 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
           <T size={11} color={C.ghost}>Each agent gets a cursor on the canvas; what it writes appears while it writes it. Set Agents above 1× to split the work across several agents.</T>
         </div>
       ) : (
-        <virtual-list estimatedItemHeight={44} followTail alignment="bottom" style={{ flexGrow: 1, minHeight: 0, paddingTop: 8, paddingBottom: 8 }}>
+        <virtual-list ref={listEl} estimatedItemHeight={44} followTail alignment="bottom" style={{ flexGrow: 1, minHeight: 0, paddingTop: 8, paddingBottom: 8 }}>
           {items.map((m) => (
             <div key={m.id} style={{ paddingLeft: 12, paddingRight: 12 }}>
               {/* Items are mutated in place, so `tick` (the store version) is what re-renders one; only the live ones take it (a finished row never changes; `isLast` and the row's own ticks cover the rest). */}
@@ -253,7 +282,26 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
               placeholder={running ? 'Queue a follow-up…' : 'Design anything…'}
               minRows={2}
               maxRows={8}
-              onChange={(e) => setDraft(e.value ?? '')}
+              onKeyDown={(e) => { tabbing.current = e.key === 'tab' }}
+              onChange={(e) => {
+                const typed = e.value ?? ''
+                setDraft(typed)
+                // The box drops the tab (and shows its placeholder again) only when the value it is given changes
+                // in a later frame than the tab itself, so the clean draft follows after a pause, unless typing went on.
+                // Only the Tab key counts: a pasted tab is the user's text. A second Tab-out before the pause ends
+                // restores the draft the first one started from.
+                const tabbed = tabbing.current
+                tabbing.current = false
+                if (!tabbed) { tabCleanup = null; return }
+                const clean = tabCleanup?.typed === draft ? tabCleanup.clean : withoutTabKey(draft, typed)
+                if (clean === typed) return
+                const mine = tabCleanup = { typed, clean }
+                setTimeout(() => {
+                  if (tabCleanup !== mine) return
+                  tabCleanup = null
+                  if (kept.get('draft') === typed) liveSetDraft(clean)
+                }, 100)
+              }}
               onSubmit={(e) => send(e.value ?? draft)}
               theme={{ caret: C.accent }}
               style={{ fontSize: 13, color: C.text, fontFamily: FONT, width: '100%' }}
@@ -412,6 +460,7 @@ function ChatHistory({ running, toast, changed }: { running: boolean; toast: Toa
   const close = () => {
     setList(null)
     setConfirm(false)
+    setArmed(null)
   }
   // Core refusals ("Stop the agent before …") are shown as toasts.
   const act = <R,>(cmd: string, args: Record<string, unknown> = {}): R | null => {

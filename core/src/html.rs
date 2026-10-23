@@ -74,13 +74,15 @@ pub fn html_document(e: &mut Engine, ids: &[String], opts: &Value) -> Result<Str
     let base = e.doc.dir();
     let mut body = String::new();
     let mut fonts = Vec::new();
+    let mut svg_ids = 0;
     for id in ids {
         let mut cx = e.ctx();
         let top = crate::render::top_index(cx.doc, id).ok_or_else(|| cx.missing(id))?;
         let root = cx.laid_out(top).ok_or_else(|| cx.missing(id))?;
         let n = find_rnode(&root, id).ok_or_else(|| cx.missing(id))?;
-        let mut h = Html { out: &mut body, names, ids: ids_attr, base: base.clone(), families: &mut fonts, fonts: &mut e.fonts, assets: &mut e.assets };
+        let mut h = Html { out: &mut body, names, ids: ids_attr, base: base.clone(), families: &mut fonts, fonts: &mut e.fonts, assets: &mut e.assets, svg_ids };
         h.node(n, None);
+        svg_ids = h.svg_ids;
     }
     if opts["includeHtmlScaffold"] == false {
         return Ok(body);
@@ -112,6 +114,8 @@ struct Html<'a> {
     families: &'a mut Vec<(String, u16)>,
     fonts: &'a mut crate::text::Fonts,
     assets: &'a mut crate::svg::Assets,
+    /// Ids used by the inline SVGs so far; the next one numbers its ids after them.
+    svg_ids: usize,
 }
 
 fn css_color(v: &str) -> Option<String> {
@@ -161,13 +165,14 @@ fn gradient_css(o: &serde_json::Map<String, Value>) -> Option<String> {
     let pt = |k: &str, a: &str, d: f64| o.get(k).and_then(|v| v.get(a)).and_then(num).unwrap_or(d);
     let at = |k: &str| pt("center", k, 0.5) * 100.0;
     let kind = o.get("gradientType").and_then(Value::as_str);
-    // CSS has no shifted or resized linear gradient, nor a rotated ellipse (a multiple of 90deg or a circle needs none).
+    // CSS has no shifted or resized linear gradient, nor a rotated ellipse (a multiple of 90deg or a circle needs none),
+    // and its linear gradient line is measured in pixels, so a slanted one differs from the canvas, which rotates the unit frame first.
     let quarter = (rot / 90.0 - (rot / 90.0).round()).abs() < 1e-9;
     let (rw, rh) = (pt("size", "width", 1.0), pt("size", "height", 1.0));
     let beyond_css = match kind {
         Some("radial") => !quarter && rw != rh,
         Some("angular") => false,
-        _ => at("x") != 50.0 || at("y") != 50.0 || rh != 1.0,
+        _ => !quarter || at("x") != 50.0 || at("y") != 50.0 || rh != 1.0,
     };
     if beyond_css {
         return Some(svg_gradient(kind == Some("radial"), (at("x") / 100.0, at("y") / 100.0), (rw, rh), rot, &stops));
@@ -232,11 +237,81 @@ fn stroke_overlay(grad: &str, w: &Value, alignment: Option<&str>, blend: Option<
     ))
 }
 
+/// How far the painted stroke reaches outside the box (the canvas's `Stroke::reach`): the widest side for a
+/// rectangle or frame, the top width for another shape; none for an inner stroke or without a visible paint.
+fn stroke_reach(n: &RNode) -> f64 {
+    let painted = fills(n.p.get("stroke")).iter().any(|p| p.as_str().or_else(|| p["color"].as_str()).is_some_and(|c| css_color(c).is_some()) || p.as_object().filter(|o| o.get("type").and_then(Value::as_str) == Some("gradient")).and_then(gradient_css).is_some());
+    let w = match n.p.get("strokeWidth") {
+        Some(Value::Object(s)) => {
+            let side = |k: &str| s.get(k).and_then(num).unwrap_or(0.0).max(0.0);
+            if matches!(n.ty.as_str(), "frame" | "rectangle") { ["top", "right", "bottom", "left"].into_iter().map(side).fold(0.0, f64::max) } else { side("top") }
+        }
+        Some(v) => num(v).unwrap_or(0.0).max(0.0),
+        None => 0.0,
+    };
+    match n.s("strokeAlignment") {
+        _ if !painted => 0.0,
+        Some("inner" | "inside") => 0.0,
+        Some("outer" | "outside") => w,
+        _ => w / 2.0,
+    }
+}
+
 /// Overlay boxes sit above the node's own background and below its children.
 const OVERLAY: &str = "position:absolute;z-index:-1;border-radius:inherit;pointer-events:none;";
 
+/// The CSS layer of an image paint and its opacity (a background has none of its own).
+fn image_layer(o: &serde_json::Map<String, Value>) -> Option<(String, f64)> {
+    let url = o.get("url").and_then(Value::as_str).filter(|u| !u.is_empty())?;
+    let size = match o.get("mode").and_then(Value::as_str) {
+        Some("fit") => "contain",
+        Some("fill") => "cover",
+        _ => "100% 100%",
+    };
+    Some((format!("url('{}') center/{size} no-repeat", esc(url)), o.get("opacity").and_then(num).unwrap_or(1.0).clamp(0.0, 1.0)))
+}
+
+/// A mesh gradient or shader paint of the `n.w`×`n.h` box as a PNG background layer: CSS has no such paint, so it is
+/// rasterised like the SVG export does. None for another paint, an empty box or a shader that fails (the SVG export's
+/// error hatch is a canvas marker; the page shows no fill).
+fn raster_layer(o: &serde_json::Map<String, Value>, n: &RNode, assets: &mut crate::svg::Assets, base: Option<&Path>) -> Option<String> {
+    use base64::Engine as _;
+    let (w, h) = (n.w, n.h);
+    if w <= 0.0 || h <= 0.0 {
+        return None;
+    }
+    let data = match o.get("type").and_then(Value::as_str)? {
+        "mesh_gradient" => {
+            // The SVG export's resolution: at most 512 px, 2x for small boxes.
+            let scale = (512.0 / w.max(h)).min(2.0);
+            let pm = crate::raster::mesh_gradient(o, (w * scale).ceil().max(1.0) as u32, (h * scale).ceil().max(1.0) as u32)?;
+            base64::engine::general_purpose::STANDARD.encode(pm.encode_png().ok()?)
+        }
+        "shader" => {
+            let url = o.get("url").and_then(Value::as_str).unwrap_or("");
+            let src = assets.image(url, base).ok_or_else(|| format!("Shader file not found: \"{url}\"")).and_then(|p| std::fs::read_to_string(p).map_err(|e| e.to_string()));
+            let outline = match n.ty.as_str() {
+                "ellipse" => crate::shader::Outline::Ellipse,
+                _ => crate::shader::Outline::RRect(crate::svg::radii(n)),
+            };
+            // ponytail: `@backdrop` reads nothing here (a transparent pixel); the page has no canvas to sample.
+            let mut load = |u: &str| assets.image(u, base).and_then(|p| crate::svg::decode_image(&p));
+            match src.and_then(|src| crate::shader::png(&src, o.get("uniforms").and_then(Value::as_object), w, h, &outline, &mut load, None)) {
+                Ok(data) => data,
+                Err(e) => {
+                    eprintln!("shader fill {url}: {e}");
+                    return None;
+                }
+            }
+        }
+        _ => return None,
+    };
+    Some(format!("url('data:image/png;base64,{data}') 0 0/100% 100% no-repeat"))
+}
+
 /// The fills bottom to top as CSS layers, with the paint's opacity where CSS cannot fold it into the layer, and its blend mode.
-fn fill_layers(n: &RNode) -> Vec<(String, f64, Option<&'static str>)> {
+/// `raster` draws the paints CSS cannot express (mesh gradients, shaders) into a layer.
+fn fill_layers(n: &RNode, raster: &mut dyn FnMut(&serde_json::Map<String, Value>) -> Option<String>) -> Vec<(String, f64, Option<&'static str>)> {
     let mut layers: Vec<(String, f64, Option<&'static str>)> = Vec::new();
     for f in fills(n.p.get("fill")) {
         let first = layers.len();
@@ -245,17 +320,10 @@ fn fill_layers(n: &RNode) -> Vec<(String, f64, Option<&'static str>)> {
             Value::Object(o) => match o.get("type").and_then(Value::as_str).unwrap_or("color") {
                 "color" => layers.extend(o.get("color").and_then(Value::as_str).and_then(css_color).map(|c| (format!("linear-gradient({c},{c})"), 1.0, None))),
                 "gradient" => layers.extend(gradient_css(o).map(|g| (g, 1.0, None))),
-                "image" => {
-                    let url = o.get("url").and_then(Value::as_str).unwrap_or("");
-                    if !url.is_empty() {
-                        let size = match o.get("mode").and_then(Value::as_str) {
-                            Some("fit") => "contain",
-                            Some("fill") => "cover",
-                            _ => "100% 100%",
-                        };
-                        let opacity = o.get("opacity").and_then(num).unwrap_or(1.0).clamp(0.0, 1.0);
-                        layers.push((format!("url('{}') center/{size} no-repeat", esc(url)), opacity, None));
-                    }
+                "image" => layers.extend(image_layer(o).map(|(l, a)| (l, a, None))),
+                "mesh_gradient" | "shader" => {
+                    let opacity = o.get("opacity").and_then(num).unwrap_or(1.0).clamp(0.0, 1.0);
+                    layers.extend(raster(o).map(|l| (l, opacity, None)));
                 }
                 _ => {}
             },
@@ -271,7 +339,7 @@ fn fill_layers(n: &RNode) -> Vec<(String, f64, Option<&'static str>)> {
 
 /// A bottom fill or a stroke with a blend mode blends with what lies beneath the element, not just its own layers.
 fn blends_backdrop(n: &RNode) -> bool {
-    n.ty != "text" && n.ty != "icon" && (fill_layers(n).first().is_some_and(|l| l.2.is_some()) || fills(n.p.get("stroke")).iter().any(|s| blend_mode(s["blendMode"].as_str()).is_some()))
+    n.ty != "text" && n.ty != "icon" && (fill_layers(n, &mut |_| Some(String::new())).first().is_some_and(|l| l.2.is_some()) || fills(n.p.get("stroke")).iter().any(|s| blend_mode(s["blendMode"].as_str()).is_some()))
 }
 
 fn size_css(v: Option<&Value>, prop: &str, parent_dir: Option<&str>, horiz_axis: bool, measured: f64) -> String {
@@ -345,10 +413,15 @@ impl Html<'_> {
             // fit_content(N) on a node with nothing to hug is N (the laid-out size); the CSS keyword would collapse it to 0.
             let (wl, hl) = (Value::from(px(n.w)), Value::from(px(n.h)));
             let is_fit = |v: Option<&Value>| v.and_then(Value::as_str).is_some_and(|s| s.starts_with("fit_content"));
-            let wv = if is_fit(wv) && !crate::layout::hugs(n, 0) { Some(&wl) } else { wv };
-            let hv = if is_fit(hv) && !crate::layout::hugs(n, 1) { Some(&hl) } else { hv };
+            // A frame without a size is fit_content too; when it hugs a fill child CSS would size it from that child's content.
+            let wv = if is_fit(wv) && !crate::layout::hugs(n, 0) || crate::layout::hugs_fill(n, 0) { Some(&wl) } else { wv };
+            let hv = if is_fit(hv) && !crate::layout::hugs(n, 1) || crate::layout::hugs_fill(n, 1) { Some(&hl) } else { hv };
             css += &size_css(wv, "width", parent_dir, true, n.w);
             css += &size_css(hv, "height", parent_dir, false, n.h);
+            // Fixed-width text without a width wraps at width 0 on the canvas: one word per line.
+            if n.ty == "text" && wv.is_none() {
+                css += &size_css(Some(&Value::from(px(n.w))), "width", parent_dir, true, n.w);
+            }
             if matches!(n.ty.as_str(), "rectangle" | "ellipse" | "icon" | "polygon" | "line" | "path") {
                 if wv.is_none() {
                     css += &size_css(Some(&Value::from(n.w)), "width", parent_dir, true, n.w);
@@ -374,16 +447,18 @@ impl Html<'_> {
             let _ = write!(css, "transform:{};transform-origin:{}px {}px;", tf.trim_start(), px(-n.bx), px(-n.by));
         }
         // Shapes CSS cannot draw are inlined as SVG, which carries their own paint.
-        let as_svg = matches!(n.ty.as_str(), "path" | "polygon" | "line") || n.ty == "ellipse" && (n.f("innerRadius").unwrap_or(0.0) > 0.0 || n.f("sweepAngle").is_some_and(|s| s.abs() < 360.0));
+        // An icon with a paint other than a plain colour (gradient, image, mesh, shader) is drawn by the SVG exporter too.
+        let paint_icon = n.ty == "icon" && fills(n.p.get("fill")).iter().any(|f| f.is_object() && !matches!(f["type"].as_str(), None | Some("color")));
+        let as_svg = paint_icon || matches!(n.ty.as_str(), "path" | "polygon" | "line") || n.ty == "ellipse" &&(n.f("innerRadius").unwrap_or(0.0) > 0.0 || n.f("sweepAngle").is_some_and(|s| s.abs() < 360.0));
         let (under, over) = if as_svg { Default::default() } else { self.paint_css(n, &mut css) };
         let attrs = self.attrs(n);
         match n.ty.as_str() {
             "text" => {
                 self.text_css(n, &mut css);
                 let content = n.s("content").unwrap_or("");
-                let _ = writeln!(self.out, "<p{attrs} style=\"{css}\">{}</p>", esc(content).replace('\n', "<br>"));
+                let _ = writeln!(self.out, "<p{attrs} style=\"{css}\">{}</p>", content.split('\n').map(esc).collect::<Vec<_>>().join("<br>"));
             }
-            "icon" => {
+            "icon" if !as_svg => {
                 // No fill = invisible icon.
                 let fill = fills(n.p.get("fill")).first().and_then(|f| f.as_str().or_else(|| f["color"].as_str())).and_then(css_color);
                 let svg = match fill {
@@ -403,8 +478,9 @@ impl Html<'_> {
                 }
                 let mut shape = RNode::leaf(n.id.clone(), &n.ty, p, None);
                 (shape.x, shape.y, shape.w, shape.h) = (n.x, n.y, n.w, n.h);
-                let mut svg = crate::svg::Svg::new(self.fonts, self.assets, self.base.clone());
+                let mut svg = crate::svg::Svg::new(self.fonts, self.assets, self.base.clone()).start_ids(self.svg_ids);
                 svg.node(&shape);
+                self.svg_ids = svg.uid();
                 // An inline svg sits on the text baseline (display:block keeps a height-0 line in place) and browsers clip it to its viewport; caps, outer strokes and shadows paint past the box.
                 let svg = svg.finish(Some((n.x, n.y, n.w.max(1.0), n.h.max(1.0)))).replacen("<svg ", "<svg style=\"display:block;overflow:visible\" ", 1);
                 let _ = writeln!(self.out, "<div{attrs} style=\"{css}\">{svg}</div>");
@@ -489,7 +565,8 @@ impl Html<'_> {
         let mut under = String::new();
         let mut over = String::new();
         if n.ty != "text" && n.ty != "icon" {
-            let layers = fill_layers(n);
+            let (assets, base) = (&mut *self.assets, self.base.as_deref());
+            let layers = fill_layers(n, &mut |o| raster_layer(o, n, assets, base));
             // CSS lists the topmost background first. A translucent image cannot be a background layer: it and
             // every fill above it become overlays, and so do all fills when the bottom one blends with the backdrop
             // (a background only blends with its own layers).
@@ -577,7 +654,7 @@ impl Html<'_> {
         // The box has no shadow of its own to follow: text and groups cast the shadow of their glyphs and children,
         // and CSS cannot draw an inner shadow there.
         let mut filters: Vec<String> = Vec::new();
-        let gradient_text = n.ty == "text" && fills(n.p.get("fill")).first().is_some_and(|f| f["type"] == "gradient");
+        let gradient_text = n.ty == "text" && fills(n.p.get("fill")).first().is_some_and(|f| matches!(f["type"].as_str(), Some("gradient" | "image")));
         if matches!(n.ty.as_str(), "text" | "group" | "icon") {
             let outer = list.iter().filter(|s| !s.0);
             if n.ty == "text" && !gradient_text {
@@ -599,7 +676,12 @@ impl Html<'_> {
         } else if n.ty == "frame" || visible_fill(n) {
             // Like the canvas, a shape without a visible fill casts nothing (a box-shadow of a transparent box would
             // still paint its outer band); a frame always casts its outer shadow, which is only drawn outside it.
-            shadows.extend(list.iter().map(|(inner, x, y, b, c)| format!("{}{x}px {y}px {b}px {c}", if *inner { "inset " } else { "" })));
+            // A drop shadow is cast by the outline with the stroke's outer part: it spreads by that reach.
+            let reach = stroke_reach(n);
+            shadows.extend(list.iter().map(|(inner, x, y, b, c)| match (inner, reach > 0.0) {
+                (false, true) => format!("{x}px {y}px {b}px {reach}px {c}"),
+                _ => format!("{}{x}px {y}px {b}px {c}", if *inner { "inset " } else { "" }),
+            }));
         }
         if !above.is_empty() {
             let _ = writeln!(over, "<div style=\"position:absolute;inset:0;border-radius:inherit;pointer-events:none;box-shadow:{};\"></div>", above.join(","));
@@ -662,8 +744,14 @@ impl Html<'_> {
         if let Some(a) = n.s("textAlign") {
             let _ = write!(css, "text-align:{a};");
         }
+        // Like the canvas, fixed-width text keeps its newlines and runs of spaces and breaks a word wider than the box,
+        // except in a box of width 0, where a word is never split.
         if n.s("textGrowth").unwrap_or("auto") == "auto" {
             css.push_str("white-space:pre;");
+        } else if n.w > 0.0 {
+            css.push_str("white-space:pre-wrap;overflow-wrap:anywhere;");
+        } else {
+            css.push_str("white-space:pre-wrap;");
         }
         let mut deco = Vec::new();
         if n.b("underline") {
@@ -675,12 +763,25 @@ impl Html<'_> {
         if !deco.is_empty() {
             let _ = write!(css, "text-decoration:{};", deco.join(" "));
         }
-        let gradient = fills(n.p.get("fill")).first().and_then(|f| f.as_object().filter(|o| o.get("type").and_then(Value::as_str) == Some("gradient"))).and_then(gradient_css);
-        if let Some(g) = gradient {
+        // A gradient or image fill is the background clipped to the glyphs.
+        let mut fill_opacity = 1.0;
+        let clip = fills(n.p.get("fill")).first().and_then(|f| f.as_object()).and_then(|o| match o.get("type").and_then(Value::as_str) {
+            Some("gradient") => gradient_css(o),
+            Some("image") => image_layer(o).map(|(l, a)| {
+                fill_opacity = a;
+                l
+            }),
+            _ => None,
+        });
+        if let Some(g) = clip {
             let _ = write!(css, "background:{g};-webkit-background-clip:text;background-clip:text;color:transparent;");
             // Decorations default to the transparent colour; an opaque one lets the clipped gradient show through them.
             if !deco.is_empty() {
                 css.push_str("text-decoration-color:#000000;");
+            }
+            // A background has no opacity of its own: the element takes it (a later declaration beats the node's), which fades a stroke too.
+            if fill_opacity < 1.0 {
+                let _ = write!(css, "opacity:{};", n.f("opacity").unwrap_or(1.0) * fill_opacity);
             }
         } else if let Some(c) = fills(n.p.get("fill")).first().and_then(|f| f.as_str().map(str::to_string).or_else(|| f["color"].as_str().map(str::to_string))).and_then(|c| css_color(&c)) {
             let _ = write!(css, "color:{c};");
@@ -825,6 +926,11 @@ mod tests {
         assert!(s.contains("x1=%220.75%22 y1=%220.5%22 x2=%22-0.25%22 y2=%220.5%22"), "{s}");
         let (s, _) = rect_html(json!({"fill": grad(json!({"gradientType": "radial", "rotation": 45, "size": {"width": 0.3, "height": 0.8}}))}));
         assert!(s.contains("radialGradient") && s.contains("matrix(0.106066 -0.106066 0.282843 0.282843 0.5 0.5)"), "{s}");
+        // A linear gradient rotated off a quarter turn is an SVG background too (CSS measures its line in pixels); quarter turns stay CSS.
+        let (s, _) = rect_html(json!({"fill": grad(json!({"rotation": 60}))}));
+        assert!(s.contains("data:image/svg+xml,%3Csvg") && s.contains("linearGradient") && !s.contains("linear-gradient(-60deg"), "{s}");
+        let (s, _) = rect_html(json!({"fill": grad(json!({"rotation": 180}))}));
+        assert!(s.contains("linear-gradient(-180deg,#ff0000 0%,#0000ff 100%)"), "{s}");
         // An unparseable stop colour stays as transparent black, like the canvas.
         let (s, _) = rect_html(json!({"fill": grad(json!({"colors": [{"color": "#ff0000", "position": 0}, {"color": "transparent", "position": 1}]}))}));
         assert!(s.contains("linear-gradient(-90deg,#ff0000 0%,rgba(0, 0, 0, 0) 100%)"), "{s}");
@@ -861,6 +967,37 @@ mod tests {
         assert!(h.find("#ff0000") < h.find("padding:10px;") && !h.contains("z-index:-1"), "{h}");
         let h = ring("center");
         assert!(h.find("#ff0000") < h.find("inset:0px;padding:5px;") && h.contains("inset:-5px;padding:5px;") && h.matches("z-index:-1").count() == 2, "{h}");
+    }
+
+    /// The canvas casts a drop shadow from the outline with the stroke's outer part, so the shadow spreads by that reach
+    /// (an offset smaller than the stroke would hide under the stroke ring otherwise); inner shadows and inner strokes do not.
+    #[test]
+    fn drop_shadow_is_cast_from_the_stroked_outline() {
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        e.load_template("empty");
+        let mut html = |align: &str, width: serde_json::Value, shadow: serde_json::Value| {
+            let rect = json!({"type": "rectangle", "width": 100, "height": 50, "fill": "#ffffff", "stroke": "#000000", "strokeWidth": width, "strokeAlignment": align, "effect": shadow});
+            let id = e.insert_root(rect).unwrap();
+            super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap()
+        };
+        let drop = json!({"type": "shadow", "offset": {"x": 12, "y": 12}, "color": "#ff0000"});
+        let h = html("outer", json!(20), drop.clone());
+        assert!(h.contains("box-shadow:0 0 0 20px #000000,12px 12px 0px 20px #ff0000;"), "{h}");
+        let h = html("center", json!(20), drop.clone());
+        assert!(h.contains("box-shadow:inset 0 0 0 10px #000000,0 0 0 10px #000000,12px 12px 0px 10px #ff0000;"), "{h}");
+        // The widest side reaches furthest.
+        let h = html("outer", json!({"top": 2, "right": 8, "bottom": 4, "left": 6}), drop.clone());
+        assert!(h.contains("12px 12px 0px 8px #ff0000"), "{h}");
+        let h = html("inner", json!(20), drop.clone());
+        assert!(h.contains("box-shadow:inset 0 0 0 20px #000000,12px 12px 0px #ff0000;"), "{h}");
+        let h = html("outer", json!(20), json!({"type": "shadow", "shadowType": "inner", "offset": {"x": 12, "y": 12}, "color": "#ff0000"}));
+        assert!(h.contains("inset 12px 12px 0px #ff0000") && !h.contains("20px #ff0000"), "{h}");
+        // A gradient stroke without stops paints nothing, so it adds no reach.
+        let empty = json!({"type": "rectangle", "width": 100, "height": 50, "fill": "#ffffff", "stroke": {"type": "gradient", "colors": []}, "strokeWidth": 20, "strokeAlignment": "outer", "effect": drop.clone()});
+        let id = e.insert_root(empty).unwrap();
+        let h = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
+        assert!(h.contains("12px 12px 0px #ff0000") && !h.contains("20px #ff0000"), "{h}");
     }
 
     /// A frame whose fill blends with the backdrop paints its overlay in tree order: flow children must be positioned to stay above it.
@@ -996,6 +1133,21 @@ mod tests {
         assert!(empty.contains("width:25px;") && empty.contains("height:fit-content;"), "{empty}");
     }
 
+    /// A fit_content parent with a fill child gets the laid-out size: CSS would size it from the fill child's content.
+    #[test]
+    fn hugging_parent_of_a_fill_child_is_exported_as_pixels() {
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        e.load_template("empty");
+        let id = e.insert_root(json!({"type": "frame", "name": "Card", "layout": "vertical", "padding": 16, "gap": 8, "children": [
+            {"type": "rectangle", "name": "fill", "width": "fill_container", "height": 20, "fill": "#00ff00"},
+            {"type": "rectangle", "name": "btn", "width": 120, "height": 40, "fill": "#0000ff"}]})).unwrap();
+        let h = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
+        let card = h.lines().find(|l| l.contains("data-name=\"Card\"")).unwrap();
+        // The width has a fill child (152 = 120 + 2 * 16); the height has none and stays the browser's to hug.
+        assert!(card.contains("width:152px;") && !card.contains("fit-content") && !card.contains("height:"), "{card}");
+    }
+
     /// A rotated or flipped child of an auto layout takes its bounding box in the flow, like the canvas.
     #[test]
     fn tilted_children_reserve_their_bounding_box() {
@@ -1041,6 +1193,29 @@ mod tests {
             assert_eq!(html.matches("opacity:0.5;").count() + html.matches(" opacity=").count(), 1, "{ty}: {html}");
             assert!(html.contains("opacity:0.5;"), "{ty}: {html}");
         }
+    }
+
+    #[test]
+    fn html_icon_with_a_gradient_fill_is_drawn() {
+        let dir = std::env::temp_dir().join("nalarupa-test-icon-html");
+        let _ = std::fs::create_dir_all(dir.join("cache/icons"));
+        let _ = std::fs::write(dir.join("cache/icons/lucide_0.563-star.svg"), r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 15 9 22 9 17 14 19 22 12 18 5 22 7 14 2 9 9 9Z"/></svg>"#);
+        let mut e = Engine::new(dir);
+        e.offline();
+        e.load_template("empty");
+        let grad = |a: &str, b: &str| json!({"type": "gradient", "colors": [{"color": a, "position": 0}, {"color": b, "position": 1}]});
+        let icon = |fill: serde_json::Value| json!({"type": "icon", "icon": "star", "library": "lucide", "x": 0, "y": 0, "width": 80, "height": 80, "fill": fill});
+        let frame = json!({"type": "frame", "x": 0, "y": 0, "width": 200, "height": 100, "layout": "none", "children": [
+            icon(json!("#ff0000")), icon(grad("#ff0000", "#0000ff")), icon(grad("#00ff00", "#ffff00"))]});
+        let id = e.insert_root(frame).unwrap();
+        let h = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
+        // The solid icon stays an inline svg tinted by `color`; each gradient icon is painted with its own gradient.
+        assert!(h.contains("color:#ff0000"), "{h}");
+        assert_eq!(h.matches("<path").count(), 3, "{h}");
+        assert!(h.contains("stop-color=\"#0000ff\"") && h.contains("stop-color=\"#ffff00\""), "{h}");
+        // Ids are unique across the page, or the second icon would take the first one's gradient.
+        let ids: Vec<&str> = h.split(" id=\"").skip(1).map(|s| s.split('"').next().unwrap()).collect();
+        assert!(ids.len() >= 2 && ids.iter().all(|i| ids.iter().filter(|j| j == &i).count() == 1), "{ids:?}\n{h}");
     }
 
     #[test]
@@ -1109,6 +1284,41 @@ mod tests {
         assert!(err.contains("node not found") && !err.contains("hidden"), "{err}");
     }
 
+    /// Mesh gradients, shaders and image fills on text reach the HTML as backgrounds (they were dropped before).
+    #[test]
+    fn mesh_shader_and_text_image_fills_are_exported() {
+        let mesh = json!({"type": "mesh_gradient", "columns": 2, "rows": 2, "colors": ["#ff0000", "#00ff00", "#0000ff", "#ffff00"], "points": [[0, 0], [1, 0], [0, 1], [1, 1]]});
+        let (s, _) = rect_html(json!({"fill": mesh}));
+        assert!(s.contains("background:url('data:image/png;base64,") && s.contains(") 0 0/100% 100% no-repeat;"), "{s}");
+        // A translucent mesh is an overlay with the paint's opacity, like a translucent image.
+        let half = json!({"type": "mesh_gradient", "opacity": 0.5, "columns": 2, "rows": 2, "colors": ["#ff0000", "#00ff00", "#0000ff", "#ffff00"], "points": [[0, 0], [1, 0], [0, 1], [1, 1]]});
+        let (s, h) = rect_html(json!({"fill": ["#ffffff", half]}));
+        assert!(s.contains("background:linear-gradient(#ffffff,#ffffff);") && h.contains("data:image/png;base64,") && h.contains("opacity:0.5;"), "{h}");
+        // A shader that is missing leaves no background (and does not break the export).
+        let (s, _) = rect_html(json!({"fill": {"type": "shader", "url": "nope.glsl"}}));
+        assert!(!s.contains("background"), "{s}");
+        // A shader that runs is a PNG background too (needs a GPU adapter).
+        if crate::shader::adapter().is_ok() {
+            let dir = std::env::temp_dir().join("nalarupa-test-html-shader");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("red.glsl"), "void main() { gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0); }").unwrap();
+            let (s, _) = rect_html(json!({"fill": {"type": "shader", "url": dir.join("red.glsl").to_str().unwrap()}}));
+            assert!(s.contains("background:url('data:image/png;base64,"), "{s}");
+        }
+
+        // An image fill on text is the background clipped to the glyphs, as a gradient is.
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        e.load_template("empty");
+        let id = e.insert_root(json!({"type": "text", "content": "IMG", "fontSize": 60, "fill": {"type": "image", "url": "pic.png", "mode": "fill"}})).unwrap();
+        let h = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
+        assert!(h.contains("background:url('pic.png') center/cover no-repeat;-webkit-background-clip:text;background-clip:text;color:transparent;"), "{h}");
+        // The image paint's opacity multiplies the node's, as the element is all a background can fade.
+        let id = e.insert_root(json!({"type": "text", "content": "IMG", "fontSize": 60, "opacity": 0.5, "fill": {"type": "image", "url": "pic.png", "mode": "fill", "opacity": 0.5}})).unwrap();
+        let h = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
+        assert!(h.contains("opacity:0.5;") && h.contains("color:transparent;opacity:0.25;"), "{h}");
+    }
+
     /// A text stroke reaches the SVG and HTML exports (it was dropped before).
     #[test]
     fn text_stroke_is_exported() {
@@ -1131,5 +1341,41 @@ mod tests {
         // Stroke-only text does not take the inherited color as its fill.
         let hollow = e.insert_root(json!({"type": "text", "content": "Out", "fontSize": 50, "stroke": "#000000", "strokeWidth": 4})).unwrap();
         assert!(html(&mut e, &hollow).contains("color:transparent;-webkit-text-stroke:4px #000000;"));
+    }
+
+    /// Fixed-width text keeps its newlines and spaces and breaks long words like the canvas; auto-growth text stays on `pre`.
+    #[test]
+    fn fixed_width_text_wraps_like_the_canvas() {
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        e.load_template("empty");
+        let style_of = |e: &mut Engine, growth: &str| {
+            let id = e.insert_root(json!({"type": "text", "content": "a\n\nb   c", "fontSize": 16, "textGrowth": growth, "width": 100})).unwrap();
+            let html = super::html_document(e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
+            html.split("style=\"").nth(1).unwrap().split('"').next().unwrap().to_string()
+        };
+        for growth in ["fixed-width", "fixed-width-height"] {
+            let style = style_of(&mut e, growth);
+            assert!(style.contains("white-space:pre-wrap;overflow-wrap:anywhere;"), "{growth}: {style}");
+        }
+        // Without a width the box is 0 wide: one word per line, no split inside a word.
+        let id = e.insert_root(json!({"type": "text", "content": "one two", "fontSize": 16, "textGrowth": "fixed-width"})).unwrap();
+        let html = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
+        assert!(html.contains("width:0px;") && html.contains("white-space:pre-wrap;") && !html.contains("overflow-wrap"), "{html}");
+        let auto = style_of(&mut e, "auto");
+        assert!(auto.contains("white-space:pre;") && !auto.contains("overflow-wrap"), "{auto}");
+    }
+
+    /// Newlines in text become `<br>`: `esc` drops control characters, so each line is escaped on its own.
+    #[test]
+    fn text_keeps_its_line_breaks() {
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        e.load_template("empty");
+        for growth in ["auto", "fixed-width"] {
+            let id = e.insert_root(json!({"type": "text", "content": "a\nb <i>\n\nc", "fontSize": 16, "textGrowth": growth, "width": 100})).unwrap();
+            let html = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
+            assert!(html.contains(">a<br>b &lt;i&gt;<br><br>c</p>"), "{growth}: {html}");
+        }
     }
 }

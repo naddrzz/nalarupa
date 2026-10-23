@@ -1,6 +1,6 @@
 // End-to-end check against the real GPU window: `bun scripts/e2e.ts`
 // Screenshots land in app/screenshots/. The window opens in the background.
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { launch } from '@gpuix/react/automation'
@@ -167,20 +167,21 @@ try {
   if ((await texts('TextHello')).length) throw new Error('the placeholder was kept in front of the typed text')
   for (const id of await texts('Hello')) await mcp('execute', { input: `Delete("${id}")` })
 
+  // Whole-screen pixels via grim (Linux only).
+  const grab = async () => {
+    const buf = Buffer.from(await Bun.$`grim -t ppm -`.quiet().arrayBuffer())
+    let p = 0
+    const head: string[] = []
+    while (head.length < 4) {
+      let t = ''
+      while (buf[p] > 32) t += String.fromCharCode(buf[p++])
+      p++
+      head.push(t)
+    }
+    return { w: +head[1], px: buf.subarray(p) }
+  }
   // A text field clicked into draws a focus ring. Linux only: grim.
   if (process.platform === 'linux') {
-    const grab = async () => {
-      const buf = Buffer.from(await Bun.$`grim -t ppm -`.quiet().arrayBuffer())
-      let p = 0
-      const head: string[] = []
-      while (head.length < 4) {
-        let t = ''
-        while (buf[p] > 32) t += String.fromCharCode(buf[p++])
-        p++
-        head.push(t)
-      }
-      return { w: +head[1], px: buf.subarray(p) }
-    }
     // The box around everything that changed on screen (the output, not the window, is what grim grabs). A
     // caret or the swap of a field's text stays within the input; its ring is 4+ px bigger on every side.
     const changedBox = async (before: Awaited<ReturnType<typeof grab>>) => {
@@ -265,6 +266,14 @@ TakeScreenshot([s])`,
   sameSpot('generating glow', await centre('agent-glow-turned'), await selectedCentre('SpinGen'))
   await shot('05b-rotated-overlays')
   await mcp('execute', { input: `Delete(Get(n => n.name === "SpinImg" ? n.id : undefined)[0]); Delete(Get(n => n.name === "SpinGen" ? n.id : undefined)[0])` })
+  await sleep(300)
+
+  // A flash goes with its node: deleting the node while the flash shows removes the outline at once
+  // (it used to hang around the empty spot for the rest of the ~0.9 s flash).
+  await mcp('execute', { input: `Insert(document, {type:"rectangle", name:"SpinGone", x:300, y:600, width:400, height:160, rotation:-30, fill:"#ff3355"})` })
+  if (!(await poll(async () => (await app!.getByTestId('agent-flash-turned').count()) > 0))) throw new Error('no flash on the node to delete')
+  await mcp('execute', { input: `Delete(Get(n => n.name === "SpinGone" ? n.id : undefined)[0])` })
+  if (!(await poll(async () => (await app!.getByTestId('agent-flash-turned').count()) === 0, 400))) throw new Error('the flash of a deleted node is still on screen')
   await sleep(300)
 
   // Slides tab → Export deck to PDF: one page per top-level frame (3 template slides + the MCP one).
@@ -385,6 +394,30 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
   const canvasBox = (await app.getByTestId('canvas').bounds())!
   if (planField.y + planField.height > canvasBox.y + canvasBox.height) throw new Error(`32 todos pushed the composer to ${planField.y + planField.height}, below the window's bottom ${canvasBox.y + canvasBox.height}`)
 
+  // Tab and Shift+Tab out of the empty composer leave its placeholder painted (the textarea used to keep the
+  // Tab it was typed as, which hid the placeholder). GPUIX paints the placeholder itself, so compare pixels:
+  // the box looks as it did before it was focused. Linux only: grim, and sway for the window's origin.
+  const dir = process.env.XDG_RUNTIME_DIR
+  const sock = process.platform === 'linux' && dir ? readdirSync(dir).find((f) => f.startsWith('sway-ipc')) : undefined
+  if (process.platform === 'linux' && !sock) throw new Error('sway IPC socket not found in XDG_RUNTIME_DIR: run via scripts/wl-run.sh')
+  if (sock) {
+    type Node = { type: string; rect: { x: number; y: number }; nodes?: Node[]; floating_nodes?: Node[] }
+    const windowOf = (n: Node): Node | undefined => n.type === 'floating_con' ? n : [...(n.nodes ?? []), ...(n.floating_nodes ?? [])].map(windowOf).find(Boolean)
+    const origin = windowOf(JSON.parse(await Bun.$`swaymsg -s ${join(dir!, sock)} -t get_tree`.text()))!.rect
+    const box = (await app.getByTestId('agent-input').bounds())!
+    const rows = (g: Awaited<ReturnType<typeof grab>>) => Array.from({ length: Math.floor(box.height) }, (_, i) => {
+      const from = ((Math.floor(origin.y + box.y) + i) * g.w + Math.floor(origin.x + box.x)) * 3
+      return g.px.subarray(from, from + Math.floor(box.width) * 3).toString('hex')
+    }).join()
+    const idle = rows(await grab())
+    for (const keys of ['tab', 'shift-tab']) {
+      await app.getByTestId('agent-input').click()
+      await sleep(300)
+      await app.call('keystrokes', { keys })
+      await until(async () => rows(await grab()) === idle, `the empty composer to show its placeholder after ${keys}`)
+    }
+  }
+
   // Shift+Tab leaves a text field backwards (GPUIX registers a field's focus handle twice, so GPUI's own
   // walk lands on the field again): from the composer it reaches the Plan toggle above it, which Enter
   // folds, and Enter again unfolds.
@@ -483,6 +516,14 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
   await app.getByTestId(`chat-remove-${chatId}`).click()
   await sleep(200)
   if (!existsSync(chatFile)) throw new Error('one press on remove deleted the chat without asking')
+  // Closing the popover disarms it: a stray click after reopening must not delete the chat.
+  await app.getByTestId('agent-history').click()
+  await until(async () => (await app.getByTestId('chat-history').count()) === 0, 'the history popover to close')
+  await app.getByTestId('agent-history').click()
+  await app.getByTestId(`chat-${chatId}`).waitFor()
+  if (await app.getByTestId(`chat-remove-confirm-${chatId}`).count()) throw new Error('an armed remove stayed armed after the history popover was closed and reopened')
+  await app.getByTestId(`chat-${chatId}`).hover()
+  await app.getByTestId(`chat-remove-${chatId}`).click()
   await app.getByTestId(`chat-remove-confirm-${chatId}`).click()
   await sleep(300)
   if (existsSync(chatFile)) throw new Error(`removing the chat left ${chatFile}`)
@@ -626,6 +667,32 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
     await app.getByText('Got editor state').waitFor({ timeoutMs: 15000 })
     await app.getByText('Got editor state').click()
     await until(async () => (await app!.getByText('result row 119').count()) > 0, 'the last line of a long tool result')
+
+    // Sending while scrolled up in the chat returns the list to the bottom: the echo and the reply are on screen, not off it.
+    // The list keeps rows past its viewport mounted, so "on screen" is the row's bounds being above the composer.
+    await until(async () => !!(await app!.getByTestId('agent-input').bounds()), 'the chat composer')
+    const composer = (await app.getByTestId('agent-input').bounds())!
+    const onScreen = async (text: string) => {
+      const b = await app!.getByText(text).bounds().catch(() => null) // throws while the row is not mounted
+      return !!b && b.y + b.height <= composer.y
+    }
+    await until(async () => {
+      await app!.mouse.wheel({ x: composer.x + 40, y: 300 }, 0, 600)
+      await sleep(200)
+      return !(await onScreen('result row 119'))
+    }, 'the chat to scroll up from its tail', 20000)
+    const oldReplies = new Set((await app.getByType('markdown').all()).map((n) => n.id))
+    writeFileSync(join(bin, 'claude'), `#!/bin/sh\necho '${delta('Echo: scrolled reply')}'\n`, { mode: 0o755 })
+    await app.getByTestId('agent-input').click()
+    await app.getByTestId('agent-input').fill('Sent while scrolled up')
+    await sleep(200)
+    await app.getByTestId('agent-send').click()
+    await until(() => onScreen('Sent while scrolled up'), 'the sent message on screen after sending from a scrolled-up chat')
+    // The reply is a markdown block (its text is not queryable): the one that was not mounted before the send.
+    await until(async () => {
+      const b = (await app!.getByType('markdown').all()).find((n) => !oldReplies.has(n.id))?.bounds
+      return !!b && b.height > 0 && b.y + b.height <= composer.y
+    }, 'the reply on screen after sending from a scrolled-up chat')
   }
 
   // A layer selected on the canvas scrolls the (virtual) Layers list to its row: here the last of 150 rows (the first inserted).
@@ -662,6 +729,15 @@ for (let i = 0; i < 149; i++) Insert(f, {type:"rectangle", name:"Chip " + i, x:(
   await shot('06-present')
   await app.getByTestId('presentation').press('escape')
   await sleep(500)
+  // A new document starts without the external agent's cursor from the one before.
+  await mcp('execute', { input: 'Insert(document, {type:"rectangle", name:"Presence", x:100, y:100, width:300, height:200, fill:"#22ff55"})' })
+  await until(async () => (await app!.getByTestId('agent-cursor-external').count()) > 0, "the external agent's cursor")
+  await app.getByTestId('home').click()
+  await app.getByTestId('template-blank').click()
+  await app.getByTestId('unsaved-discard').click()
+  await until(async () => (await app!.getByTestId('canvas').count()) > 0, 'the new document')
+  await sleep(1500) // the old cursor, if kept, shows within a frame or two of the canvas
+  if (await app.getByTestId('agent-cursor-external').count()) throw new Error("the previous document's external agent cursor is still on the new canvas")
   console.log('e2e ok — screenshots in', out)
 } finally {
   await app?.close()

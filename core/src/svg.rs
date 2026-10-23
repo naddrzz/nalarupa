@@ -20,6 +20,10 @@ pub struct Assets {
     icons: HashMap<String, Option<String>>,
     /// Image URLs whose download failed this session (not retried on every layer rebuild).
     failed: std::collections::HashSet<String>,
+    /// Whether a `data:` image is within the size limit, by url hash (its header is decoded once, not per use).
+    data_ok: HashMap<u64, bool>,
+    /// Too-deep verdicts of SVG images, keyed by `deep_key` and valid while the stamp matches.
+    deep: HashMap<String, (u64, bool)>,
     pub online: bool,
 }
 
@@ -27,7 +31,7 @@ impl Assets {
     pub fn new(dir: PathBuf) -> Assets {
         let _ = std::fs::create_dir_all(dir.join("icons"));
         let _ = std::fs::create_dir_all(dir.join("images"));
-        Assets { dir, icons: HashMap::new(), failed: Default::default(), online: true }
+        Assets { dir, icons: HashMap::new(), failed: Default::default(), data_ok: HashMap::new(), deep: HashMap::new(), online: true }
     }
 
     /// Icon at the default weight (200; only Material Symbols has weights).
@@ -68,8 +72,51 @@ impl Assets {
         svg
     }
 
-    /// Resolve an image fill url to a local file path usvg can load.
+    /// Resolve an image fill url to a local file path usvg can load. A raster image over
+    /// `MAX_IMAGE_PIXELS` is refused like a missing one: decoding it would freeze the render and
+    /// need gigabytes (a few KB of PNG can declare 30000 x 30000). An SVG nested deeper than
+    /// `MAX_SVG_DEPTH` counts as unavailable too: usvg recurses per level and overflows the stack.
     pub fn image(&mut self, url: &str, base: Option<&Path>) -> Option<String> {
+        let href = self.resolve_image(url, base)?;
+        if !self.within_pixel_limit(&href, url) {
+            return None;
+        }
+        let too_deep = match deep_key(&href) {
+            None => false,
+            Some((key, stamp)) => match self.deep.get(&key) {
+                Some(&(s, v)) if s == stamp => v,
+                _ => {
+                    let v = svg_too_deep(&href);
+                    self.deep.insert(key, (stamp, v));
+                    v
+                }
+            },
+        };
+        (!too_deep).then_some(href)
+    }
+
+    /// Whether a raster image's declared size is within `MAX_IMAGE_PIXELS` (the verdict of a `data:` image is cached).
+    fn within_pixel_limit(&mut self, href: &str, url: &str) -> bool {
+        let is_data = href.starts_with("data:");
+        let key = fxhash(href);
+        if is_data {
+            if let Some(&ok) = self.data_ok.get(&key) {
+                return ok;
+            }
+        }
+        let size = href_size(href);
+        let ok = size.is_none_or(|(w, h)| w as u64 * h as u64 <= MAX_IMAGE_PIXELS);
+        if let (false, Some((w, h))) = (ok, size) {
+            let shown = if is_data { "<data URL>" } else { url };
+            eprintln!("image {shown}: {w}x{h} px is over the {} megapixel limit", MAX_IMAGE_PIXELS / 1_000_000);
+        }
+        if is_data {
+            self.data_ok.insert(key, ok);
+        }
+        ok
+    }
+
+    fn resolve_image(&mut self, url: &str, base: Option<&Path>) -> Option<String> {
         if url.is_empty() || url.starts_with("pencil:") {
             return None;
         }
@@ -108,6 +155,213 @@ impl Assets {
         let full = if p.is_absolute() { p.to_path_buf() } else { base?.join(rel) };
         full.exists().then(|| full.to_string_lossy().replace('\\', "/"))
     }
+}
+
+/// Largest raster image decoded, in pixels (RGBA: 400 MB).
+const MAX_IMAGE_PIXELS: u64 = 100_000_000;
+
+/// Declared pixel size of a raster image given as `Assets::image` returns it (a file path or a
+/// `data:` url), read from its header without decoding. None for SVG or anything unrecognised.
+fn href_size(href: &str) -> Option<(u32, u32)> {
+    if href.starts_with("data:") {
+        let (bytes, _) = data_url::DataUrl::process(href).ok()?.decode_to_vec().ok()?;
+        return image_size(&mut std::io::Cursor::new(bytes));
+    }
+    image_size(&mut std::io::BufReader::new(std::fs::File::open(href).ok()?))
+}
+
+/// Width and height from a PNG, GIF, JPEG or WebP header.
+fn image_size<R: std::io::BufRead + std::io::Seek>(r: &mut R) -> Option<(u32, u32)> {
+    use std::io::{Read, SeekFrom};
+    let mut head = [0u8; 24];
+    let n = r.read(&mut head).ok()?;
+    let be16 = |b: &[u8]| u16::from_be_bytes([b[0], b[1]]) as u32;
+    match head {
+        [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13, b'I', b'H', b'D', b'R', ..] if n >= 24 => Some((u32::from_be_bytes(head[16..20].try_into().ok()?), u32::from_be_bytes(head[20..24].try_into().ok()?))),
+        [b'G', b'I', b'F', b'8', ..] if n >= 10 => Some((u16::from_le_bytes([head[6], head[7]]) as u32, u16::from_le_bytes([head[8], head[9]]) as u32)),
+        [b'R', b'I', b'F', b'F', _, _, _, _, b'W', b'E', b'B', b'P', ..] => {
+            r.seek(SeekFrom::Start(0)).ok()?;
+            image_webp::WebPDecoder::new(r).ok().map(|d| d.dimensions())
+        }
+        [0xFF, 0xD8, ..] => {
+            r.seek(SeekFrom::Start(2)).ok()?;
+            // Walk the marker segments to the first start-of-frame (C0-CF but not DHT, JPG, DAC).
+            loop {
+                let mut m = [0u8; 2];
+                r.read_exact(&mut m).ok()?;
+                match m {
+                    [0xFF, 0xFF] => {
+                        r.seek(SeekFrom::Current(-1)).ok()?;
+                    }
+                    [0xFF, 0x01 | 0xD0..=0xD7] => {}
+                    [0xFF, 0xD9 | 0xDA] | [_, 0x00] => return None,
+                    [0xFF, t] => {
+                        let mut seg = [0u8; 7];
+                        r.read_exact(&mut seg[..2]).ok()?;
+                        let len = be16(&seg) as i64;
+                        if matches!(t, 0xC0..=0xCF) && !matches!(t, 0xC4 | 0xC8 | 0xCC) {
+                            r.read_exact(&mut seg[2..7]).ok()?;
+                            return Some((be16(&seg[5..]), be16(&seg[3..])));
+                        }
+                        r.seek(SeekFrom::Current(len - 2)).ok()?;
+                    }
+                    _ => return None,
+                }
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Deepest element nesting an SVG image may have; usvg's own parse overflows a 2 MiB stack at ~3500.
+const MAX_SVG_DEPTH: usize = 256;
+
+thread_local! {
+    /// Element depth of the SVG images being parsed right now, outermost first (see `image_href_resolver`).
+    static NESTED_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// usvg's data-url image resolver, refusing SVGs whose nesting, summed over images embedded in
+/// images, exceeds `MAX_SVG_DEPTH`. `Assets::image` vets the top-level image; this covers a shallow
+/// SVG that carries a deep one as a `data:` url, which usvg would parse recursively.
+pub fn image_href_resolver() -> resvg::usvg::ImageHrefResolver<'static> {
+    let inner = resvg::usvg::ImageHrefResolver::default_data_resolver();
+    resvg::usvg::ImageHrefResolver {
+        resolve_data: Box::new(move |mime, data, opts| {
+            let used = NESTED_DEPTH.get();
+            let depth = if is_svg_payload(mime, &data) { max_depth(&data, MAX_SVG_DEPTH - used) } else { 0 };
+            if used + depth > MAX_SVG_DEPTH {
+                return None;
+            }
+            NESTED_DEPTH.set(used + depth);
+            let kind = inner(mime, data, opts);
+            NESTED_DEPTH.set(used);
+            kind
+        }),
+        resolve_string: resvg::usvg::ImageHrefResolver::default_string_resolver(),
+    }
+}
+
+/// Whether usvg parses a data url of this MIME type and content as an SVG (it sniffs `text/plain`).
+fn is_svg_payload(mime: &str, bytes: &[u8]) -> bool {
+    matches!(mime, "image/svg+xml" | "text/plain") && image_ext(bytes) == "svg"
+}
+
+/// Cache key and change stamp of an image `svg_too_deep` would scan: a `data:` url (by hash) or an
+/// `.svg` file (by path, stamped with its size and modification time).
+fn deep_key(href: &str) -> Option<(String, u64)> {
+    if href.starts_with("data:") {
+        return Some((format!("{:016x}", fxhash(href)), 0));
+    }
+    if !href.to_ascii_lowercase().ends_with(".svg") {
+        return None;
+    }
+    let meta = std::fs::metadata(href).ok()?;
+    let nanos = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos() as u64);
+    Some((href.to_string(), meta.len().wrapping_add(nanos)))
+}
+
+/// Whether the image behind a `data:` url or a file path is an SVG nested deeper than `MAX_SVG_DEPTH`.
+fn svg_too_deep(href: &str) -> bool {
+    let bytes = if let Some(rest) = href.strip_prefix("data:") {
+        let Some((head, payload)) = rest.split_once(',') else { return false };
+        // Only what usvg parses as markup: other MIME types are skipped, or ignored by usvg.
+        if !matches!(head.split(';').next().unwrap_or(""), "image/svg+xml" | "text/plain" | "") {
+            return false;
+        }
+        let bytes = if head.ends_with(";base64") {
+            match base64::engine::general_purpose::STANDARD.decode(payload.trim()) {
+                Ok(b) => b,
+                Err(_) => return false,
+            }
+        } else {
+            percent_decode(payload)
+        };
+        if image_ext(&bytes) != "svg" {
+            return false;
+        }
+        bytes
+    } else if href.to_ascii_lowercase().ends_with(".svg") {
+        match std::fs::read(href) {
+            Ok(b) => b,
+            Err(_) => return false,
+        }
+    } else {
+        return false;
+    };
+    max_depth(&bytes, MAX_SVG_DEPTH) > MAX_SVG_DEPTH
+}
+
+fn percent_decode(s: &str) -> Vec<u8> {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let hex = |c: u8| (c as char).to_digit(16);
+        match (b[i], b.get(i + 1).and_then(|&c| hex(c)), b.get(i + 2).and_then(|&c| hex(c))) {
+            (b'%', Some(h), Some(l)) => {
+                out.push((h * 16 + l) as u8);
+                i += 3;
+            }
+            (c, ..) => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// How deeply markup nests elements (comments, CDATA, PIs and the doctype skipped); stops at
+/// `limit + 1` once it is exceeded.
+fn max_depth(b: &[u8], limit: usize) -> usize {
+    let find = |from: usize, pat: &[u8]| b[from..].windows(pat.len()).position(|w| w == pat).map_or(b.len(), |p| from + p + pat.len());
+    let (mut i, mut depth, mut peak) = (0, 0usize, 0usize);
+    while i < b.len() {
+        if b[i] != b'<' {
+            i += 1;
+        } else if b[i..].starts_with(b"<!--") {
+            i = find(i + 4, b"-->");
+        } else if b[i..].starts_with(b"<![CDATA[") {
+            i = find(i + 9, b"]]>");
+        } else if b[i..].starts_with(b"<?") {
+            i = find(i + 2, b"?>");
+        } else if b[i..].starts_with(b"<!") {
+            // A doctype may hold an internal subset in brackets.
+            let (mut j, mut sq) = (i + 2, 0usize);
+            while j < b.len() && (b[j] != b'>' || sq > 0) {
+                match b[j] {
+                    b'[' => sq += 1,
+                    b']' => sq = sq.saturating_sub(1),
+                    _ => {}
+                }
+                j += 1;
+            }
+            i = j + 1;
+        } else {
+            let close = b.get(i + 1) == Some(&b'/');
+            let (mut j, mut quote) = (i + 1, 0u8);
+            while j < b.len() && (b[j] != b'>' || quote != 0) {
+                match (quote, b[j]) {
+                    (0, q @ (b'"' | b'\'')) => quote = q,
+                    (q, c) if q == c => quote = 0,
+                    _ => {}
+                }
+                j += 1;
+            }
+            if close {
+                depth = depth.saturating_sub(1);
+            } else if b[j.min(b.len()) - 1] != b'/' {
+                depth += 1;
+                peak = peak.max(depth);
+                if depth > limit {
+                    return depth;
+                }
+            }
+            i = j + 1;
+        }
+    }
+    peak
 }
 
 /// File extension for downloaded image bytes (resvg decodes by extension).
@@ -356,6 +610,16 @@ pub struct Svg<'a> {
 impl<'a> Svg<'a> {
     pub fn new(fonts: &'a mut Fonts, assets: &'a mut Assets, base: Option<PathBuf>) -> Self {
         Svg { fonts, assets, base, defs: String::new(), out: String::new(), uid: 0, painted: Vec::new(), tag: false, skip: Default::default(), outline: None, pad: 0.0 }
+    }
+
+    /// Number ids from `uid` on, so several inline SVGs in one page do not share ids; read back with `uid`.
+    pub fn start_ids(mut self, uid: usize) -> Self {
+        self.uid = uid;
+        self
+    }
+
+    pub fn uid(&self) -> usize {
+        self.uid
     }
 
     /// Wrap emitted nodes into a document. With `view` the output is cropped to that box (exports);
@@ -1039,7 +1303,7 @@ impl<'a> Svg<'a> {
             let close = "</g>".repeat(open.saturating_sub(self.out.matches("</g>").count()));
             format!(r##"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="{w}" height="{h}" viewBox="{x} {y} {w} {h}"><rect x="{x}" y="{y}" width="{w}" height="{h}" fill="#f6f6f6"/><defs>{}</defs>{}{close}</svg>"##, self.defs, self.out)
         });
-        let opts = resvg::usvg::Options { fontdb: std::sync::Arc::clone(&self.fonts.db), font_resolver: self.fonts.resolver(), resources_dir: base.clone(), ..Default::default() };
+        let opts = resvg::usvg::Options { fontdb: std::sync::Arc::clone(&self.fonts.db), font_resolver: self.fonts.resolver(), resources_dir: base.clone(), image_href_resolver: image_href_resolver(), ..Default::default() };
         let png = src.and_then(|src| {
             let mut load = |u: &str| assets.image(u, base.as_deref()).and_then(|p| decode_image(&p));
             let mut paint = |pw: u32, ph: u32| {
@@ -1279,10 +1543,11 @@ impl<'a> Svg<'a> {
 /// Pixels of an image file (premultiplied RGBA, top row first), decoded by resvg's own decoders.
 /// The bytes go in as data (`text/plain` makes usvg sniff the format): usvg will not open a file
 /// without an extension, which is how downloaded images are cached.
-fn decode_image(path: &str) -> Option<tiny_skia::Pixmap> {
+pub(crate) fn decode_image(path: &str) -> Option<tiny_skia::Pixmap> {
     let data = base64::engine::general_purpose::STANDARD.encode(std::fs::read(path).ok()?);
     let svg = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1" height="1"><image xlink:href="data:text/plain;base64,{data}"/></svg>"#);
-    let tree = resvg::usvg::Tree::from_str(&svg, &resvg::usvg::Options::default()).ok()?;
+    let opts = resvg::usvg::Options { image_href_resolver: image_href_resolver(), ..Default::default() };
+    let tree = resvg::usvg::Tree::from_str(&svg, &opts).ok()?;
     let b = tree.root().abs_bounding_box();
     let mut pm = tiny_skia::Pixmap::new(b.width().round() as u32, b.height().round() as u32)?;
     resvg::render(&tree, tiny_skia::Transform::identity(), &mut pm.as_mut());
@@ -1720,6 +1985,80 @@ mod tests {
         assert_eq!(assets.image(url, None).unwrap(), path);
         assert_eq!(image_ext(&[0xFF, 0xD8, 0xFF]), "jpg");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// An image declaring more than MAX_IMAGE_PIXELS is refused from its header alone (a 875 KB
+    /// PNG declaring 30000 x 30000 took 19 s and 7 GB to decode), like a missing file.
+    #[test]
+    fn oversized_images_are_refused() {
+        let dir = std::env::temp_dir().join(format!("nalarupa-big-{:x}", crate::doc::random_u64()));
+        let mut assets = Assets::new(dir.clone());
+        let png = |w: u32, h: u32| [&b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR"[..], &w.to_be_bytes(), &h.to_be_bytes()].concat();
+        let gif = |w: u16, h: u16| [&b"GIF89a"[..], &w.to_le_bytes(), &h.to_le_bytes()].concat();
+        // SOI, an APP0 segment, then SOF0 (precision 8, height, width).
+        let jpg = |w: u16, h: u16| [&[0xFF, 0xD8, 0xFF, 0xE0, 0, 4, 0, 0, 0xFF, 0xC0, 0, 11, 8][..], &h.to_be_bytes(), &w.to_be_bytes(), &[1, 1, 0x11, 0]].concat();
+        let cases = [("a.png", png(30000, 30000), false), ("b.png", png(8000, 8000), true), ("c.gif", gif(60000, 60000), false), ("d.jpg", jpg(20000, 20000), false), ("e.jpg", jpg(640, 480), true)];
+        assert_eq!(image_size(&mut std::io::Cursor::new(jpg(640, 480))), Some((640, 480)));
+        for (name, bytes, ok) in cases {
+            std::fs::write(dir.join(name), &bytes).unwrap();
+            assert_eq!(assets.image(name, Some(&dir)).is_some(), ok, "{name}");
+            let data = format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(&bytes));
+            assert_eq!(assets.image(&data, None).is_some(), ok, "{name} as data url");
+            let pct: String = bytes.iter().map(|b| format!("%{b:02X}")).collect();
+            assert_eq!(assets.image(&format!("data:image/png,{pct}"), None).is_some(), ok, "{name} as percent-encoded data url");
+        }
+        // Bytes that only start like a PNG are not read as one.
+        let mut bad = png(30000, 30000);
+        bad[5] = b'X';
+        assert_eq!(image_size(&mut std::io::Cursor::new(bad)), None);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// An SVG image nested thousands of levels deep overflows usvg's recursion (a segfault on the
+    /// next render): it is unavailable instead, whether it comes as base64, percent-encoded or a file.
+    #[test]
+    fn deeply_nested_svg_images_are_unavailable() {
+        let deep = |n: usize| format!(r#"<?xml version="1.0"?><!-- <g> --><svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">{}<rect width="5" height="5"/><path d="M0 0"/>{}</svg>"#, "<g id=\"a>\">".repeat(n), "</g>".repeat(n));
+        let mut assets = Assets::new(std::env::temp_dir().join("nalarupa-test-assets"));
+        let b64 = |s: &str| format!("data:image/svg+xml;base64,{}", base64::engine::general_purpose::STANDARD.encode(s));
+        assert!(assets.image(&b64(&deep(100)), None).is_some());
+        assert!(assets.image(&b64(&deep(6000)), None).is_none());
+        let pct = |s: &str| format!("data:image/svg+xml,{}", s.replace('%', "%25").replace('<', "%3C").replace('>', "%3E"));
+        assert!(assets.image(&pct(&deep(100)), None).is_some());
+        assert!(assets.image(&pct(&deep(6000)), None).is_none());
+        let file = std::env::temp_dir().join(format!("nalarupa-deep-{:x}.svg", crate::doc::random_u64()));
+        std::fs::write(&file, deep(6000)).unwrap();
+        assert!(assets.image(&file.to_string_lossy(), None).is_none());
+        std::fs::write(&file, deep(100)).unwrap();
+        assert!(assets.image(&file.to_string_lossy(), None).is_some());
+        let _ = std::fs::remove_file(file);
+        // Binary payloads are not scanned as markup, whatever their MIME type.
+        let png = format!("data:application/octet-stream;base64,{}", base64::engine::general_purpose::STANDARD.encode(b"\x89PNG\r\n\x1a\n<g><g>"));
+        assert!(assets.image(&png, None).is_some());
+    }
+
+    /// A shallow SVG carrying a deep one as a data url (nested again and again) parses without
+    /// overflowing the stack: the inner image is dropped.
+    #[test]
+    fn nested_deep_svg_data_urls_are_dropped() {
+        let wrap = |inner: &str| format!(r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="8" height="8"><image xlink:href="data:image/svg+xml;base64,{}" width="8" height="8"/></svg>"#, base64::engine::general_purpose::STANDARD.encode(inner));
+        let deep = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">{}<rect width="5" height="5"/>{}</svg>"#, "<g>".repeat(6000), "</g>".repeat(6000));
+        let opts = resvg::usvg::Options { image_href_resolver: image_href_resolver(), ..Default::default() };
+        fn count(g: &resvg::usvg::Group) -> usize {
+            g.children().iter().map(|n| match n {
+                resvg::usvg::Node::Image(i) => 1 + if let resvg::usvg::ImageKind::SVG(t) = i.kind() { count(t.root()) } else { 0 },
+                resvg::usvg::Node::Group(g) => count(g),
+                _ => 0,
+            }).sum()
+        }
+        let images = |svg: &str| count(resvg::usvg::Tree::from_str(svg, &opts).unwrap().root());
+        assert_eq!(images(&wrap(&deep)), 0);
+        // Wrappers of 200 levels each add up: one nested inside another is fine, two are not.
+        let mid = |inner: &str| format!(r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="8" height="8">{}<image xlink:href="data:image/svg+xml;base64,{}" width="8" height="8"/>{}</svg>"#, "<g>".repeat(200), base64::engine::general_purpose::STANDARD.encode(inner), "</g>".repeat(200));
+        let leaf = r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="5" height="5"/></svg>"#;
+        assert_eq!(images(&wrap(leaf)), 1);
+        assert_eq!(images(&wrap(&mid(leaf))), 2);
+        assert_eq!(images(&wrap(&mid(&mid(leaf)))), 1, "the inner wrapper would make 400 levels");
     }
 
     /// The non-separable blend modes rasterise to the W3C result in PNG export: a channel the
