@@ -74,13 +74,15 @@ pub fn html_document(e: &mut Engine, ids: &[String], opts: &Value) -> Result<Str
     let base = e.doc.dir();
     let mut body = String::new();
     let mut fonts = Vec::new();
+    let mut svg_ids = 0;
     for id in ids {
         let mut cx = e.ctx();
         let top = crate::render::top_index(cx.doc, id).ok_or_else(|| cx.missing(id))?;
         let root = cx.laid_out(top).ok_or_else(|| cx.missing(id))?;
         let n = find_rnode(&root, id).ok_or_else(|| cx.missing(id))?;
-        let mut h = Html { out: &mut body, names, ids: ids_attr, base: base.clone(), families: &mut fonts, fonts: &mut e.fonts, assets: &mut e.assets, svg_ids: 0 };
+        let mut h = Html { out: &mut body, names, ids: ids_attr, base: base.clone(), families: &mut fonts, fonts: &mut e.fonts, assets: &mut e.assets, svg_ids };
         h.node(n, None);
+        svg_ids = h.svg_ids;
     }
     if opts["includeHtmlScaffold"] == false {
         return Ok(body);
