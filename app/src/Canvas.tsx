@@ -52,7 +52,7 @@ type Drag =
   | { mode: 'resize'; handle: Handle; f0: Pt; box: Rect; m: M | null; items: Item[]; anchors: Pt[] }
   | { mode: 'rotate'; cx: number; cy: number; a0: number; rot0: number; flipX: boolean; flipY: boolean; id: string; box: Box; x0: number; y0: number; movable: boolean }
   | { mode: 'radius'; id: string; corner: number; f0: Pt; m: M | null; r0: number[] }
-  | { mode: 'create'; dx0: number; dy0: number; dx1: number; dy1: number }
+  | { mode: 'create'; tool: Tool; dx0: number; dy0: number; dx1: number; dy1: number }
   | { mode: 'marquee'; sx: number; sy: number; dx0: number; dy0: number; base: string[]; deep: boolean; shift: boolean; moved: boolean }
   | { mode: 'pen'; sx: number; sy: number; moved: boolean; target: PenDrag; click?: () => void }
 
@@ -1070,7 +1070,7 @@ export function Canvas(props: {
     if (e.button !== 0) return
     if (pen.current || tool === 'pen') return penDown(sx, sy, [dx, dy], e)
     if (tool !== 'move') {
-      drag.current = { mode: 'create', dx0: dx, dy0: dy, dx1: dx, dy1: dy }
+      drag.current = { mode: 'create', tool, dx0: dx, dy0: dy, dx1: dx, dy1: dy }
       return
     }
     const mods = e.modifiers
@@ -1222,6 +1222,8 @@ export function Canvas(props: {
     }
     if (d.mode !== 'create') return
     setGhost(null)
+    // The tool the draw started with: a tool key pressed mid-drag already switched `tool`.
+    const tool = d.tool
     const x0 = Math.round(Math.min(d.dx0, d.dx1))
     const y0 = Math.round(Math.min(d.dy0, d.dy1))
     let bw = Math.round(Math.abs(d.dx1 - d.dx0))
@@ -1291,6 +1293,11 @@ export function Canvas(props: {
     const m = e.modifiers
     const mods = { mod: !!(m?.ctrl || m?.cmd), shift: !!m?.shift, alt: !!m?.alt }
     if (pen.current && penKey(key, mods)) return
+    // Escape mid-draw cancels it: the release then creates nothing.
+    if (key === 'escape' && drag.current?.mode === 'create') {
+      drag.current = null
+      setGhost(null)
+    }
     // Enter on a single text layer edits it, on a path its points (other Enter handling lives in onShortcut).
     const one = key === 'enter' && !mods.mod && !mods.shift && selection.length === 1 ? tryCall('node', { id: selection[0] })?.node?.type : undefined
     if (one === 'text') return startEdit(selection[0])
