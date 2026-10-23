@@ -415,8 +415,19 @@ impl Html<'_> {
         match n.ty.as_str() {
             "text" => {
                 self.text_css(n, &mut css);
-                let content = n.s("content").unwrap_or("");
-                let _ = writeln!(self.out, "<p{attrs} style=\"{css}\">{}</p>", esc(content).replace('\n', "<br>"));
+                let content = esc(n.s("content").unwrap_or("")).replace('\n', "<br>");
+                // Like the canvas, only a fixed-size box places its text in the middle or at the bottom; overflow spills
+                // evenly (middle) or upward (bottom). The text sits in one flex item so its line breaks stay in flow.
+                let justify = match (n.s("textGrowth"), n.s("textAlignVertical")) {
+                    (Some("fixed-width-height"), Some("middle")) => Some("center"),
+                    (Some("fixed-width-height"), Some("bottom")) => Some("flex-end"),
+                    _ => None,
+                };
+                if let Some(j) = justify {
+                    let _ = writeln!(self.out, "<p{attrs} style=\"{css}display:flex;flex-direction:column;justify-content:{j};\"><span>{content}</span></p>");
+                } else {
+                    let _ = writeln!(self.out, "<p{attrs} style=\"{css}\">{content}</p>");
+                }
             }
             "icon" => {
                 // No fill = invisible icon.
@@ -1224,5 +1235,25 @@ mod tests {
         assert!(html.contains("width:0px;") && html.contains("white-space:pre-wrap;") && !html.contains("overflow-wrap"), "{html}");
         let auto = style_of(&mut e, "auto");
         assert!(auto.contains("white-space:pre;") && !auto.contains("overflow-wrap"), "{auto}");
+    }
+
+    /// Middle and bottom text in a fixed-size box is placed like the canvas; other boxes keep the top.
+    #[test]
+    fn vertical_text_alignment_is_exported() {
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        e.load_template("empty");
+        let mut html = |growth: &str, valign: &str| {
+            let id = e.insert_root(json!({"type": "text", "content": "ab", "fontSize": 16, "textGrowth": growth, "width": 100, "height": 60, "textAlignVertical": valign})).unwrap();
+            super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap()
+        };
+        let mid = html("fixed-width-height", "middle");
+        assert!(mid.contains("display:flex;flex-direction:column;justify-content:center;\"><span>"), "{mid}");
+        let bottom = html("fixed-width-height", "bottom");
+        assert!(bottom.contains("justify-content:flex-end;"), "{bottom}");
+        for (growth, valign) in [("fixed-width-height", "top"), ("fixed-width", "middle"), ("auto", "bottom")] {
+            let h = html(growth, valign);
+            assert!(!h.contains("justify-content") && !h.contains("<span>"), "{growth}/{valign}: {h}");
+        }
     }
 }
