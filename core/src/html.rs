@@ -222,7 +222,7 @@ fn stroke_overlay(grad: &str, w: &Value, alignment: Option<&str>, blend: Option<
 /// How far the painted stroke reaches outside the box (the canvas's `Stroke::reach`): the widest side for a
 /// rectangle or frame, the top width for another shape; none for an inner stroke or without a visible paint.
 fn stroke_reach(n: &RNode) -> f64 {
-    let painted = fills(n.p.get("stroke")).iter().any(|p| p.as_str().or_else(|| p["color"].as_str()).is_some_and(|c| css_color(c).is_some()) || p.get("type").and_then(Value::as_str) == Some("gradient"));
+    let painted = fills(n.p.get("stroke")).iter().any(|p| p.as_str().or_else(|| p["color"].as_str()).is_some_and(|c| css_color(c).is_some()) || p.as_object().filter(|o| o.get("type").and_then(Value::as_str) == Some("gradient")).and_then(gradient_css).is_some());
     let w = match n.p.get("strokeWidth") {
         Some(Value::Object(s)) => {
             let side = |k: &str| s.get(k).and_then(num).unwrap_or(0.0).max(0.0);
@@ -961,10 +961,15 @@ mod tests {
         // The widest side reaches furthest.
         let h = html("outer", json!({"top": 2, "right": 8, "bottom": 4, "left": 6}), drop.clone());
         assert!(h.contains("12px 12px 0px 8px #ff0000"), "{h}");
-        let h = html("inner", json!(20), drop);
+        let h = html("inner", json!(20), drop.clone());
         assert!(h.contains("box-shadow:inset 0 0 0 20px #000000,12px 12px 0px #ff0000;"), "{h}");
         let h = html("outer", json!(20), json!({"type": "shadow", "shadowType": "inner", "offset": {"x": 12, "y": 12}, "color": "#ff0000"}));
         assert!(h.contains("inset 12px 12px 0px #ff0000") && !h.contains("20px #ff0000"), "{h}");
+        // A gradient stroke without stops paints nothing, so it adds no reach.
+        let empty = json!({"type": "rectangle", "width": 100, "height": 50, "fill": "#ffffff", "stroke": {"type": "gradient", "colors": []}, "strokeWidth": 20, "strokeAlignment": "outer", "effect": drop.clone()});
+        let id = e.insert_root(empty).unwrap();
+        let h = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
+        assert!(h.contains("12px 12px 0px #ff0000") && !h.contains("20px #ff0000"), "{h}");
     }
 
     /// A frame whose fill blends with the backdrop paints its overlay in tree order: flow children must be positioned to stay above it.
