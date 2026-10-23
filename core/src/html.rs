@@ -134,6 +134,19 @@ fn css_color_alpha(v: &str, k: f64) -> Option<String> {
     Some(format!("rgba({}, {}, {}, {:.3})", p(0), p(2), p(4), a))
 }
 
+/// Whether a fill paints anything in HTML: a paint with alpha above zero, of a type `fill_layers` draws (mesh gradients and shaders are not).
+fn visible_fill(n: &RNode) -> bool {
+    fills(n.p.get("fill")).iter().any(|f| match f {
+        Value::String(s) => color(s).is_some_and(|c| c.1 > 0.0),
+        Value::Object(o) => match o.get("type").and_then(Value::as_str).unwrap_or("color") {
+            "color" => o.get("color").and_then(Value::as_str).and_then(color).is_some_and(|c| c.1 > 0.0),
+            "gradient" | "image" => o.get("opacity").and_then(num).unwrap_or(1.0) > 0.0,
+            _ => false,
+        },
+        _ => false,
+    })
+}
+
 /// CSS gradient of a gradient paint. Backgrounds have no per-layer opacity, so `opacity` goes into the stop alphas.
 fn gradient_css(o: &serde_json::Map<String, Value>) -> Option<String> {
     let opacity = o.get("opacity").and_then(num).unwrap_or(1.0).clamp(0.0, 1.0);
@@ -681,8 +694,10 @@ impl Html<'_> {
                     filters.push(shadow_filter(&outer));
                 }
             }
-        } else {
-            // Like the canvas, a drop shadow is cast by the outline with the stroke's outer part: it spreads by that reach.
+        } else if n.ty == "frame" || visible_fill(n) {
+            // Like the canvas, a shape without a visible fill casts nothing (a box-shadow of a transparent box would
+            // still paint its outer band); a frame always casts its outer shadow, which is only drawn outside it.
+            // A drop shadow is cast by the outline with the stroke's outer part: it spreads by that reach.
             let reach = stroke_reach(n);
             shadows.extend(list.iter().map(|(inner, x, y, b, c)| match (inner, reach > 0.0) {
                 (false, true) => format!("{x}px {y}px {b}px {reach}px {c}"),
@@ -1053,6 +1068,39 @@ mod tests {
         // The decoration needs a colour of its own: the text colour is transparent.
         assert!(g2.contains("text-decoration:underline;") && g2.contains("text-decoration-color:#000000;") && !g.contains("text-decoration"), "{g2}");
         assert!(grp.contains("filter:drop-shadow(6px 6px 2px #ff0000) blur(2px);") && !grp.contains("box-shadow"), "{grp}");
+    }
+
+    /// Like the canvas, a shape without a visible fill casts no shadow (a CSS box-shadow would paint its outer band); its stroke stays,
+    /// and a frame keeps its shadow, which only shows outside it.
+    #[test]
+    fn shapes_without_a_visible_fill_cast_no_shadow() {
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        e.load_template("empty");
+        let sh = json!({"type": "shadow", "offset": {"x": 20, "y": 20}, "blur": 0, "color": "#0000ff"});
+        let node = |name: &str, ty: &str, extra: serde_json::Value| {
+            let mut n = json!({"type": ty, "name": name, "width": 100, "height": 100, "effect": sh});
+            n.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            n
+        };
+        let id = e.insert_root(json!({"type": "frame", "layout": "none", "width": 300, "height": 200, "children": [
+            node("none", "rectangle", json!({})),
+            node("stroke", "rectangle", json!({"stroke": "#ff0000", "strokeWidth": 4})),
+            node("clear", "ellipse", json!({"fill": "#ff000000"})),
+            node("mesh", "rectangle", json!({"fill": {"type": "mesh_gradient"}})),
+            node("inner", "rectangle", json!({"effect": {"type": "shadow", "shadowType": "inner", "offset": {"x": 5, "y": 5}, "color": "#0000ff"}})),
+            node("filled", "rectangle", json!({"fill": "#00ff00"})),
+            node("box", "frame", json!({"layout": "none"}))
+        ]})).unwrap();
+        let h = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
+        let style = |name: &str| h.split(&format!("data-name=\"{name}\" style=\"")).nth(1).unwrap().split('"').next().unwrap().to_string();
+        for name in ["none", "clear", "mesh", "inner"] {
+            assert!(!style(name).contains("box-shadow"), "{name}: {}", style(name));
+        }
+        let s = style("stroke");
+        assert!(s.contains("box-shadow:inset 0 0 0 2px #ff0000,0 0 0 2px #ff0000;") && !s.contains("#0000ff"), "{s}");
+        assert!(style("filled").contains("box-shadow:20px 20px 0px #0000ff;"), "{}", style("filled"));
+        assert!(style("box").contains("box-shadow:20px 20px 0px #0000ff;"), "{}", style("box"));
     }
 
     /// Fixed-size children keep their main-axis size in an overflowing auto layout, as on the canvas.
