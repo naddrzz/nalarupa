@@ -472,6 +472,7 @@ impl Engine {
         let Some(prev) = self.undo.pop() else { return false };
         self.coalesce = None;
         self.redo.push(std::mem::replace(&mut self.doc.root, prev));
+        self.settle_generating();
         self.touch();
         true
     }
@@ -483,8 +484,17 @@ impl Engine {
         let Some(next) = self.redo.pop() else { return false };
         self.coalesce = None;
         self.undo.push(std::mem::replace(&mut self.doc.root, next));
+        self.settle_generating();
         self.touch();
         true
+    }
+
+    /// History holds the `placeholder: true` an agent set while it built a design; with no agent running,
+    /// an undo or redo must not bring "Generating" back onto a finished design.
+    fn settle_generating(&mut self) {
+        if !self.agent.running {
+            crate::agent::clear_generating(self);
+        }
     }
 
     /// During a drag, mutations apply live and are committed once by `drag_end`.
@@ -1105,6 +1115,25 @@ mod tests {
         assert!(e.undo());
         assert_eq!(xs(&e), [("U".into(), 0)]);
         assert!(!e.undo());
+    }
+
+    /// Undo of the step that cleared `placeholder` must not show a finished design as "Generating"; while an
+    /// agent runs, history is left alone.
+    #[test]
+    fn undo_does_not_restore_generating_without_an_agent() {
+        let mut e = Engine::new(std::env::temp_dir().join(format!("nalarupa-test-undo-generating-{}", std::process::id())));
+        e.load_template("empty");
+        e.doc.root["children"] = json!([{"id": "g", "type": "frame", "name": "G", "x": 0, "placeholder": true}]);
+        e.edit(|d| { d.root["children"][0]["x"] = json!(10); Ok(()) }).unwrap();
+        e.edit(|d| { d.root["children"][0]["placeholder"] = json!(false); Ok(()) }).unwrap();
+        let flag = |e: &Engine| e.doc.root["children"][0]["placeholder"] == true;
+        e.agent.running = true;
+        assert!(e.undo() && flag(&e), "an agent still works: its flag stays");
+        e.agent.running = false;
+        assert!(e.redo() && !flag(&e));
+        assert!(e.undo() && !flag(&e), "no agent: undo does not bring the flag back");
+        assert!(e.undo() && !flag(&e), "nor does an older step");
+        assert!(e.redo() && e.redo() && !flag(&e));
     }
 
     /// A font landing in the background redraws the canvas but is not an edit.

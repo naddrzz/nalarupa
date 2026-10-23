@@ -380,7 +380,8 @@ fn start_thread(p: Profile, prompt: String, child: Option<String>) {
 
 /// The run is over: frames still flagged `placeholder` (Stop, an error or a dead process came before the
 /// call that clears it) stop showing as "Generating". Silent and out of the undo history, like the AI Pen's own finish.
-fn clear_generating(e: &mut Engine) {
+/// Also runs when an undo or redo lands with no agent running.
+pub fn clear_generating(e: &mut Engine) {
     let mut stale = Vec::new();
     crate::doc::walk(e.doc.children(), &mut |n| {
         if n["placeholder"] == true && n["id"].as_str().is_some_and(|id| !e.agent.pens.iter().any(|p| p == id)) {
