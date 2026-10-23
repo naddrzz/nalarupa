@@ -1242,7 +1242,16 @@ fn run_claude_code(p: &Profile, prompt: &str, child: bool, model: Option<String>
 fn error_cause(ev: &Value) -> Option<String> {
     let result = ev["result"].as_str().map(str::trim).filter(|t| !t.is_empty());
     let errors: Vec<&str> = ev["errors"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::trim).filter(|t| !t.is_empty()).collect();
-    result.map(str::to_string).or_else(|| (!errors.is_empty()).then(|| errors.join("\n"))).map(|t| clip_ends(&t, ERROR_MAX))
+    result.map(str::to_string).or_else(|| (!errors.is_empty()).then(|| errors.join("\n"))).map(|t| clip_ends(&t, ERROR_MAX)).map(sign_in_hint)
+}
+
+/// The CLI tells a signed-out user to run `/login`, a command of its own terminal UI; point at what works here.
+fn sign_in_hint(text: String) -> String {
+    if text.contains("/login") || text.to_lowercase().contains("not logged in") {
+        "Claude Code is not signed in. Open a terminal, run `claude` and sign in with /login, or switch the backend to the Claude API in Agent settings (gear icon).".into()
+    } else {
+        text
+    }
 }
 
 /// Longest error text kept in the chat card and the saved chat (tool output is capped at 6000).
@@ -1258,7 +1267,7 @@ fn exit_error(status: &str, stderr: &str, reported: bool) -> String {
     } else if stderr.is_empty() {
         prefix
     } else {
-        format!("{prefix}: {}", clip_ends(stderr, ERROR_MAX.saturating_sub(prefix.len() + 2)))
+        sign_in_hint(format!("{prefix}: {}", clip_ends(stderr, ERROR_MAX.saturating_sub(prefix.len() + 2))))
     }
 }
 
@@ -1383,9 +1392,18 @@ mod tests {
     #[test]
     fn error_cause_reads_result_then_errors() {
         assert_eq!(error_cause(&json!({"result": " Credit balance is too low "})).as_deref(), Some("Credit balance is too low"));
-        assert_eq!(error_cause(&json!({"result": "", "errors": ["", "Not logged in", " Run /login "]})).as_deref(), Some("Not logged in\nRun /login"));
+        assert_eq!(error_cause(&json!({"result": "", "errors": ["", "Quota exceeded", " Try later "]})).as_deref(), Some("Quota exceeded\nTry later"));
         assert_eq!(error_cause(&json!({"result": "  ", "errors": []})), None, "no cause: the exit error shows stderr instead");
         assert_eq!(error_cause(&json!({})), None);
+    }
+
+    #[test]
+    fn a_signed_out_cli_points_at_the_terminal_and_the_settings() {
+        let hint = error_cause(&json!({"result": "Not logged in · Please run /login"})).unwrap();
+        assert!(hint.starts_with("Claude Code is not signed in") && hint.contains("Agent settings"), "{hint}");
+        assert_eq!(error_cause(&json!({"result": "Invalid API key · Please run /login"})).unwrap(), hint);
+        assert_eq!(exit_error("exit status: 1", "Error: Not logged in", false), hint);
+        assert_eq!(error_cause(&json!({"result": "Credit balance is too low"})).as_deref(), Some("Credit balance is too low"));
     }
 
     #[test]
