@@ -1129,9 +1129,10 @@ fn run_claude_code(p: &Profile, prompt: &str, child: bool, model: Option<String>
         })
     };
     let err_reader = std::thread::spawn(move || {
-        let mut err = String::new();
-        let _ = std::io::Read::read_to_string(&mut stderr, &mut err);
-        err
+        // Bytes, not `read_to_string`: a localized shell message in the OEM code page is not UTF-8 and would be dropped whole.
+        let mut err = Vec::new();
+        let _ = std::io::Read::read_to_end(&mut stderr, &mut err);
+        String::from_utf8_lossy(&err).into_owned()
     });
 
     // Per streamed message: content index → (tool id, tool name, partial input JSON).
@@ -1142,9 +1143,10 @@ fn run_claude_code(p: &Profile, prompt: &str, child: bool, model: Option<String>
     let mut reported = false;
     let mut textless_error = false;
     let mut stale = false;
-    for line in BufReader::new(stdout).lines() {
+    // Split on bytes: `lines()` stops at the first line that is not UTF-8, which cut the reply and left the CLI on a closed pipe.
+    for line in BufReader::new(stdout).split(b'\n') {
         let Ok(line) = line else { break };
-        let Ok(ev) = serde_json::from_str::<Value>(&line) else { continue };
+        let Ok(ev) = serde_json::from_str::<Value>(&String::from_utf8_lossy(&line)) else { continue };
         if !child {
             if let Some(id) = ev["session_id"].as_str() {
                 engine().agent.session = Some(id.to_string());
