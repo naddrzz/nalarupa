@@ -219,17 +219,18 @@ export function Inspector({ version, selection, select, toast }: Props) {
   const fill = fillMixed ? null : solidColor(n.fill, vars)
   const stroke = solidColor(n.stroke, vars)
 
+  const fresh = (i: Info) => ({ ...i, ...tryCall('node', { id: i.id }) }) as Info
   /** Up/Down or scrub on a mixed field: every layer moves by the same delta from its own starting value instead of all taking one number. A layer pinned at `min`/`max` moves again as soon as the direction reverses. */
   const stepEach = (read: (i: Info) => number, write: (i: Info, v: number) => Record<string, unknown> | null, min = -Infinity, max = Infinity) => (delta: number, key: string) => {
-    // Start values come from the document, not the render snapshot, which can predate a gesture that just ended.
-    if (stepBase.current?.key !== key) stepBase.current = { key, last: 0, vals: new Map(infos.map((i) => [i.id, read({ ...i, ...tryCall('node', { id: i.id }) } as Info)])) }
+    // Start values and the writer's input come from the document, not the render snapshot, which can predate a gesture that just ended.
+    if (stepBase.current?.key !== key) stepBase.current = { key, last: 0, vals: new Map(infos.map((i) => [i.id, read(fresh(i))])) }
     const base = stepBase.current
     const by = delta - base.last
     base.last = delta
     perNode((i) => {
       const v = Math.min(max, Math.max(min, Math.round(((base.vals.get(i.id) ?? read(i)) + by) * 100) / 100))
       base.vals.set(i.id, v)
-      return write(i, v)
+      return write(fresh(i), v)
     }, key)
   }
   // Rotation turns around the center like the canvas handle: a free layer's origin moves so the center stays put.
