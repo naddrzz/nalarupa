@@ -325,7 +325,7 @@ assert(nodeIcon('path') === nodeIcon('polygon') && nodeIcon('frame', true) === '
 // A blank or whitespace-only name is labelled like a missing one (the type, or a text layer's content), in Layers and for the frame label / Slides caption.
 {
   call('new', { template: 'empty' })
-  const fr = call('insert', { node: { type: 'frame', name: '', x: 0, y: 0, width: 200, height: 100 } }).id
+  const fr = call('insert', { node: { type: 'frame', name: '   ', x: 0, y: 0, width: 200, height: 100 } }).id
   const ids = ['rectangle', 'ellipse'].map((type, i) => call('insert', { parent: fr, node: { type, name: i ? '' : '   ', x: 10, y: 10, width: 20, height: 20 } }).id)
   const tx = call('insert', { parent: fr, node: { type: 'text', name: ' ', content: 'blank name', x: 10, y: 50, fontSize: 14 } }).id
   const names = Object.fromEntries(call<{ id: string; name: string }[]>('layers').map((l) => [l.id, l.name]))
