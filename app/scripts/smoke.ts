@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { call, renderPixels } from '../src/core'
-import { applyEvents, barAgents, changing, clearPresence, cursorFaded, cursorOpacity, FADE_IN, imageSrc, lastContentId, needsFrame, poke, resetChat, restoreChat, spinning, store, takeActivity } from '../src/agents'
+import { applyEvents, barAgents, changing, clearPresence, cursorFaded, cursorOpacity, FADE_IN, imageSrc, lastContentId, needsFrame, poke, resetChat, restoreChat, runVerb, spinning, store, takeActivity } from '../src/agents'
 import { own, painted, pointIn, shimmerHalves } from '../src/geometry'
 import { FRAME_LABEL_TEXT, INDICATOR_TICK_MS, ellipsisAt, ellipsisPadAt, pulseAt } from '../src/theme'
 
@@ -185,6 +185,17 @@ resetChat()
   assert(settled([end(true)]) === 'completed,cancelled,cancelled', 'a stopped run cancels its unfinished steps')
   assert(settled([ev('error', { text: 'Claude API error 529: Overloaded' }), end(false)]) === 'completed,cancelled,cancelled', 'a failed run cancels its unfinished steps')
   assert(settled([end(false)]) === 'completed,in_progress,pending', 'a run that ended cleanly leaves its plan alone')
+  // The closing row words how the run ended: only a clean run "designed" something.
+  const verb = (end: object[]) => {
+    resetChat()
+    applyEvents([ev('user', { text: 'go' }), ev('start'), ...end], 0)
+    const u = store.items.find((i) => i.kind === 'usage')
+    return u?.kind === 'usage' ? runVerb(u) : ''
+  }
+  assert(verb([end(false)]) === 'designed for', 'a clean run closes with "designed for"')
+  assert(verb([end(true)]) === 'stopped after', 'a stopped run closes with "stopped after"')
+  assert(verb([ev('error', { text: 'could not start the claude CLI' }), end(false)]) === 'failed after', 'a failed run closes with "failed after"')
+  assert(verb([ev('error', { text: 'boom' }), end(true)]) === 'stopped after', 'a stopped run reads as stopped even after an error')
   // An earlier failed run does not cancel the plan of the next run.
   settled([ev('error', { text: 'boom' }), end(false)])
   applyEvents([ev('start'), plan, end(false)], 0)

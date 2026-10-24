@@ -18,7 +18,7 @@ export type ChatItem =
     }
   | { kind: 'note'; id: number; text: string }
   | { kind: 'error'; id: number; agent?: Profile; text: string }
-  | { kind: 'usage'; id: number; agent: Profile; durationMs: number; usage: any; stopped: boolean }
+  | { kind: 'usage'; id: number; agent: Profile; durationMs: number; usage: any; stopped: boolean; failed: boolean }
   | { kind: 'external'; id: number; text: string; error?: boolean }
   /** The agent waits for the user to allow a tool (permission card). */
   | { kind: 'permission'; id: number; reqId: string; agent: Profile; tool: string; input: any }
@@ -277,8 +277,9 @@ export function applyEvents(events: any[], now: number): boolean {
         store.running.delete(aid)
         for (const it of store.items) if (it.kind === 'tool' && it.agent.id === aid && it.running) Object.assign(it, { running: false, error: true, output: 'Tool call cancelled' })
         // A failed run ends the agent as a Stop does: its unfinished plan must not keep reading as live.
-        if (store.todosOwner === aid && (ev.stopped || failedRun(aid))) store.todos = store.todos.map((t) => (t.status === 'completed' ? t : { ...t, status: 'cancelled' }))
-        store.items.push({ kind: 'usage', id: nextId++, agent: p ?? FALLBACK, durationMs: ev.durationMs ?? 0, usage: ev.usage ?? {}, stopped: !!ev.stopped })
+        const failed = !ev.stopped && failedRun(aid)
+        if (store.todosOwner === aid && (ev.stopped || failed)) store.todos = store.todos.map((t) => (t.status === 'completed' ? t : { ...t, status: 'cancelled' }))
+        store.items.push({ kind: 'usage', id: nextId++, agent: p ?? FALLBACK, durationMs: ev.durationMs ?? 0, usage: ev.usage ?? {}, stopped: !!ev.stopped, failed })
         const c = store.cursors.get(aid)
         if (c) c.lastActivity = now
         store.pills.delete(aid)
@@ -287,6 +288,11 @@ export function applyEvents(events: any[], now: number): boolean {
     }
   }
   return changed
+}
+
+/** How a run's closing row words what happened: a stopped or failed run did not "design" anything. */
+export function runVerb(u: { stopped: boolean; failed: boolean }): string {
+  return u.stopped ? 'stopped after' : u.failed ? 'failed after' : 'designed for'
 }
 
 /** Whether the agent's current run (since its last usage row) reported an error. */
