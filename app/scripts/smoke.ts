@@ -157,6 +157,20 @@ resetChat()
   applyEvents([{ type: 'agent', kind: 'done', agent: ag }, { type: 'agent', kind: 'done', agent: { id: 'a1', name: 'Agent 1', color: '#ffffff' } }, { type: 'agent', kind: 'done', agent: { id: 'a2', name: 'Agent 2', color: '#ffffff' } }], 0)
   assert(!store.items.some(changing), 'a finished chat has no live row')
 }
+// Each reply opens with the agent header on its first item, whether that is text, thinking or a tool call; later items of the reply have none.
+{
+  const agent = { id: 'ag1', name: 'Surya', color: '#38B2AC' }
+  const ev = (kind: string, o: object = {}) => ({ type: 'agent', kind, agent, ...o })
+  const end = ev('done', { durationMs: 1, usage: {}, stopped: false })
+  resetChat()
+  applyEvents([ev('user', { text: 'one' }), ev('start'), ev('text_delta', { text: 'Text first' }), ev('message_end'), end], 0)
+  applyEvents([ev('user', { text: 'two' }), ev('start'), ev('thinking_delta', { text: 'hmm' }), ev('message_end'), ev('text_delta', { text: 'Thinking first' }), ev('message_end'), end], 0)
+  applyEvents([ev('user', { text: 'three' }), ev('start'), ev('tool_start', { id: 't1', name: 'execute' }), ev('tool_done', { id: 't1', name: 'execute', input: {}, output: 'ok' }), ev('text_delta', { text: 'Tool first' }), ev('message_end'), end], 0)
+  applyEvents([ev('start'), ev('text_delta', { text: 'No prompt' }), ev('message_end'), end], 0)
+  applyEvents([ev('user', { text: 'four' }), ev('start'), ev('text_delta', { text: 'Cut off' }), ev('message_end'), ev('note', { text: 'The reply hit the output limit' }), ev('text_delta', { text: 'Continued' }), ev('message_end'), end], 0)
+  const marks = store.items.flatMap((i) => (i.kind === 'assistant' || i.kind === 'thinking' || i.kind === 'tool' ? [`${i.kind}${i.header ? '+' : ''}`] : []))
+  assert(marks.join() === 'assistant+,thinking+,assistant,tool+,assistant,assistant+,assistant+,assistant', `reply headers ${marks}`)
+}
 // A stopped or failed run settles its plan: unfinished steps become cancelled, none stays in progress.
 {
   const agent = { id: 'ag1', name: 'Surya', color: '#38B2AC' }

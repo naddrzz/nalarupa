@@ -11,10 +11,10 @@ export type ChatItem =
   | { kind: 'user'; id: number; text: string }
   | { kind: 'queued'; id: number; text: string }
   | { kind: 'assistant'; id: number; agent: Profile; text: string; streaming: boolean; header: boolean; by?: Author }
-  | { kind: 'thinking'; id: number; agent: Profile; text: string; startedAt: number; endedAt?: number }
+  | { kind: 'thinking'; id: number; agent: Profile; text: string; startedAt: number; endedAt?: number; header: boolean; by?: Author }
   | {
       kind: 'tool'; id: number; toolId: string; agent: Profile; name: string; input?: any; output?: string
-      images?: string[]; error?: boolean; lines?: number; running: boolean
+      images?: string[]; error?: boolean; lines?: number; running: boolean; header: boolean; by?: Author
     }
   | { kind: 'note'; id: number; text: string }
   | { kind: 'error'; id: number; agent?: Profile; text: string }
@@ -113,6 +113,12 @@ function lastOf(agent: string, kinds: ChatItem['kind'][]): ChatItem | undefined 
   return undefined
 }
 
+/** Whether the agent's next item opens its reply (a turn's first thinking, tool or text), which then carries the name and model header. */
+function opensReply(agent: string): boolean {
+  const prev = store.items.filter((i) => i.kind !== 'note' && i.kind !== 'queued').pop() // neither ends the reply: an output-limit note lands mid-run, a queued message waits behind it
+  return !prev || prev.kind === 'user' || prev.kind === 'usage' || !('agent' in prev) || prev.agent?.id !== agent
+}
+
 function endStreaming(agent: string, now: number) {
   for (const it of store.items) {
     if (it.kind === 'assistant' && it.agent.id === agent) it.streaming = false
@@ -206,9 +212,7 @@ export function applyEvents(events: any[], now: number): boolean {
         if (last?.kind === 'assistant' && last.streaming) last.text += ev.text
         else if (String(ev.text ?? '').trim()) {
           endStreaming(aid, now)
-          const prev = store.items[store.items.length - 1]
-          const header = !prev || prev.kind === 'user' || !('agent' in prev) || prev.agent?.id !== aid
-          store.items.push({ kind: 'assistant', id: nextId++, agent: p ?? FALLBACK, text: ev.text, streaming: true, header, by: store.authors.get(aid) })
+          store.items.push({ kind: 'assistant', id: nextId++, agent: p ?? FALLBACK, text: ev.text, streaming: true, header: opensReply(aid), by: store.authors.get(aid) })
         }
         const cur = lastOf(aid, ['assistant'])
         if (cur?.kind === 'assistant') store.pills.set(aid, { text: cur.text, at: now })
@@ -219,7 +223,7 @@ export function applyEvents(events: any[], now: number): boolean {
         if (last?.kind === 'thinking' && last.endedAt === undefined) last.text += ev.text
         else {
           endStreaming(aid, now)
-          store.items.push({ kind: 'thinking', id: nextId++, agent: p ?? FALLBACK, text: ev.text, startedAt: now })
+          store.items.push({ kind: 'thinking', id: nextId++, agent: p ?? FALLBACK, text: ev.text, startedAt: now, header: opensReply(aid), by: store.authors.get(aid) })
           if (p) poke(p, now)
         }
         break
@@ -227,7 +231,7 @@ export function applyEvents(events: any[], now: number): boolean {
       case 'tool_start':
         endStreaming(aid, now)
         if (!store.items.some((i) => i.kind === 'tool' && i.toolId === ev.id)) {
-          store.items.push({ kind: 'tool', id: nextId++, toolId: ev.id, agent: p ?? FALLBACK, name: ev.name, running: true })
+          store.items.push({ kind: 'tool', id: nextId++, toolId: ev.id, agent: p ?? FALLBACK, name: ev.name, running: true, header: opensReply(aid), by: store.authors.get(aid) })
         }
         if (p) poke(p, now)
         break
@@ -239,7 +243,7 @@ export function applyEvents(events: any[], now: number): boolean {
       case 'tool_done': {
         let t = store.items.find((i) => i.kind === 'tool' && i.toolId === ev.id)
         if (!t) {
-          t = { kind: 'tool', id: nextId++, toolId: ev.id, agent: p ?? FALLBACK, name: ev.name, running: false }
+          t = { kind: 'tool', id: nextId++, toolId: ev.id, agent: p ?? FALLBACK, name: ev.name, running: false, header: opensReply(aid), by: store.authors.get(aid) }
           store.items.push(t)
         }
         if (t.kind === 'tool') Object.assign(t, { input: ev.input, output: ev.output, images: ev.images, error: ev.error, running: false, name: ev.name || t.name })
