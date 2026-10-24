@@ -588,7 +588,12 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
   if (!(await settled(() => savedKey() === 'sk-ant-second'))) throw new Error(`a new key did not replace the saved one: ${savedKey()}`)
   await app.getByTestId('api-key-remove').click()
   if (!(await settled(() => savedKey() === undefined))) throw new Error(`Remove left the key saved: ${savedKey()}`)
-  await app.getByText('Claude Code CLI').click()
+  // The model picker follows the backend switch while the panel is still open: the API has no "Default"
+  // model, the CLI has no saved one, so it must not keep showing the other backend's pick (or its Fast toggle).
+  await until(async () => !!(await app!.getByText('Opus 5.5').count()) && !(await app!.getByText('Default').count()), 'the model picker to read Opus 5.5 on the API backend')
+  await app.getByTestId('backend-claude-code').click()
+  await until(async () => !!(await app!.getByText('Default').count()) && !(await app!.getByText('Opus 5.5').count()), 'the model picker to read Default after switching to the CLI with the panel open')
+  if (await app.getByTestId('agent-fast').count()) throw new Error('the Fast toggle stayed after switching to the CLI backend with no saved model')
   await app.getByTestId('agent-settings').click()
   await sleep(300)
 
