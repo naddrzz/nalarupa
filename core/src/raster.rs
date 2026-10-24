@@ -28,6 +28,8 @@ pub struct Scene {
     paths: Vec<BezPath>,
     /// Doc-space box of each background blur and how far around it content feeds its blur.
     backdrops: Vec<(Rect, f64)>,
+    /// Largest `Effect::grow` of its filter layers.
+    reach: f64,
 }
 
 struct Item {
@@ -293,6 +295,7 @@ impl Build {
 
     /// Open a layer; `close` it with the returned index.
     fn open(&mut self, bbox: Rect, ts: Affine, clip: Option<(u32, Fill)>, blend: BlendMode, opacity: f32, filter: Option<Effect>) -> usize {
+        self.s.reach = self.s.reach.max(filter.as_ref().map_or(0.0, |e| e.grow));
         self.push(bbox, ts, Op::Push { clip, blend, opacity, filter: filter.map(Box::new), end: 0 });
         self.s.items.len() - 1
     }
@@ -856,11 +859,13 @@ pub struct Band {
     ctx: RenderContext,
     res: Resources,
     aux: Vec<Option<Aux>>,
+    /// The padded frame of `paint`.
+    pad: Vec<u8>,
 }
 
 impl Default for Band {
     fn default() -> Self {
-        Band { ctx: RenderContext::new_with(1, 1, settings()), res: Resources::new(), aux: Vec::new() }
+        Band { ctx: RenderContext::new_with(1, 1, settings()), res: Resources::new(), aux: Vec::new(), pad: Vec::new() }
     }
 }
 
@@ -872,6 +877,31 @@ fn settings() -> RenderSettings {
 /// pixels starting at (x0, y0) at `zoom`.
 #[allow(clippy::too_many_arguments)]
 pub fn paint(band: &mut Band, scenes: &[(&Scene, &usvg::Tree)], zoom: f64, bg: [u8; 3], x0: i32, y0: i32, w: u32, h: u32, out: &mut [u8]) {
+    // A filter layer is cropped to the target, and vello's drop shadow offsets that crop before it
+    // blurs: a shadow moving up or left loses the source it blurs from along the target's top and
+    // left edges. A window cut from a bigger frame is only right if that frame reaches as far as
+    // the filters do, so paint the margin too and keep the middle.
+    let reach = scenes.iter().map(|(s, _)| s.reach).fold(0.0, f64::max);
+    let m = if reach > 0.0 { ((reach * zoom).ceil() as u32 + 8).min(MAX_PAD) } else { 0 };
+    let (pw, ph) = (w + 2 * m, h + 2 * m);
+    if m == 0 || pw.max(ph) > u32::from(u16::MAX) || out.len() != (w * h * 4) as usize {
+        return render(band, scenes, zoom, bg, x0, y0, w, h, out);
+    }
+    let mut pad = std::mem::take(&mut band.pad);
+    pad.resize((pw * ph * 4) as usize, 0);
+    render(band, scenes, zoom, bg, x0 - m as i32, y0 - m as i32, pw, ph, &mut pad);
+    for (row, dst) in out.chunks_exact_mut(w as usize * 4).enumerate() {
+        let at = ((row as u32 + m) * pw + m) as usize * 4;
+        dst.copy_from_slice(&pad[at..at + w as usize * 4]);
+    }
+    band.pad = pad;
+}
+
+/// Widest margin `paint` adds on each side (device pixels).
+const MAX_PAD: u32 = 512;
+
+#[allow(clippy::too_many_arguments)]
+fn render(band: &mut Band, scenes: &[(&Scene, &usvg::Tree)], zoom: f64, bg: [u8; 3], x0: i32, y0: i32, w: u32, h: u32, out: &mut [u8]) {
     let (Ok(w16), Ok(h16)) = (u16::try_from(w), u16::try_from(h)) else { return };
     let Some(target) = PixmapMut::new(w16, h16, out) else { return };
     band.ctx.reset_and_resize(w16, h16);
@@ -1762,5 +1792,39 @@ mod tests {
         }
         assert!(resvg > 500, "the reference draws the emoji: {resvg}");
         assert!(vello * 10 >= resvg * 9, "vello {vello} vs resvg {resvg}");
+    }
+
+    /// A shadow that moves up (here a rotated, flipped node's) blurs from source above the window:
+    /// a window cut through it paints what the whole frame does.
+    #[test]
+    fn windows_cut_through_shadows_match_the_whole() {
+        let shadow = r##"{"type":"shadow","offset":{"x":10,"y":10},"blur":4,"color":"#00000080"}"##;
+        for (name, turn) in [("plain", ""), ("rotated and flipped", r#","flipY":true,"rotation":45"#), ("flipped only", r#","flipX":true"#)] {
+            let json = format!(
+                r##"{{"version":"2.19","children":[{{"type":"frame","id":"r","x":0,"y":0,"width":400,"height":400,"layout":"none","fill":"#eeeeee","children":[
+                {{"type":"ellipse","id":"e","x":100,"y":200,"width":120,"height":80,"fill":"#ff00ff80"{turn},"effect":{shadow}}}]}}]}}"##
+            );
+            let doc = Doc::from_json(&json).unwrap();
+            let (mut fonts, mut assets) = offline();
+            let mut cx = Ctx { doc: &doc, libs: &[], fonts: &mut fonts, assets: &mut assets };
+            let root = cx.laid_out(0).unwrap();
+            let opts = cx.tree_options();
+            let mut svg = crate::svg::Svg::new(cx.fonts, cx.assets, None);
+            svg.node(&root);
+            let tree = usvg::Tree::from_str(&svg.finish(None), &opts).unwrap();
+            let scenes = [(&Scene::new(&tree), &tree)];
+            let mut band = Band::default();
+            let (x0, y0, w) = (-66, -66, 532u32);
+            let mut whole = vec![0u8; (w * w * 4) as usize];
+            paint(&mut band, &scenes, 1.0, BG, x0, y0, w, w, &mut whole);
+            // Windows whose top edge runs through the shadow, at different heights.
+            for (top, h) in [(67, 133u32), (100, 90), (150, 200)] {
+                let mut part = vec![0u8; (w * h * 4) as usize];
+                paint(&mut band, &scenes, 1.0, BG, x0, top, w, h, &mut part);
+                let at = ((top - y0) as u32 * w * 4) as usize;
+                let worst = part.iter().zip(&whole[at..]).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+                assert!(worst <= 1, "{name}: window y {top}..{} differs from the whole frame by {worst}", top + h as i32);
+            }
+        }
     }
 }
