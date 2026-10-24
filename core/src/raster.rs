@@ -882,7 +882,7 @@ pub fn paint(band: &mut Band, scenes: &[(&Scene, &usvg::Tree)], zoom: f64, bg: [
     // left edges. A window cut from a bigger frame is only right if that frame reaches as far as
     // the filters do, so paint the margin too and keep the middle.
     let reach = scenes.iter().map(|(s, _)| s.reach).fold(0.0, f64::max);
-    let m = if reach > 0.0 { ((reach * zoom).ceil() as u32 + 8).min(MAX_PAD) } else { 0 };
+    let m = if reach > 0.0 { ((reach * zoom).ceil().min(f64::from(MAX_PAD)) as u32 + 8).min(MAX_PAD) } else { 0 };
     let (pw, ph) = (w + 2 * m, h + 2 * m);
     if m == 0 || pw.max(ph) > u32::from(u16::MAX) || out.len() != (w * h * 4) as usize {
         return render(band, scenes, zoom, bg, x0, y0, w, h, out);
