@@ -28,7 +28,7 @@ pub struct Scene {
     paths: Vec<BezPath>,
     /// Doc-space box of each background blur and how far around it content feeds its blur.
     backdrops: Vec<(Rect, f64)>,
-    /// Largest `Effect::grow` of its filter layers.
+    /// Largest summed `Effect::grow` along a chain of nested filter layers.
     reach: f64,
 }
 
@@ -85,7 +85,7 @@ struct Shadow {
 
 impl Scene {
     pub fn new(tree: &usvg::Tree) -> Scene {
-        let mut b = Build { s: Scene::default(), images: HashMap::new(), at: Vec::new(), inside: None, failed: false, alpha: false };
+        let mut b = Build { s: Scene::default(), images: HashMap::new(), at: Vec::new(), inside: None, failed: false, alpha: false, chain: 0.0 };
         b.children(tree.root(), tree.root().abs_transform());
         b.s
     }
@@ -248,6 +248,8 @@ struct Build {
     failed: bool,
     /// Only the alpha of what is built matters (shadow sources, knockouts, blur masks).
     alpha: bool,
+    /// Summed `Effect::grow` of the filter layers open now.
+    chain: f64,
 }
 
 /// The svg.rs filters vello draws (see `effect_of`).
@@ -295,7 +297,8 @@ impl Build {
 
     /// Open a layer; `close` it with the returned index.
     fn open(&mut self, bbox: Rect, ts: Affine, clip: Option<(u32, Fill)>, blend: BlendMode, opacity: f32, filter: Option<Effect>) -> usize {
-        self.s.reach = self.s.reach.max(filter.as_ref().map_or(0.0, |e| e.grow));
+        self.chain += filter.as_ref().map_or(0.0, |e| e.grow);
+        self.s.reach = self.s.reach.max(self.chain);
         self.push(bbox, ts, Op::Push { clip, blend, opacity, filter: filter.map(Box::new), end: 0 });
         self.s.items.len() - 1
     }
@@ -303,8 +306,9 @@ impl Build {
     fn close(&mut self, start: usize, bbox: Rect) {
         let end = self.s.items.len();
         self.push(bbox, Affine::IDENTITY, Op::Pop);
-        if let Op::Push { end: e, .. } = &mut self.s.items[start].op {
+        if let Op::Push { end: e, filter, .. } = &mut self.s.items[start].op {
             *e = end;
+            self.chain -= filter.as_ref().map_or(0.0, |f| f.grow);
         }
     }
 
@@ -884,7 +888,7 @@ pub fn paint(band: &mut Band, scenes: &[(&Scene, &usvg::Tree)], zoom: f64, bg: [
     let reach = scenes.iter().map(|(s, _)| s.reach).fold(0.0, f64::max);
     let m = if reach > 0.0 { ((reach * zoom).ceil().min(f64::from(MAX_PAD)) as u32 + 8).min(MAX_PAD) } else { 0 };
     let (pw, ph) = (w + 2 * m, h + 2 * m);
-    if m == 0 || pw.max(ph) > u32::from(u16::MAX) || out.len() != (w * h * 4) as usize {
+    if m == 0 || w == 0 || h == 0 || pw.max(ph) > u32::from(u16::MAX) || out.len() != (w * h * 4) as usize {
         return render(band, scenes, zoom, bg, x0, y0, w, h, out);
     }
     let mut pad = std::mem::take(&mut band.pad);
