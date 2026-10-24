@@ -641,7 +641,7 @@ function ModelPicker({ settingsOpen, backendRev, toast }: { settingsOpen: boolea
   const current = stored ?? (cli ? 'default' : 'claude-opus-5-5')
   const [model, setModel] = useState(current)
   const [fast, setFast] = useState(s.agent_fast === true)
-  useEffect(() => setModel(current), [current])
+  useEffect(() => setModel(current), [s, current])
   const { ref: triggerRef, on: focused, clear } = useRing()
   // Arrow keys move the menu's highlight, which is only a 1.1:1 background shift: ring it while the
   // keyboard drives the menu, not while the mouse does.
