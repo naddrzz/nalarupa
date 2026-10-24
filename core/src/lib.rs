@@ -247,7 +247,10 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             e.edit_or_drag(|d| {
                 // Final slot of the previous layer per parent: a one-step move must not pass it (the block stays in order at either end).
                 let mut last: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
-                for (k, (id, parent, _)) in items.iter().enumerate() {
+                // Position within the block per parent: front/back slots count from each parent's own end.
+                let mut rank: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+                for (id, parent, _) in items.iter() {
+                    let k = *rank.entry(parent.as_str()).and_modify(|n| *n += 1).or_insert(0);
                     let (_, idx) = d.parent_of(id).ok_or("node not found")?;
                     let count = if parent == ROOT { d.children().len() } else { d.find(parent).and_then(|p| p["children"].as_array()).map_or(1, |c| c.len()) };
                     let to = match dir.as_str() {

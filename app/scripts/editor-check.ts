@@ -181,6 +181,15 @@ call('undo')
   assert(order() === 'ABCD', `send backward at the back keeps the order (${order()})`)
   call('reorder', { ids: [r.B, r.C], dir: 'up' })
   assert(order() === 'ADBC', `bring forward moves a free block one step (${order()})`)
+  // Layers from two parents in one call: front/back count from each parent's own end.
+  const RG = call('insert', { node: { type: 'frame', name: 'RG', x: 2600, y: 0, width: 500, height: 300, layout: 'none' } }).id
+  const g: Record<string, string> = {}
+  for (const n of ['E', 'F', 'G']) g[n] = call('insert', { parent: RG, node: { type: 'rectangle', name: n, x: 0, y: 0, width: 10, height: 10 } }).id
+  const orderG = () => call<B[]>('children_boxes', { id: RG }).map((k) => Object.keys(g).find((n) => g[n] === k.id)).join('')
+  call('reorder', { ids: [r.A, g.E], dir: 'front' })
+  assert(order() === 'DBCA' && orderG() === 'FGE', `bring to front across parents (${order()}, ${orderG()})`)
+  call('reorder', { ids: [r.A, g.E], dir: 'back' })
+  assert(order() === 'ADBC' && orderG() === 'EFG', `send to back across parents (${order()}, ${orderG()})`)
 }
 
 // Clipboard: copy → paste lands in place next to the visible source; text and SVG paste.
