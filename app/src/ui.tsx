@@ -340,8 +340,10 @@ function scrubMove(e: EventPayload) {
  * Number field: drag the label to scrub, Up/Down ±step (Shift ×10), Enter/blur
  * commits. `onCommit` gets a coalescing key: one focus session or one scrub = one undo step.
  */
-export function NumField({ label, name = label, value, mixed, onCommit, step = 1, min, max, testId, width }: {
-  label: string; value: number; mixed?: boolean; onCommit: (v: number, coalesce: string) => void; step?: number; min?: number; max?: number; testId?: string; width?: number
+export function NumField({ label, name = label, value, mixed, onCommit, onStep, step = 1, min, max, testId, width }: {
+  label: string; value: number; mixed?: boolean; onCommit: (v: number, coalesce: string) => void
+  /** Up/Down and scrub on a mixed field send the total change since the gesture began, so each value can move from its own start (a typed number still goes through `onCommit`). */
+  onStep?: (delta: number, coalesce: string) => void; step?: number; min?: number; max?: number; testId?: string; width?: number
   /** Accessible name when the visible label is a letter or symbol ("W", "↻"). */
   name?: string
 }) {
@@ -353,6 +355,7 @@ export function NumField({ label, name = label, value, mixed, onCommit, step = 1
   latest.current = draft
   useEffect(() => setDraft(shown), [shown])
   const session = useRef<string | null>(null)
+  const stepped = useRef(0)
   const key = () => (session.current ??= `field:${testId ?? label}:${++gesture}`)
   const commit = (v: number, k = key()) => {
     if (!Number.isFinite(v)) return setDraft(shown)
@@ -377,7 +380,8 @@ export function NumField({ label, name = label, value, mixed, onCommit, step = 1
         onMouseDown={(e) => {
           const base = mixed ? 0 : Number(latest.current) || 0
           const k = `scrub:${testId ?? label}:${++gesture}`
-          scrub = { x: e.x ?? 0, at: e.x ?? 0, last: 0, apply: (steps) => commit(Math.round((base + steps * step) * 100) / 100, k) }
+          stepped.current = 0
+          scrub = { x: e.x ?? 0, at: e.x ?? 0, last: 0, apply: (steps) => mixed && onStep ? onStep(Math.round(steps * step * 100) / 100, k) : commit(Math.round((base + steps * step) * 100) / 100, k) }
         }}
         onMouseMove={scrubMove}
         onMouseUp={() => { scrub = null }}
@@ -395,12 +399,18 @@ export function NumField({ label, name = label, value, mixed, onCommit, step = 1
         onBlur={() => {
           typed()
           session.current = null
+          stepped.current = 0
         }}
         onKeyDown={(e) => {
           const k = (e.key ?? '').toLowerCase()
           if (k !== 'up' && k !== 'down') return
+          const delta = (k === 'up' ? 1 : -1) * step * (e.modifiers?.shift ? 10 : 1)
+          if (mixed && onStep) {
+            stepped.current = Math.round((stepped.current + delta) * 100) / 100
+            return onStep(stepped.current, key())
+          }
           const base = Number(latest.current) || 0
-          commit(Math.round((base + (k === 'up' ? 1 : -1) * step * (e.modifiers?.shift ? 10 : 1)) * 100) / 100)
+          commit(Math.round((base + delta) * 100) / 100)
         }}
         theme={{ caret: C.accent }}
       />
