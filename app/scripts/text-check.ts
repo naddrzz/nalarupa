@@ -27,7 +27,7 @@ for (let seen = widths(), since = Date.now(), end = since + 20000; Date.now() < 
 
 // Auto growth: size from the content. A newline adds a line of the same height and the box is as wide as the longest line.
 const one = box(make({ content: 'Hello world' }))
-assert(one.w > 0 && one.h > 20, `auto text is one line taller than the font size: ${one.w}x${one.h}`)
+assert(one.w > 0 && one.h > 20 && one.h === box(make({ content: 'Hello world', textGrowth: 'fixed-width', width: 1000 })).h, `auto text is one line, as tall as a wide fixed-width box: ${one.w}x${one.h}`)
 const two = box(make({ content: 'Hello world\nHi' }))
 assert(two.w === one.w && two.h === one.h * 2, `a newline adds a line and keeps the longest line's width: ${two.w}x${two.h}`)
 const wide = box(make({ content: 'Hello world', width: 10, height: 10 }))
