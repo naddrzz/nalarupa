@@ -729,7 +729,10 @@ for (let i = 0; i < 149; i++) Insert(f, {type:"rectangle", name:"Chip " + i, x:(
   await shot('06-present')
   await app.getByTestId('presentation').press('escape')
   await sleep(500)
-  // A new document starts without the external agent's cursor from the one before.
+  // A new document starts without the external agent's cursor from the one before. Fit everything first: a cursor that has
+  // faded spawns at its target, and the camera still sits on the far-off Many frame, where the layer culls it.
+  await app.getByTestId('canvas').press('shift-1')
+  await sleep(500)
   await mcp('execute', { input: 'Insert(document, {type:"rectangle", name:"Presence", x:100, y:100, width:300, height:200, fill:"#22ff55"})' })
   await until(async () => (await app!.getByTestId('agent-cursor-external').count()) > 0, "the external agent's cursor")
   await app.getByTestId('home').click()
