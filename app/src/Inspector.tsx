@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useRef } from 'react'
 import { tryCall } from './core'
 import { nodeIcon, type IconName } from './icons'
 import { turnAroundCenter } from './geometry'
@@ -145,6 +145,8 @@ export function Inspector({ version, selection, select, toast }: Props) {
     else toast('Unable to delete the selection. Select the layers again and try again.', true)
   }
   const infos = useMemo(() => selection.map((id) => ({ id, ...tryCall('node', { id }) }) as Info).filter((i) => i.node), [selection, version])
+  // Each layer's value when a relative gesture on a mixed field began.
+  const stepBase = useRef<{ key: string; vals: Map<string, number> } | null>(null)
   const update = (props: Record<string, unknown>, coalesce?: string) => {
     const ok = tryCall('update', { ids: selection, props, coalesce }) !== null
     if (!ok) toast(BAD_VALUE, true)
@@ -217,18 +219,25 @@ export function Inspector({ version, selection, select, toast }: Props) {
   const fill = fillMixed ? null : solidColor(n.fill, vars)
   const stroke = solidColor(n.stroke, vars)
 
+  /** Up/Down or scrub on a mixed field: every layer moves by the same delta from its own starting value instead of all taking one number. */
+  const stepEach = (read: (i: Info) => number, write: (i: Info, v: number) => Record<string, unknown> | null) => (delta: number, key: string) => {
+    if (stepBase.current?.key !== key || !infos.every((i) => stepBase.current!.vals.has(i.id))) stepBase.current = { key, vals: new Map(infos.map((i) => [i.id, read(i)])) }
+    const { vals } = stepBase.current
+    perNode((i) => write(i, Math.round((vals.get(i.id)! + delta) * 100) / 100), key)
+  }
   // Rotation turns around the center like the canvas handle: a free layer's origin moves so the center stays put.
   // A group's box starts (bx, by) past its origin.
-  const setRotation = (v: number, key: string) => perNode((i) => {
+  const rotationProps = (i: Info, v: number) => {
     const props: Record<string, unknown> = { rotation: v || null }
     if (!inFlow(i) && i.box) {
       const [fx, fy] = [!!i.node.flipX, !!i.node.flipY]
       ;[props.x, props.y] = turnAroundCenter(Number(i.node.x ?? 0), Number(i.node.y ?? 0), i.box.w, i.box.h, Number(i.node.rotation ?? 0), v, fx, fy, i.local?.bx, i.local?.by)
     }
     return props
-  }, key)
+  }
+  const setRotation = (v: number, key: string) => perNode((i) => rotationProps(i, v), key)
   // W/H: typing a number makes that axis fixed; auto text becomes fixed width (height: fixed size). A group is the union of its children and has no size to set.
-  const setSize = (axis: 'width' | 'height', v: number, key: string) => perNode((i) => {
+  const sizeProps = (i: Info, axis: 'width' | 'height', v: number) => {
     if (i.node.type === 'group') return null
     const p: Record<string, unknown> = { [axis]: Math.max(0, Math.round(v * 100) / 100) }
     if (i.node.type === 'text') {
@@ -236,7 +245,8 @@ export function Inspector({ version, selection, select, toast }: Props) {
       else if ((i.node.textGrowth ?? 'auto') === 'auto') p.textGrowth = 'fixed-width'
     }
     return p
-  }, key)
+  }
+  const setSize = (axis: 'width' | 'height', v: number, key: string) => perNode((i) => sizeProps(i, axis, v), key)
   // Hug / Fill: on = that mode, off = fixed at the current size. Text leaves auto growth first.
   const sizing = (axis: 'width' | 'height', mode: string, on: boolean) => perNode((i) => {
     const size = Math.round(dimOf(i, axis))
@@ -270,21 +280,21 @@ export function Inspector({ version, selection, select, toast }: Props) {
         </Row>
         {!infos.some(inFlow) ? (
           <Row>
-            <NumField label="X" name="X position" {...numOf((i) => i.node.x)} onCommit={(v, k) => update({ x: v }, k)} testId="inspector-x" />
-            <NumField label="Y" name="Y position" {...numOf((i) => i.node.y)} onCommit={(v, k) => update({ y: v }, k)} testId="inspector-y" />
+            <NumField label="X" name="X position" {...numOf((i) => i.node.x)} onCommit={(v, k) => update({ x: v }, k)} onStep={stepEach((i) => Number(i.node.x ?? 0) || 0, (_, v) => ({ x: v }))} testId="inspector-x" />
+            <NumField label="Y" name="Y position" {...numOf((i) => i.node.y)} onCommit={(v, k) => update({ y: v }, k)} onStep={stepEach((i) => Number(i.node.y ?? 0) || 0, (_, v) => ({ y: v }))} testId="inspector-y" />
           </Row>
         ) : null}
         <Row>
-          <NumField label="↻" name="Rotation" {...numOf((i) => i.node.rotation)} onCommit={(v, k) => setRotation(v, k)} testId="inspector-rotation" />
-          <NumField label="α" name="Opacity" {...numOf((i) => (i.node.opacity ?? 1) * 100)} onCommit={(v, k) => update({ opacity: v >= 100 ? null : v / 100 }, k)} min={0} max={100} testId="inspector-opacity" />
+          <NumField label="↻" name="Rotation" {...numOf((i) => i.node.rotation)} onCommit={(v, k) => setRotation(v, k)} onStep={stepEach((i) => Number(i.node.rotation ?? 0) || 0, rotationProps)} testId="inspector-rotation" />
+          <NumField label="α" name="Opacity" {...numOf((i) => (i.node.opacity ?? 1) * 100)} onCommit={(v, k) => update({ opacity: v >= 100 ? null : v / 100 }, k)} onStep={stepEach((i) => (i.node.opacity ?? 1) * 100, (_, v) => ({ opacity: v >= 100 ? null : Math.max(0, v) / 100 }))} min={0} max={100} testId="inspector-opacity" />
         </Row>
       </Section>
 
       <Section title={!multi && inFlow(infos[0]) ? 'Size (auto layout child)' : 'Size'}>
         {all((i) => i.node.type === 'group') ? null : (
           <Row>
-            <NumField label="W" name="Width" {...numOf((i) => dimOf(i, 'width'))} onCommit={(v, k) => setSize('width', v, k)} min={0} testId="inspector-w" />
-            <NumField label="H" name="Height" {...numOf((i) => dimOf(i, 'height'))} onCommit={(v, k) => setSize('height', v, k)} min={0} testId="inspector-h" />
+            <NumField label="W" name="Width" {...numOf((i) => dimOf(i, 'width'))} onCommit={(v, k) => setSize('width', v, k)} onStep={stepEach((i) => dimOf(i, 'width'), (i, v) => sizeProps(i, 'width', v))} min={0} testId="inspector-w" />
+            <NumField label="H" name="Height" {...numOf((i) => dimOf(i, 'height'))} onCommit={(v, k) => setSize('height', v, k)} onStep={stepEach((i) => dimOf(i, 'height'), (i, v) => sizeProps(i, 'height', v))} min={0} testId="inspector-h" />
           </Row>
         )}
         {canHug || canFill ? (

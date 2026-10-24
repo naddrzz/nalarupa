@@ -250,6 +250,44 @@ try {
   await shot('03-marquee')
   assert(await app.getByText('2 layers selected').count(), 'marquee selects both rectangles')
 
+  // Up/Down and scrubbing a "Mixed" field step each layer from its own value (they used to start from 0 and
+  // give every layer the same number); one undo step restores them.
+  const fresh = (await ports()).filter((p) => !portsBefore.has(p))
+  assert(fresh.length === 1, `expected one new MCP port, found ${fresh.join(', ') || 'none'}`)
+  const port = fresh[0]
+  const xw = async () => {
+    const res: any = await (await mcpCall(port, { method: 'tools/call', params: { name: 'execute', arguments: { input: 'Get(undefined, n => { if (n.name === "Rectangle") Print(JSON.stringify([n.x, n.width])) })' } } })).json()
+    return String(res.result?.content?.[0]?.text ?? '').split('\n').filter((l) => l.startsWith('[')).sort().join(' ')
+  }
+  // The rectangles start the same size: widen the right one so W is mixed too (put back below).
+  const widen = (w: number) => mcpCall(port, { method: 'tools/call', params: { name: 'execute', arguments: { input: `Get(n => n.name === "Rectangle" && n.x > 300 ? n.id : undefined).filter(Boolean).forEach(id => Update(id, { width: ${w} }))` } } })
+  await widen(250)
+  await sleep(500)
+  const xw0 = await xw()
+  const [[ax, aw], [bx, bw]] = xw0.split(' ').map((l) => JSON.parse(l) as number[])
+  assert(aw !== bw && ax !== bx, `the two rectangles differ in X and W (${xw0})`)
+  const wField = await app.getByTestId('inspector-w').bounds()
+  await app.mouse.click({ x: wField.x + wField.width - 10, y: wField.y + wField.height / 2 })
+  await app.call('keystrokes', { keys: 'up' })
+  const wUp = JSON.stringify([[ax, aw + 1], [bx, bw + 1]].sort())
+  assert(await until(async () => JSON.stringify((await xw()).split(' ').map((l) => JSON.parse(l)).sort()) === wUp), `Up on a mixed W adds 1 to each layer's own width (${await xw()}, from ${xw0})`)
+  await app.call('keystrokes', { keys: 'shift-down' })
+  const wDown = JSON.stringify([[ax, aw - 9], [bx, bw - 9]].sort())
+  assert(await until(async () => JSON.stringify((await xw()).split(' ').map((l) => JSON.parse(l)).sort()) === wDown), `Shift+Down on a mixed W subtracts 10 from the steps so far (${await xw()})`)
+  await canvas.press('ctrl-z')
+  assert(await until(async () => (await xw()) === xw0, 5000), `one undo step restores both widths (${await xw()})`)
+  // Scrub the X label 40 px (2 px per step): both layers move 20 and keep their offset.
+  const xs = await app.getByTestId('inspector-x-scrub').center()
+  await app.mouse.down(xs)
+  for (let i = 1; i <= 10; i++) await app.mouse.move({ x: xs.x + i * 4, y: xs.y }, { pressedButton: 0 })
+  await app.mouse.up({ x: xs.x + 40, y: xs.y })
+  const xScrub = JSON.stringify([[ax + 20, aw], [bx + 20, bw]].sort())
+  assert(await until(async () => JSON.stringify((await xw()).split(' ').map((l) => JSON.parse(l)).sort()) === xScrub), `scrubbing a mixed X moves each layer by the same amount (${await xw()}, from ${xw0})`)
+  await canvas.press('ctrl-z')
+  assert(await until(async () => (await xw()) === xw0, 5000), `one undo step reverts the scrub (${await xw()})`)
+  await widen(bw === 250 ? 187 : bw)
+  await sleep(300)
+
   // Shift+H / Shift+V mirror every selected layer in place; one undo step reverts the whole flip.
   const boxes = async () => JSON.stringify((await app.getByTestId('selection-box').all()).map((n: any) => n.bounds))
   const still = async (a: string) => until(async () => (await boxes()) === a)
@@ -476,9 +514,6 @@ try {
   await canvas.press('ctrl-z')
   await sleep(300)
   // No width, no stroke: each stroke field fills in the other's placeholder default, in one undo step.
-  const fresh = (await ports()).filter((p) => !portsBefore.has(p))
-  assert(fresh.length === 1, `expected one new MCP port, found ${fresh.join(', ') || 'none'}`)
-  const port = fresh[0]
   const stroked = async () => {
     const res: any = await (await mcpCall(port, { method: 'tools/call', params: { name: 'execute', arguments: { input: 'Get(undefined, n => { if (n.name === "Rectangle") Print(JSON.stringify({ stroke: n.stroke ?? "", strokeWidth: n.strokeWidth ?? "" })) })' } } })).json()
     return String(res.result?.content?.[0]?.text ?? '').split('\n').filter((l) => l.startsWith('{')).pop() ?? ''
