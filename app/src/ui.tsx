@@ -360,6 +360,7 @@ export function NumField({ label, name = label, value, mixed, onCommit, onStep, 
         onMouseDown={(e) => {
           const base = mixed ? 0 : Number(latest.current) || 0
           const k = `scrub:${testId ?? label}:${++gesture}`
+          stepped.current = 0
           scrub = { x: e.x ?? 0, at: e.x ?? 0, last: 0, apply: (steps) => mixed && onStep ? onStep(Math.round(steps * step * 100) / 100, k) : commit(Math.round((base + steps * step) * 100) / 100, k) }
         }}
         onMouseMove={scrubMove}

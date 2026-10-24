@@ -285,7 +285,7 @@ try {
   assert(await until(async () => JSON.stringify((await xw()).split(' ').map((l) => JSON.parse(l)).sort()) === xScrub), `scrubbing a mixed X moves each layer by the same amount (${await xw()}, from ${xw0})`)
   await canvas.press('ctrl-z')
   assert(await until(async () => (await xw()) === xw0, 5000), `one undo step reverts the scrub (${await xw()})`)
-  await widen(bw === 250 ? 187 : bw)
+  await widen(aw)
   await sleep(300)
 
   // Shift+H / Shift+V mirror every selected layer in place; one undo step reverts the whole flip.
