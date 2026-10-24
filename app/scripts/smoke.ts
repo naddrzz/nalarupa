@@ -167,8 +167,9 @@ resetChat()
   applyEvents([ev('user', { text: 'two' }), ev('start'), ev('thinking_delta', { text: 'hmm' }), ev('message_end'), ev('text_delta', { text: 'Thinking first' }), ev('message_end'), end], 0)
   applyEvents([ev('user', { text: 'three' }), ev('start'), ev('tool_start', { id: 't1', name: 'execute' }), ev('tool_done', { id: 't1', name: 'execute', input: {}, output: 'ok' }), ev('text_delta', { text: 'Tool first' }), ev('message_end'), end], 0)
   applyEvents([ev('start'), ev('text_delta', { text: 'No prompt' }), ev('message_end'), end], 0)
+  applyEvents([ev('user', { text: 'four' }), ev('start'), ev('text_delta', { text: 'Cut off' }), ev('message_end'), ev('note', { text: 'The reply hit the output limit' }), ev('text_delta', { text: 'Continued' }), ev('message_end'), end], 0)
   const marks = store.items.flatMap((i) => (i.kind === 'assistant' || i.kind === 'thinking' || i.kind === 'tool' ? [`${i.kind}${i.header ? '+' : ''}`] : []))
-  assert(marks.join() === 'assistant+,thinking+,assistant,tool+,assistant,assistant+', `reply headers ${marks}`)
+  assert(marks.join() === 'assistant+,thinking+,assistant,tool+,assistant,assistant+,assistant+,assistant', `reply headers ${marks}`)
 }
 // A stopped or failed run settles its plan: unfinished steps become cancelled, none stays in progress.
 {

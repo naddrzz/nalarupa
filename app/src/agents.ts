@@ -115,7 +115,7 @@ function lastOf(agent: string, kinds: ChatItem['kind'][]): ChatItem | undefined 
 
 /** Whether the agent's next item opens its reply (a turn's first thinking, tool or text), which then carries the name and model header. */
 function opensReply(agent: string): boolean {
-  const prev = store.items[store.items.length - 1]
+  const prev = store.items.filter((i) => i.kind !== 'note' && i.kind !== 'queued').pop() // neither ends the reply: an output-limit note lands mid-run, a queued message waits behind it
   return !prev || prev.kind === 'user' || prev.kind === 'usage' || !('agent' in prev) || prev.agent?.id !== agent
 }
 
