@@ -9,7 +9,7 @@ use crate::doc::Doc;
 use crate::raster;
 use crate::resolve::{RNode, Resolver};
 use crate::svg::{clip_svg, fxhash, is_turned, own_matrix, Assets, Svg};
-use crate::text::Fonts;
+use crate::text::{Fonts, TextStyle};
 use resvg::{tiny_skia, usvg};
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
@@ -863,7 +863,8 @@ fn changed_nodes(old: &Layer, new: &Layer, out: &mut Vec<Rect>) {
 }
 
 /// Generous paint reach outside a node's box from its effects, stroke and text overflow.
-fn reach(ty: &str, p: &Map<String, Value>) -> f64 {
+fn reach(n: &RNode) -> f64 {
+    let p = &n.p;
     let num = |v: &Value| v.as_f64().unwrap_or(0.0).abs();
     let effects = match p.get("effect") {
         Some(Value::Array(a)) => a.iter().collect(),
@@ -877,8 +878,16 @@ fn reach(ty: &str, p: &Map<String, Value>) -> f64 {
         None => 0.0,
     };
     // Glyphs spill out of a line box shorter than the font's ascent plus descent (tight line heights,
-    // overhangs): one em each way.
-    let glyphs = if ty == "text" { p.get("fontSize").map_or(14.0, num) } else { 0.0 };
+    // overhangs): one em each way. A fixed-size box also lets its lines run past it: lines below the
+    // box and words wider than it.
+    let glyphs = if n.ty == "text" {
+        let st = TextStyle::of(n);
+        let lines = n.lines.len() as f64 * st.size * st.line_height.unwrap_or(0.0).max(2.0);
+        let wide = n.lines.iter().map(|l| l.width).fold(0.0, f64::max);
+        st.size + (lines - n.h).max(wide - n.w).max(0.0)
+    } else {
+        0.0
+    };
     4.0 + fx + stroke + glyphs
 }
 
@@ -1028,7 +1037,7 @@ fn prepare_layer(cx: &mut Ctx, index: usize, hash: u64, hidden: &HashSet<String>
             local: ([n.bx, n.by], n.f("rotation").unwrap_or(0.0), n.b("flipX"), n.b("flipY")),
             clip: n.ty == "frame" && n.b("clip"),
             sig: fxhash(&sig),
-            reach: if turned[depth] { f64::INFINITY } else { reach(&n.ty, &n.p) },
+            reach: if turned[depth] { f64::INFINITY } else { reach(n) },
         });
         stack.push(n.id.clone());
     }, 0);
@@ -1184,10 +1193,10 @@ pub(crate) mod tests {
     /// repaints them too, so the incremental frame equals a cold render (no descender tails left).
     #[test]
     fn text_overflow_leaves_no_ghosts() {
-        let json = |lh: f64| {
+        let json = |lh: f64, box_: &str, size: &str| {
             format!(
                 r##"{{"version":"2.19","children":[{{"type":"frame","id":"f","x":0,"y":0,"width":1920,"height":1080,"layout":"none","fill":"#0f1115","children":[
-                {{"type":"text","id":"t","x":160,"y":587,"width":1600,"textGrowth":"fixed-width","content":"Say one thing,\nbeautifully.","fontSize":120,"fontWeight":"700","lineHeight":{lh},"fill":"#f4f1ea"}}]}}]}}"##
+                {{"type":"text","id":"t","x":160,"y":587,"width":1600,{box_},"content":"Say one thing,\nbeautifully.","fontSize":{size},"fontWeight":"700","lineHeight":{lh},"fill":"#f4f1ea"}}]}}]}}"##
             )
         };
         let frame = |r: &mut Renderer| r.render(640, 400, 160.0, 700.0, 1.0, [28, 28, 31], None, true).to_vec();
@@ -1197,9 +1206,11 @@ pub(crate) mod tests {
             ("move", |t| t["y"] = json!(287)),
             ("hide", |t| t["enabled"] = json!(false)),
         ];
-        for lh in [1.05, 0.8] {
+        // Tight line heights, a string font size, and a fixed-height box its lines run out of.
+        let cases = [(1.05, r#""textGrowth":"fixed-width""#, "120"), (0.8, r#""textGrowth":"fixed-width""#, "120"), (1.05, r#""textGrowth":"fixed-width""#, r#""120""#), (1.05, r#""textGrowth":"fixed-width-height","height":40"#, "120")];
+        for (lh, box_, size) in cases {
             for (name, edit) in edits {
-                let mut doc = Doc::from_json(&json(lh)).unwrap();
+                let mut doc = Doc::from_json(&json(lh, box_, size)).unwrap();
                 let mut live = Renderer::default();
                 sync(&mut live, &doc);
                 frame(&mut live);
@@ -1213,7 +1224,7 @@ pub(crate) mod tests {
                 sync(&mut cold, &doc);
                 // Banded rasterising may round a channel by one; a ghost is far off.
                 let stale = incremental.iter().zip(frame(&mut cold)).filter(|(a, b)| a.abs_diff(*b) > 10).count();
-                assert!(stale == 0, "{stale} stale glyph channels after {name} at lineHeight {lh}");
+                assert!(stale == 0, "{stale} stale glyph channels after {name} at lineHeight {lh}, {box_}, fontSize {size}");
             }
         }
     }
