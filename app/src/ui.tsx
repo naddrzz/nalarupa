@@ -123,6 +123,25 @@ export function useRing<T extends PublicInstance>(forwarded?: Ref<T>) {
   return { ref, el, on, clear: () => setKeyboardFocus(null) }
 }
 
+/** Scroll the container that gets `ref` (an `overflowY: 'scroll'` panel) to show the control Tab just focused, ring
+ *  included. GPUI does not scroll on focus, and `scrollIntoView` only brings the container's direct child into view. */
+export function useScrollToFocus() {
+  const renderer = useGpuixRequired()
+  const ref = useRef<PublicInstance>(null)
+  const focus = useKeyboardFocusId()
+  useEffect(() => {
+    const [box, at, off] = ref.current && focus !== null
+      ? [renderer.getElementBounds?.(ref.current.id), renderer.getElementBounds?.(focus), renderer.getScrollOffset?.(ref.current.id)]
+      : []
+    // Focus in another panel is none of this container's business.
+    if (!box || !at || !off || at.x < box.x || at.x + at.width > box.x + box.width) return
+    const ring = 3
+    const dy = at.y - ring < box.y ? box.y - (at.y - ring) : Math.min(0, box.y + box.height - (at.y + at.height + ring))
+    if (dy) renderer.scrollTo?.(ref.current!.id, off[0], Math.min(0, off[1] + dy))
+  }, [focus])
+  return ref
+}
+
 // GPUIX tracks a text field's focus handle on two nested divs, so GPUI's tab-stop list holds the field
 // twice and `focusPrevious` from it lands on the field again: Shift+Tab never leaves. Each field keeps a
 // `back` stop (a focusable div that is no tab stop) right before it; focusing that and walking back from
@@ -198,13 +217,14 @@ export const IconButton = forwardRef<PublicInstance, {
   )
 })
 
-export function Button({ children, onClick, primary, icon, testId, grow, danger }: {
-  children: ReactNode; onClick?: () => void; primary?: boolean; icon?: IconName; testId?: string; grow?: boolean; danger?: boolean
+export function Button({ children, onClick, primary, icon, testId, focusTestId, grow, danger }: {
+  children: ReactNode; onClick?: () => void; primary?: boolean; icon?: IconName; testId?: string; focusTestId?: string; grow?: boolean; danger?: boolean
 }) {
   const fg = primary ? '#16110F' : danger ? C.danger : C.text
   return (
     <Pressable
       testId={testId}
+      focusTestId={focusTestId}
       onClick={onClick}
       style={{
         display: 'flex', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,

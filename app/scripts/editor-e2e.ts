@@ -505,6 +505,28 @@ try {
   assert(await until(async () => !(await app.getByText('500').count())), 'an opacity above 100 no longer shows the typed 500')
   assert(await until(async () => !(await app.getByText('-4').count())), 'a negative radius no longer shows the typed -4')
 
+  // Tab through the Inspector scrolls the focused control into view: the last Export button (HTML) ends up on screen
+  // with its ring; Shift+Tab walks back to the name field.
+  const nameY0 = (await app.getByTestId('inspector-name').bounds())!.y
+  let tabs = 0
+  while (!(await count('export-html-focus')) && tabs < 60) {
+    await app.call('keystrokes', { keys: 'tab' })
+    tabs++
+    await sleep(120)
+  }
+  assert(await until(async () => !!(await count('export-html-focus'))), `Tab reaches the HTML export button (${tabs} presses)`)
+  const windowBottom = c.y + c.height
+  assert(await until(async () => {
+    const b = await app.getByTestId('export-html').bounds()
+    return !!b && b.y + b.height + 3 <= windowBottom
+  }), 'Tab scrolls the focused HTML export button, ring included, above the window bottom')
+  assert((await app.getByTestId('inspector-name').bounds())!.y < nameY0, 'Tab scrolled the Inspector')
+  for (let i = 0; i < tabs; i++) {
+    await app.call('keystrokes', { keys: 'shift-tab' })
+    await sleep(120)
+  }
+  assert((await app.getByTestId('inspector-name').bounds())!.y >= c.y + 3, 'Shift+Tab back to the name field keeps it, ring included, below the panel top')
+
   // Handle centers (canvas px), tl, tr, br, bl. Each sits 12 px in at radius 0 and slides toward the middle
   // (80 px for a 180×160 box) as the radius grows: inset = 12 + radius·68/80.
   const insets = async () => (await app.getByTestId('radius-handle').all()).map((n, i) => {
