@@ -276,14 +276,17 @@ export function App() {
       // Inside auto layout arrows reorder along the layout axis (Alt: to the end); elsewhere they nudge.
       const free = new Map<string, string[]>()
       const loose: string[] = []
+      const ordered: string[] = []
       for (const id of sel) {
         const info = nodeOf(id)
         const layout = info?.node?.layoutPosition !== 'absolute' ? info?.parentLayout : 'none'
         if (!layout || layout === 'none') loose.push(id)
-        else if ((layout === 'vertical') === (key === 'up' || key === 'down')) {
-          const later = key === 'right' || key === 'down'
-          tryCall('reorder', { ids: [id], dir: m.alt ? (later ? 'front' : 'back') : later ? 'up' : 'down' })
-        }
+        else if ((layout === 'vertical') === (key === 'up' || key === 'down')) ordered.push(id)
+      }
+      // One call moves the layers as a block (and is one undo step).
+      if (ordered.length) {
+        const later = key === 'right' || key === 'down'
+        tryCall('reorder', { ids: ordered, dir: m.alt ? (later ? 'front' : 'back') : later ? 'up' : 'down' })
       }
       // A moved layer carries its descendants, so a loose descendant of a loose layer is left to it.
       for (const id of loose.filter((id) => !loose.some((o) => o !== id && inside(id, o)))) {
