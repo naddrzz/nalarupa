@@ -740,6 +740,18 @@ impl<'a> Svg<'a> {
         if let Some(m) = &mask {
             self.drop_shadows(fx, m, mb, outline);
         }
+        // Inner shadows are measured from the fill edge whatever the stroke: an outer/center stroke
+        // grows only the drop shadow's silhouette, so it gets a fill-only mask of its own.
+        let grown = stroke.as_ref().is_some_and(|s| s.align != "inner");
+        let inner_mask = mask.as_ref().map(|m| {
+            if !grown || !fx.shadows.iter().any(|s| s.inner) {
+                return m.to_string();
+            }
+            let id = format!("{m}i");
+            let _ = write!(self.defs, r##"<path id="{id}" d="{}"{} fill="#000"/>"##, geo.d, geo.rule("fill-rule"));
+            id
+        });
+        let inner_outline = if grown { round_outline(n, None) } else { outline };
         // A clip group is isolated, so a blended child would blend against transparent instead of the
         // frame's fill: such a frame paints its fill and inner shadows inside the clip group too.
         let clip = n.ty == "frame" && n.b("clip");
@@ -771,8 +783,8 @@ impl<'a> Svg<'a> {
             let _ = write!(self.defs, r#"<clipPath id="{c}"><path d="{}"{}/></clipPath>"#, geo.d, geo.rule("clip-rule"));
             let _ = write!(self.out, r##"<path d="{}" fill="none" stroke="#808080" stroke-width="2" clip-path="url(#{c})"/>"##, geo.d);
         }
-        if let Some(m) = &mask {
-            self.inner_shadows(fx, m, mb, outline);
+        if let Some(m) = &inner_mask {
+            self.inner_shadows(fx, m, mb, inner_outline);
         }
         if !clip {
             self.stroke(n, &geo, stroke.as_ref());

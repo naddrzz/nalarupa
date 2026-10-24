@@ -1442,6 +1442,25 @@ pub(crate) mod tests {
         }
     }
 
+    /// An inner shadow is measured from the fill edge whatever the stroke alignment: the band stays
+    /// on the fill (x 50..61) and nothing is painted outside the shape, in both rasters.
+    #[test]
+    fn inner_shadow_ignores_stroke_alignment() {
+        for align in ["inner", "center", "outer"] {
+            let json = format!(
+                r##"{{"version":"2.19","children":[{{"type":"frame","id":"f","x":0,"y":0,"width":200,"height":200,"layout":"none","fill":"#ffffff","children":[{{"type":"rectangle","id":"r","x":50,"y":40,"width":100,"height":100,"fill":"#0000ff","stroke":"#00000000","strokeWidth":8,"strokeAlignment":"{align}","effect":{{"type":"shadow","shadowType":"inner","offset":{{"x":12,"y":0}},"blur":0,"color":"#ff0000"}}}}]}}]}}"##
+            );
+            let doc = Doc::from_json(&json).unwrap();
+            for raster in [Raster::Resvg, Raster::Vello] {
+                let mut r = Renderer { raster, ..Renderer::default() };
+                sync(&mut r, &doc);
+                let px = r.render(200, 200, 0.0, 0.0, 1.0, [255, 255, 255], None, true).to_vec();
+                let red: Vec<usize> = (0..200).filter(|&x| { let p = &px[(90 * 200 + x) * 4..]; p[0] > 200 && p[1] < 60 && p[2] < 60 }).collect();
+                assert_eq!((red.first(), red.last()), (Some(&50), Some(&61)), "{align} {raster:?}: inner shadow band");
+            }
+        }
+    }
+
     /// Text paints like a shape: fill, then inner shadows, then the stroke, so the stroke covers an inner shadow.
     #[test]
     fn text_stroke_covers_inner_shadow() {
