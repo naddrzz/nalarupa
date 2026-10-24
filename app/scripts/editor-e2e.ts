@@ -389,8 +389,7 @@ try {
   await sleep(600)
   await app.mouse.click({ x: rn.x + rn.width - 8, y: rn.y + rn.height / 2 })
   await app.call('keystrokes', { keys: 'ctrl-a C a r d s enter' })
-  await sleep(400)
-  assert(await app.getByText('Cards').count(), 'layer renamed from the layers panel')
+  assert(await until(async () => !!(await app.getByText('Cards').count()), 5000), 'layer renamed from the layers panel')
   // Enter in the rename field hands the keys back to the Layers row, which passes shortcuts on.
   await app.call('keystrokes', { keys: 'escape' })
   assert(await until(async () => !(await count('size-label'))), 'Escape clears the selection after a layer rename')
