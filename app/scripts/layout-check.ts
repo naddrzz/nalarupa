@@ -89,7 +89,7 @@ const lone = insert('document', { type: 'frame', name: 'Lone', x: 0, y: 500, wid
 const lk = insert(lone, rect('fill_container', 'fill_container'))
 assert(box(lone).w === 30 && box(lone).h === 20 && box(lk).w === 30, `fit_content falls back when only fill children remain: ${box(lone).w}x${box(lone).h}`)
 
-// Errors: an unknown node and a layout command with nothing selected are errors, not silent no-ops.
+// Errors: a layout command on an unknown node is an error, not a silent no-op.
 let failed = ''
 try {
   call('set_layout', { ids: ['no-such-node'], layout: 'vertical' })

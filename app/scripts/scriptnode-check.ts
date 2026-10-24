@@ -62,7 +62,7 @@ assert(shows('big') === 5, `count 9 is clamped to the maximum 5: ${shows('big')}
 assert(kids('twin').map((b) => b.h).join() === def.map((b) => b.h).join(), 'two nodes with one file and the same inputs draw the same bars')
 
 // The node is hit as one: a click on a generated bar selects the script node, not the bar.
-const chain = call<string[]>('hit', { x: 4, y: 40 })
+const chain = call<string[]>('hit', { x: 4, y: 5 })
 assert(chain.at(-1) === 'def', `hit on a generated bar ends at the script node: ${chain}`)
 
 // Changing the inputs or the size re-runs the script; undo goes back.
