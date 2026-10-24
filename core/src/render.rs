@@ -862,8 +862,8 @@ fn changed_nodes(old: &Layer, new: &Layer, out: &mut Vec<Rect>) {
     out.extend(changed.into_iter().map(|f| (f.x - f.reach, f.y - f.reach, f.w + 2.0 * f.reach, f.h + 2.0 * f.reach)));
 }
 
-/// Generous paint reach outside a node's box from its effects and stroke.
-fn reach(p: &Map<String, Value>) -> f64 {
+/// Generous paint reach outside a node's box from its effects, stroke and text overflow.
+fn reach(ty: &str, p: &Map<String, Value>) -> f64 {
     let num = |v: &Value| v.as_f64().unwrap_or(0.0).abs();
     let effects = match p.get("effect") {
         Some(Value::Array(a)) => a.iter().collect(),
@@ -876,7 +876,10 @@ fn reach(p: &Map<String, Value>) -> f64 {
         Some(v) => num(v),
         None => 0.0,
     };
-    4.0 + fx + stroke
+    // Glyphs spill out of a line box shorter than the font's ascent plus descent (tight line heights,
+    // overhangs): one em each way.
+    let glyphs = if ty == "text" { p.get("fontSize").map_or(14.0, num) } else { 0.0 };
+    4.0 + fx + stroke + glyphs
 }
 
 /// Copy a w×h window of `pix` into `out`, reusing its allocation.
@@ -1025,7 +1028,7 @@ fn prepare_layer(cx: &mut Ctx, index: usize, hash: u64, hidden: &HashSet<String>
             local: ([n.bx, n.by], n.f("rotation").unwrap_or(0.0), n.b("flipX"), n.b("flipY")),
             clip: n.ty == "frame" && n.b("clip"),
             sig: fxhash(&sig),
-            reach: if turned[depth] { f64::INFINITY } else { reach(&n.p) },
+            reach: if turned[depth] { f64::INFINITY } else { reach(&n.ty, &n.p) },
         });
         stack.push(n.id.clone());
     }, 0);
@@ -1174,6 +1177,44 @@ pub(crate) mod tests {
             let mut cold = Renderer::default();
             sync(&mut cold, &doc);
             assert!(incremental == frame(&mut cold), "stale pixels after rotating to {deg} degrees");
+        }
+    }
+
+    /// Glyphs of a tight-line-height text stick out of its layout box: editing or deleting it
+    /// repaints them too, so the incremental frame equals a cold render (no descender tails left).
+    #[test]
+    fn text_overflow_leaves_no_ghosts() {
+        let json = |lh: f64| {
+            format!(
+                r##"{{"version":"2.19","children":[{{"type":"frame","id":"f","x":0,"y":0,"width":1920,"height":1080,"layout":"none","fill":"#0f1115","children":[
+                {{"type":"text","id":"t","x":160,"y":587,"width":1600,"textGrowth":"fixed-width","content":"Say one thing,\nbeautifully.","fontSize":120,"fontWeight":"700","lineHeight":{lh},"fill":"#f4f1ea"}}]}}]}}"##
+            )
+        };
+        let frame = |r: &mut Renderer| r.render(640, 400, 160.0, 700.0, 1.0, [28, 28, 31], None, true).to_vec();
+        let edits: [(&str, fn(&mut Value)); 4] = [
+            ("delete", |t| *t = Value::Null),
+            ("recolor", |t| t["fill"] = json!("#ff0000")),
+            ("move", |t| t["y"] = json!(287)),
+            ("hide", |t| t["enabled"] = json!(false)),
+        ];
+        for lh in [1.05, 0.8] {
+            for (name, edit) in edits {
+                let mut doc = Doc::from_json(&json(lh)).unwrap();
+                let mut live = Renderer::default();
+                sync(&mut live, &doc);
+                frame(&mut live);
+                edit(&mut doc.root["children"][0]["children"][0]);
+                if doc.root["children"][0]["children"][0].is_null() {
+                    doc.root["children"][0]["children"] = json!([]);
+                }
+                sync(&mut live, &doc);
+                let incremental = frame(&mut live);
+                let mut cold = Renderer::default();
+                sync(&mut cold, &doc);
+                // Banded rasterising may round a channel by one; a ghost is far off.
+                let stale = incremental.iter().zip(frame(&mut cold)).filter(|(a, b)| a.abs_diff(*b) > 10).count();
+                assert!(stale == 0, "{stale} stale glyph channels after {name} at lineHeight {lh}");
+            }
         }
     }
 
