@@ -733,6 +733,12 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
       }
       const [dim, bright] = [peak(think), peak(answer)]
       await shot('14-thought')
+      // The rule is 2 px of the border colour, 10 px of padding left of the text: sample its two columns and the one on each side.
+      const at = (x: number) => { const i = (Math.floor(origin.y + think.y + think.height / 2) * g.w + Math.floor(origin.x + x)) * 3; return [g.px[i], g.px[i + 1], g.px[i + 2]].join() }
+      const rule = [-13, -12, -11, -10].map((d) => at(think.x + d))
+      if (rule[1] !== '43,43,49' || rule[2] !== '43,43,49' || rule[0] === rule[1] || rule[3] === rule[2]) throw new Error(`expected a 2 px rule (43,43,49) 11-12 px left of the thought, got ${rule.join(' | ')}`)
+      // 12 px text on an 18 px line: the block is a whole number of 18 px lines.
+      if (Math.abs(think.height / 18 - Math.round(think.height / 18)) > 0.05) throw new Error(`the thought is ${think.height} px tall: not a whole number of 18 px lines`)
       if (bright < 200 || dim > 185) throw new Error(`the expanded thought peaks at ${dim} and the reply at ${bright}: the thought should be muted and the reply bright`)
       if (think.x < answer.x + 8) throw new Error(`the thought starts at x=${think.x}, the reply at x=${answer.x}: the thought should be indented`)
     }
