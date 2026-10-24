@@ -410,6 +410,22 @@ assert(redAt(300, 70), 'moving a container out of a clipping frame repaints its 
     rmSync(bombDir, { recursive: true, force: true })
   }
 }
+// A shadow that moves up (a rotated, flipped node's does) must not fade along the edges the repaint is cut
+// into bands at: after an edit the canvas equals a full render (solo) of the same document.
+{
+  call('new', { template: 'empty' })
+  const root = ins('document', { type: 'frame', name: 'root', x: 0, y: 0, width: 400, height: 400, layout: 'none', fill: '#eeeeee' })
+  const e = ins(root, { type: 'ellipse', name: 'E', x: 100, y: 200, width: 120, height: 80, fill: '#ff00ff80', flipY: true, rotation: 45, effect: { type: 'shadow', offset: { x: 10, y: 10 }, blur: 4, color: '#00000080' } })
+  const frame = (solo?: string) => new Uint8Array(renderPixels(400, 400, 0, 0, 1, 0xffffff, solo)!) // copy: the core reuses its buffer
+  frame()
+  call('move_by', { ids: [e], dx: 1, dy: 0 })
+  call('move_by', { ids: [e], dx: -1, dy: 0 })
+  const live = frame()
+  const full = frame(root)
+  let worst = 0
+  for (let i = 0; i < live.length; i++) worst = Math.max(worst, Math.abs(live[i] - full[i]))
+  assert(worst <= 1, `an edited canvas matches a full render around a rotated, flipped shadow (largest difference ${worst})`)
+}
 // One very long line (pasted minified JSON, a base64 blob) lays out in linear time: quadruple the text,
 // about quadruple the time (it was ~14x, 160k characters took 9 s).
 const layoutMs = (chars: number) => {
