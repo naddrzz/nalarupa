@@ -744,6 +744,7 @@ const Item = memo(function Item({ m, isLast, expanded, toggle }: { m: ChatItem; 
       const label = live ? `Thinking${dots()}` : `Thought for ${duration((m.endedAt ?? 0) - m.startedAt)}`
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingTop: 4, paddingBottom: 4 }}>
+          {m.header ? <AgentHeader agentId={m.agent.id} by={m.by} /> : null}
           <Pressable label={label} expanded={expanded} onClick={() => toggle(m.id)} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 24, borderRadius: 4 }}>
             <Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={11} color={C.ghost} />
             <T size={12} color={C.ghost}>{label}</T>
@@ -753,12 +754,13 @@ const Item = memo(function Item({ m, isLast, expanded, toggle }: { m: ChatItem; 
       )
     }
     case 'tool': {
-      if (m.name === 'TodoWrite') return <div style={{ height: 0 }} />
+      if (m.name === 'TodoWrite') return m.header ? <AgentHeader agentId={m.agent.id} by={m.by} /> : <div style={{ height: 0 }} />
       const label = toolLabel(m.name, m.running)
       const now = performance.now() // one sample, so the dots and their pad always add up to three
       const src = m.name === 'execute' && typeof m.input?.input === 'string' ? (m.input.input as string) : null
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 3, paddingBottom: 3 }}>
+          {m.header ? <AgentHeader agentId={m.agent.id} by={m.by} /> : null}
           <Pressable label={m.running ? `${label}, running` : `${label}, ${m.error ? 'failed' : 'done'}`} expanded={expanded} onClick={() => toggle(m.id)} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 24, borderRadius: 4 }}>
             <div style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: m.agent.color, opacity: m.running && !REDUCED_MOTION ? pulseAt(now) : 1 }} />
             {m.running ? (
