@@ -174,6 +174,10 @@ cd app && bun run drag-check && bun run viewport-check && bun run issues-check
 ```
 
 ```bash
+cd app && bun run layout-check && bun run text-check && bun run scriptnode-check
+```
+
+```bash
 cd app && bun run a11y-check && bun run motion-check && bun run window-check
 ```
 
@@ -194,6 +198,11 @@ cd app && bun run a11y-check && bun run motion-check && bun run window-check
   `[outside viewport]` marks and visible-first order in the editor state); `issues-check` covers the feedback after an
   `execute` call (the "Issues detected" warnings, `Generate` errors, `Export` and `TakeScreenshot` lines). All three run
   without a window.
+- `layout-check` covers auto layout as the document is edited (gap, padding, alignment, `fill_container`,
+  `fit_content`, absolute children, reorder, delete, undo, save and reopen); `text-check` covers text sizing
+  (`textGrowth`, line height, letter spacing, wrapping, re-measuring after an edit, font fallback);
+  `scriptnode-check` covers script nodes (inputs and their clamping, re-running on a new input or size, the
+  error shown in the node, children never saved). All three run without a window.
 - `a11y-check` reads the Windows UI Automation tree and fails on any unnamed control; `motion-check` makes
   sure animations stop under *reduced motion*; `window-check` makes sure the window fits the screen and its
   frame carries the Nalarupa icon (`bun run window-check dist/nalarupa.exe` for the built exe).
