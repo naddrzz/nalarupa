@@ -37,7 +37,7 @@ impl RNode {
         self.p.get(k).and_then(Value::as_bool).unwrap_or(false)
     }
     pub fn name(&self) -> &str {
-        self.s("name").unwrap_or(&self.ty)
+        self.s("name").filter(|n| !n.trim().is_empty()).unwrap_or(&self.ty)
     }
     pub fn visit(&self, f: &mut dyn FnMut(&RNode, usize), depth: usize) {
         f(self, depth);

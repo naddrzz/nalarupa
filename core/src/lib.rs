@@ -48,7 +48,7 @@ fn layers(e: &Engine) -> Value {
             let layout = n["type"] == "frame" && n["layout"] != "none";
             let content = n["content"].as_str().filter(|_| n["type"] == "text").map(|c| c.lines().next().unwrap_or(c));
             out.push(json!({
-                "id": id, "name": n["name"].as_str().or(content).unwrap_or(n["type"].as_str().unwrap_or("node")),
+                "id": id, "name": n["name"].as_str().filter(|s| !s.trim().is_empty()).or(content).unwrap_or(n["type"].as_str().unwrap_or("node")),
                 "type": n["type"], "depth": depth, "parent": parent, "index": index, "layout": layout,
                 "reusable": n["reusable"] == true, "hidden": n["enabled"] == false,
                 "children": n["children"].as_array().map(|c| c.len()).unwrap_or(0),
