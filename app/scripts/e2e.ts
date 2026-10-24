@@ -698,6 +698,55 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
       const b = (await app!.getByType('markdown').all()).find((n) => !oldReplies.has(n.id))?.bounds
       return !!b && b.height > 0 && b.y + b.height <= composer.y
     }, 'the reply on screen after sending from a scrolled-up chat')
+
+    // An expanded thought is secondary to the reply: dimmer text (a markdown block takes its colour from its theme,
+    // not from style) and indented. Linux only: grim, and sway for the window's origin.
+    if (sock) {
+      const thought = JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'THOUGHT: pick a calm palette first, then the type scale. THOUGHT: keep the hero short.' } } })
+      const stop = JSON.stringify({ type: 'stream_event', event: { type: 'message_stop' } })
+      writeFileSync(join(bin, 'claude'), `#!/bin/sh\necho '${thought}'\necho '${stop}'\necho '${delta('REPLY: here is the design, with the hero kept short and a calm palette.')}'\n`, { mode: 0o755 })
+      const seen = new Set((await app.getByType('markdown').all()).map((n) => n.id))
+      await app.getByTestId('agent-input').click()
+      await app.getByTestId('agent-input').fill('Think first')
+      await sleep(200)
+      await app.getByTestId('agent-send').click()
+      await app.getByText('Thought for').waitFor({ timeoutMs: 15000 })
+      const blocks = async () => (await app!.getByType('markdown').all()).filter((n) => !seen.has(n.id) && (n.bounds?.height ?? 0) > 0).map((n) => n.bounds!).sort((a, b) => a.y - b.y)
+      // The row moves while the reply streams in, so a click can land beside it: click again until the thought is open.
+      await until(async () => {
+        if ((await blocks()).length < 2) {
+          await app!.getByText('Thought for').click().catch(() => {})
+          await sleep(700)
+        }
+        return (await blocks()).length === 2
+      }, 'the expanded thought and the reply', 20000)
+      await sleep(500)
+      type Node = { type: string; rect: { x: number; y: number }; nodes?: Node[]; floating_nodes?: Node[] }
+      const windowOf = (n: Node): Node | undefined => n.type === 'floating_con' ? n : [...(n.nodes ?? []), ...(n.floating_nodes ?? [])].map(windowOf).find(Boolean)
+      const origin = windowOf(JSON.parse(await Bun.$`swaymsg -s ${join(dir!, sock)} -t get_tree`.text()))!.rect
+      const [think, answer] = await blocks()
+      const g = await grab()
+      // The brightest channel in a block: muted text peaks near 0xA1, the reply's near 0xEC.
+      const peak = (b: { x: number; y: number; width: number; height: number }) => {
+        let max = 0
+        for (let y = Math.floor(origin.y + b.y); y < Math.ceil(origin.y + b.y + b.height); y++)
+          for (let x = Math.floor(origin.x + b.x); x < Math.ceil(origin.x + b.x + b.width); x++) {
+            const i = (y * g.w + x) * 3
+            max = Math.max(max, g.px[i], g.px[i + 1], g.px[i + 2])
+          }
+        return max
+      }
+      const [dim, bright] = [peak(think), peak(answer)]
+      await shot('14-thought')
+      // The rule is 2 px of the border colour, 10 px of padding left of the text: sample its two columns and the one on each side.
+      const at = (x: number) => { const i = (Math.floor(origin.y + think.y + think.height / 2) * g.w + Math.floor(origin.x + x)) * 3; return [g.px[i], g.px[i + 1], g.px[i + 2]].join() }
+      const rule = [-13, -12, -11, -10].map((d) => at(think.x + d))
+      if (rule[1] !== '43,43,49' || rule[2] !== '43,43,49' || rule[0] === rule[1] || rule[3] === rule[2]) throw new Error(`expected a 2 px rule (43,43,49) 11-12 px left of the thought, got ${rule.join(' | ')}`)
+      // 12 px text on an 18 px line: the block is a whole number of 18 px lines.
+      if (Math.abs(think.height / 18 - Math.round(think.height / 18)) > 0.05) throw new Error(`the thought is ${think.height} px tall: not a whole number of 18 px lines`)
+      if (bright < 200 || dim > 185) throw new Error(`the expanded thought peaks at ${dim} and the reply at ${bright}: the thought should be muted and the reply bright`)
+      if (think.x < answer.x + 8) throw new Error(`the thought starts at x=${think.x}, the reply at x=${answer.x}: the thought should be indented`)
+    }
   }
 
   // A layer selected on the canvas scrolls the (virtual) Layers list to its row: here the last of 150 rows (the first inserted).

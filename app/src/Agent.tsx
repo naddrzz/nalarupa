@@ -716,6 +716,9 @@ function Planning() {
   return <T size={12} color={C.ghost}>{`Planning next moves${dots()}`}</T>
 }
 
+// <markdown> ignores style.color and style.fontSize: its text comes from the theme, so a thought is dimmed here.
+const THOUGHT_THEME = { text: C.muted, metrics: { mdTextSize: 12, mdLineHeight: 18 } }
+
 const Item = memo(function Item({ m, isLast, expanded, toggle }: { m: ChatItem; isLast: boolean; expanded: boolean; toggle: (id: number) => void; tick: number }) {
   const typing = m.kind === 'assistant' && isLast && (revealed.get(m.id) ?? 0) < m.text.split(/(\s+)/).length
   useTick(typing ? 16 : REDUCED_MOTION ? 400 : INDICATOR_TICK_MS, typing || spinning(m))
@@ -750,7 +753,11 @@ const Item = memo(function Item({ m, isLast, expanded, toggle }: { m: ChatItem; 
             <Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={11} color={C.ghost} />
             <T size={12} color={C.ghost}>{label}</T>
           </Pressable>
-          {expanded && m.text.trim() ? <markdown source={m.text} style={{ fontSize: 12, color: C.muted, fontFamily: FONT }} /> : null}
+          {expanded && m.text.trim() ? (
+            <div style={{ borderLeftWidth: 2, borderColor: C.border, paddingLeft: 10, marginLeft: 5, marginBottom: 6 }}>
+              <markdown source={m.text} theme={THOUGHT_THEME} style={{ fontFamily: FONT }} />
+            </div>
+          ) : null}
         </div>
       )
     }
