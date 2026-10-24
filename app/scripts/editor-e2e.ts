@@ -523,7 +523,8 @@ try {
   assert((await app.getByTestId('inspector-name').bounds())!.y < nameY0, 'Tab scrolled the Inspector')
   for (let i = 0; i < tabs; i++) {
     await app.call('keystrokes', { keys: 'shift-tab' })
-    await sleep(120)
+    // Leaving a text field backwards retries for up to ~1 s (the back stop in app.tsx); a press in between would walk from the wrong stop.
+    await sleep(1200)
   }
   assert((await app.getByTestId('inspector-name').bounds())!.y >= c.y + 3, 'Shift+Tab back to the name field keeps it, ring included, below the panel top')
 
