@@ -130,6 +130,7 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
   const [open, setOpen] = useKept<Set<number>>('open', () => new Set())
   const [planOpen, setPlanOpen] = useKept('planOpen', () => true)
   const [, setChatVersion] = useState(0)
+  const [backendRev, setBackendRev] = useState(0)
   const [picks] = useKept('picks', () => SUGGESTIONS.slice().sort(() => Math.random() - 0.5).slice(0, 6))
   // "Let it cook" settings (design count, iterate mode) persist in the app settings.
   const saved = useMemo(() => tryCall<Record<string, unknown>>('settings_get') ?? {}, [])
@@ -202,7 +203,7 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
         <IconButton icon="plus" title="New agent" testId="agent-new" onClick={newChat} />
         <IconButton icon="settings" title="Agent settings" testId="agent-settings" active={settings} onClick={() => setSettings((s) => !s)} />
       </div>
-      {settings ? <AgentSettings mcpUrl={mcpUrl} toast={toast} /> : null}
+      {settings ? <AgentSettings mcpUrl={mcpUrl} toast={toast} onBackend={() => setBackendRev((n) => n + 1)} /> : null}
       {agents.length > 1 && (running || agents.some((a) => a.parent)) ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 14, paddingRight: 8, paddingTop: 5, paddingBottom: 6, borderBottomWidth: 1, borderColor: C.border, backgroundColor: C.panel2 }}>
           <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8, height: 24 }}>
@@ -313,7 +314,7 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
           </Row>
           {parallel !== '1' ? <Segmented label="How agents share the work" value={mode} onChange={setMode} options={[{ value: 'split', label: 'Split' }, { value: 'side', label: 'Side by side' }]} /> : null}
           <Row gap={6}>
-            <ModelPicker settingsOpen={settings} toast={toast} />
+            <ModelPicker settingsOpen={settings} backendRev={backendRev} toast={toast} />
             <div style={{ flexGrow: 1 }} />
             <CookMenu designs={designs} mode={cookMode} set={setCook} />
             {running ? (
@@ -631,16 +632,16 @@ const FAST_MODELS = ['claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8']
 
 /** Model picker plus the Fast toggle, which shows only where the model has a fast mode. Claude Code
  *  also offers "Default", which leaves the CLI on its own configured model. */
-function ModelPicker({ settingsOpen, toast }: { settingsOpen: boolean; toast: Toast }) {
-  // Re-read when the settings panel closes: the backend may have changed.
-  const s = useMemo(() => tryCall<Record<string, unknown>>('settings_get') ?? {}, [settingsOpen])
+function ModelPicker({ settingsOpen, backendRev, toast }: { settingsOpen: boolean; backendRev: number; toast: Toast }) {
+  // Re-read when the settings panel closes or switches backend: the backend decides the default model.
+  const s = useMemo(() => tryCall<Record<string, unknown>>('settings_get') ?? {}, [settingsOpen, backendRev])
   const cli = s.backend === 'claude-code'
   const items = cli ? [{ value: 'default', label: 'Default' }, ...MODELS] : MODELS
   const stored = typeof s.agent_model === 'string' ? s.agent_model : null
   const current = stored ?? (cli ? 'default' : 'claude-opus-5-5')
   const [model, setModel] = useState(current)
   const [fast, setFast] = useState(s.agent_fast === true)
-  useEffect(() => setModel(current), [current])
+  useEffect(() => setModel(current), [s, current])
   const { ref: triggerRef, on: focused, clear } = useRing()
   // Arrow keys move the menu's highlight, which is only a 1.1:1 background shift: ring it while the
   // keyboard drives the menu, not while the mouse does.
@@ -872,7 +873,7 @@ function PermissionCard({ m }: { m: Extract<ChatItem, { kind: 'permission' }> })
   )
 }
 
-function AgentSettings({ mcpUrl, toast }: { mcpUrl: string; toast: Toast }) {
+function AgentSettings({ mcpUrl, toast, onBackend }: { mcpUrl: string; toast: Toast; onBackend: () => void }) {
   const s = useMemo(() => tryCall<Record<string, string>>('settings_get') ?? {}, [])
   const [backend, setBackend] = useState(s.backend ?? 'claude-code')
   const [hasKey, setHasKey] = useState(!!s.anthropic_api_key)
@@ -890,7 +891,7 @@ function AgentSettings({ mcpUrl, toast }: { mcpUrl: string; toast: Toast }) {
       <Segmented
         label="Agent backend"
         value={backend}
-        onChange={(v) => { if (set('agent_backend', v)) setBackend(v) }}
+        onChange={(v) => { if (set('agent_backend', v)) { setBackend(v); onBackend() } }}
         options={[{ value: 'api', label: 'Claude API' }, { value: 'claude-code', label: 'Claude Code CLI', testId: 'backend-claude-code' }]}
       />
       {backend === 'api' ? (
