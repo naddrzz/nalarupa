@@ -554,6 +554,29 @@ try {
   assert(await until(async () => !!(await app.getByTestId('inspector-name').count())), 'pressing the title of a frame with children selects it')
   await sleep(500)
 
+  // Arrow keys on several layers of an auto layout move them as a block: relative order kept, one undo step per press.
+  const layoutOrder = async () => {
+    const res: any = await (await mcpCall(port, { method: 'tools/call', params: { name: 'execute', arguments: { input: 'Print(JSON.stringify(Get(undefined, n => n.type === "rectangle" || n.type === "ellipse" ? n.id : undefined).filter(Boolean)))' } } })).json()
+    return String(res.result?.content?.[0]?.text ?? '').split('\n').filter((l) => l.startsWith('[')).pop() ?? ''
+  }
+  const o0 = await layoutOrder()
+  assert(JSON.parse(o0 || '[]').length === 3, `the layout has three layers (${o0})`)
+  const rects = await app.getByTestId('layers').getByText('Rectangle').all()
+  const rowMid = (n: (typeof rects)[number]) => ({ x: n.bounds!.x + n.bounds!.width / 2, y: n.bounds!.y + n.bounds!.height / 2 })
+  await app.mouse.click(rowMid(rects[0]))
+  await app.mouse.click(rowMid(rects[1]), { modifiers: 'ctrl' })
+  assert(await until(async () => (await app.getByText('2 layers selected').count()) > 0), 'two layout children are selected')
+  await canvas.press('alt-right')
+  assert(await until(async () => (await layoutOrder()) !== o0), 'Alt+Right moves the two selected layers behind the third')
+  const o1: string[] = JSON.parse(await layoutOrder())
+  await canvas.press('alt-left')
+  assert(await until(async () => (await layoutOrder()) !== JSON.stringify(o1)), 'Alt+Left moves them back to the front')
+  assert((await layoutOrder()) === JSON.stringify([o1[1], o1[2], o1[0]]), `the selected layers keep their relative order as a block (${o1} → ${await layoutOrder()})`)
+  await canvas.press('ctrl-z')
+  assert(await until(async () => (await layoutOrder()) === JSON.stringify(o1)), `one undo step reverts one arrow key press (${await layoutOrder()})`)
+  await canvas.press('ctrl-z')
+  assert(await until(async () => (await layoutOrder()) === o0), 'a second undo step reverts the first press')
+
   // Pen tool (vector editing): click = corner, drag = curve handles, clicking the first point closes.
   await canvas.press('escape')
   await canvas.press('p')
