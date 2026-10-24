@@ -3,7 +3,7 @@
 // usage rows, queued prompts, parallel agents.
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { call, tryCall } from './core'
-import { barAgents, changing, imageSrc, lastContentId, profileOf, resetChat, restoreChat, spinning, store, type Author, type ChatItem } from './agents'
+import { barAgents, changing, imageSrc, lastContentId, profileOf, resetChat, restoreChat, runVerb, spinning, store, type Author, type ChatItem } from './agents'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import * as SelectPrimitive from '@gpuix/react/select'
 import { C, FONT, INDICATOR_TICK_MS, MONO, REDUCED_MOTION, ellipsisAt, ellipsisPadAt, pulseAt } from './theme'
@@ -799,9 +799,9 @@ const Item = memo(function Item({ m, isLast, expanded, toggle }: { m: ChatItem; 
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingTop: 6, paddingBottom: 8 }}>
           {m.stopped ? <T size={11} color={C.ghost} style={{ fontStyle: 'italic' }}>Agent stopped by user.</T> : null}
-          <Pressable label={`${m.agent.name} designed for ${duration(m.durationMs)}. Show usage`} expanded={expanded} onClick={() => toggle(m.id)} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 24, borderRadius: 4 }}>
+          <Pressable label={`${m.agent.name} ${runVerb(m)} ${duration(m.durationMs)}. Show usage`} expanded={expanded} onClick={() => toggle(m.id)} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 24, borderRadius: 4 }}>
             <div style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: m.agent.color }} />
-            <T size={11} color={C.ghost}>{`${m.agent.name} designed for ${duration(m.durationMs)}`}</T>
+            <T size={11} color={C.ghost}>{`${m.agent.name} ${runVerb(m)} ${duration(m.durationMs)}`}</T>
           </Pressable>
           {expanded ? rows.filter(([, v]) => v !== undefined && v !== null).map(([k, v]) => (
             <Row key={k}>
