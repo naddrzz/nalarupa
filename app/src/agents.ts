@@ -125,6 +125,24 @@ export function cursorFaded(agent: string, c: CursorState | undefined, now: numb
   return !c || (!store.running.has(agent) && now - c.lastActivity > GONE)
 }
 
+export const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3)
+
+/** Cursor opacity: 200 ms fade-in from `appearAt`, then full until it has idled FADE_DELAY, then the fade-out. */
+export function cursorOpacity(c: CursorState, now: number, running: boolean): number {
+  const sa = now - c.appearAt
+  const si = running ? 0 : now - c.lastActivity
+  if (sa < FADE_IN) return easeOutCubic(sa / FADE_IN)
+  if (si > FADE_DELAY) return Math.max(0, 1 - easeOutCubic((si - FADE_DELAY) / FADE_DUR))
+  return 1
+}
+
+/** Count the cursor active at `now`. One that is partly faded fades back in from the opacity it has reached, not from 0 and not in a single frame. */
+export function wakeCursor(agent: string, c: CursorState, now: number) {
+  const o = cursorOpacity(c, now, store.running.has(agent))
+  if (o < 1) c.appearAt = now - FADE_IN * (1 - Math.cbrt(1 - o))
+  c.lastActivity = now
+}
+
 /** Wake (or spawn) the agent's cursor without moving it. */
 export function poke(p: Profile, now: number) {
   const c = store.cursors.get(p.id)
@@ -134,8 +152,7 @@ export function poke(p: Profile, now: number) {
     store.cursors.set(p.id, { profile: p, x, y, tx: x, ty: y, appearAt: now, lastActivity: now, wobble: 0, phase: Math.random() * Math.PI * 2 })
     return
   }
-  if (cursorFaded(p.id, c, now)) c.appearAt = now
-  c.lastActivity = now
+  wakeCursor(p.id, c, now)
 }
 
 /** Apply core events; returns true when anything visible changed. */

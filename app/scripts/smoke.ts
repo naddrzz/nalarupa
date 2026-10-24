@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { call, renderPixels } from '../src/core'
-import { applyEvents, barAgents, changing, clearPresence, cursorFaded, imageSrc, lastContentId, needsFrame, poke, resetChat, restoreChat, spinning, store, takeActivity } from '../src/agents'
+import { applyEvents, barAgents, changing, clearPresence, cursorFaded, cursorOpacity, FADE_IN, imageSrc, lastContentId, needsFrame, poke, resetChat, restoreChat, spinning, store, takeActivity } from '../src/agents'
 import { own, painted, pointIn, shimmerHalves } from '../src/geometry'
 import { FRAME_LABEL_TEXT, INDICATOR_TICK_MS, ellipsisAt, ellipsisPadAt, pulseAt } from '../src/theme'
 
@@ -263,6 +263,19 @@ resetChat()
   applyEvents([{ type: 'agent', agent: profile, kind: 'start' }], 20000)
   assert(store.running.has('a') && cursor.appearAt === 20000, 'starting an agent with a faded cursor restarts the fade-in')
   store.running.clear()
+  store.cursors.clear()
+}
+// A cursor that wakes while fading out continues from the opacity it reached: no one-frame jump back to full.
+{
+  const profile = { id: 'a', name: 'A', color: '#f00' }
+  const cursor = { profile, x: 0, y: 0, tx: 0, ty: 0, appearAt: 0, lastActivity: 0, wobble: 0, phase: 0 }
+  store.cursors.set('a', cursor)
+  const before = cursorOpacity(cursor, 6400, false)
+  assert(before > 0 && before < 0.1, 'the cursor is nearly faded out before it wakes')
+  poke(profile, 6400)
+  const after = cursorOpacity(cursor, 6400, true)
+  assert(Math.abs(after - before) < 1e-6, 'waking a fading cursor keeps its opacity for that frame')
+  assert(cursorOpacity(cursor, 6500, true) > after && cursorOpacity(cursor, 6400 + FADE_IN, true) === 1, 'a woken cursor fades back in to full within the fade-in time')
   store.cursors.clear()
 }
 // A reply keeps the model that wrote it: a later turn on another model does not re-label it, and a chat
