@@ -449,5 +449,26 @@ const layoutMs = (chars: number) => {
 layoutMs(10000) // warm the font and shaping caches
 const [short, long] = [layoutMs(40000), layoutMs(160000)]
 assert(long < short * 9 && long < 4000, `a long single line lays out in linear time (40k chars ${short.toFixed(0)} ms, 160k ${long.toFixed(0)} ms)`)
+// Exporting rasterizes, encodes and writes after the engine lock is released: a 2x PNG and a PDF of a page of
+// blurred, shadowed cards (seconds of work) never stall another thread's core calls (they did for the whole export).
+{
+  call('new', { template: 'empty' })
+  const out = mkdtempSync(join(tmpdir(), 'smoke-export-'))
+  const page = call('insert', { parent: 'document', node: { type: 'frame', name: 'Page', layout: 'none', x: 0, y: 0, width: 1440, height: 900, fill: { type: 'gradient', gradientType: 'linear', rotation: 45, colors: [{ color: '#667eea', position: 0 }, { color: '#764ba2', position: 1 }] } } }).id
+  for (let i = 0; i < 12; i++) call('insert', { parent: page, node: { type: 'frame', name: 'Card' + i, layout: 'none', x: 40 + (i % 4) * 340, y: 40 + Math.floor(i / 4) * 240, width: 300, height: 200, cornerRadius: 16, fill: '#ffffffcc', effect: [{ type: 'shadow', offset: { x: 0, y: 12 }, blur: 40, color: '#00000055' }, { type: 'background_blur', radius: 20 }] } })
+  const worker = new Worker(new URL('./export-lock-worker.ts', import.meta.url))
+  const done = new Promise<{ max: number }>((r) => (worker.onmessage = (e) => r(e.data)))
+  await Bun.sleep(300)
+  const t0 = performance.now()
+  const png = call('export', { ids: [page], format: 'png', path: out, opts: { scale: 2 } })
+  const pdf = call('export', { ids: [page], format: 'pdf', path: join(out, 'page.pdf'), opts: {} })
+  const took = performance.now() - t0
+  worker.postMessage('stop')
+  const { max } = await done
+  worker.terminate()
+  assert(png.length === 1 && pdf.length === 1, 'the exports report their files')
+  assert(took > 1000 && max < took / 4 && max < 1000, `another thread's core calls keep answering during an export (slowest ${max} ms of ${took.toFixed(0)} ms)`)
+  rmSync(out, { recursive: true, force: true })
+}
 console.log('smoke ok — MCP at', init.mcpUrl)
 process.exit(0)

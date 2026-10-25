@@ -277,23 +277,27 @@ impl Ctx<'_> {
         encode_tree(&self.node_tree_at(id, scale)?, format, scale, quality)
     }
 
-    /// One PDF page per node (1 px = 1 pt), in the given order; text stays selectable.
-    pub fn nodes_pdf(&mut self, ids: &[String]) -> Result<Vec<u8>, String> {
-        use krilla_svg::SurfaceExt;
-        let mut pdf = krilla::Document::new();
-        for id in ids {
-            let tree = self.node_tree(id)?;
-            let size = tree.size();
-            let settings = krilla::page::PageSettings::from_wh(size.width(), size.height()).ok_or("empty page")?;
-            let mut page = pdf.start_page_with(settings);
-            let mut surface = page.surface();
-            let pt = krilla::geom::Size::from_wh(size.width(), size.height()).ok_or("empty page")?;
-            surface.draw_svg(&tree, pt, krilla_svg::SvgSettings::default());
-            surface.finish();
-            page.finish();
-        }
-        pdf.finish().map_err(|e| format!("PDF export failed: {e:?}"))
+    /// The trees of one PDF page per node, in the given order.
+    pub fn pdf_trees(&mut self, ids: &[String]) -> Result<Vec<usvg::Tree>, String> {
+        ids.iter().map(|id| self.node_tree(id)).collect()
     }
+}
+
+/// One PDF page per tree (1 px = 1 pt); text stays selectable. Needs no engine state, like `encode_tree`.
+pub fn encode_pdf(trees: &[usvg::Tree]) -> Result<Vec<u8>, String> {
+    use krilla_svg::SurfaceExt;
+    let mut pdf = krilla::Document::new();
+    for tree in trees {
+        let size = tree.size();
+        let settings = krilla::page::PageSettings::from_wh(size.width(), size.height()).ok_or("empty page")?;
+        let mut page = pdf.start_page_with(settings);
+        let mut surface = page.surface();
+        let pt = krilla::geom::Size::from_wh(size.width(), size.height()).ok_or("empty page")?;
+        surface.draw_svg(tree, pt, krilla_svg::SvgSettings::default());
+        surface.finish();
+        page.finish();
+    }
+    pdf.finish().map_err(|e| format!("PDF export failed: {e:?}"))
 }
 
 pub fn top_index(doc: &Doc, id: &str) -> Option<usize> {

@@ -4,6 +4,7 @@ use crate::engine::Engine;
 use crate::render::find_rnode;
 use crate::resolve::{num, RNode};
 use crate::svg::{blend_mode, color, esc, fills};
+use resvg::usvg;
 use serde_json::Value;
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
@@ -14,26 +15,58 @@ fn out_path(e: &Engine, out: &str, default_name: &str) -> PathBuf {
     if p.is_absolute() { p } else { base.join(p) }
 }
 
-/// Export nodes; returns the written file paths.
-pub fn export(e: &mut Engine, ids: &[String], format: &str, out: &str, opts: &Value) -> Result<Vec<String>, String> {
-    let mut written = Vec::new();
+/// An export whose rasterizing, encoding and writing still have to run. `plan` builds it under the
+/// engine lock (layout and SVG trees only); `run` does the slow part and needs no engine state, so
+/// call it after the guard drops or the canvas freezes for the length of the export.
+pub struct ExportJob {
+    files: Vec<(PathBuf, Output)>,
+}
+
+enum Output {
+    Bytes(Vec<u8>),
+    Image(usvg::Tree, String, f64, u8),
+    Pdf(Vec<usvg::Tree>),
+}
+
+impl ExportJob {
+    /// Render and write every file; returns the written file paths.
+    pub fn run(self) -> Result<Vec<String>, String> {
+        let mut written = Vec::new();
+        for (file, output) in self.files {
+            if let Some(dir) = file.parent() {
+                std::fs::create_dir_all(dir).map_err(|err| err.to_string())?;
+            }
+            let bytes = match output {
+                Output::Bytes(b) => b,
+                Output::Image(tree, format, scale, quality) => crate::render::encode_tree(&tree, &format, scale, quality)?,
+                Output::Pdf(trees) => crate::render::encode_pdf(&trees)?,
+            };
+            std::fs::write(&file, bytes).map_err(|err| err.to_string())?;
+            written.push(file.display().to_string());
+        }
+        Ok(written)
+    }
+}
+
+/// Plan an export of nodes; `ExportJob::run` writes the files.
+pub fn plan(e: &mut Engine, ids: &[String], format: &str, out: &str, opts: &Value) -> Result<ExportJob, String> {
+    let mut files = Vec::new();
     let format = if format == "jpg" { "jpeg" } else { format };
     match format {
         "png" | "jpeg" | "webp" | "svg" => {
             let dir = out_path(e, out, "exports");
-            std::fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
             let scale = opts["scale"].as_f64().unwrap_or(2.0);
             let quality = opts["quality"].as_f64().unwrap_or(90.0).clamp(1.0, 100.0) as u8;
             for id in ids {
                 let file = dir.join(format!("{}.{format}", id.replace('/', "_")));
-                let bytes = if format == "svg" {
+                let output = if format == "svg" {
                     let mut cx = e.ctx();
-                    cx.node_svg(id).ok_or_else(|| cx.missing(id))?.0.into_bytes()
+                    Output::Bytes(cx.node_svg(id).ok_or_else(|| cx.missing(id))?.0.into_bytes())
                 } else {
-                    e.ctx().node_image(id, format, scale, quality)?
+                    let scale = scale.clamp(0.05, 8.0);
+                    Output::Image(e.ctx().node_tree_at(id, scale)?, format.to_string(), scale, quality)
                 };
-                std::fs::write(&file, bytes).map_err(|err| err.to_string())?;
-                written.push(file.display().to_string());
+                files.push((file, output));
             }
         }
         "pdf" => {
@@ -47,25 +80,16 @@ pub fn export(e: &mut Engine, ids: &[String], format: &str, out: &str, opts: &Va
                 return Err("nothing to export: the document has no visible top-level frames".into());
             }
             let file = out_path(e, out, &format!("{}.pdf", e.title()));
-            if let Some(dir) = file.parent() {
-                std::fs::create_dir_all(dir).map_err(|err| err.to_string())?;
-            }
-            let pdf = e.ctx().nodes_pdf(&ids)?;
-            std::fs::write(&file, pdf).map_err(|err| err.to_string())?;
-            written.push(file.display().to_string());
+            let trees = e.ctx().pdf_trees(&ids)?;
+            files.push((file, Output::Pdf(trees)));
         }
         "html-css" | "html-tailwind" | "html" => {
             let file = out_path(e, out, "export.html");
-            if let Some(dir) = file.parent() {
-                std::fs::create_dir_all(dir).map_err(|err| err.to_string())?;
-            }
-            let html = html_document(e, ids, opts)?;
-            std::fs::write(&file, html).map_err(|err| err.to_string())?;
-            written.push(file.display().to_string());
+            files.push((file, Output::Bytes(html_document(e, ids, opts)?.into_bytes())));
         }
         other => return Err(format!("unknown export format '{other}' (use png, jpeg, webp, svg, pdf or html-css)")),
     }
-    Ok(written)
+    Ok(ExportJob { files })
 }
 
 pub fn html_document(e: &mut Engine, ids: &[String], opts: &Value) -> Result<String, String> {
@@ -851,6 +875,10 @@ mod tests {
     use crate::engine::Engine;
     use serde_json::json;
 
+    fn export(e: &mut Engine, ids: &[String], format: &str, out: &str, opts: &serde_json::Value) -> Result<Vec<String>, String> {
+        super::plan(e, ids, format, out, opts)?.run()
+    }
+
     /// The `style` of a rectangle exported as an HTML fragment, plus the whole fragment.
     fn rect_html(extra: serde_json::Value) -> (String, String) {
         let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
@@ -1246,7 +1274,7 @@ mod tests {
         e.offline();
         e.load_template("slides");
 
-        let files = super::export(&mut e, &[], "pdf", out.join("deck.pdf").to_str().unwrap(), &json!({})).unwrap();
+        let files = export(&mut e, &[], "pdf", out.join("deck.pdf").to_str().unwrap(), &json!({})).unwrap();
         let pdf = std::fs::read(&files[0]).unwrap();
         assert!(pdf.starts_with(b"%PDF-"));
         let text = String::from_utf8_lossy(&pdf).replace("/Type /", "/Type/");
@@ -1254,18 +1282,18 @@ mod tests {
         assert_eq!(pages, 3, "one page per top-level frame");
 
         e.edit(|d| d.update("sld02", &json!({"enabled": false}))).unwrap();
-        let files = super::export(&mut e, &[], "pdf", out.join("partial.pdf").to_str().unwrap(), &json!({})).unwrap();
+        let files = export(&mut e, &[], "pdf", out.join("partial.pdf").to_str().unwrap(), &json!({})).unwrap();
         let text = String::from_utf8_lossy(&std::fs::read(&files[0]).unwrap()).replace("/Type /", "/Type/");
         assert_eq!(text.matches("/Type/Page").count() - text.matches("/Type/Pages").count(), 2, "a hidden slide is skipped");
         e.edit(|d| d.update("sld02", &json!({"enabled": null}))).unwrap();
 
         let ids = ["sld01".to_string()];
-        let jpg = super::export(&mut e, &ids, "jpg", out.to_str().unwrap(), &json!({"scale": 0.25})).unwrap();
+        let jpg = export(&mut e, &ids, "jpg", out.to_str().unwrap(), &json!({"scale": 0.25})).unwrap();
         assert!(std::fs::read(&jpg[0]).unwrap().starts_with(&[0xFF, 0xD8, 0xFF]));
-        let webp = super::export(&mut e, &ids, "webp", out.to_str().unwrap(), &json!({"scale": 0.25})).unwrap();
+        let webp = export(&mut e, &ids, "webp", out.to_str().unwrap(), &json!({"scale": 0.25})).unwrap();
         let webp = std::fs::read(&webp[0]).unwrap();
         assert!(webp.starts_with(b"RIFF") && &webp[8..12] == b"WEBP");
-        assert!(super::export(&mut e, &ids, "tiff", "", &json!({})).is_err());
+        assert!(export(&mut e, &ids, "tiff", "", &json!({})).is_err());
     }
 
     /// A hidden layer (or one inside a hidden parent) says so instead of "node not found".
@@ -1279,12 +1307,12 @@ mod tests {
         let child = e.doc.find("sld02").unwrap()["children"][0]["id"].as_str().unwrap().to_string();
         for id in ["sld02".to_string(), child] {
             for format in ["png", "svg", "pdf", "html-css"] {
-                let err = super::export(&mut e, &[id.clone()], format, out.to_str().unwrap(), &json!({})).unwrap_err();
+                let err = export(&mut e, &[id.clone()], format, out.to_str().unwrap(), &json!({})).unwrap_err();
                 assert!(err.contains("hidden") && !err.contains("node not found"), "{format} {id}: {err}");
             }
             assert!(e.ctx().node_png(&id, 1.0).unwrap_err().contains("hidden"));
         }
-        let err = super::export(&mut e, &["nope".to_string()], "png", out.to_str().unwrap(), &json!({})).unwrap_err();
+        let err = export(&mut e, &["nope".to_string()], "png", out.to_str().unwrap(), &json!({})).unwrap_err();
         assert!(err.contains("node not found: nope"), "{err}");
     }
 
@@ -1299,9 +1327,9 @@ mod tests {
         let kid = e.doc.find(&comp).unwrap()["children"][0]["id"].as_str().unwrap().to_string();
         let inst = e.edit(|d| d.insert("", json!({"type":"ref","ref":comp,"descendants":{kid.clone():{"enabled":false}}}), None)).unwrap();
         let id = format!("{inst}/{kid}");
-        let err = super::export(&mut e, &[id.clone()], "png", out.to_str().unwrap(), &json!({})).unwrap_err();
+        let err = export(&mut e, &[id.clone()], "png", out.to_str().unwrap(), &json!({})).unwrap_err();
         assert!(err.contains("hidden") && !err.contains("node not found"), "{err}");
-        let err = super::export(&mut e, &[format!("{inst}/nope")], "png", out.to_str().unwrap(), &json!({})).unwrap_err();
+        let err = export(&mut e, &[format!("{inst}/nope")], "png", out.to_str().unwrap(), &json!({})).unwrap_err();
         assert!(err.contains("node not found") && !err.contains("hidden"), "{err}");
     }
 
@@ -1350,12 +1378,12 @@ mod tests {
         let text = |align: &str| json!({"type": "text", "content": "Out", "fontSize": 50, "fill": "#ffff00", "stroke": "#000000", "strokeWidth": 4, "strokeAlignment": align});
         let (center, outer) = (e.insert_root(text("center")).unwrap(), e.insert_root(text("outer")).unwrap());
 
-        let svg = |e: &mut Engine, id: &String| std::fs::read_to_string(&super::export(e, &[id.clone()], "svg", out.to_str().unwrap(), &json!({})).unwrap()[0]).unwrap();
+        let svg = |e: &mut Engine, id: &String| std::fs::read_to_string(&export(e, &[id.clone()], "svg", out.to_str().unwrap(), &json!({})).unwrap()[0]).unwrap();
         let svg_center = svg(&mut e, &center);
         assert!(svg_center.contains(r##"stroke="#000000""##) && svg_center.contains(r#"stroke-width="4""#), "{svg_center}");
         assert!(svg(&mut e, &outer).contains(r#"stroke-width="8""#), "an outer stroke is drawn double width and clipped");
 
-        let html = |e: &mut Engine, id: &String| std::fs::read_to_string(&super::export(e, &[id.clone()], "html", out.join("export.html").to_str().unwrap(), &json!({})).unwrap()[0]).unwrap();
+        let html = |e: &mut Engine, id: &String| std::fs::read_to_string(&export(e, &[id.clone()], "html", out.join("export.html").to_str().unwrap(), &json!({})).unwrap()[0]).unwrap();
         let html_center = html(&mut e, &center);
         assert!(html_center.contains("-webkit-text-stroke:4px #000000;") && !html_center.contains("color:transparent"), "{html_center}");
         assert!(html(&mut e, &outer).contains("-webkit-text-stroke:8px #000000;paint-order:stroke fill;"));

@@ -16,17 +16,25 @@ pub struct ToolOut {
     /// Screenshots (node id, tree, scale) still to rasterize: `finish` does it once the caller has
     /// released the engine lock, so the canvas keeps drawing while the agent looks at its work.
     pub shots: Vec<(String, resvg::usvg::Tree, f64)>,
+    /// `Export(...)` calls from a script, planned under the lock; `finish` renders and writes them.
+    pub exports: Vec<crate::html::ExportJob>,
 }
 
 impl ToolOut {
     pub fn ok(text: impl Into<String>) -> ToolOut {
-        ToolOut { text: text.into(), images: Vec::new(), error: false, shots: Vec::new() }
+        ToolOut { text: text.into(), images: Vec::new(), error: false, shots: Vec::new(), exports: Vec::new() }
     }
     pub fn err(text: impl Into<String>) -> ToolOut {
         ToolOut { error: true, ..ToolOut::ok(text) }
     }
-    /// Rasterize pending screenshots. Call without holding `engine()`.
+    /// Rasterize pending screenshots and write pending exports. Call without holding `engine()`.
     pub fn finish(mut self) -> ToolOut {
+        for job in std::mem::take(&mut self.exports) {
+            match job.run() {
+                Ok(files) => self.text += &format!("\nExported: {}\n", files.join(", ")),
+                Err(err) => self.text += &format!("\nExport failed: {err}\n"),
+            }
+        }
         for (id, tree, scale) in std::mem::take(&mut self.shots) {
             match crate::render::encode_tree(&tree, "png", scale, 0) {
                 Ok(png) => self.images.push(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, png)),
