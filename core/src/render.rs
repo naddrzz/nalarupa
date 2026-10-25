@@ -6,6 +6,7 @@
 //! rasterized by vello_cpu (`raster.rs`), or by resvg alone with `NALARUPA_RASTER=resvg`.
 
 use crate::doc::Doc;
+use crate::hit::Shape;
 use crate::raster;
 use crate::resolve::{RNode, Resolver};
 use crate::svg::{clip_svg, fxhash, is_turned, own_matrix, Assets, Svg};
@@ -97,6 +98,8 @@ pub struct Flat {
     pub local: ([f64; 2], f64, bool, bool),
     /// Clips its children to its box (a `clip` frame), so they cannot be hit outside it.
     clip: bool,
+    /// What an ellipse, path, line or stroke-only rectangle paints; `None` = its box is the hit surface.
+    shape: Option<Arc<Shape>>,
     /// Own props, box, parent and sibling index: a change means this node must repaint.
     sig: u64,
     /// How far shadows, blurs and strokes paint outside the box; infinite when the node or an
@@ -1036,6 +1039,7 @@ fn prepare_layer(cx: &mut Ctx, index: usize, hash: u64, hidden: &HashSet<String>
             m: mats[depth],
             local: ([n.bx, n.by], n.f("rotation").unwrap_or(0.0), n.b("flipX"), n.b("flipY")),
             clip: n.ty == "frame" && n.b("clip"),
+            shape: Shape::of(n).map(Arc::new),
             sig: fxhash(&sig),
             reach: if turned[depth] { f64::INFINITY } else { reach(n) },
         });
@@ -1075,12 +1079,13 @@ pub fn unapply(m: [f64; 6], x: f64, y: f64) -> (f64, f64) {
 /// The deepest node is the last-painted one whose box holds the point; a child can be hit outside
 /// its parent's box unless an ancestor clips it. A group's union box is not a hit surface, so only its
 /// children can be hit: a point inside its box but on none of them falls through to the layers below.
+/// The same goes for the empty part of an ellipse's, path's or line's box (see `Shape`).
 pub fn hit_chain(r: &Renderer, x: f64, y: f64) -> Vec<String> {
     for id in r.order.iter().rev() {
         let Some(layer) = r.layers.get(id) else { continue };
         let inside = |f: &Flat| {
             let (x, y) = f.m.map_or((x, y), |m| unapply(m, x, y));
-            x >= f.x && y >= f.y && x <= f.x + f.w && y <= f.y + f.h
+            x >= f.x && y >= f.y && x <= f.x + f.w && y <= f.y + f.h && f.shape.as_ref().is_none_or(|s| s.hits(x, y))
         };
         // Per node, in paint order: is it reachable (no clipping ancestor misses the point), and is it
         // under a script node (whose generated children select the script node).
@@ -1369,6 +1374,27 @@ pub(crate) mod tests {
         assert_eq!(hit_chain(&r, 320.0, 320.0), ["f", "g", "b"]);
         assert_eq!(hit_chain(&r, 510.0, 10.0), ["t", "c"]);
         assert!(hit_chain(&r, 600.0, 100.0).is_empty(), "inside a top-level group's box only");
+    }
+
+    /// A click lands on what a shape paints: the empty corner of an ellipse's box, the far end of a diagonal
+    /// path's box and the inside of a stroke-only rectangle fall through to the layer painted there.
+    #[test]
+    fn shape_box_does_not_swallow_hits() {
+        let json = r##"{"version":"2.19","children":[
+            {"type":"frame","id":"f","x":0,"y":0,"width":400,"height":300,"layout":"none","fill":"#ffffff","children":[
+                {"type":"rectangle","id":"card","x":20,"y":20,"width":360,"height":260,"fill":"#3b82f6"},
+                {"type":"ellipse","id":"avatar","x":100,"y":100,"width":100,"height":100,"fill":"#ef4444"},
+                {"type":"path","id":"diag","x":220,"y":40,"width":150,"height":150,"geometry":"M0 0 L150 150","stroke":"#000000","strokeWidth":2},
+                {"type":"rectangle","id":"outline","x":230,"y":200,"width":100,"height":60,"stroke":"#000000","strokeWidth":2}]}]}"##;
+        let doc = Doc::from_json(json).unwrap();
+        let mut r = Renderer::default();
+        sync(&mut r, &doc);
+        assert_eq!(hit_chain(&r, 150.0, 150.0), ["f", "avatar"]);
+        assert_eq!(hit_chain(&r, 103.0, 103.0), ["f", "card"], "outside the circle, inside its box");
+        assert_eq!(hit_chain(&r, 295.0, 115.0), ["f", "diag"]);
+        assert_eq!(hit_chain(&r, 360.0, 50.0), ["f", "card"], "far from the line, inside its box");
+        assert_eq!(hit_chain(&r, 230.0, 230.0), ["f", "outline"]);
+        assert_eq!(hit_chain(&r, 280.0, 230.0), ["f", "card"], "inside the unfilled rectangle");
     }
 
     /// Horizontal/vertical stroked lines have no layer box; both rasterizers must still draw them
