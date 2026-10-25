@@ -638,7 +638,25 @@ impl Engine {
             None => self.doc.path.clone().ok_or("document has no path yet; pass a path to save")?,
         };
         self.doc.root["version"] = json!(crate::doc::FORMAT_VERSION);
-        self.doc.save(&target)?;
+        // Save as into another folder: relative images, scripts and imports are rewritten to reach the same
+        // files from there (also in the undo history, so it never brings back a path that no longer resolves).
+        let to = target.parent().unwrap_or(Path::new("")).to_path_buf();
+        let moved_from = self.doc.dir().filter(|from| !Doc::same_dir(from, &to));
+        let backup = moved_from.as_ref().map(|_| self.doc.root.clone());
+        if let Some(from) = &moved_from {
+            Doc::relocate(&mut self.doc.root, from, &to);
+        }
+        if let Err(err) = self.doc.save(&target) {
+            if let Some(root) = backup {
+                self.doc.root = root;
+            }
+            return Err(err);
+        }
+        if let Some(from) = &moved_from {
+            for v in self.undo.iter_mut().chain(self.redo.iter_mut()) {
+                Doc::relocate(v, from, &to);
+            }
+        }
         self.doc.path = Some(target.clone());
         self.saved = self.version;
         self.remember_recent(&target);

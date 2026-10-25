@@ -115,6 +115,39 @@ throws(() => call('open'), /path required/, 'open without a path')
   call('open', { path: b })
 }
 
+// Save as into another folder keeps relative images and imports pointing at the same files, in the open
+// document, in the saved copy when reopened, and in undo history.
+{
+  const dir = mkdtempSync(join(data, 'saveas-'))
+  mkdirSync(join(dir, 'a', 'img'), { recursive: true })
+  mkdirSync(join(dir, 'b'))
+  writeFileSync(join(dir, 'a', 'img', 'red.svg'), '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8" fill="#ff0000"/></svg>')
+  writeFileSync(join(dir, 'a', 'lib.pen'), JSON.stringify({ version: '2.19', children: [{ id: 'comp', type: 'frame', reusable: true, width: 40, height: 40, fill: '#00ff00' }] }))
+  writeFileSync(join(dir, 'a', 'doc.pen'), JSON.stringify({ version: '2.19', imports: { lib: 'lib.pen' }, children: [{ id: 'f', type: 'frame', width: 100, height: 100, fill: '#ffffff', layout: 'none', children: [
+    { id: 'r', type: 'rectangle', x: 0, y: 0, width: 50, height: 50, fill: { type: 'image', url: 'img/red.svg', mode: 'fill' } },
+    { id: 'i', type: 'ref', ref: 'lib:comp', x: 50, y: 50 }] }] }))
+  const shot = () => call('png', { id: 'f' }) as string
+  call('open', { path: join(dir, 'a', 'doc.pen') })
+  const before = shot()
+  call('update', { ids: ['i'], props: { x: 55 } })
+  const edited = shot()
+  call('save', { path: join(dir, 'b', 'doc.pen') })
+  assert(shot() === edited, 'the open document still shows its image and component after Save as')
+  const saved = JSON.parse(readFileSync(join(dir, 'b', 'doc.pen'), 'utf8'))
+  assert(saved.children[0].children[0].fill.url === '../a/img/red.svg' && saved.imports.lib === '../a/lib.pen', `Save as rewrites relative references (${JSON.stringify([saved.children[0].children[0].fill.url, saved.imports])})`)
+  assert(edited !== before, 'the edit before Save as moved the component')
+  call('undo')
+  assert(call('state').path === join(dir, 'b', 'doc.pen') && shot() === before, 'an undo after Save as brings back the earlier state with its image and component')
+  call('redo')
+  call('save', { path: join(dir, 'b', 'doc.pen') })
+  call('open', { path: join(dir, 'b', 'doc.pen') })
+  assert(shot() === edited, 'the saved copy reopens with its image and imported component')
+  // Saving again in place leaves the paths alone.
+  call('save')
+  assert(JSON.parse(readFileSync(join(dir, 'b', 'doc.pen'), 'utf8')).imports.lib === '../a/lib.pen', 'a plain save keeps the paths')
+  call('open', { path: b })
+}
+
 // Edit commands with undo/redo.
 const x0 = node('sld02').node.x
 call('select', { ids: ['sld02'] })
