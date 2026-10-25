@@ -422,8 +422,10 @@ impl Engine {
     pub fn commit(&mut self, before: Value) {
         let Some(mut step) = diff(&self.doc.root, &before) else { return };
         if let Some(start) = self.drag_before.take() {
-            self.drag_before = Some(merge3(&before, &self.doc.root, &start));
-            step = diff(&self.doc.root, &start).unwrap_or_default();
+            // Undoing this step starts from the drag's snapshot with the change in it, so the patch is relative to that.
+            let merged = merge3(&before, &self.doc.root, &start);
+            step = diff(&merged, &start).unwrap_or_default();
+            self.drag_before = Some(merged);
         }
         self.coalesce = None;
         self.undo.push(step);
