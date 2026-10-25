@@ -679,7 +679,7 @@ impl Html<'_> {
         if matches!(n.ty.as_str(), "text" | "group" | "icon") {
             let outer = list.iter().filter(|s| !s.0);
             if n.ty == "text" && !gradient_text {
-                let t: Vec<String> = outer.map(|(_, x, y, b, c)| format!("{x}px {y}px {b}px {c}")).collect();
+                let t: Vec<String> = outer.rev().map(|(_, x, y, b, c)| format!("{x}px {y}px {b}px {c}")).collect();
                 if !t.is_empty() {
                     let _ = write!(css, "text-shadow:{};", t.join(","));
                 }
@@ -697,9 +697,10 @@ impl Html<'_> {
         } else if n.ty == "frame" || visible_fill(n) {
             // Like the canvas, a shape without a visible fill casts nothing (a box-shadow of a transparent box would
             // still paint its outer band); a frame always casts its outer shadow, which is only drawn outside it.
-            // A drop shadow is cast by the outline with the stroke's outer part: it spreads by that reach.
+            // A drop shadow is cast by the outline with the stroke's outer part: it spreads by that reach. The canvas paints
+            // the later effect on top and the first CSS shadow is the topmost, so the list goes in reverse.
             let reach = stroke_reach(n);
-            shadows.extend(list.iter().map(|(inner, x, y, b, c)| match (inner, reach > 0.0) {
+            shadows.extend(list.iter().rev().map(|(inner, x, y, b, c)| match (inner, reach > 0.0) {
                 (false, true) => format!("{x}px {y}px {b}px {reach}px {c}"),
                 _ => format!("{}{x}px {y}px {b}px {c}", if *inner { "inset " } else { "" }),
             }));
@@ -834,7 +835,7 @@ fn shadow_filter(shadows: &[&(bool, f64, f64, f64, String)]) -> String {
     for (i, (_, x, y, b, c)) in shadows.iter().enumerate() {
         let _ = write!(f, "<feGaussianBlur in=\"SourceAlpha\" stdDeviation=\"{}\"/><feOffset dx=\"{x}\" dy=\"{y}\" result=\"o{i}\"/><feFlood flood-color=\"{c}\"/><feComposite in2=\"o{i}\" operator=\"in\" result=\"s{i}\"/>", b / 2.0);
     }
-    let merge: String = (0..shadows.len()).rev().map(|i| format!("<feMergeNode in=\"s{i}\"/>")).collect();
+    let merge: String = (0..shadows.len()).map(|i| format!("<feMergeNode in=\"s{i}\"/>")).collect();
     // The region must hold every offset, blurred shadow: a percentage of the element would clip big ones. The element's
     // size is not known here, so it starts a margin before the origin and runs far past any element.
     let m = shadows.iter().map(|(_, x, y, b, _)| x.abs().max(y.abs()) + b * 1.5).fold(0.0, f64::max).ceil() + 1.0;
@@ -1101,6 +1102,29 @@ mod tests {
         assert!(s.contains("box-shadow:inset 0 0 0 2px #ff0000,0 0 0 2px #ff0000;") && !s.contains("#0000ff"), "{s}");
         assert!(style("filled").contains("box-shadow:20px 20px 0px #0000ff;"), "{}", style("filled"));
         assert!(style("box").contains("box-shadow:20px 20px 0px #0000ff;"), "{}", style("box"));
+    }
+
+    /// The canvas paints the later effect over the earlier one, while the first CSS shadow is the topmost: the lists are reversed.
+    #[test]
+    fn shadows_stack_like_the_canvas() {
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        e.load_template("empty");
+        let red = json!({"type": "shadow", "offset": {"x": 10, "y": 10}, "blur": 0, "color": "#ff0000"});
+        let blue = json!({"type": "shadow", "offset": {"x": 20, "y": 20}, "blur": 0, "color": "#0000ff"});
+        let grad = json!({"type": "gradient", "gradientType": "linear", "colors": [{"color": "#ff0000", "position": 0}, {"color": "#0000ff", "position": 1}]});
+        let id = e.insert_root(json!({"type": "frame", "layout": "none", "width": 300, "height": 200, "children": [
+            {"type": "rectangle", "name": "r", "width": 100, "height": 80, "fill": "#ffffff", "effect": [red, blue]},
+            {"type": "text", "name": "t", "content": "Hi", "fontSize": 40, "fill": "#000000", "effect": [red, blue]},
+            {"type": "text", "name": "g", "content": "Hi", "fontSize": 40, "fill": grad, "effect": [red, blue]}
+        ]})).unwrap();
+        let h = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
+        let style = |name: &str| h.split(&format!("data-name=\"{name}\" style=\"")).nth(1).unwrap().split('"').next().unwrap().to_string();
+        assert!(style("r").contains("box-shadow:20px 20px 0px #0000ff,10px 10px 0px #ff0000;"), "{}", style("r"));
+        assert!(style("t").contains("text-shadow:20px 20px 0px #0000ff,10px 10px 0px #ff0000;"), "{}", style("t"));
+        // In an feMerge the first node is the bottom one: the earlier effect goes first.
+        let g = style("g");
+        assert!(g.find("in=%22s0%22").unwrap() < g.find("in=%22s1%22").unwrap(), "{g}");
     }
 
     /// Fixed-size children keep their main-axis size in an overflowing auto layout, as on the canvas.
