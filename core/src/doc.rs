@@ -618,6 +618,7 @@ fn lexical(p: &Path) -> PathBuf {
 /// The relative reference `url` (resolved against `from`) as written for a document in `to`; None when it is
 /// not a relative path (empty, absolute, a `scheme:` url or a `pencil:` id). Another drive gets an absolute path.
 fn relocated(url: &str, from: &Path, to: &Path) -> Option<String> {
+    let (prefix, url) = url.strip_prefix("file://").map_or(("", url), |rest| ("file://", rest)); // loaders read `file://x` as relative too
     let scheme = url.split_once(':').is_some_and(|(s, _)| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c)));
     if url.is_empty() || scheme || url.starts_with(['/', '\\']) || Path::new(url).is_absolute() {
         return None;
@@ -628,10 +629,10 @@ fn relocated(url: &str, from: &Path, to: &Path) -> Option<String> {
     let common = target.iter().zip(&base).take_while(|(a, b)| a == b).count();
     let names = |cs: &[Component]| cs.iter().map(|c| c.as_os_str().to_string_lossy().to_string()).collect::<Vec<_>>();
     if common == 0 {
-        return Some(full.to_string_lossy().replace('\\', "/"));
+        return Some(format!("{prefix}{}", full.to_string_lossy().replace('\\', "/")));
     }
     let rel = vec!["..".to_string(); base.len() - common].into_iter().chain(names(&target[common..])).collect::<Vec<_>>().join("/");
-    Some(if rel.starts_with("..") { rel } else { format!("./{rel}") })
+    Some(if rel.starts_with("..") { format!("{prefix}{rel}") } else { format!("{prefix}./{rel}") })
 }
 
 fn relocate_in(v: &mut Value, from: &Path, to: &Path) {
@@ -788,7 +789,9 @@ mod tests {
             {"fill": {"type": "image", "url": "data:image/png;base64,AA=="}},
             {"fill": {"type": "image", "url": "nalarupa:pending-x"}},
             {"fill": {"type": "image", "url": "/abs/i.png"}},
-            {"fill": {"type": "image", "url": ""}}]}]});
+            {"fill": {"type": "image", "url": ""}},
+            {"fill": {"type": "image", "url": "file://img/f.png"}},
+            {"type": "script", "scriptUri": "file:///abs/s.js"}]}]});
         Doc::relocate(&mut root, from, to);
         assert_eq!(root["imports"], json!({"lib": "../../a/my%20lib.pen", "abs": "/x/l.pen"}));
         let k = &root["children"][0]["children"];
@@ -800,6 +803,8 @@ mod tests {
         for (i, url) in [(4, "https://h/i.png"), (5, "data:image/png;base64,AA=="), (6, "nalarupa:pending-x"), (7, "/abs/i.png"), (8, "")] {
             assert_eq!(k[i]["fill"]["url"], url);
         }
+        assert_eq!(k[9]["fill"]["url"], "file://../../a/img/f.png");
+        assert_eq!(k[10]["scriptUri"], "file:///abs/s.js");
         // Into a folder below the old one the path points down.
         let mut root = json!({"children": [{"fill": {"type": "image", "url": "./images/x.jpg"}}]});
         Doc::relocate(&mut root, Path::new("/p"), Path::new("/p/sub"));

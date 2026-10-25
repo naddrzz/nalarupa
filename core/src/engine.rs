@@ -653,7 +653,7 @@ impl Engine {
             return Err(err);
         }
         if let Some(from) = &moved_from {
-            for v in self.undo.iter_mut().chain(self.redo.iter_mut()) {
+            for v in self.undo.iter_mut().chain(self.redo.iter_mut()).chain(self.drag_before.iter_mut()) {
                 Doc::relocate(v, from, &to);
             }
         }
@@ -1049,6 +1049,18 @@ mod tests {
         e.resolve_pending("nalarupa:pending-image-1-a", "./images/x.jpg");
         assert_eq!(e.libs[0].1["children"][0]["fill"]["url"], "./images/x.jpg");
         assert!(e.inflight.is_empty());
+    }
+
+    #[test]
+    fn save_as_relocates_the_drag_snapshot() {
+        let root = std::env::temp_dir().join("nalarupa-test-save-as-drag");
+        let mut e = Engine::new(root.join("data"));
+        e.doc.path = Some(root.join("a").join("x.pen"));
+        e.doc.root = json!({"children": [{"id": "i", "type": "rectangle", "fill": {"type": "image", "url": "./img.png"}}]});
+        e.drag_before = Some(e.doc.root.clone());
+        e.save(Some(root.join("b").join("y.pen").to_str().unwrap())).unwrap();
+        assert_eq!(e.drag_before.as_ref().unwrap()["children"][0]["fill"]["url"], "../a/img.png");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
