@@ -90,6 +90,8 @@ pub struct Flat {
     pub placeholder: bool,
     /// Has an image fill that is still being generated.
     pub pending: bool,
+    /// This node or an ancestor has opacity 0: nothing of it is painted.
+    pub faded: bool,
     /// Painted transform `[a, b, c, d, e, f]` (x' = a·x + c·y + e, y' = b·x + d·y + f) from this box's
     /// coordinates to the canvas: own and ancestors' rotations/flips. `None` = identity.
     pub m: Option<[f64; 6]>,
@@ -616,7 +618,8 @@ impl Renderer {
     }
 
     /// Nodes that need animated overlays (placeholder frames, pending images), each with the canvas box its
-    /// clipping ancestors leave visible (`None` when nothing clips it). A node clipped away entirely is left out.
+    /// clipping ancestors leave visible (`None` when nothing clips it). A node clipped away entirely, or with
+    /// opacity 0 itself or in an ancestor, is left out.
     pub fn live(&self) -> Vec<(&Flat, Option<Rect>)> {
         let canvas = |f: &Flat| {
             let m = f.m.unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
@@ -630,7 +633,7 @@ impl Renderer {
             let mut path: Vec<usize> = Vec::new();
             for (i, f) in layer.flat.iter().enumerate() {
                 path.truncate(f.depth);
-                if f.placeholder || f.pending {
+                if (f.placeholder || f.pending) && !f.faded {
                     // A rotated clipping frame is cut by its canvas bounding box (its corners may still show).
                     let clip = path.iter().map(|&p| &layer.flat[p]).filter(|p| p.clip).map(canvas).reduce(|a, b| {
                         let (x0, y0, x1, y1) = (a.0.max(b.0), a.1.max(b.1), (a.0 + a.2).min(b.0 + b.2), (a.1 + a.3).min(b.1 + b.3));
@@ -995,12 +998,16 @@ fn prepare_layer(cx: &mut Ctx, index: usize, hash: u64, hidden: &HashSet<String>
     let mut mats: Vec<Option<[f64; 6]>> = Vec::new();
     // Per depth: this node or an ancestor is hidden while it slides.
     let mut sliding: Vec<bool> = Vec::new();
+    // Per depth: this node or an ancestor has opacity 0.
+    let mut faded: Vec<bool> = Vec::new();
     root.visit(&mut |n, depth| {
         stack.truncate(depth);
         index.truncate(depth + 1);
         turned.truncate(depth);
         mats.truncate(depth);
         sliding.truncate(depth);
+        faded.truncate(depth);
+        faded.push(n.f("opacity").unwrap_or(1.0) <= 0.0 || faded.last() == Some(&true));
         let rotated = is_turned(n);
         turned.push(rotated || turned.last() == Some(&true));
         let parent_m = mats.last().copied().flatten();
@@ -1033,6 +1040,7 @@ fn prepare_layer(cx: &mut Ctx, index: usize, hash: u64, hidden: &HashSet<String>
             problem: n.problem,
             placeholder: n.ty == "frame" && n.b("placeholder"),
             pending: crate::svg::fills(n.p.get("fill")).iter().any(|f| f["url"].as_str().is_some_and(is_pending_url)),
+            faded: faded[depth],
             m: mats[depth],
             local: ([n.bx, n.by], n.f("rotation").unwrap_or(0.0), n.b("flipX"), n.b("flipY")),
             clip: n.ty == "frame" && n.b("clip"),
@@ -1347,6 +1355,25 @@ pub(crate) mod tests {
         let live: Vec<_> = r.live().into_iter().map(|(f, c)| (f.id.as_str(), c)).collect();
         // `img` sits at doc (250, 150) and sticks out of the frame (x 100..400, y 100..300).
         assert_eq!(live, [("img", Some((100.0, 100.0, 300.0, 200.0))), ("free", None)]);
+    }
+
+    /// A node painted fully transparent (own or ancestor opacity 0) shows no overlay.
+    #[test]
+    fn live_skips_invisible_nodes() {
+        let pending = r##"{"type":"image","url":"nalarupa:pending-x"}"##;
+        let json = format!(r##"{{"version":"2.19","children":[
+            {{"type":"frame","id":"f","x":0,"y":0,"width":800,"height":600,"layout":"none","children":[
+                {{"type":"rectangle","id":"visible","x":10,"y":10,"width":100,"height":100,"fill":{pending}}},
+                {{"type":"rectangle","id":"op0","x":300,"y":10,"width":100,"height":100,"opacity":0,"fill":{pending}}},
+                {{"type":"frame","id":"g","x":300,"y":200,"width":200,"height":200,"opacity":0,"layout":"none","children":[
+                    {{"type":"rectangle","id":"inner","x":10,"y":10,"width":50,"height":50,"fill":{pending}}}]}},
+                {{"type":"frame","id":"ph","x":550,"y":200,"width":100,"height":100,"opacity":0,"placeholder":true}},
+                {{"type":"frame","id":"half","x":550,"y":350,"width":100,"height":100,"opacity":0.5,"placeholder":true}}]}}]}}"##);
+        let doc = Doc::from_json(&json).unwrap();
+        let mut r = Renderer::default();
+        sync(&mut r, &doc);
+        let live: Vec<_> = r.live().into_iter().map(|(f, _)| f.id.as_str()).collect();
+        assert_eq!(live, ["visible", "half"]);
     }
 
     /// A group paints nothing of its own: a point in its box but on none of its children hits the layer below.
