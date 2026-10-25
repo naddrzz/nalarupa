@@ -67,6 +67,24 @@ const b = join(data, 'b.pen')
 call('save', { path: b })
 assert(readFileSync(a, 'utf8') === readFileSync(b, 'utf8'), 'save → open → save is byte-identical')
 
+// Undo or redo back to the saved (or just created) document leaves it clean again.
+call('new', { template: 'blank' })
+const undoFrame = call('layers')[0].id
+const undoRect = call('insert', { parent: undoFrame, node: { type: 'rectangle', x: 10, y: 10, width: 50, height: 50 } }).id
+assert(call('state').dirty, 'drawing a rectangle marks a new document dirty')
+call('undo')
+assert(!call('state').dirty, 'undo back to the new document is clean')
+call('redo')
+assert(call('state').dirty, 'redo away from the new document is dirty')
+call('save', { path: join(data, 'undo.pen') })
+call('update', { ids: [undoRect], props: { x: 20 } })
+call('undo')
+assert(!call('state').dirty, 'undo back to the saved document is clean')
+call('undo')
+assert(call('state').dirty, 'undo past the saved document is dirty')
+call('redo')
+assert(!call('state').dirty, 'redo forward to the saved document is clean')
+
 // A file saved while a generated image was still loading keeps its pending url; reopening it counts that as a failed load.
 for (const url of ['nalarupa:pending-image-1-ab', 'pencil:pending-1']) {
   const pend = join(data, 'pending.pen')
