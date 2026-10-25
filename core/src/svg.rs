@@ -1368,11 +1368,7 @@ impl<'a> Svg<'a> {
         let fixed = matches!(n.s("textGrowth"), Some("fixed-width" | "fixed-width-height"));
         let w = if fixed { w.ceil() } else { w };
         let total = lines.len() as f64 * m.line_h;
-        let off = match n.s("textAlignVertical") {
-            Some("middle") if fixed => (h - total) / 2.0,
-            Some("bottom") if fixed => h - total,
-            _ => 0.0,
-        };
+        let off = valign_off(n, h, total);
         let align = n.s("textAlign");
         let mut spans = String::new();
         for (i, l) in lines.iter().enumerate() {
@@ -1728,10 +1724,30 @@ fn union(a: Rect, b: Rect) -> Rect {
     (x0, y0, (a.0 + a.2).max(b.0 + b.2) - x0, (a.1 + a.3).max(b.1 + b.3) - y0)
 }
 
+/// Offset of a fixed-size text's lines from the top of its box (negative when they overflow it).
+fn valign_off(n: &RNode, h: f64, total: f64) -> f64 {
+    let fixed = matches!(n.s("textGrowth"), Some("fixed-width" | "fixed-width-height"));
+    match n.s("textAlignVertical") {
+        Some("middle") if fixed => (h - total) / 2.0,
+        Some("bottom") if fixed => h - total,
+        _ => 0.0,
+    }
+}
+
+/// Box of a node; a text also covers the lines that overflow its fixed box.
+fn own_box(n: &RNode) -> Rect {
+    let own = (n.x, n.y, n.w, n.h);
+    let total = n.lines.len() as f64 * n.line_h;
+    if n.ty != "text" || total <= n.h {
+        return own;
+    }
+    union(own, (n.x, n.y + valign_off(n, n.h, total), n.w, total))
+}
+
 /// Box of a node and everything it draws outside it (unclipped descendants, under their own
 /// rotation and flips), in the node's own space.
 fn extent(n: &RNode) -> Rect {
-    let own = (n.x, n.y, n.w, n.h);
+    let own = own_box(n);
     if n.ty == "frame" && n.b("clip") {
         return own;
     }
@@ -1769,7 +1785,7 @@ pub fn visual_bounds(n: &RNode) -> Rect {
     let mut b = if n.ty == "group" {
         n.kids.iter().map(visual_bounds).reduce(union).unwrap_or((n.x, n.y, 0.0, 0.0))
     } else {
-        inflate((n.x, n.y, n.w, n.h), out)
+        inflate(own_box(n), out)
     };
     if n.ty == "frame" && !n.b("clip") {
         b = n.kids.iter().map(visual_bounds).fold(b, union);
@@ -2096,6 +2112,23 @@ mod tests {
             "effect": [{"type": "shadow", "offset": {"x": 0, "y": 4}, "blur": 8}, {"type": "shadow", "shadowType": "inner", "blur": 40}]}), (0.0, 0.0, 100.0, 50.0));
         assert_eq!(visual_bounds(&n), (-14.0, -10.0, 128.0, 78.0));
         assert_eq!(visual_bounds(&node("rectangle", json!({}), (5.0, 6.0, 7.0, 8.0))), (5.0, 6.0, 7.0, 8.0));
+    }
+
+    /// Lines past the box of a fixed-size text are painted, so they are exported (and reach above it when bottom-aligned).
+    #[test]
+    fn export_visual_bounds_include_overflowing_text() {
+        let line = |t: &str| crate::text::Line { text: t.into(), width: 50.0, soft: true };
+        let text = |p: Value| {
+            let mut n = node("text", p, (100.0, 100.0, 120.0, 40.0));
+            n.lines = vec![line("a"), line("b"), line("c"), line("d")];
+            n.line_h = 29.0;
+            n
+        };
+        let grow = json!({"textGrowth": "fixed-width-height"});
+        assert_eq!(visual_bounds(&text(grow.clone())), (100.0, 100.0, 120.0, 116.0));
+        assert_eq!(extent(&text(grow)), (100.0, 100.0, 120.0, 116.0));
+        assert_eq!(visual_bounds(&text(json!({"textGrowth": "fixed-width-height", "textAlignVertical": "bottom"}))), (100.0, 24.0, 120.0, 116.0));
+        assert_eq!(visual_bounds(&text(json!({"textGrowth": "fixed-width-height", "textAlignVertical": "middle"}))), (100.0, 62.0, 120.0, 116.0));
     }
 
     /// Rotated and flipped nodes export the box they paint, not their unrotated box.
