@@ -244,6 +244,30 @@ try {
     assert(await until(async () => Number(await val(field)) === (field === 'inspector-x' ? fx0 : fy0)), `one undo step restores the origin after ${key}`)
   }
 
+  // Enter commits an Inspector field but it keeps the keys: Ctrl+Z sent to the focused field (not the canvas) must
+  // still undo the edit, for a number field and a text field alike.
+  const selX = async () => Math.round((await app.getByTestId('selection-box').all())[0]?.bounds?.x ?? NaN)
+  const x0 = await selX()
+  const xf = await app.getByTestId('inspector-x').bounds()
+  await app.mouse.click({ x: xf.x + xf.width - 10, y: xf.y + xf.height / 2 })
+  await sleep(300)
+  await app.call('keystrokes', { keys: 'ctrl-a' })
+  await app.call('keystrokes', { keys: `${fx0 + 60}`.split('').join(' ') })
+  await app.call('keystrokes', { keys: 'enter' })
+  assert(await until(async () => (await selX()) !== x0), 'Enter commits the typed X')
+  const x1 = await selX()
+  await app.call('keystrokes', { keys: 'ctrl-z' })
+  assert(await until(async () => (await selX()) === x0, 5000), `Ctrl+Z in the X field after Enter undoes the edit (${x0} → ${x1} → ${await selX()})`)
+  const nf = await app.getByTestId('inspector-name').bounds()
+  await app.mouse.click({ x: nf.x + nf.width - 10, y: nf.y + nf.height / 2 })
+  await sleep(300)
+  await app.call('keystrokes', { keys: 'ctrl-a' })
+  await app.call('keystrokes', { keys: 'z q' })
+  await app.call('keystrokes', { keys: 'enter' })
+  assert(await until(async () => (await app.getByText('zq').count()) > 0), 'Enter commits the typed layer name')
+  await app.call('keystrokes', { keys: 'ctrl-z' })
+  assert(await until(async () => (await app.getByText('zq').count()) === 0, 5000), 'Ctrl+Z in the name field after Enter undoes the rename')
+
   // Marquee from the artboard's empty area selects both rectangles (touch semantics).
   await app.mouse.drag(at(120, 420), at(430, 300), { steps: 6 })
   await sleep(300)
