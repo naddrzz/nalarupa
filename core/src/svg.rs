@@ -869,7 +869,7 @@ impl<'a> Svg<'a> {
         // Text takes a stroke like any shape; icons draw their own strokes.
         let stroke = if text { self.stroke_of(n, &Geo { d: String::new(), evenodd: false, closed: true }) } else { None };
         let reach = stroke.as_ref().map_or(0.0, Stroke::reach);
-        let b = if text { inflate((n.x, n.y, n.w, n.h), TextStyle::of(n).size / 2.0 + reach) } else { (n.x, n.y, n.w, n.h) };
+        let b = if text { inflate(own_box(n), TextStyle::of(n).size / 2.0 + reach) } else { (n.x, n.y, n.w, n.h) };
         let fills = if text { self.paints(n.p.get("fill"), (n.x, n.y, n.w, n.h)) } else { Vec::new() };
         let visible = fills.iter().any(|p| p.alpha > 0.0);
         let mask = outline.map(|m| {
@@ -990,7 +990,11 @@ impl<'a> Svg<'a> {
         let l = crate::layout::local_aabb(n);
         let (px, py) = (n.x - n.bx, n.y - n.by);
         let aabb = (px + l[0], py + l[1], l[2] - l[0], l[3] - l[1]);
-        let area = if n.ty == "group" { union(aabb, extent(n)) } else { aabb };
+        let area = match n.ty.as_str() {
+            "group" => union(aabb, extent(n)),
+            "text" => union(aabb, turn(n, own_box(n))),
+            _ => aabb,
+        };
         // The outline's reach past the box: outer strokes, glyph overhang.
         let reach = max_stroke(n) + if n.ty == "text" { TextStyle::of(n).size } else { 0.0 } + 1.0;
         let (mx, my, mw, mh) = inflate(area, reach);
@@ -1109,7 +1113,7 @@ impl<'a> Svg<'a> {
             return self.text_stroke_markup(n, s, paints, "");
         }
         let id = self.id("k");
-        let (x, y, w, h) = inflate((n.x, n.y, n.w, n.h), TextStyle::of(n).size / 2.0 + s.reach() + 2.0);
+        let (x, y, w, h) = inflate(own_box(n), TextStyle::of(n).size / 2.0 + s.reach() + 2.0);
         let inner = s.align == "inner";
         let glyphs = self.text_markup(n, &[Paint { value: if inner { "#fff" } else { "#000" }.into(), alpha: 1.0, blend: None }]);
         let rect = if inner { String::new() } else { format!(r##"<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="#fff"/>"##) };
