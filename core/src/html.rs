@@ -386,11 +386,12 @@ impl Html<'_> {
     fn node(&mut self, n: &RNode, parent: Option<&RNode>) {
         let in_flow = parent.is_some_and(|p| p.ty == "frame" && p.s("layout") != Some("none")) && n.s("layoutPosition") != Some("absolute");
         let tilted = n.f("rotation").is_some_and(|r| r != 0.0) || n.b("flipX") || n.b("flipY");
-        if !(in_flow && tilted) {
+        if !((in_flow || parent.is_none()) && tilted) {
             return self.element(n, parent, None);
         }
         // The canvas places a rotated or flipped child by its bounding box, so it takes that much room in the
         // flow: the box is a wrapper of that size and the element sits in it with its origin where the layout put it.
+        // A top-level layer is the same: its paint reaches up and left of its origin, where the page cannot scroll.
         let l = crate::layout::local_aabb(n);
         let _ = writeln!(self.out, "<div style=\"position:relative;flex-shrink:0;width:{}px;height:{}px;\">", px(l[2] - l[0]), px(l[3] - l[1]));
         self.element(n, parent, Some((n.bx - l[0], n.by - l[1])));
@@ -403,10 +404,10 @@ impl Html<'_> {
         let parent_dir = parent.filter(|_| slot.is_none()).map(|p| if p.ty == "frame" { p.s("layout").unwrap_or("horizontal") } else { "none" });
         let absolute = slot.is_some() || parent_dir == Some("none") || n.s("layoutPosition") == Some("absolute");
         let mut css = String::new();
-        if parent.is_none() {
-            css += "position:relative;";
-        } else if let Some((x, y)) = slot {
+        if let Some((x, y)) = slot {
             let _ = write!(css, "position:absolute;left:{}px;top:{}px;", px(x), px(y));
+        } else if parent.is_none() {
+            css += "position:relative;";
         } else if absolute {
             let p = parent.unwrap();
             let _ = write!(css, "position:absolute;left:{}px;top:{}px;", n.x - p.x, n.y - p.y);
@@ -1192,6 +1193,32 @@ mod tests {
         let id = e.insert_root(json!({"type": "frame", "layout": "horizontal", "width": 300, "height": 120, "children": [rect(json!({"rotation": 45}))]})).unwrap();
         let h = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
         assert!(h.contains("width:84.852814px;height:84.852814px;"), "{h}");
+    }
+
+    /// A rotated or flipped top-level layer sits in a bounding-box wrapper, so none of its paint lands above the page (y < 0).
+    #[test]
+    fn tilted_top_level_layers_are_wrapped_in_their_bounding_box() {
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        e.load_template("empty");
+        let rect = |e: &mut Engine, extra: serde_json::Value| {
+            let mut r = json!({"type": "rectangle", "name": "r", "x": 100, "y": 100, "width": 160, "height": 120, "fill": "#3366cc"});
+            r.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            e.insert_root(r).unwrap()
+        };
+        // flipY about the origin spans (0..160, -120..0): the origin is the wrapper's bottom-left.
+        let id = rect(&mut e, json!({"flipY": true}));
+        let h = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
+        assert!(h.starts_with("<div style=\"position:relative;flex-shrink:0;width:160px;height:120px;\">\n<div data-name=\"r\" style=\"position:absolute;left:0px;top:120px;"), "{h}");
+        assert!(h.contains("transform:scale(1,-1);"), "{h}");
+        // 90deg CCW: the box spans (0..120, -160..0).
+        let id = rect(&mut e, json!({"rotation": 90}));
+        let h = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
+        assert!(h.starts_with("<div style=\"position:relative;flex-shrink:0;width:120px;height:160px;\">\n<div data-name=\"r\" style=\"position:absolute;left:0px;top:160px;"), "{h}");
+        // An untilted layer stays unwrapped.
+        let id = rect(&mut e, json!({}));
+        let h = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
+        assert!(h.starts_with("<div data-name=\"r\" style=\"position:relative;"), "{h}");
     }
 
     #[test]
