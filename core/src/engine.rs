@@ -659,6 +659,9 @@ impl Engine {
         }
         self.doc.path = Some(target.clone());
         self.saved = self.version;
+        if moved_from.is_some() && !self.streams.is_empty() && !self.executing {
+            self.rebuild_preview(); // the live preview is a copy of the old document: redo it from the new folder
+        }
         self.remember_recent(&target);
         Ok(target.to_string_lossy().to_string())
     }
@@ -1060,6 +1063,22 @@ mod tests {
         e.drag_before = Some(e.doc.root.clone());
         e.save(Some(root.join("b").join("y.pen").to_str().unwrap())).unwrap();
         assert_eq!(e.drag_before.as_ref().unwrap()["children"][0]["fill"]["url"], "../a/img.png");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn save_as_moves_the_live_preview() {
+        let root = std::env::temp_dir().join("nalarupa-test-save-as-preview");
+        let mut e = Engine::new(root.join("data"));
+        e.doc.path = Some(root.join("a").join("x.pen"));
+        e.doc.root = json!({"children": [{"id": "i", "type": "rectangle", "fill": {"type": "image", "url": "./img.png"}}]});
+        e.stream_update("k", "agent", "");
+        assert!(e.preview.is_some());
+        e.save(Some(root.join("b").join("y.pen").to_str().unwrap())).unwrap();
+        let p = e.preview.as_ref().unwrap();
+        assert_eq!(p.path, e.doc.path);
+        assert_eq!(p.root["children"][0]["fill"]["url"], "../a/img.png");
+        assert!(!e.dirty());
         let _ = std::fs::remove_dir_all(&root);
     }
 
