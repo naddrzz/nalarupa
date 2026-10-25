@@ -31,6 +31,9 @@ enum Output {
 impl ExportJob {
     /// Render and write every file; returns the written file paths.
     pub fn run(self) -> Result<Vec<String>, String> {
+        // The engine lock used to order exports; two requests for one path must not interleave their writes.
+        static WRITING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _writing = WRITING.lock().unwrap_or_else(|p| p.into_inner());
         let mut written = Vec::new();
         for (file, output) in self.files {
             if let Some(dir) = file.parent() {
