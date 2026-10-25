@@ -6,11 +6,15 @@ import { nodeIcon } from './icons'
 import { C, LEFT_W } from './theme'
 import { FocusRing, forwardKey, Icon, IconButton, Pressable, Segmented, setKeyboardFocus, ShortcutScope, T, useKeyboardFocusId, type Toast } from './ui'
 
+// What the panel keeps while Present unmounts the editor; App owns it and clears it on Home.
+export type LeftSaved = { tab?: 'layers' | 'slides'; open?: Set<string> }
+
 export function LeftPanel(props: {
   version: number; selection: string[]; select: (ids: string[]) => void; focus: (id: string) => void; present: (id?: string) => void
-  toast: Toast; hover?: (id: string | null) => void; onShortcut: (key: string, mods: Mods) => boolean
+  toast: Toast; hover?: (id: string | null) => void; onShortcut: (key: string, mods: Mods) => boolean; saved: { current: LeftSaved }
 }) {
-  const [tab, setTab] = useState<'layers' | 'slides'>('layers')
+  const [tab, setTab] = useState(props.saved.current.tab ?? 'layers')
+  useEffect(() => { props.saved.current.tab = tab }, [tab])
   return (
     <div style={{ width: LEFT_W, flexShrink: 0, height: '100%', display: 'flex', flexDirection: 'column', backgroundColor: C.panel, borderRightWidth: 1, borderColor: C.border }}>
       <div style={{ padding: 10, borderBottomWidth: 1, borderColor: C.border }}>
@@ -28,9 +32,10 @@ const ROW_H = 28
 // inside the 223 px the panel leaves after its border and the rows' 12 px padding.
 const THUMB_W = 196
 
-function Layers({ version, selection, select, focus, hover, onShortcut }: { version: number; selection: string[]; select: (ids: string[]) => void; focus: (id: string) => void; hover?: (id: string | null) => void; onShortcut: (key: string, mods: Mods) => boolean }) {
+function Layers({ version, selection, select, focus, hover, onShortcut, saved }: { version: number; selection: string[]; select: (ids: string[]) => void; focus: (id: string) => void; hover?: (id: string | null) => void; onShortcut: (key: string, mods: Mods) => boolean; saved: { current: LeftSaved } }) {
   const layers = useMemo(() => tryCall<Row[]>('layers') ?? [], [version])
-  const [open, setOpen] = useState<Set<string>>(new Set())
+  const [open, setOpen] = useState<Set<string>>(saved.current.open ?? new Set())
+  useEffect(() => { saved.current.open = open }, [open])
   const [hoverRow, setHoverRow] = useState<string | null>(null)
   const [renaming, setRenaming] = useState<{ id: string; draft: string } | null>(null)
   // A keyboard tree (WAI-ARIA treeview): one row is the Tab stop, arrows move between visible rows,
@@ -54,7 +59,8 @@ function Layers({ version, selection, select, focus, hover, onShortcut }: { vers
   // Applied while rendering, so a reveal never paints collapsed first, and only into `open`, so Left
   // or the chevron can still collapse an ancestor of the selection. Only newly selected nodes reveal,
   // unless the document changed (a new node can be selected before its layer exists).
-  const [revealed, setRevealed] = useState<{ selection: string[]; layers: Row[] } | null>(null)
+  // A remount with saved rows keeps them as they were, so an ancestor the user collapsed stays collapsed.
+  const [revealed, setRevealed] = useState<{ selection: string[]; layers: Row[] } | null>(saved.current.open ? { selection, layers } : null)
   if (revealed?.selection !== selection || revealed.layers !== layers) {
     setRevealed({ selection, layers })
     const byId = new Map(layers.map((l) => [l.id, l]))

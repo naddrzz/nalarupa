@@ -5,7 +5,7 @@ import { applyEvents, clearPresence, store } from './agents'
 import { Canvas, fitCam, isMovable, type Cam, type Mods, type Tool } from './Canvas'
 import { defaultSavePath } from './paths'
 import { readClipboard, writeClipboard } from './clipboard'
-import { LeftPanel } from './Layers'
+import { LeftPanel, type LeftSaved } from './Layers'
 import { Inspector } from './Inspector'
 import { AgentPanel } from './Agent'
 import { Home } from './Home'
@@ -50,6 +50,8 @@ export function App() {
   const [hoverId, setHoverId] = useState<string | null>(null)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const canvasEl = useRef<PublicInstance>(null)
+  // The left panel's tab and expanded rows, kept across Present (which unmounts the editor); Home clears them.
+  const leftSaved = useRef<LeftSaved>({})
 
   const cw = Math.max(100, (win?.width ?? 1440) - LEFT_W - RIGHT_W)
   const ch = Math.max(100, (win?.height ?? 900) - TOP_H)
@@ -364,7 +366,7 @@ export function App() {
     <ShortcutScope value={panelShortcut}>
     <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', backgroundColor: C.bg }}>
       <div style={{ height: TOP_H, flexShrink: 0, display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 4, paddingLeft: 8, paddingRight: 10, backgroundColor: C.panel, borderBottomWidth: 1, borderColor: C.border }}>
-        <IconButton icon="home" title="Home" testId="home" onClick={() => setScreen('home')} />
+        <IconButton icon="home" title="Home" testId="home" onClick={() => { leftSaved.current = {}; setScreen('home') }} />
         <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, width: LEFT_W - 48, paddingLeft: 4 }}>
           <T size={13} weight="600" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{state.title}</T>
           {state.dirty ? <div testId="unsaved-dot" style={{ width: 6, height: 6, flexShrink: 0, borderRadius: 3, backgroundColor: C.accent }} /> : null}
@@ -388,7 +390,7 @@ export function App() {
         <IconButton icon="saveAs" title="Save as… (Ctrl+Shift+S)" onClick={() => save(true)} />
       </div>
       <div style={{ flexGrow: 1, minHeight: 0, display: 'flex', flexDirection: 'row' }}>
-        <Left version={state.version} selection={selection} select={select} focus={focusLayer} present={present} toast={toast} hover={setHoverId} onShortcut={panelShortcut} />
+        <Left version={state.version} selection={selection} select={select} focus={focusLayer} present={present} toast={toast} hover={setHoverId} onShortcut={panelShortcut} saved={leftSaved} />
         <Canvas
           w={cw} h={ch} cam={cam} setCam={setCam} version={state.version} selection={selection}
           select={select} tool={tool} setTool={setTool} toast={toast} onShortcut={onShortcut} penKeyRef={penKeyRef} chatOpen={rightTab === 'agent'} hoverId={hoverId}
