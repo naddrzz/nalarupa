@@ -156,6 +156,7 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
       setDraft('')
       pinNext.current = lastRow
       onSent?.()
+      input.release() // onSent moves the keys to the canvas, so the composer is no longer focused
     } else toast('Unable to start the agent. Check the backend in Agent settings and try again.', true)
   }
   // The core refuses while an agent runs ("Stop the agent before …"): keep the chat and say why.
@@ -270,7 +271,7 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
 
       <div style={{ padding: 10, borderTopWidth: 1, borderColor: C.border, display: 'flex', flexDirection: 'column', gap: 8 }}>
         <div style={{ position: 'relative', borderRadius: 10, borderWidth: 1, borderColor: C.border, backgroundColor: C.panel2, padding: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {input.ring ? <FocusRing radius={10} /> : null}
+          {input.ring ? <FocusRing radius={10} testId="agent-input-ring" /> : null}
           <div onMouseDown={input.onMouseDown}>
             {input.back}
             <textarea
