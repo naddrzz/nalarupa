@@ -228,7 +228,7 @@ impl Ctx<'_> {
         let mut n = r.resolve(self.doc.children().get(index)?)?;
         crate::layout::layout(&mut n, self.fonts);
         // Script nodes need their laid-out size before they can run.
-        crate::script::expand_scripts(&mut n, &r, self.fonts, self.doc.dir().as_deref(), live);
+        crate::script::expand_scripts(&mut n, &r, self.fonts, self.doc.dir().as_deref(), self.doc.path.as_deref(), live);
         Some(n)
     }
 

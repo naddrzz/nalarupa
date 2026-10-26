@@ -1426,13 +1426,22 @@ struct Slot {
     next: Option<Job>,
     /// Last finished output: shown while a newer run is pending.
     last: Option<ScriptRun>,
+    /// Tick of the last request, so eviction drops the longest-unused slots first.
+    used: u64,
 }
 
 #[derive(Default)]
 struct Scripts {
     cache: HashMap<u64, ScriptRun>,
     slots: HashMap<String, Slot>,
+    /// Worker threads alive; waiting slots queue beyond `WORKERS`.
+    active: usize,
+    tick: u64,
 }
+
+/// Most script runs going at once: a document with many script nodes queues the rest.
+const WORKERS: usize = 8;
+const SLOTS: usize = 1024;
 
 static SCRIPTS: std::sync::Mutex<Option<Scripts>> = std::sync::Mutex::new(None);
 /// Counts finished background runs, so the renderer knows when to rebuild a waiting layer.
@@ -1456,18 +1465,35 @@ pub fn busy() -> bool {
     scripts().as_ref().is_some_and(|s| s.slots.values().any(|l| l.running || l.next.is_some()))
 }
 
-fn work(slot: String) {
+/// A worker thread: runs its slot's jobs, then takes over any slot still waiting for a worker.
+fn work(mut slot: String) {
     loop {
         let job = {
             let mut g = scripts();
-            let Some(s) = g.as_mut().and_then(|s| s.slots.get_mut(&slot)) else { return };
-            let Some(job) = s.next.take() else {
-                s.running = false;
-                s.current = None;
-                return;
-            };
-            s.current = Some(job.key);
-            job
+            let Some(sc) = g.as_mut() else { return };
+            let job = sc.slots.get_mut(&slot).and_then(|s| {
+                let job = s.next.take()?;
+                s.current = Some(job.key);
+                Some(job)
+            });
+            match job {
+                Some(job) => job,
+                None => {
+                    if let Some(s) = sc.slots.get_mut(&slot) {
+                        s.running = false;
+                        s.current = None;
+                    }
+                    let Some(waiting) = sc.slots.iter().find(|(_, s)| !s.running && s.next.is_some()).map(|(k, _)| k.clone()) else {
+                        sc.active -= 1;
+                        return;
+                    };
+                    if let Some(s) = sc.slots.get_mut(&waiting) {
+                        s.running = true;
+                    }
+                    slot = waiting;
+                    continue;
+                }
+            }
         };
         let cached = scripts().as_ref().and_then(|s| s.cache.get(&job.key).cloned());
         let r = cached.unwrap_or_else(|| std::panic::catch_unwind(|| run_job(&job)).unwrap_or_else(|_| Err(Status::error("An internal error occurred", None))));
@@ -1526,33 +1552,51 @@ pub fn script_node(uri: &str, dir: Option<&std::path::Path>, inputs: Option<&Map
         g.cache.insert(key, r.clone());
         return r;
     };
-    if g.slots.len() > 256 {
-        g.slots.retain(|_, s| s.running || s.next.is_some());
+    g.tick += 1;
+    if g.slots.len() >= SLOTS {
+        // Drop the longest-unused idle slots (their node is gone or off screen); busy ones stay.
+        let mut idle: Vec<(u64, String)> = g.slots.iter().filter(|(_, s)| !s.running && s.next.is_none()).map(|(k, s)| (s.used, k.clone())).collect();
+        idle.sort_unstable();
+        for (_, k) in idle.into_iter().take(SLOTS / 4) {
+            g.slots.remove(&k);
+        }
     }
+    let (tick, free) = (g.tick, g.active < WORKERS);
     let s = g.slots.entry(slot.to_string()).or_default();
-    if s.current != Some(key) && s.next.as_ref().is_none_or(|j| j.key != key) {
+    s.used = tick;
+    if s.current == Some(key) {
+        // The size or input went back to what is running: drop the stale one waiting behind it.
+        s.next = None;
+    } else if s.next.as_ref().is_none_or(|j| j.key != key) {
         s.next = Some(job);
     }
-    if !s.running {
+    let start = !s.running && s.next.is_some() && free;
+    if start {
         s.running = true;
+    }
+    let last = s.last.clone();
+    if start {
+        g.active += 1;
         let slot = slot.to_string();
         std::thread::spawn(move || work(slot));
     }
-    s.last.clone().unwrap_or_else(|| Err(Status { kind: "running", title: "Running script".into(), description: None, code: None }))
+    last.unwrap_or_else(|| Err(Status { kind: "running", title: "Running script".into(), description: None, code: None }))
 }
 
 /// Replace every laid-out script node's children with its output (or mark its status), then lay
-/// the output out in the node's box. `live` = the caller holds the engine lock: runs happen in the background. Ids are `scriptId/k`, so they never collide with saved nodes.
-pub fn expand_scripts(n: &mut RNode, r: &crate::resolve::Resolver, fonts: &mut crate::text::Fonts, dir: Option<&std::path::Path>, live: bool) {
+/// the output out in the node's box. `doc` = the document's file. `live` = the caller holds the engine lock: runs happen in the background. Ids are `scriptId/k`, so they never collide with saved nodes.
+pub fn expand_scripts(n: &mut RNode, r: &crate::resolve::Resolver, fonts: &mut crate::text::Fonts, dir: Option<&std::path::Path>, doc: Option<&std::path::Path>, live: bool) {
     for k in &mut n.kids {
-        expand_scripts(k, r, fonts, dir, live);
+        expand_scripts(k, r, fonts, dir, doc, live);
     }
     if n.ty != "script" {
         return;
     }
     let inputs = n.p.get("inputs").and_then(Value::as_object);
-    let slot = live.then(|| format!("{}\u{0}{}", dir.map_or(String::new(), |d| d.to_string_lossy().into_owned()), n.id));
-    let run = script_node(n.s("scriptUri").unwrap_or(""), dir, inputs, n.w, n.h, slot.as_deref()).and_then(|mut out| {
+    let uri = n.s("scriptUri").unwrap_or("");
+    // A slot belongs to one node of one document, so another document's output never shows here.
+    let slot = live.then(|| format!("{}\u{0}{}\u{0}{uri}", doc.map_or(String::new(), |d| d.to_string_lossy().into_owned()), n.id));
+    let run = script_node(uri, dir, inputs, n.w, n.h, slot.as_deref()).and_then(|mut out| {
         let mut k = 0;
         fn ids(v: &mut Value, sid: &str, k: &mut usize, r: &crate::resolve::Resolver) -> Result<(), Status> {
             v["id"] = json!(format!("{sid}/{k}"));
@@ -2051,5 +2095,21 @@ Insert(document, {type:'frame', name:'C', width:10, height:10})
             e.sync();
         }
         assert!(!busy());
+        // Back to the size that is running drops the stale one waiting behind it.
+        let call = |w: f64| script_node("./slow.js", Some(&dir), None, w, 10.0, Some("back-slot"));
+        let wait = |until: &dyn Fn() -> bool| {
+            let limit = Instant::now() + Duration::from_secs(10);
+            while !until() {
+                assert!(Instant::now() < limit);
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        };
+        assert!(call(101.0).is_err());
+        wait(&|| scripts().as_ref().unwrap().slots["back-slot"].next.is_none()); // the worker has taken it
+        call(102.0);
+        call(101.0);
+        assert!(scripts().as_ref().unwrap().slots["back-slot"].next.is_none(), "the stale size no longer waits");
+        wait(&|| !busy());
+        assert_eq!(call(101.0).unwrap()[0]["width"], 101.0);
     }
 }
