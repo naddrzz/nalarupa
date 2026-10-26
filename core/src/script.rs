@@ -883,11 +883,8 @@ fn finish(e: &mut Engine, prep: Prepared, result: Result<Map<String, Value>, Str
     // Only the tree is built under the engine lock; `ToolOut::finish` rasterizes it.
     let mut shots = Vec::new();
     for id in &ex.shots {
-        let target = if id == "document" { e.doc.children().first().and_then(|n| n["id"].as_str()).unwrap_or("").to_string() } else { id.clone() };
-        e.sync();
-        let scale = e.renderer.find(&target).map(|f| (1400.0 / f.w.max(f.h).max(1.0)).min(2.0)).unwrap_or(1.0).clamp(0.05, 8.0);
-        match e.ctx().node_tree_at(&target, scale) {
-            Ok(tree) => shots.push((id.clone(), tree, scale)),
+        match shot_tree(e, id) {
+            Ok((tree, scale)) => shots.push((id.clone(), tree, scale)),
             Err(err) => text += &format!("Screenshot of {id} failed: {err}\n"),
         }
     }
@@ -900,9 +897,17 @@ fn finish(e: &mut Engine, prep: Prepared, result: Result<Map<String, Value>, Str
     ToolOut { text, images: Vec::new(), error: false, shots, icons }
 }
 
+/// The render tree and scale of a screenshot target (`document` is the first top-level node).
+pub fn shot_tree(e: &mut Engine, id: &str) -> Result<(resvg::usvg::Tree, f64), String> {
+    let target = if id == "document" { e.doc.children().first().and_then(|n| n["id"].as_str()).unwrap_or("").to_string() } else { id.to_string() };
+    e.sync();
+    let scale = e.renderer.find(&target).map(|f| (1400.0 / f.w.max(f.h).max(1.0)).min(2.0)).unwrap_or(1.0).clamp(0.05, 8.0);
+    e.ctx().node_tree_at(&target, scale).map(|tree| (tree, scale))
+}
+
 /// Layout and content checks on nodes touched by this call, plus the icons still downloading (their
-/// "not found" warning, library, name): whether they exist is only known once `ToolOut::finish` waits.
-fn validate(e: &mut Engine, touched: &[String]) -> (Vec<String>, Vec<(String, String, String)>) {
+/// "not found" warning, library, name, weight): whether they exist is only known once `ToolOut::finish` waits.
+fn validate(e: &mut Engine, touched: &[String]) -> (Vec<String>, Vec<(String, String, String, u32)>) {
     let touched: HashSet<&str> = touched.iter().map(String::as_str).collect();
     if touched.is_empty() {
         return (Vec::new(), Vec::new());
@@ -959,10 +964,11 @@ fn validate(e: &mut Engine, touched: &[String]) -> (Vec<String>, Vec<(String, St
             }
             if n.ty == "icon" {
                 let (library, name) = (n.s("library").unwrap_or("lucide"), n.s("icon").unwrap_or(""));
-                if e.assets.icon(library, name).is_none() {
+                let weight = n.f("weight").unwrap_or(200.0);
+                if e.assets.icon_weight(library, name, weight).is_none() {
                     let warning = format!("icon {label}: '{name}' not found in library '{library}'");
-                    if e.assets.icon_loading(library, name, 200.0) {
-                        icons.push((warning, library.to_string(), name.to_string()));
+                    if e.assets.icon_loading(library, name, weight) {
+                        icons.push((warning, library.to_string(), name.to_string(), weight.max(0.0) as u32));
                     } else {
                         out.push(warning);
                     }

@@ -16,9 +16,9 @@ pub struct ToolOut {
     /// Screenshots (node id, tree, scale) still to rasterize: `finish` does it once the caller has
     /// released the engine lock, so the canvas keeps drawing while the agent looks at its work.
     pub shots: Vec<(String, resvg::usvg::Tree, f64)>,
-    /// Icons still downloading when the call ended (warning, library, name): `finish` waits for them
-    /// without the engine lock and reports the ones that turn out not to exist.
-    pub icons: Vec<(String, String, String)>,
+    /// Icons still downloading when the call ended (warning, library, name, weight): `finish` waits for
+    /// them without the engine lock and reports the ones that turn out not to exist.
+    pub icons: Vec<(String, String, String, u32)>,
 }
 
 impl ToolOut {
@@ -30,8 +30,15 @@ impl ToolOut {
     }
     /// Rasterize pending screenshots and settle pending icons. Call without holding `engine()`.
     pub fn finish(mut self) -> ToolOut {
+        let settled = !self.icons.is_empty();
         self.settle_icons();
-        for (id, tree, scale) in std::mem::take(&mut self.shots) {
+        for (id, mut tree, mut scale) in std::mem::take(&mut self.shots) {
+            // The tree was built while the icons were still downloading, so it has none of them.
+            if settled {
+                if let Ok((fresh, s)) = crate::script::shot_tree(&mut engine(), &id) {
+                    (tree, scale) = (fresh, s);
+                }
+            }
             match crate::render::encode_tree(&tree, "png", scale, 0) {
                 Ok(png) => self.images.push(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, png)),
                 Err(err) => self.text += &format!("Screenshot of {id} failed: {err}\n"),
@@ -45,13 +52,14 @@ impl ToolOut {
     fn settle_icons(&mut self) {
         let until = std::time::Instant::now() + std::time::Duration::from_secs(12);
         let mut missing = Vec::new();
-        for (warning, library, name) in std::mem::take(&mut self.icons) {
-            while engine().assets.icon_loading(&library, &name, 200.0) && std::time::Instant::now() < until {
+        for (warning, library, name, weight) in std::mem::take(&mut self.icons) {
+            let weight = weight as f64;
+            while engine().assets.icon_loading(&library, &name, weight) && std::time::Instant::now() < until {
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
             let found = {
                 let mut e = engine();
-                e.assets.icon(&library, &name).is_some() || e.assets.icon_loading(&library, &name, 200.0)
+                e.assets.icon_weight(&library, &name, weight).is_some() || e.assets.icon_loading(&library, &name, weight)
             };
             if !found {
                 missing.push(warning);
