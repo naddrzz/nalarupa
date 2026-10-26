@@ -56,13 +56,16 @@ pub struct Slide {
     /// (the ancestor and those above it). The snapshot sits at the settled spot and is moved, so
     /// the clips are applied when it is painted, not baked into it.
     clips: Vec<(usvg::Tree, Vec<String>)>,
+    /// What its own top-level frame stacks above it (later siblings of it and of its ancestors),
+    /// repainted over it: the frame's layer leaves it out, so it would show over them.
+    over: Option<usvg::Tree>,
     /// Raster of `tree` at (zoom, device rect).
     cache: Option<(f64, (i32, i32, u32, u32), tiny_skia::Pixmap)>,
 }
 
 impl Slide {
     pub fn new(id: &str) -> Slide {
-        Slide { id: id.to_string(), added: Instant::now(), start: None, from: (0.0, SLIDE_OFFSET), fade: true, fresh: true, tree: None, lin: [1.0, 0.0, 0.0, 1.0], ancestors: Vec::new(), clips: Vec::new(), cache: None }
+        Slide { id: id.to_string(), added: Instant::now(), start: None, from: (0.0, SLIDE_OFFSET), fade: true, fresh: true, tree: None, lin: [1.0, 0.0, 0.0, 1.0], ancestors: Vec::new(), clips: Vec::new(), over: None, cache: None }
     }
 
     /// (offset x, offset y, opacity) now.
@@ -495,6 +498,16 @@ impl Renderer {
             svg.wrap(m, alpha);
             let text = svg.finish(None);
             s.tree = usvg::Tree::from_str(&text, &cx.tree_options()).ok();
+            // Skipped for a top-level node, or when nothing follows it or its ancestors.
+            let path: Vec<&RNode> = chain.iter().copied().chain([node]).collect();
+            s.over = None;
+            if path.windows(2).any(|w| w[0].kids.last().is_some_and(|l| l.id != w[1].id)) {
+                let mut svg = Svg::new(cx.fonts, cx.assets, cx.doc.dir());
+                svg.skip = ids.iter().filter(|i| **i != s.id).cloned().collect();
+                svg.above(root, &s.id);
+                let text = svg.finish(None);
+                s.over = usvg::Tree::from_str(&text, &cx.tree_options()).ok();
+            }
             s.ancestors = ids.iter().filter(|a| **a != s.id && find_rnode(root, a).is_some_and(|an| find_rnode(an, &s.id).is_some())).cloned().collect();
             s.cache = None;
         }
@@ -585,7 +598,7 @@ impl Renderer {
             }
             let pm = cut.as_ref().unwrap_or(pm);
             out.draw_pixmap(px, py, pm.as_ref(), &paint, tiny_skia::Transform::identity(), None);
-            // Top-level frames stacked above the slide's own cover it, as they do once it settles.
+            // What stacks above the slide (in its frame, then the frames above) covers it, as it does once it settles.
             let own = self.order.iter().position(|id| self.layers.get(id).is_some_and(|l| l.flat.iter().any(|f| f.id == s.id)));
             let above = own.map_or(&[][..], |i| &self.order[i + 1..]);
             let (cw, ch) = (pm.width() as i32, pm.height() as i32);
@@ -594,7 +607,8 @@ impl Renderer {
                 continue;
             }
             let cover = ((cx0 + vx) as f64 / zoom, (cy0 + vy) as f64 / zoom, (cx1 - cx0) as f64 / zoom, (cy1 - cy0) as f64 / zoom);
-            let trees: Vec<&usvg::Tree> = above.iter().filter(|id| solo.is_none_or(|s| s == id.as_str())).filter_map(|id| self.layers.get(id)).filter(|l| overlaps(l.paint, cover)).filter_map(|l| l.tree.as_ref()).collect();
+            let frames = above.iter().filter(|id| solo.is_none_or(|s| s == id.as_str())).filter_map(|id| self.layers.get(id)).filter(|l| overlaps(l.paint, cover)).filter_map(|l| l.tree.as_ref());
+            let trees: Vec<&usvg::Tree> = s.over.iter().chain(frames).collect();
             if trees.is_empty() {
                 continue;
             }
@@ -1631,6 +1645,33 @@ pub(crate) mod tests {
         // k sits at 120..220 x 120..220 (6.8 low mid-slide); q covers x ≥ 150.
         assert_eq!(at(&px, 180, 150), [255, 255, 0], "the frame above covers the sliding node");
         assert!(at(&px, 130, 150)[0] > 100, "the part outside that frame still shows the sliding node");
+    }
+
+    /// Inside one top-level frame a sibling above the sliding node's container (an overlay, a
+    /// header) covers it mid-slide as it does once settled; the container's own paint does not.
+    #[test]
+    fn slide_stays_under_siblings_above_its_container() {
+        let json = r##"{"version":"2.19","children":[
+            {"type":"frame","id":"d","x":0,"y":0,"width":640,"height":400,"layout":"none","fill":"#1c1c1f","children":[
+                {"type":"frame","id":"p","x":100,"y":100,"width":500,"height":300,"layout":"none","fill":"#dddddd","children":[
+                    {"type":"rectangle","id":"n","x":150,"y":100,"width":300,"height":150,"fill":"#00ff00"}]},
+                {"type":"rectangle","id":"q","x":200,"y":150,"width":300,"height":200,"fill":"#ff0000"}]}]}"##;
+        let doc = Doc::from_json(json).unwrap();
+        let (mut fonts, mut assets) = offline();
+        let mut r = Renderer::default();
+        r.slides.push(Slide::new("n"));
+        let mut cx = Ctx { doc: &doc, libs: &[], fonts: &mut fonts, assets: &mut assets };
+        let roots = r.shift_siblings(&mut cx);
+        let rebuilt = r.sync(&mut cx);
+        r.refresh_slides(&mut cx, &rebuilt, roots);
+        let at = |px: &[u8], x: usize, y: usize| px[(y * 640 + x) * 4..(y * 640 + x) * 4 + 3].to_vec();
+        r.render(640, 400, 0.0, 0.0, 1.0, [30, 30, 30], None, true);
+        r.slides[0].start = Some(Instant::now() - Duration::from_millis(100));
+        let px = r.render(640, 400, 0.0, 0.0, 1.0, [30, 30, 30], None, true).to_vec();
+        // n spans x 250..550, y 200..350 (6.8 low mid-slide); q spans x 200..500, y 150..350.
+        assert_eq!(at(&px, 300, 300), [255, 0, 0], "the sibling above the container covers the sliding node");
+        assert!(at(&px, 520, 300)[1] > 60, "the part outside it still shows the sliding node");
+        assert_eq!(at(&px, 120, 120), [221, 221, 221], "the container's own paint is not repainted over it");
     }
 
     /// Two slides in different frames: the lower one's cover pass must not erase the higher

@@ -713,6 +713,41 @@ impl<'a> Svg<'a> {
         }
     }
 
+    /// Only what stacks above node `id` inside `n`: for each ancestor of `id`, the siblings after
+    /// the branch, within its rotation, flips, opacity and clip (the ancestor's own paint and
+    /// everything below `id` is left out). Repainted over a sliding `id`, which the layer leaves out.
+    pub fn above(&mut self, n: &RNode, id: &str) {
+        let Some(i) = n.kids.iter().position(|k| k.id == id || crate::render::find_rnode(k, id).is_some()) else { return };
+        let opacity = n.f("opacity").unwrap_or(1.0);
+        if opacity <= 0.0 || self.skip.contains(&n.id) {
+            return;
+        }
+        let (tf, clip) = (transform(n), (n.ty == "frame" && n.b("clip")).then(|| geometry(n)));
+        let mut g = String::new();
+        if opacity < 1.0 {
+            let _ = write!(g, r#" opacity="{opacity}""#);
+        }
+        if !tf.is_empty() {
+            let _ = write!(g, r#" transform="{tf}""#);
+        }
+        let _ = write!(self.out, "<g{g}>");
+        self.painted.push((!tf.is_empty(), Vec::new()));
+        if let Some(c) = &clip {
+            self.open_clip(c);
+        }
+        if n.kids[i].id != id {
+            self.above(&n.kids[i], id);
+        }
+        for k in &n.kids[i + 1..] {
+            self.node(k);
+        }
+        if clip.is_some() {
+            self.out.push_str("</g>");
+        }
+        self.painted.pop();
+        self.out.push_str("</g>");
+    }
+
     fn shape(&mut self, n: &RNode, fx: &Effects, outline: Option<&str>) {
         let geo = geometry(n);
         let b = (n.x, n.y, n.w, n.h);
