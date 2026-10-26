@@ -1280,9 +1280,11 @@ mod tests {
         let png = pm.encode_png().unwrap();
         let mut crc = png.clone();
         let n = crc.len();
-        // The IDAT payload sits before the IEND chunk (12 bytes) and the IDAT CRC (4 bytes).
-        crc[n - 12 - 5] ^= 0xFF;
-        let files = [("ok.png", png.clone()), ("cut.png", png[..png.len() / 2].to_vec()), ("crc.png", crc)];
+        // The IDAT CRC (4 bytes) sits right before the IEND chunk (12 bytes).
+        crc[n - 13] ^= 0xFF;
+        let mut webp = Vec::new();
+        image_webp::WebPEncoder::new(&mut webp).encode(pm.data(), 64, 32, image_webp::ColorType::Rgba8).unwrap();
+        let files = [("ok.png", png.clone()), ("cut.png", png[..png.len() / 2].to_vec()), ("crc.png", crc), ("ok.webp", webp.clone()), ("cut.webp", webp[..webp.len() / 2].to_vec())];
         for (name, bytes) in &files {
             std::fs::write(dir.join(name), bytes).unwrap();
         }

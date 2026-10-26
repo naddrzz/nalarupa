@@ -282,9 +282,9 @@ impl Ctx<'_> {
         let mut pdf = krilla::Document::new();
         // krilla decodes late and fails the whole document on one damaged image: leave those out.
         self.assets.verify(true);
-        let pages = ids.iter().try_for_each(|id| self.pdf_page(&mut pdf, id));
+        let pages = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ids.iter().try_for_each(|id| self.pdf_page(&mut pdf, id))));
         self.assets.verify(false);
-        pages?;
+        pages.unwrap_or_else(|p| std::panic::resume_unwind(p))?;
         pdf.finish().map_err(|e| format!("PDF export failed: {e:?}"))
     }
 

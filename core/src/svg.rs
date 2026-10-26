@@ -92,8 +92,15 @@ impl Assets {
         if !self.within_pixel_limit(&href, url) {
             return None;
         }
-        if self.verify && !*self.decoded.entry(fxhash(&href)).or_insert_with(|| decodes(&href)) {
-            eprintln!("image {}: damaged, left out of the export", if href.starts_with("data:") { "<data URL>" } else { url });
+        if self.verify
+            && !*self.decoded.entry(fxhash(&href)).or_insert_with(|| {
+                let ok = decodes(&href);
+                if !ok {
+                    eprintln!("image {}: damaged, left out of the export", if href.starts_with("data:") { "<data URL>" } else { url });
+                }
+                ok
+            })
+        {
             return None;
         }
         let too_deep = match deep_key(&href) {
@@ -194,7 +201,7 @@ fn decodes(href: &str) -> bool {
         "gif" => {
             let mut opts = gif::DecodeOptions::new();
             opts.set_color_output(gif::ColorOutput::RGBA);
-            opts.read_info(&bytes[..]).and_then(|mut d| d.read_next_frame().map(|_| ())).is_ok()
+            matches!(opts.read_info(&bytes[..]).and_then(|mut d| d.read_next_frame().map(|f| f.is_some())), Ok(true))
         }
         "webp" => image_webp::WebPDecoder::new(std::io::Cursor::new(&bytes)).and_then(|mut d| {
             let mut buf = vec![0; d.output_buffer_size().ok_or(image_webp::DecodingError::ImageTooLarge)?];
