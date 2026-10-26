@@ -57,8 +57,14 @@ impl Doc {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
-        let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-        let tmp = target.with_extension("tmp-nalarupa");
+        let target = match std::fs::canonicalize(path) {
+            Ok(target) => target,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && !path.is_symlink() => path.to_path_buf(),
+            Err(e) => return Err(format!("cannot resolve {}: {e}", path.display())),
+        };
+        let mut tmp_name = target.file_name().unwrap_or_default().to_os_string();
+        tmp_name.push(".tmp-nalarupa");
+        let tmp = target.with_file_name(tmp_name);
         std::fs::write(&tmp, text).map_err(|e| {
             let _ = std::fs::remove_file(&tmp);
             format!("cannot write {}: {e}", tmp.display())

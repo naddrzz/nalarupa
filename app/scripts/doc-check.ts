@@ -78,7 +78,9 @@ writeFileSync(real, '{"version":"2.19","children":[]}')
 let linked = true
 try {
   symlinkSync(real, link)
-} catch {
+} catch (e) {
+  const code = (e as NodeJS.ErrnoException).code
+  if (process.platform !== 'win32' || (code !== 'EPERM' && code !== 'EACCES')) throw e
   linked = false // creating a symlink needs a privilege on Windows
 }
 if (linked) {
@@ -87,7 +89,11 @@ if (linked) {
   assert(call('save').path === link, 'save keeps the document path')
   assert(lstatSync(link).isSymbolicLink(), 'saving through a symlink keeps the link')
   assert(readFileSync(real, 'utf8').includes('via-link'), 'saving through a symlink updates the real file')
-  assert(!existsSync(join(data, 'link.tmp-nalarupa')) && !existsSync(join(data, 'real.tmp-nalarupa')), 'a save leaves no temp file')
+  assert(!existsSync(join(data, 'link.pen.tmp-nalarupa')) && !existsSync(join(data, 'real.pen.tmp-nalarupa')), 'a save leaves no temp file')
+  const dangling = join(data, 'dangling.pen')
+  symlinkSync(join(data, 'missing.pen'), dangling)
+  throws(() => call('save', { path: dangling }), /cannot resolve/, 'saving through a dangling symlink')
+  assert(lstatSync(dangling).isSymbolicLink(), 'a dangling symlink is not replaced by a save')
 }
 
 // A file saved while a generated image was still loading keeps its pending url; reopening it counts that as a failed load.
