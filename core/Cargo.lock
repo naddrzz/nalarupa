@@ -956,6 +956,7 @@ dependencies = [
  "base64 0.22.1",
  "data-url",
  "dirs",
+ "gif",
  "image-webp 0.1.3",
  "jpeg-encoder",
  "krilla",
