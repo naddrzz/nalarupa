@@ -101,10 +101,11 @@ export function App() {
   }, [state.title, state.dirty])
 
   useEffect(() => {
-    // Drop selected ids that no longer exist (undo, agent deletes).
+    // Drop selected ids that no longer exist (undo, agent deletes). A hidden layer has no render box but is still in the document.
     if (!selection.length) return
-    const boxes = tryCall<Box[]>('boxes', { ids: selection }) ?? []
-    if (boxes.length !== selection.length) setSelection(boxes.map((b) => b.id))
+    const drawn = new Set((tryCall<Box[]>('boxes', { ids: selection }) ?? []).map((b) => b.id))
+    const kept = selection.filter((id) => drawn.has(id) || tryCall('node', { id })?.node)
+    if (kept.length !== selection.length) setSelection(kept)
   }, [state.version])
 
   // The control that held focus can unmount (Inspector Delete/Hide, Delete on a Layers row): then no element
@@ -165,7 +166,7 @@ export function App() {
     return true
   }
   const nodeOf = (id: string) => tryCall('node', { id })
-  const parentOf = (id: string) => (tryCall<Box[]>('boxes', { ids: [id] }) ?? [])[0]?.parent ?? 'document'
+  const parentOf = (id: string) => (tryCall<Box[]>('boxes', { ids: [id] }) ?? [])[0]?.parent ?? nodeOf(id)?.parent ?? 'document'
   const childIds = (parent: string) => (parent === 'document' ? tryCall<Box[]>('frames') : tryCall<Box[]>('children_boxes', { id: parent }))?.map((b) => b.id) ?? []
   const copySelection = () => {
     const r = tryCall<{ html: string; text: string; ids: string[] }>('copy', { ids: selection })
