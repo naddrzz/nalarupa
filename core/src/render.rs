@@ -25,6 +25,8 @@ const SLIDE_DECAY: f64 = 20.0;
 const FADE_DECAY: f64 = 5.0;
 /// Done at offset < 0.5 and opacity > 0.95: ln(20)/5 ≈ 0.6 s (the offset settles at 0.23 s).
 const SLIDE_TIME: Duration = Duration::from_millis(600);
+/// A restarted offset has settled this long after the restart.
+const GLIDE_TIME: Duration = Duration::from_millis(250);
 /// A slide no frame has shown yet (canvas not on screen) is dropped after this.
 const SLIDE_WAIT: Duration = Duration::from_secs(2);
 /// Every slide is snapshotted on each sync (and checked against all the others), so a bulk
@@ -45,6 +47,9 @@ pub struct Slide {
     fade: bool,
     /// Inserted since the last sync: its layout siblings are still to be checked for moves.
     fresh: bool,
+    /// Seconds after `start` that the offset decay restarts from `from`: a fading node a reflow
+    /// moved glides on from where it shows, while its fade keeps its own clock.
+    rest: f64,
     /// The node alone in absolute doc coordinates (under its ancestors' rotation, flips and
     /// opacity), without descendants that slide themselves.
     tree: Option<usvg::Tree>,
@@ -62,13 +67,17 @@ pub struct Slide {
 
 impl Slide {
     pub fn new(id: &str) -> Slide {
-        Slide { id: id.to_string(), added: Instant::now(), start: None, from: (0.0, SLIDE_OFFSET), fade: true, fresh: true, tree: None, lin: [1.0, 0.0, 0.0, 1.0], ancestors: Vec::new(), clips: Vec::new(), cache: None }
+        Slide { id: id.to_string(), added: Instant::now(), start: None, from: (0.0, SLIDE_OFFSET), fade: true, fresh: true, rest: 0.0, tree: None, lin: [1.0, 0.0, 0.0, 1.0], ancestors: Vec::new(), clips: Vec::new(), cache: None }
+    }
+
+    fn elapsed(&self, now: Instant) -> f64 {
+        self.start.map_or(0.0, |s| now.duration_since(s).as_secs_f64())
     }
 
     /// (offset x, offset y, opacity) now.
     fn state(&self, now: Instant) -> (f64, f64, f64) {
-        let t = self.start.map_or(0.0, |s| now.duration_since(s).as_secs_f64());
-        let k = (-SLIDE_DECAY * t).exp();
+        let t = self.elapsed(now);
+        let k = (-SLIDE_DECAY * (t - self.rest)).exp();
         (self.from.0 * k, self.from.1 * k, if self.fade { 1.0 - (-FADE_DECAY * t).exp() } else { 1.0 })
     }
 }
@@ -427,12 +436,17 @@ impl Renderer {
                 }
                 let room = self.slides.len() < MAX_SLIDES;
                 match self.slides.iter_mut().find(|s| s.id == k.id) {
-                    // Already gliding: continue from where it shows now.
-                    Some(s) if !s.fade => {
+                    // Already gliding: continue from where it shows now. A fading node keeps its
+                    // fade clock and restarts only the offset decay.
+                    Some(s) => {
                         let (cx0, cy0, _) = s.state(now);
-                        (s.from, s.start, s.cache) = ((cx0 + dx, cy0 + dy), None, None);
+                        (s.from, s.cache) = ((cx0 + dx, cy0 + dy), None);
+                        if s.fade {
+                            s.rest = s.elapsed(now);
+                        } else {
+                            s.start = None;
+                        }
                     }
-                    Some(_) => {}
                     None if room => self.slides.push(Slide { from: (dx, dy), fade: false, fresh: false, ..Slide::new(&k.id) }),
                     None => {}
                 }
@@ -505,7 +519,7 @@ impl Renderer {
         let now = Instant::now();
         let before = self.slides.len();
         self.slides.retain(|s| match s.start {
-            Some(t) => now.duration_since(t) < SLIDE_TIME,
+            Some(t) => now.duration_since(t) < SLIDE_TIME.max(Duration::from_secs_f64(s.rest) + GLIDE_TIME),
             None => now.duration_since(s.added) < SLIDE_WAIT,
         });
         self.slides.len() != before
@@ -1783,6 +1797,40 @@ pub(crate) mod tests {
         let px = r.render(400, 400, 0.0, 0.0, 1.0, [30, 30, 30], None, true).to_vec();
         let red = |x: usize, y: usize| px[(y * 400 + x) * 4] > 200 && px[(y * 400 + x) * 4 + 2] < 100;
         assert!(red(50, 240) && !red(50, 120), "the sibling starts at its old position");
+    }
+
+    /// A node still fading in that a later insert reflows glides to its new place too, without
+    /// restarting its fade, and its slide outlives the fade until the glide has settled.
+    #[test]
+    fn fading_sibling_glides_when_reflowed() {
+        let col = |kids: &str| format!(r##"{{"version":"2.19","children":[{{"type":"frame","id":"f","x":0,"y":0,"width":400,"height":400,"layout":"vertical",
+            "justifyContent":"center","fill":"#ffffff","children":[{kids}]}}]}}"##);
+        let a = r##"{"type":"rectangle","id":"a","width":100,"height":100,"fill":"#ff0000"}"##;
+        let before = Doc::from_json(&col(a)).unwrap();
+        let after = Doc::from_json(&col(&format!(r##"{a},{{"type":"rectangle","id":"b","width":100,"height":100,"fill":"#0000ff"}}"##))).unwrap();
+        let (mut fonts, mut assets) = offline();
+        let mut r = Renderer::default();
+        let mut sync = |r: &mut Renderer, doc: &Doc| {
+            let mut cx = Ctx { doc, libs: &[], fonts: &mut fonts, assets: &mut assets };
+            let roots = r.shift_siblings(&mut cx);
+            let rebuilt = r.sync(&mut cx);
+            r.refresh_slides(&mut cx, &rebuilt, roots);
+        };
+        sync(&mut r, &before);
+        // `a` was inserted 500 ms ago, `b` is inserted now: the reflow moves `a` up 50 units.
+        let mut fading = Slide::new("a");
+        (fading.fresh, fading.start) = (false, Some(Instant::now() - Duration::from_millis(500)));
+        r.slides.extend([fading, Slide::new("b")]);
+        sync(&mut r, &after);
+        let a = r.slides.iter().find(|s| s.id == "a").unwrap();
+        assert!(a.fade, "it keeps fading");
+        let (_, dy, alpha) = a.state(Instant::now());
+        assert!(dy > 49.0 && dy <= 50.1, "it starts the glide where it shows (settled spot is 50 above its old one), got {dy}");
+        assert!(alpha > 0.9, "its fade is not restarted, got {alpha}");
+        assert!(!r.expire_slides() && r.slides.len() == 2, "the fade ending does not cut the glide short");
+        r.slides.iter_mut().find(|s| s.id == "a").unwrap().start = Some(Instant::now() - Duration::from_millis(800));
+        r.slides.retain(|s| s.id == "a");
+        assert!(r.expire_slides() && r.slides.is_empty(), "it ends once the glide has settled");
     }
 
     /// A sliding node with a drop or inner shadow is drawn by resvg; its filter layers stay
