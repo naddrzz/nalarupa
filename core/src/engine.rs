@@ -151,6 +151,22 @@ fn drop_pending(v: &mut Value, inflight: &std::collections::HashSet<String>) {
     }
 }
 
+/// A file saved while an agent was still building a frame keeps its `placeholder` flag, and no run will ever
+/// clear it: the frame would show "Generating" forever. Frames in `pens` are being drawn by an AI Pen of this
+/// process, which still clears them.
+fn drop_placeholder(v: &mut Value, pens: &[String]) {
+    match v {
+        Value::Array(a) => a.iter_mut().for_each(|x| drop_placeholder(x, pens)),
+        Value::Object(o) => {
+            if o.get("placeholder") == Some(&Value::Bool(true)) && !o.get("id").and_then(Value::as_str).is_some_and(|id| pens.iter().any(|p| p == id)) {
+                o.insert("placeholder".into(), json!(false));
+            }
+            o.values_mut().for_each(|x| drop_placeholder(x, pens));
+        }
+        _ => {}
+    }
+}
+
 /// `ours` with the changes that turned `base` into `theirs` applied; where both changed the same
 /// value, `theirs` wins. Lists of nodes (`id`) merge per node, the rest as a whole.
 fn merge3(base: &Value, theirs: &Value, ours: &Value) -> Value {
@@ -597,6 +613,7 @@ impl Engine {
         let mut doc = Doc::load(path)?;
         crate::resolve::migrate(&mut doc.root);
         drop_pending(&mut doc.root, &self.inflight);
+        drop_placeholder(&mut doc.root, &self.agent.pens);
         self.doc = doc;
         self.load_libs();
         self.reset_history();
@@ -1021,6 +1038,32 @@ mod tests {
         assert_eq!(v["children"][0]["fill"]["url"], "nalarupa:pending-image-1-a");
         assert_eq!(v["children"][1]["fill"]["url"], "");
         assert_eq!(v["children"][2]["fill"]["url"], "./images/x.jpg");
+    }
+
+    #[test]
+    fn open_clears_placeholder_flags_nobody_will_clear() {
+        let mut v = json!({"children": [
+            {"id": "a", "type": "frame", "placeholder": true, "children": [{"id": "b", "type": "frame", "placeholder": true}]},
+            {"id": "c", "type": "frame", "placeholder": true},
+            {"id": "d", "type": "frame"}]});
+        drop_placeholder(&mut v, &["c".to_string()]);
+        assert_eq!(v["children"][0]["placeholder"], false);
+        assert_eq!(v["children"][0]["children"][0]["placeholder"], false);
+        assert_eq!(v["children"][1]["placeholder"], true);
+        assert!(v["children"][2].get("placeholder").is_none());
+    }
+
+    #[test]
+    fn a_file_saved_mid_run_reopens_without_generating_frames() {
+        let dir = std::env::temp_dir().join("nalarupa-test-open-placeholder");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut e = Engine::new(dir.clone());
+        e.doc = Doc::from_json(r#"{"version":"2.19","children":[{"id":"f","type":"frame","name":"Fake","x":0,"y":0,"width":800,"height":500,"placeholder":true}]}"#).unwrap();
+        let path = dir.join("mid.nala");
+        e.save(Some(path.to_str().unwrap())).unwrap();
+        e.open(&path).unwrap();
+        assert_eq!(e.doc.find("f").unwrap()["placeholder"], false);
     }
 
     #[test]
