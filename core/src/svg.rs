@@ -2105,18 +2105,29 @@ mod tests {
     fn downloads_run_at_most_max_at_once() {
         let dir = std::env::temp_dir().join(format!("nalarupa-queue-{:x}", crate::doc::random_u64()));
         let mut assets = Assets::new(dir.clone());
-        // Jobs block until the sender is dropped, which never happens (the leaked sender keeps them parked).
+        // Jobs block until the sender is dropped at the end, then count themselves as ended.
         let (hold, parked) = std::sync::mpsc::channel::<()>();
         let parked = std::sync::Arc::new(std::sync::Mutex::new(parked));
+        let ended = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         for i in 0..MAX_DOWNLOADS + 3 {
-            let parked = parked.clone();
-            assets.spawn(format!("k{i}"), move || parked.lock().unwrap().recv().is_ok());
+            let (parked, ended) = (parked.clone(), ended.clone());
+            assets.spawn(format!("k{i}"), move || {
+                let ok = parked.lock().unwrap().recv().is_ok();
+                ended.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                ok
+            });
         }
-        std::mem::forget(hold);
         assert_eq!((assets.running, assets.queue.len()), (MAX_DOWNLOADS, 3));
         assert!((0..MAX_DOWNLOADS + 3).all(|i| assets.loading(&format!("k{i}"))), "queued keys count as loading");
         assets.downloaded("k0", true);
         assert_eq!((assets.running, assets.queue.len()), (MAX_DOWNLOADS, 2), "an ended download frees a slot for the next");
+        // Release the parked jobs (MAX_DOWNLOADS + 1 started) and wait for them so no thread outlives the test.
+        drop(hold);
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while ended.load(std::sync::atomic::Ordering::SeqCst) < MAX_DOWNLOADS + 1 && std::time::Instant::now() < until {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(ended.load(std::sync::atomic::Ordering::SeqCst), MAX_DOWNLOADS + 1);
         let _ = std::fs::remove_dir_all(dir);
     }
 
