@@ -126,8 +126,9 @@ fn font_query(fam: &str) -> Option<String> {
 }
 
 /// `s` as the inside of a single-quoted CSS string (before HTML-escaping it for the `style` attribute).
+/// A raw line break ends a CSS string (the declaration is dropped), so those become hex escapes.
 fn css_str(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('\'', "\\'")
+    s.replace('\\', "\\\\").replace('\'', "\\'").replace('\n', "\\a ").replace('\r', "\\d ").replace('\x0c', "\\c ")
 }
 
 struct Html<'a> {
@@ -1375,12 +1376,14 @@ mod tests {
             {"type": "text", "content": "hi", "fontSize": 12, "fontFamily": evil},
             {"type": "text", "content": "hi", "fontSize": 12, "fontFamily": "A'B\\C"},
             {"type": "text", "content": "hi", "fontSize": 12, "fontFamily": "Noto Sans"},
+            {"type": "text", "content": "hi", "fontSize": 12, "fontFamily": "L\nM\rN"},
             {"type": "rectangle", "y": 50, "width": 50, "height": 50, "fill": {"type": "image", "url": "a.png');position:fixed;/*\\", "mode": "fill"}},
         ]})).unwrap();
         let h = super::html_document(&mut e, &[id], &json!({})).unwrap();
         assert!(!h.contains("<script"), "{h}");
         assert!(h.contains("family=Noto+Sans:wght@") && !h.contains("family=X") && !h.contains("family=A"), "{h}");
         assert!(h.contains("font-family:'A\\&apos;B\\\\C',sans-serif;"), "{h}");
+        assert!(h.contains("font-family:'L\\a M\\d N',sans-serif;"), "{h}");
         assert!(h.contains("url('a.png\\&apos;);position:fixed;/*\\\\')"), "{h}");
     }
 
