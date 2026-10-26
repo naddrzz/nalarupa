@@ -311,6 +311,18 @@ fn ancestors_of<'r>(n: &'r RNode, id: &str, chain: &mut Vec<&'r RNode>) -> bool 
     false
 }
 
+/// Whether `id` or one of its ancestors has an opacity below 1 (`None`: no such node).
+fn dimmed(nodes: &[Value], id: &str, above: bool) -> Option<bool> {
+    nodes.iter().find_map(|n| {
+        let dim = above || n["opacity"].as_f64().is_some_and(|o| o < 1.0);
+        if n["id"] == id {
+            Some(dim)
+        } else {
+            dimmed(n["children"].as_array()?, id, dim)
+        }
+    })
+}
+
 pub fn find_rnode<'r>(n: &'r RNode, id: &str) -> Option<&'r RNode> {
     if n.id == id {
         return Some(n);
@@ -441,10 +453,14 @@ impl Renderer {
         roots
     }
 
-    /// Whether an insert into `parent` may start its own slide: there is room, and no inserted
-    /// node already sliding holds `parent` (its snapshot carries the new node along).
+    /// Whether an insert into `parent` may start its own slide: there is room, `parent` and its
+    /// ancestors are opaque (the settled layer composites a semi-transparent one with its children
+    /// as a single group, which a snapshot painted over the parent's own paint cannot match, so
+    /// those inserts appear in place), and no inserted node already sliding holds `parent` (its
+    /// snapshot carries the new node along).
     pub fn can_slide_into(&self, doc: &Doc, parent: &str) -> bool {
         self.slides.len() < MAX_SLIDES
+            && !dimmed(doc.children(), parent, false).unwrap_or(false)
             && !self.slides.iter().any(|s| s.fade && (s.id == parent || doc.find(&s.id).and_then(|n| n["children"].as_array()).is_some_and(|k| crate::doc::find_in(k, parent).is_some())))
     }
 
