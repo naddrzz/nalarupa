@@ -1140,4 +1140,22 @@ mod tests {
         assert!(e.dirty());
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn finished_download_redraws_without_dirtying() {
+        let dir = std::env::temp_dir().join(format!("nalarupa-test-asset-ready-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut e = Engine::new(dir.clone());
+        e.offline();
+        assert!(!e.dirty());
+        let (before, generation) = (e.version, e.assets.generation);
+        e.asset_ready("http://x/a.png", true);
+        assert!(e.version > before && !e.dirty(), "a clean document stays clean");
+        assert_eq!(e.assets.generation, generation + 1);
+        e.touch();
+        let v = e.version;
+        e.asset_ready("http://x/b.png", false);
+        assert!(e.version > v && e.dirty(), "a failed download redraws too (the image shows as unavailable)");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

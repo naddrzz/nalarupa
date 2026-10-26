@@ -14,6 +14,11 @@ use std::path::{Path, PathBuf};
 
 type Rect = (f64, f64, f64, f64);
 
+/// Downloads that run at the same time; the rest of a document's missing assets wait their turn.
+const MAX_DOWNLOADS: usize = 8;
+
+type Download = Box<dyn FnOnce() -> bool + Send>;
+
 /// Icon SVGs and remote images, fetched once and cached on disk.
 pub struct Assets {
     dir: PathBuf,
@@ -22,6 +27,9 @@ pub struct Assets {
     failed: std::collections::HashSet<String>,
     /// Downloads in flight (icon key or image url), run on background threads so they never hold the engine.
     loading: std::collections::HashSet<String>,
+    /// Downloads waiting for a free thread (at most `MAX_DOWNLOADS` run at once), and how many run now.
+    queue: std::collections::VecDeque<(String, Download)>,
+    running: usize,
     /// Bumped when a download ends; the renderer rebuilds every layer when it changes.
     pub generation: u64,
     /// Whether a `data:` image is within the size limit, by url hash (its header is decoded once, not per use).
@@ -35,7 +43,7 @@ impl Assets {
     pub fn new(dir: PathBuf) -> Assets {
         let _ = std::fs::create_dir_all(dir.join("icons"));
         let _ = std::fs::create_dir_all(dir.join("images"));
-        Assets { dir, icons: HashMap::new(), failed: Default::default(), loading: Default::default(), generation: 0, data_ok: HashMap::new(), deep: HashMap::new(), online: true }
+        Assets { dir, icons: HashMap::new(), failed: Default::default(), loading: Default::default(), queue: Default::default(), running: 0, generation: 0, data_ok: HashMap::new(), deep: HashMap::new(), online: true }
     }
 
     /// Icon at the default weight (200; only Material Symbols has weights).
@@ -72,24 +80,36 @@ impl Assets {
 
     /// Run `job` (a download that stores its result on disk, true on success) on a background thread
     /// unless this key is already loading or failed, then tell the engine, which draws again.
+    /// Past `MAX_DOWNLOADS` running, it waits in the queue until one ends.
     fn spawn(&mut self, key: String, job: impl FnOnce() -> bool + Send + 'static) {
         if self.failed.contains(&key) || !self.loading.insert(key.clone()) {
             return;
         }
-        std::thread::spawn(move || {
-            let ok = job();
-            crate::engine::engine().asset_ready(&key, ok);
-        });
+        self.queue.push_back((key, Box::new(job)));
+        self.start_queued();
+    }
+
+    fn start_queued(&mut self) {
+        while self.running < MAX_DOWNLOADS {
+            let Some((key, job)) = self.queue.pop_front() else { return };
+            self.running += 1;
+            std::thread::spawn(move || {
+                let ok = job();
+                crate::engine::engine().asset_ready(&key, ok);
+            });
+        }
     }
 
     /// A download ended: a failed one is not retried this session. Always bumps `generation`
     /// (a failed image draws as unavailable instead of blank).
     pub fn downloaded(&mut self, key: &str, ok: bool) {
         self.loading.remove(key);
+        self.running = self.running.saturating_sub(1);
         if !ok {
             self.failed.insert(key.to_string());
         }
         self.generation += 1;
+        self.start_queued();
     }
 
     /// Resolve an image fill url to a local file path usvg can load. A raster image over
@@ -2076,6 +2096,27 @@ mod tests {
         let missing = "http://127.0.0.1:1/b.png";
         assets.downloaded(missing, false);
         assert!(assets.image(missing, None).is_none() && !assets.loading(missing));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A document with many missing assets does not start a thread for each: past MAX_DOWNLOADS the rest
+    /// wait in the queue and start as running ones end.
+    #[test]
+    fn downloads_run_at_most_max_at_once() {
+        let dir = std::env::temp_dir().join(format!("nalarupa-queue-{:x}", crate::doc::random_u64()));
+        let mut assets = Assets::new(dir.clone());
+        // Jobs block until the sender is dropped, which never happens (the leaked sender keeps them parked).
+        let (hold, parked) = std::sync::mpsc::channel::<()>();
+        let parked = std::sync::Arc::new(std::sync::Mutex::new(parked));
+        for i in 0..MAX_DOWNLOADS + 3 {
+            let parked = parked.clone();
+            assets.spawn(format!("k{i}"), move || parked.lock().unwrap().recv().is_ok());
+        }
+        std::mem::forget(hold);
+        assert_eq!((assets.running, assets.queue.len()), (MAX_DOWNLOADS, 3));
+        assert!((0..MAX_DOWNLOADS + 3).all(|i| assets.loading(&format!("k{i}"))), "queued keys count as loading");
+        assets.downloaded("k0", true);
+        assert_eq!((assets.running, assets.queue.len()), (MAX_DOWNLOADS, 2), "an ended download frees a slot for the next");
         let _ = std::fs::remove_dir_all(dir);
     }
 
