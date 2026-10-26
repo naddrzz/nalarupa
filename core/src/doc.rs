@@ -61,6 +61,17 @@ impl Doc {
         std::fs::rename(&tmp, path).map_err(|e| format!("cannot save {}: {e}", path.display()))
     }
 
+    /// Give every node without a usable id a fresh one and make repeated ids unique
+    /// (the first node keeps its id). Hand-written files and copy-pasted JSON have both.
+    pub fn ensure_ids(&mut self) {
+        let mut taken = std::collections::HashSet::new();
+        collect_ids(self.children(), &mut taken);
+        let mut seen = std::collections::HashSet::new();
+        if let Some(kids) = self.root["children"].as_array_mut() {
+            fix_ids(kids, &mut seen, &mut taken);
+        }
+    }
+
     pub fn dir(&self) -> Option<PathBuf> {
         self.path.as_ref().and_then(|p| p.parent().map(Path::to_path_buf))
     }
@@ -405,6 +416,35 @@ impl Doc {
     }
 }
 
+fn collect_ids(nodes: &[Value], out: &mut std::collections::HashSet<String>) {
+    for n in nodes {
+        if let Some(id) = n["id"].as_str() {
+            out.insert(id.to_string());
+        }
+        if let Some(kids) = n["children"].as_array() {
+            collect_ids(kids, out);
+        }
+    }
+}
+
+fn fix_ids(nodes: &mut [Value], seen: &mut std::collections::HashSet<String>, taken: &mut std::collections::HashSet<String>) {
+    for n in nodes {
+        let Some(obj) = n.as_object_mut() else { continue };
+        let keep = obj.get("id").and_then(Value::as_str).filter(|id| !id.is_empty() && !seen.contains(*id)).map(str::to_string);
+        let id = keep.unwrap_or_else(|| loop {
+            let id = random_id();
+            if taken.insert(id.clone()) {
+                break id;
+            }
+        });
+        obj.insert("id".into(), json!(id));
+        seen.insert(id);
+        if let Some(kids) = obj.get_mut("children").and_then(Value::as_array_mut) {
+            fix_ids(kids, seen, taken);
+        }
+    }
+}
+
 pub fn find_in<'a>(nodes: &'a [Value], id: &str) -> Option<&'a Value> {
     for n in nodes {
         if n["id"] == id {
@@ -621,6 +661,27 @@ mod tests {
         assert!(d.insert(ROOT, json!({"type":"frame","children":"x"}), None).is_err());
         assert_eq!(d.children().len(), 1, "nothing was stored");
         d.insert(ROOT, json!({"type":"frame","children":[{"type":"group","children":[{"type":"text"}]}]}), None).unwrap();
+    }
+
+    #[test]
+    fn ensure_ids_fills_missing_and_repeated_ids() {
+        let mut d = Doc::from_json(r#"{"children":[
+            {"type":"frame","id":"f","children":[{"type":"rectangle"},{"type":"rectangle","id":""},{"type":"ellipse","id":"f"}]},
+            {"type":"frame","id":"f"},{"type":"frame","id":7}]}"#).unwrap();
+        d.ensure_ids();
+        let mut ids = Vec::new();
+        fn walk(nodes: &[Value], ids: &mut Vec<String>) {
+            for n in nodes {
+                ids.push(n["id"].as_str().expect("every node has a string id").to_string());
+                walk(n["children"].as_array().map(Vec::as_slice).unwrap_or(&[]), ids);
+            }
+        }
+        walk(d.children(), &mut ids);
+        assert_eq!(ids.len(), 6);
+        assert!(ids.iter().all(|i| !i.is_empty()));
+        assert_eq!(ids.iter().collect::<std::collections::HashSet<_>>().len(), 6);
+        assert_eq!(ids[0], "f", "the first node keeps its id");
+        assert_eq!(d.find("f").unwrap()["type"], "frame");
     }
 
     #[test]
