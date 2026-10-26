@@ -892,7 +892,7 @@ fn finish(e: &mut Engine, prep: Prepared, result: Result<Map<String, Value>, Str
         }
     }
     for (ids, format, out, opts) in ex.exports {
-        match crate::html::export(e, &ids, &format, &out, &opts) {
+        match crate::html::check_script_export(e, &format, &out).and_then(|()| crate::html::export(e, &ids, &format, &out, &opts)) {
             Ok(files) => text += &format!("\nExported: {}\n", files.join(", ")),
             Err(err) => text += &format!("\nExport failed: {err}\n"),
         }

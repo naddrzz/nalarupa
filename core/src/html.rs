@@ -8,10 +8,40 @@ use serde_json::Value;
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 
+/// Where exports go when no path is given, and the only place a script's `Export` may write:
+/// the document's folder, or the data folder `exports` for an unsaved document.
+fn export_base(e: &Engine) -> PathBuf {
+    e.doc.dir().unwrap_or_else(|| e.data_dir.join("exports"))
+}
+
 fn out_path(e: &Engine, out: &str, default_name: &str) -> PathBuf {
-    let base = e.doc.dir().unwrap_or_else(|| e.data_dir.join("exports"));
+    let base = export_base(e);
     let p = if out.is_empty() { base.join(default_name) } else { PathBuf::from(out) };
     if p.is_absolute() { p } else { base.join(p) }
+}
+
+/// A script (the agent's `execute`) exports without a permission card, so it gets the file tools' rule:
+/// inside the document's folder, never the open document itself, and a PDF / HTML file must be named like one
+/// so it cannot replace some other file (another document, a dotfile) in that folder.
+pub fn check_script_export(e: &Engine, format: &str, out: &str) -> Result<(), String> {
+    if out.is_empty() {
+        return Ok(()); // the default name in the export folder
+    }
+    let base = export_base(e);
+    let file = out_path(e, out, "");
+    let ext = |want: &[&str]| file.extension().and_then(|x| x.to_str()).is_some_and(|x| want.iter().any(|w| x.eq_ignore_ascii_case(w)));
+    let named = match format {
+        "pdf" => ext(&["pdf"]),
+        "html-css" | "html-tailwind" | "html" => ext(&["html", "htm"]),
+        _ => true,
+    };
+    if !named {
+        return Err(format!("'{}' is not a {format} file name; use a .{} path", file.display(), if format == "pdf" { "pdf" } else { "html" }));
+    }
+    if !crate::agent::path_allowed(&file, "Write", Some(&base), e.doc.path.as_deref(), None) {
+        return Err(format!("Export writes only inside {} and never over the open document; ask the user to export elsewhere", base.display()));
+    }
+    Ok(())
 }
 
 /// Export nodes; returns the written file paths.

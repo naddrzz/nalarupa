@@ -479,7 +479,7 @@ pub fn answer_permission(id: &str, answer: &str) -> Result<(), String> {
 
 /// Allowed paths: inside the workspace (here: the document's folder) for any file tool,
 /// inside the skills folder for Read. The open document itself is never written behind the app's back.
-fn path_allowed(file: &Path, tool: &str, workspace: Option<&Path>, document: Option<&Path>, skills: Option<&Path>) -> bool {
+pub(crate) fn path_allowed(file: &Path, tool: &str, workspace: Option<&Path>, document: Option<&Path>, skills: Option<&Path>) -> bool {
     let file = normalize(file);
     if document.is_some_and(|d| normalize(d) == file) && tool != "Read" {
         return false;
