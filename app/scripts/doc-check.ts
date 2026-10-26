@@ -1,5 +1,5 @@
 // Documents, export, variables, settings and edit commands through the core (no window): `bun scripts/doc-check.ts`
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { call } from '../src/core'
@@ -66,6 +66,29 @@ assert(JSON.stringify(call('layers')).includes('Round trip ✓ ünïcode 日本�
 const b = join(data, 'b.pen')
 call('save', { path: b })
 assert(readFileSync(a, 'utf8') === readFileSync(b, 'utf8'), 'save → open → save is byte-identical')
+
+// Saving through a symlink updates the real file and keeps the link; a failed save leaves no temp file behind.
+const folder = join(data, 'folder')
+mkdirSync(folder)
+throws(() => call('save', { path: folder }), /cannot save/, 'saving over a folder')
+assert(!existsSync(`${folder}.tmp-nalarupa`), 'a failed save removes its temp file')
+const real = join(data, 'real.pen')
+const link = join(data, 'link.pen')
+writeFileSync(real, '{"version":"2.19","children":[]}')
+let linked = true
+try {
+  symlinkSync(real, link)
+} catch {
+  linked = false // creating a symlink needs a privilege on Windows
+}
+if (linked) {
+  call('open', { path: link })
+  exec('Insert("document", {type:"rectangle", name:"via-link", width:5, height:5, fill:"#ff0000"})')
+  assert(call('save').path === link, 'save keeps the document path')
+  assert(lstatSync(link).isSymbolicLink(), 'saving through a symlink keeps the link')
+  assert(readFileSync(real, 'utf8').includes('via-link'), 'saving through a symlink updates the real file')
+  assert(!existsSync(join(data, 'link.tmp-nalarupa')) && !existsSync(join(data, 'real.tmp-nalarupa')), 'a save leaves no temp file')
+}
 
 // A file saved while a generated image was still loading keeps its pending url; reopening it counts that as a failed load.
 for (const url of ['nalarupa:pending-image-1-ab', 'pencil:pending-1']) {
