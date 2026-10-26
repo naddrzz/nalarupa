@@ -873,7 +873,7 @@ fn finish(e: &mut Engine, prep: Prepared, result: Result<Map<String, Value>, Str
         text += &ex.prints.join("\n");
         text.push('\n');
     }
-    let warnings = validate(e, &ex.touched);
+    let (warnings, icons) = validate(e, &ex.touched);
     if !warnings.is_empty() {
         text += "\n## Issues detected (fix them in the next call)\n";
         for w in warnings {
@@ -897,14 +897,15 @@ fn finish(e: &mut Engine, prep: Prepared, result: Result<Map<String, Value>, Str
             Err(err) => text += &format!("\nExport failed: {err}\n"),
         }
     }
-    ToolOut { text, images: Vec::new(), error: false, shots }
+    ToolOut { text, images: Vec::new(), error: false, shots, icons }
 }
 
-/// Layout and content checks on nodes touched by this call.
-fn validate(e: &mut Engine, touched: &[String]) -> Vec<String> {
+/// Layout and content checks on nodes touched by this call, plus the icons still downloading (their
+/// "not found" warning, library, name): whether they exist is only known once `ToolOut::finish` waits.
+fn validate(e: &mut Engine, touched: &[String]) -> (Vec<String>, Vec<(String, String, String)>) {
     let touched: HashSet<&str> = touched.iter().map(String::as_str).collect();
     if touched.is_empty() {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     }
     let mut tops: Vec<usize> = touched.iter().filter_map(|id| crate::render::top_index(&e.doc, id)).collect();
     tops.sort_unstable();
@@ -925,6 +926,7 @@ fn validate(e: &mut Engine, touched: &[String]) -> Vec<String> {
         }
     });
     let mut out = Vec::new();
+    let mut icons = Vec::new();
     for t in tops {
         let Some(root) = e.ctx().laid_out(t) else { continue };
         let mut stack = vec![(&root, None::<&RNode>)];
@@ -955,8 +957,16 @@ fn validate(e: &mut Engine, touched: &[String]) -> Vec<String> {
             if n.ty == "frame" && n.w < 0.5 && n.h < 0.5 && !n.kids.is_empty() {
                 out.push(format!("{label} collapsed to 0×0 (fit_content parent with only fill_container children?)"));
             }
-            if n.ty == "icon" && e.assets.icon(n.s("library").unwrap_or("lucide"), n.s("icon").unwrap_or("")).is_none() && !e.assets.icon_loading(n.s("library").unwrap_or("lucide"), n.s("icon").unwrap_or(""), 200.0) {
-                out.push(format!("icon {label}: '{}' not found in library '{}'", n.s("icon").unwrap_or(""), n.s("library").unwrap_or("lucide")));
+            if n.ty == "icon" {
+                let (library, name) = (n.s("library").unwrap_or("lucide"), n.s("icon").unwrap_or(""));
+                if e.assets.icon(library, name).is_none() {
+                    let warning = format!("icon {label}: '{name}' not found in library '{library}'");
+                    if e.assets.icon_loading(library, name, 200.0) {
+                        icons.push((warning, library.to_string(), name.to_string()));
+                    } else {
+                        out.push(warning);
+                    }
+                }
             }
             if n.ty == "text" {
                 let st = crate::text::TextStyle::of(n);
@@ -969,7 +979,9 @@ fn validate(e: &mut Engine, touched: &[String]) -> Vec<String> {
     }
     out.sort();
     out.dedup();
-    out
+    icons.sort();
+    icons.dedup();
+    (out, icons)
 }
 
 // ---------------------------------------------------------------------------------------------

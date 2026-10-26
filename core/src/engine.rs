@@ -16,17 +16,21 @@ pub struct ToolOut {
     /// Screenshots (node id, tree, scale) still to rasterize: `finish` does it once the caller has
     /// released the engine lock, so the canvas keeps drawing while the agent looks at its work.
     pub shots: Vec<(String, resvg::usvg::Tree, f64)>,
+    /// Icons still downloading when the call ended (warning, library, name): `finish` waits for them
+    /// without the engine lock and reports the ones that turn out not to exist.
+    pub icons: Vec<(String, String, String)>,
 }
 
 impl ToolOut {
     pub fn ok(text: impl Into<String>) -> ToolOut {
-        ToolOut { text: text.into(), images: Vec::new(), error: false, shots: Vec::new() }
+        ToolOut { text: text.into(), images: Vec::new(), error: false, shots: Vec::new(), icons: Vec::new() }
     }
     pub fn err(text: impl Into<String>) -> ToolOut {
         ToolOut { error: true, ..ToolOut::ok(text) }
     }
-    /// Rasterize pending screenshots. Call without holding `engine()`.
+    /// Rasterize pending screenshots and settle pending icons. Call without holding `engine()`.
     pub fn finish(mut self) -> ToolOut {
+        self.settle_icons();
         for (id, tree, scale) in std::mem::take(&mut self.shots) {
             match crate::render::encode_tree(&tree, "png", scale, 0) {
                 Ok(png) => self.images.push(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, png)),
@@ -34,6 +38,40 @@ impl ToolOut {
             }
         }
         self
+    }
+
+    /// Wait (the lock is free between polls, so the downloads can land) for icons the call used, and add
+    /// "not found" to the issues list for those that are not in their library.
+    fn settle_icons(&mut self) {
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(12);
+        let mut missing = Vec::new();
+        for (warning, library, name) in std::mem::take(&mut self.icons) {
+            while engine().assets.icon_loading(&library, &name, 200.0) && std::time::Instant::now() < until {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            let found = {
+                let mut e = engine();
+                e.assets.icon(&library, &name).is_some() || e.assets.icon_loading(&library, &name, 200.0)
+            };
+            if !found {
+                missing.push(warning);
+            }
+        }
+        if missing.is_empty() {
+            return;
+        }
+        let head = "## Issues detected (fix them in the next call)\n";
+        let bullets: String = missing.iter().map(|w| format!("- {w}\n")).collect();
+        match self.text.find(head) {
+            Some(at) => {
+                let mut end = at + head.len();
+                while self.text[end..].starts_with("- ") {
+                    end += self.text[end..].find('\n').map_or(self.text.len() - end, |i| i + 1);
+                }
+                self.text.insert_str(end, &bullets);
+            }
+            None => self.text += &format!("\n{head}{bullets}"),
+        }
     }
 }
 
