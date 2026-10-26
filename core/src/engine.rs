@@ -851,6 +851,14 @@ impl Engine {
         }
     }
 
+    /// A background icon or image download finished (or failed): layers that drew without it draw again.
+    /// The document is unchanged, so a clean one stays clean.
+    pub fn asset_ready(&mut self, key: &str, ok: bool) {
+        self.assets.downloaded(key, ok);
+        let clean = !self.dirty();
+        self.redraw(clean);
+    }
+
     /// A background generator (the AI Pen) drew into node `id`: set `props` on it without an undo
     /// step, in the document and the live preview. When `done`,
     /// every undo/redo snapshot holding the node gets them too, so history never brings back a

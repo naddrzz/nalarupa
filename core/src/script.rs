@@ -955,7 +955,7 @@ fn validate(e: &mut Engine, touched: &[String]) -> Vec<String> {
             if n.ty == "frame" && n.w < 0.5 && n.h < 0.5 && !n.kids.is_empty() {
                 out.push(format!("{label} collapsed to 0×0 (fit_content parent with only fill_container children?)"));
             }
-            if n.ty == "icon" && e.assets.icon(n.s("library").unwrap_or("lucide"), n.s("icon").unwrap_or("")).is_none() {
+            if n.ty == "icon" && e.assets.icon(n.s("library").unwrap_or("lucide"), n.s("icon").unwrap_or("")).is_none() && !e.assets.icon_loading(n.s("library").unwrap_or("lucide"), n.s("icon").unwrap_or(""), 200.0) {
                 out.push(format!("icon {label}: '{}' not found in library '{}'", n.s("icon").unwrap_or(""), n.s("library").unwrap_or("lucide")));
             }
             if n.ty == "text" {
