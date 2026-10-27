@@ -301,9 +301,14 @@ fn wrap_parallel(prompt: &str) -> String {
     )
 }
 
-fn start_thread(p: Profile, prompt: String, child: Option<String>) {
+/// False when a child was not started because Stop already ran: checked under the lock that registers it,
+/// so a Stop cannot land between the check and the child counting as active.
+fn start_thread(p: Profile, prompt: String, child: Option<String>) -> bool {
     {
         let mut e = engine();
+        if child.is_some() && e.agent.cancel.load(Ordering::SeqCst) {
+            return false;
+        }
         e.agent.active += 1;
         e.agent.running = true;
     }
@@ -379,6 +384,7 @@ fn start_thread(p: Profile, prompt: String, child: Option<String>) {
             None => {}
         }
     });
+    true
 }
 
 /// The run is over: frames still flagged `placeholder` (Stop, an error or a dead process came before the
@@ -847,8 +853,13 @@ pub fn spawn_children(parent: &str, config: &Value) -> crate::engine::ToolOut {
                 ids.iter().map(|i| format!("`{i}`")).collect::<Vec<_>>().join(", ")
             )
         };
-        started.push(format!("{} → {}", child.name, ids.join(", ")));
-        start_thread(child, prompt, Some(parent.to_string()));
+        let label = format!("{} → {}", child.name, ids.join(", "));
+        if start_thread(child, prompt, Some(parent.to_string())) {
+            started.push(label);
+        }
+    }
+    if started.is_empty() {
+        return crate::engine::ToolOut::err("Stopped before the designers started; nothing was spawned.");
     }
     crate::engine::ToolOut::ok(format!(
         "Started {} designers: {}. They are working in their containers now. Continue with your own part; do not verify or edit their work.",
