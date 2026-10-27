@@ -362,6 +362,17 @@ assert(nodeIcon('path') === nodeIcon('polygon') && nodeIcon('frame', true) === '
     rmSync(dir, { recursive: true, force: true })
   }
 }
+// Fit all frames the union of what the top-level layers paint: a flipped frame (x -600..0) or a
+// turned one (y -300..300) is inside it, and there is no margin on the unflipped side.
+call('new', { template: 'empty' })
+call('insert', { parent: 'document', node: { type: 'frame', name: 'A', x: 0, y: 0, width: 400, height: 300, fill: '#eee' } })
+const FB = call('insert', { parent: 'document', node: { type: 'frame', name: 'B', x: 0, y: 500, width: 600, height: 300, fill: '#fcc', flipX: true } }).id
+const fa = call<B>('bounds', {})
+assert(same({ ...fa, id: '' }, { id: '', x: -600, y: 0, w: 1000, h: 800 }), `fit-all bounds with a flipped frame ${JSON.stringify(fa)}`)
+call('update', { ids: [FB], props: { flipX: false, x: 0, y: 300, rotation: 90 } })
+const ft = call<B>('bounds', {})
+assert(same({ ...ft, id: '' }, { id: '', x: 0, y: -300, w: 400, h: 600 }), `fit-all bounds with a turned frame ${JSON.stringify(ft)}`)
+
 assert(ICONS.saveAs !== ICONS.open, 'Save as… has its own icon, not the Open folder')
 
 console.log('editor-check ok')
