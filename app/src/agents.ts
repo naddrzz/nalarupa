@@ -364,7 +364,11 @@ export function restoreChat(events: any[]) {
     if (it.kind === 'tool' && it.running) Object.assign(it, { running: false, error: true, output: 'Tool call cancelled' })
   }
   // The run that owned the plan never reached its `done`: its unfinished steps are cancelled, as after a Stop.
-  if (store.running.has(store.todosOwner)) store.todos = store.todos.map((t) => (t.status === 'completed' ? t : { ...t, status: 'cancelled' }))
+  // A `done` after the last plan event means the plan was left by an earlier, finished turn, so it stays as it was.
+  const ownedBy = (ev: any, kind: string) => ev.type === 'agent' && ev.kind === kind && (ev.agent?.id ?? 'agent') === store.todosOwner
+  const lastPlan = events.reduce((last, ev, n) => (ownedBy(ev, 'todos') ? n : last), -1)
+  const planDone = events.slice(lastPlan + 1).some((ev) => ownedBy(ev, 'done'))
+  if (lastPlan >= 0 && !planDone && store.running.has(store.todosOwner)) store.todos = store.todos.map((t) => (t.status === 'completed' ? t : { ...t, status: 'cancelled' }))
   store.running.clear()
   store.cursors.clear()
   store.pills.clear()

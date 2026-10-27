@@ -218,6 +218,9 @@ resetChat()
   assert(store.todos.map((t) => t.status).join(',') === 'completed,in_progress,pending', 'a plan whose run finished reopens as it ended')
   restoreChat([...saved, ev('done', { stopped: true, durationMs: 1, usage: {} })])
   assert(store.todos.map((t) => t.status).join(',') === 'completed,cancelled,cancelled', 'a stopped run reopens with a cancelled plan')
+  // A plan finished in an earlier turn is not reopened cancelled because the same agent was mid-run in a later turn that set no plan.
+  restoreChat([...saved, ev('done', { durationMs: 1, usage: {} }), ev('user', { text: 'Tweak it' }), ev('start'), ev('message_end')])
+  assert(store.todos.map((t) => t.status).join(',') === 'completed,in_progress,pending', "a later turn that set no plan leaves the earlier turn's plan alone")
   resetChat()
 }
 // A long chat keeps every item, the first prompt included, live and when reopened from history.
