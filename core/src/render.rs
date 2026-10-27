@@ -461,8 +461,23 @@ impl Renderer {
                 let s = &layer.flat[i];
                 // Everything after its subtree paints above it.
                 let end = layer.flat[i + 1..].iter().position(|f| f.depth <= s.depth).map_or(layer.flat.len(), |p| i + 1 + p);
-                let b = canvas_box(s);
-                let b = (b.0 + 0.5, b.1 + 0.5, b.2 - 1.0, b.3 - 1.0);
+                // Its snapshot paints the box and the descendants that overflow it (not those a clip frame
+                // cuts, nor ones that slide themselves), inset so boxes that only touch do not count.
+                let inset = |b: Rect| {
+                    let (dx, dy) = (if b.2 > 1.0 { 0.5 } else { 0.0 }, if b.3 > 1.0 { 0.5 } else { 0.0 });
+                    (b.0 + dx, b.1 + dy, b.2 - 2.0 * dx, b.3 - 2.0 * dy)
+                };
+                let mut boxes = vec![inset(canvas_box(s))];
+                let mut skip: Option<usize> = s.clip.then_some(s.depth);
+                for f in &layer.flat[i + 1..end] {
+                    if skip.is_some_and(|d| f.depth > d) {
+                        continue;
+                    }
+                    skip = (f.clip || sliding.contains(f.id.as_str())).then_some(f.depth);
+                    if !sliding.contains(f.id.as_str()) {
+                        boxes.push(inset(canvas_box(f)));
+                    }
+                }
                 // Depth of the sliding node whose subtree is being skipped: it paints as a slide, above.
                 let mut under: Option<usize> = None;
                 let covered = layer.flat[end..].iter().any(|f| {
@@ -470,7 +485,7 @@ impl Renderer {
                         return false;
                     }
                     under = (sliding.contains(f.id.as_str()) && !gone.contains(&f.id)).then_some(f.depth);
-                    under.is_none() && f.ty != "group" && overlaps(b, canvas_box(f))
+                    under.is_none() && f.ty != "group" && boxes.iter().any(|&b| overlaps(b, canvas_box(f)))
                 });
                 if covered {
                     gone.insert(s.id.clone());
@@ -1651,6 +1666,26 @@ pub(crate) mod tests {
         let mut cx = Ctx { doc: &doc, libs: &[], fonts: &mut fonts, assets: &mut assets };
         r.sync(&mut cx);
         assert!(r.settle_covered() && r.slides.is_empty(), "mid settles under top, then base under the settled mid");
+
+        // A slide at most 1 unit wide still counts, and so does a child overflowing its frame; a
+        // clip frame cuts its child, so that one does not.
+        let json = r##"{"version":"2.19","children":[{"type":"frame","id":"f","x":0,"y":0,"width":400,"height":400,"layout":"none","fill":"#ffffff","children":[
+            {"type":"rectangle","id":"thin","x":100,"y":100,"width":1,"height":50,"fill":"#ff0000"},
+            {"type":"frame","id":"box","x":200,"y":0,"width":20,"height":20,"layout":"none","children":[
+                {"type":"rectangle","id":"spill","x":0,"y":100,"width":20,"height":20,"fill":"#00ff00"}]},
+            {"type":"frame","id":"cut","x":300,"y":0,"width":20,"height":20,"layout":"none","clip":true,"children":[
+                {"type":"rectangle","id":"hidden","x":0,"y":100,"width":20,"height":20,"fill":"#00ff00"}]},
+            {"type":"rectangle","id":"over_thin","x":90,"y":110,"width":30,"height":10,"fill":"#ffffff"},
+            {"type":"rectangle","id":"over_spill","x":195,"y":105,"width":30,"height":10,"fill":"#ffffff"},
+            {"type":"rectangle","id":"over_hidden","x":295,"y":105,"width":30,"height":10,"fill":"#ffffff"}]}]}"##;
+        let doc = Doc::from_json(json).unwrap();
+        let mut r = Renderer::default();
+        r.slides.extend([Slide::new("thin"), Slide::new("box"), Slide::new("cut")]);
+        let mut cx = Ctx { doc: &doc, libs: &[], fonts: &mut fonts, assets: &mut assets };
+        r.sync(&mut cx);
+        assert!(r.settle_covered());
+        let left: Vec<&str> = r.slides.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(left, ["cut"], "thin and the overflowing box settle; the clipped child is not painted");
     }
 
     /// A settled slide repaints the node's descendants, also where they overflow its box.
