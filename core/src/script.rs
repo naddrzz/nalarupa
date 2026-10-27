@@ -207,7 +207,6 @@ fn n_copy(a: &[String]) -> Result<String, String> {
             _ => node_json(e, path, &GetOpts { resolve_vars: false, resolve_inst: true, geometry: true, depth: usize::MAX })?,
         };
         let id = e.doc.copy(&source, parent, (!data.is_null()).then_some(&data))?;
-        e.unslide_glass();
         let named = if data["name"].is_string() { data.clone() } else { source };
         record(ex, &named, &id);
         e.version += 1;
@@ -219,7 +218,6 @@ fn n_update(a: &[String]) -> Result<String, String> {
     let (path, data) = (arg(a, 0), json_arg(a, 1)?);
     with(|e, ex| {
         e.doc.update(path, &data)?;
-        e.unslide_glass();
         ex.touched.push(path.to_string());
         e.version += 1;
         Ok(String::new())
@@ -230,7 +228,6 @@ fn n_replace(a: &[String]) -> Result<String, String> {
     let (path, node) = (arg(a, 0), json_arg(a, 1)?);
     with(|e, ex| {
         let id = e.doc.replace(path, node.clone())?;
-        e.unslide_glass();
         record(ex, &node, &id);
         e.version += 1;
         Ok(id)
@@ -243,7 +240,6 @@ fn n_move(a: &[String]) -> Result<String, String> {
     with(|e, ex| {
         let idx = (index >= 0.0).then_some(index as usize);
         e.doc.move_node(path, (!parent.is_empty()).then_some(parent), idx)?;
-        e.unslide_glass();
         ex.touched.push(path.to_string());
         e.version += 1;
         Ok(String::new())
@@ -1622,6 +1618,7 @@ mod tests {
             Update(Get(n => n.name === "Plain" ? n.id : undefined)[0], {effect:{type:"background_blur", radius:20}});
         "##}));
         assert!(!out.error, "{}", out.text);
+        e.sync();
         assert!(e.renderer.slides.is_empty(), "the sliding card holds a glass node after the update");
 
         let mut e = engine();
@@ -1656,6 +1653,7 @@ mod tests {
             assert_eq!(e.renderer.slides.len(), 1, "{edit}: the card slides first");
             let out = execute(&mut e, &json!({"input": format!("glass = Get(n => n.name === 'Glass' ? n.id : undefined)[0]; card = Get(n => n.name === 'Card' ? n.id : undefined)[0]; plain = Get(n => n.name === 'Plain' ? n.id : undefined)[0]; {edit}")}));
             assert!(!out.error, "{edit}: {}", out.text);
+            e.sync();
             assert!(e.renderer.slides.is_empty(), "{edit}: the card holds glass now");
         }
 
@@ -1671,7 +1669,25 @@ mod tests {
             Update(Get(n => n.name === "Pane" ? n.id : undefined)[0], {effect:{type:"background_blur", radius:20}});
         "##}));
         assert!(!out.error, "{}", out.text);
+        e.sync();
         assert!(e.renderer.slides.is_empty(), "the instance's component gained glass");
+    }
+
+    /// An edit that does not come from a script (the inspector) stops a sliding card that gains glass too.
+    #[test]
+    fn glass_added_outside_a_script_unslides() {
+        let mut e = engine();
+        let out = execute(&mut e, &json!({"input": r##"
+            root = Insert(document, {type:"frame", name:"Root", width:300, height:300, layout:"none"});
+            card = Insert(root, {type:"frame", name:"Card", width:100, height:100, layout:"none"});
+            Insert(card, {type:"rectangle", name:"Plain", width:10, height:10});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        assert_eq!(e.renderer.slides.len(), 1);
+        let id = e.doc.root["children"][0]["children"][0]["children"][0]["id"].as_str().unwrap().to_string();
+        e.edit(|d| d.update(&id, &json!({"effect": {"type": "background_blur", "radius": 20}}))).unwrap();
+        e.sync();
+        assert!(e.renderer.slides.is_empty(), "the card holds glass after an inspector edit");
     }
 
     #[test]
