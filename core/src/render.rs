@@ -467,7 +467,21 @@ impl Renderer {
                     let (dx, dy) = (if b.2 > 1.0 { 0.5 } else { 0.0 }, if b.3 > 1.0 { 0.5 } else { 0.0 });
                     (b.0 + dx, b.1 + dy, b.2 - 2.0 * dx, b.3 - 2.0 * dy)
                 };
-                let mut boxes = vec![inset(canvas_box(s))];
+                // Clipping ancestors cut the snapshot (`refresh_slides`): what they cut paints nothing.
+                let mut depth = s.depth;
+                let cuts: Vec<Rect> = layer.flat[..i].iter().rev().filter(|a| {
+                    let up = a.depth < depth;
+                    if up {
+                        depth = a.depth;
+                    }
+                    up && a.clip
+                }).map(canvas_box).collect();
+                let visible = |b: Rect| cuts.iter().try_fold(b, |b, &c| {
+                    let (x0, y0) = (b.0.max(c.0), b.1.max(c.1));
+                    let (x1, y1) = ((b.0 + b.2).min(c.0 + c.2), (b.1 + b.3).min(c.1 + c.3));
+                    (x1 >= x0 && y1 >= y0).then_some((x0, y0, x1 - x0, y1 - y0))
+                });
+                let mut boxes: Vec<Rect> = visible(canvas_box(s)).map(inset).into_iter().collect();
                 let mut skip: Option<usize> = s.clip.then_some(s.depth);
                 for f in &layer.flat[i + 1..end] {
                     if skip.is_some_and(|d| f.depth > d) {
@@ -475,7 +489,7 @@ impl Renderer {
                     }
                     skip = (f.clip || sliding.contains(f.id.as_str())).then_some(f.depth);
                     if !sliding.contains(f.id.as_str()) {
-                        boxes.push(inset(canvas_box(f)));
+                        boxes.extend(visible(canvas_box(f)).map(inset));
                     }
                 }
                 // Depth of the sliding node whose subtree is being skipped: it paints as a slide, above.
@@ -1686,6 +1700,23 @@ pub(crate) mod tests {
         assert!(r.settle_covered());
         let left: Vec<&str> = r.slides.iter().map(|s| s.id.as_str()).collect();
         assert_eq!(left, ["cut"], "thin and the overflowing box settle; the clipped child is not painted");
+    }
+
+    /// A clip frame above the slide cuts its overflow in the snapshot, so a later node over the cut part does not settle it.
+    #[test]
+    fn settle_ignores_overflow_cut_by_clipping_ancestor() {
+        let json = r##"{"version":"2.19","children":[{"type":"frame","id":"f","x":0,"y":0,"width":400,"height":400,"layout":"none","fill":"#ffffff","children":[
+            {"type":"frame","id":"cl","x":0,"y":0,"width":100,"height":100,"layout":"none","clip":true,"children":[
+                {"type":"frame","id":"box","x":10,"y":10,"width":20,"height":20,"layout":"none","children":[
+                    {"type":"rectangle","id":"spill","x":0,"y":150,"width":20,"height":20,"fill":"#00ff00"}]}]},
+            {"type":"rectangle","id":"over","x":5,"y":160,"width":30,"height":10,"fill":"#ffffff"}]}]}"##;
+        let doc = Doc::from_json(json).unwrap();
+        let (mut fonts, mut assets) = offline();
+        let mut r = Renderer::default();
+        r.slides.push(Slide::new("box"));
+        let mut cx = Ctx { doc: &doc, libs: &[], fonts: &mut fonts, assets: &mut assets };
+        r.sync(&mut cx);
+        assert!(!r.settle_covered() && r.slides.len() == 1, "the cut spill is not painted, so it does not count");
     }
 
     /// A settled slide repaints the node's descendants, also where they overflow its box.
