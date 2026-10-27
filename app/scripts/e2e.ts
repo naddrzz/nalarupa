@@ -691,7 +691,9 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
     await until(async () => !(await app!.getByTestId('agent-input').count()), 'the agent panel to close with the chat scrolled up')
     await app.getByTestId('tab-agent').click()
     await until(async () => !!(await app!.getByTestId('agent-input').bounds()) && (await app!.getByType('markdown').count()) > 0, 'the chat to come back')
-    await sleep(800)
+    // The rebuilt list starts at its tail and scroll restoration retries for about a second on a slow renderer: poll until the tail row has left the screen, then check it stays away.
+    await until(async () => !(await onScreen('result row 119')), 'the chat to be scrolled back up after the Design tab round trip', 5000)
+    await sleep(300)
     if (await onScreen('result row 119')) throw new Error('the Design tab round trip put the scrolled-up chat back at its tail')
     const oldReplies = new Set((await app.getByType('markdown').all()).map((n) => n.id))
     writeFileSync(join(bin, 'claude'), `#!/bin/sh\necho '${delta('Echo: scrolled reply')}'\n`, { mode: 0o755 })
@@ -705,6 +707,24 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
       const b = (await app!.getByType('markdown').all()).find((n) => !oldReplies.has(n.id))?.bounds
       return !!b && b.height > 0 && b.y + b.height <= composer.y
     }, 'the reply on screen after sending from a scrolled-up chat')
+
+    // A reply that streams in and finishes while the panel is unmounted is there, whole and at the tail, on return.
+    writeFileSync(join(bin, 'claude'), `#!/bin/sh\nsleep 1\necho '${delta('Echo: reply that streamed while the Design tab was open, long enough to wrap onto a second line of the chat so a half-typed reply would be shorter than a whole one.')}'\n`, { mode: 0o755 })
+    await app.getByTestId('agent-input').click()
+    await app.getByTestId('agent-input').fill('Sent before leaving')
+    await sleep(200)
+    await app.getByTestId('agent-send').click()
+    await app.getByTestId('tab-design').click()
+    await until(async () => !(await app!.getByTestId('agent-input').count()), 'the agent panel to close while the reply is pending')
+    await sleep(2500) // the stand-in replies after 1 s and exits
+    await app.getByTestId('tab-agent').click()
+    // The rebuilt list has new node ids, so the reply is the last markdown block that is mounted.
+    const lastReply = async () => (await app!.getByType('markdown').all()).map((n) => n.bounds).filter((b) => b && b.height > 0).pop()
+    await until(async () => { const b = await lastReply(); return !!b && b.height > 60 && b.y + b.height <= composer.y }, 'the reply that streamed while away, whole and on screen after the Design tab round trip')
+    const away = (await lastReply())!.height
+    await sleep(500)
+    const later = (await lastReply())!.height
+    if (later !== away) throw new Error(`the reply that streamed while away was not shown whole on return (${away} px, then ${later} px)`)
 
     // An expanded thought is secondary to the reply: dimmer text (a markdown block takes its colour from its theme,
     // not from style) and indented. Linux only: grim, and sway for the window's origin.
