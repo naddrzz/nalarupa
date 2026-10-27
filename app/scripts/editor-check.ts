@@ -373,6 +373,16 @@ call('update', { ids: [FB], props: { flipX: false, x: 0, y: 300, rotation: 90 } 
 const ft = call<B>('bounds', {})
 assert(same({ ...ft, id: '' }, { id: '', x: 0, y: -300, w: 400, h: 600 }), `fit-all bounds with a turned frame ${JSON.stringify(ft)}`)
 
+// A child overflowing an unclipped frame is part of Fit all; a clipping frame cuts it off.
+call('new', { template: 'empty' })
+const FO = call('insert', { parent: 'document', node: { type: 'frame', name: 'O', x: 0, y: 0, width: 400, height: 300, layout: 'none', fill: '#eee' } }).id
+call('insert', { parent: FO, node: { type: 'rectangle', x: 300, y: 200, width: 500, height: 400, fill: '#f00' } })
+const fo = call<B>('bounds', {})
+assert(same({ ...fo, id: '' }, { id: '', x: 0, y: 0, w: 800, h: 600 }), `fit-all bounds with an overflowing child ${JSON.stringify(fo)}`)
+call('update', { ids: [FO], props: { clip: true } })
+const fc = call<B>('bounds', {})
+assert(same({ ...fc, id: '' }, { id: '', x: 0, y: 0, w: 400, h: 300 }), `fit-all bounds with a clipping frame ${JSON.stringify(fc)}`)
+
 assert(ICONS.saveAs !== ICONS.open, 'Save as… has its own icon, not the Open folder')
 
 console.log('editor-check ok')

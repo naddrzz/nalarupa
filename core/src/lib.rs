@@ -140,8 +140,7 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             e.sync();
             let sel = ids(&req["ids"]);
             // No ids: every top-level layer, as painted.
-            let sel = if sel.is_empty() { e.renderer.order.clone() } else { sel };
-            let b = editor::painted_bounds(&e, &sel);
+            let b = if sel.is_empty() { editor::fit_bounds(&e) } else { editor::painted_bounds(&e, &sel) };
             Ok(b.map_or(Value::Null, |(x, y, w, h)| json!({"x": x, "y": y, "w": w, "h": h})))
         }
         "hit" => {
