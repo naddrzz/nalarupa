@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { call, renderPixels } from '../src/core'
 import { applyEvents, barAgents, changing, clearPresence, cursorFaded, cursorOpacity, FADE_IN, imageSrc, lastContentId, needsFrame, poke, resetChat, restoreChat, runVerb, spinning, store, takeActivity } from '../src/agents'
+import { slideCam } from '../src/Present'
 import { own, painted, pointIn, shimmerHalves } from '../src/geometry'
 import { FRAME_LABEL_TEXT, INDICATOR_TICK_MS, ellipsisAt, ellipsisPadAt, pulseAt } from '../src/theme'
 
@@ -94,6 +95,19 @@ renderPixels(480, 270, 0, 0, 0.25, 0x000000, 'sld01', true)
 assert(!call('state').animating, 'presented slide settled after ~0.6 s')
 assert(lit() >= before, 'presented slide keeps its existing content')
 assert(greens() > greenBefore, 'presented slide shows its inserted content')
+call('undo')
+// Present fits a turned or flipped slide where the core paints it, not its unturned box: the slide fills the window.
+call('tool', { name: 'execute', args: { input: 'Insert(document, {type:"frame", name:"FlipSlide", x:5000, y:0, width:960, height:540, fill:"#00ff00", flipX:true, layout:"none"}); Insert(document, {type:"frame", name:"TurnSlide", x:5000, y:1000, width:960, height:540, fill:"#00ff00", rotation:90, layout:"none"})' } })
+for (const name of ['FlipSlide', 'TurnSlide']) {
+  const slide = call('frames').find((f: any) => f.name === name)
+  const cam = slideCam(slide, 480, 270)
+  const p = renderPixels(480, 270, cam.x, cam.y, cam.zoom, 0x000000, slide.id, true)!
+  let n = 0
+  for (let i = 0; i < p.length; i += 4) if (p[i + 1] > 180 && p[i] < 100) n++
+  const want = (painted(slide).w * cam.zoom * painted(slide).h * cam.zoom) * 0.9
+  assert(n > want, `${name} is presented fitted to the window (${n} green px, want > ${Math.round(want)})`)
+}
+call('undo')
 call('undo')
 // Reduced motion (an OS preference the app passes in): agent inserts appear in place.
 call('reduce_motion', { on: true })
