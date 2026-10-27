@@ -784,7 +784,7 @@ pub fn spawn_children(parent: &str, config: &Value) -> crate::engine::ToolOut {
         return crate::engine::ToolOut::err(format!("at most {MAX_CHILDREN} agents can be spawned at once"));
     }
     // Checked, reserved and read under one lock: concurrent calls cannot both spend the same remaining slot.
-    let (plans, total, side) = {
+    let (plans, vars, total, side) = {
         let mut e = engine();
         if !e.agent.profile(parent).is_some_and(|p| p.parent.is_none()) {
             return crate::engine::ToolOut::err("only the main agent can spawn agents; do the work yourself");
@@ -809,18 +809,26 @@ pub fn spawn_children(parent: &str, config: &Value) -> crate::engine::ToolOut {
             all_ids.push(ids);
         }
         e.agent.spawned += entries.len();
-        let vars = truncate(&e.doc.variables().to_string(), 4000);
-        let plans: Vec<(Profile, Vec<String>, String)> = all_ids
+        // Only cloned here: serializing a large document would hold the engine mutex against render and poll.
+        let vars = e.doc.variables();
+        let plans: Vec<(Profile, Vec<String>, Vec<Value>)> = all_ids
             .into_iter()
             .map(|ids| {
                 let child = e.agent.new_profile(Some(parent.to_string()));
                 let nodes: Vec<Value> = ids.iter().filter_map(|id| e.doc.find(id).cloned()).collect();
-                let context = truncate(&serde_json::to_string(&nodes).unwrap_or_default(), 12000);
-                (child, ids, format!("{context}\n\nDocument variables: {vars}"))
+                (child, ids, nodes)
             })
             .collect();
-        (plans, e.agent.parallel.0, e.agent.parallel.1 == "side")
+        (plans, vars, e.agent.parallel.0, e.agent.parallel.1 == "side")
     };
+    let vars = truncate(&vars.to_string(), 4000);
+    let plans: Vec<_> = plans
+        .into_iter()
+        .map(|(child, ids, nodes)| {
+            let context = truncate(&serde_json::to_string(&nodes).unwrap_or_default(), 12000);
+            (child, ids, format!("{context}\n\nDocument variables: {vars}"))
+        })
+        .collect();
     let mut started = Vec::new();
     for (entry, (child, ids, context)) in entries.iter().zip(plans) {
         let task = entry["prompt"].as_str().unwrap_or("").trim().to_string();
