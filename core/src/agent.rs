@@ -68,6 +68,8 @@ pub struct AgentState {
     queue_opts: (usize, String, usize, String),
     /// Parallel agent setting of the current turn: (count, mode "split" | "side").
     pub parallel: (usize, String),
+    /// Children started in the current turn; `parallel.0 - 1` is all a turn may start.
+    spawned: usize,
     /// The conversation being saved to `<data_dir>/sessions/<id>.json`; None until the first prompt.
     pub chat: Option<Chat>,
     /// Permission requests waiting for the user's answer (request id → asking agent, the waiting MCP call).
@@ -268,6 +270,7 @@ fn start_turn(shown: &str, prompt: String, resume: bool) {
             }
         };
         e.agent.cancel = Arc::new(AtomicBool::new(false));
+        e.agent.spawned = 0;
         main
     };
     emit(&main, "user", json!({"text": shown}));
@@ -780,6 +783,20 @@ pub fn spawn_children(parent: &str, config: &Value) -> crate::engine::ToolOut {
     if entries.len() > MAX_CHILDREN {
         return crate::engine::ToolOut::err(format!("at most {MAX_CHILDREN} agents can be spawned at once"));
     }
+    {
+        let e = engine();
+        if e.agent.profile(parent).is_some_and(|p| p.parent.is_some()) {
+            return crate::engine::ToolOut::err("only the main agent can spawn agents; do the work yourself");
+        }
+        let left = (e.agent.parallel.0.saturating_sub(1)).saturating_sub(e.agent.spawned);
+        if entries.len() > left {
+            return crate::engine::ToolOut::err(format!(
+                "{left} more designer{} can be started this turn, but {} were requested; spawn at most {left} and do the rest yourself",
+                if left == 1 { "" } else { "s" },
+                entries.len()
+            ));
+        }
+    }
     let mut started = Vec::new();
     for entry in entries {
         let ids: Vec<String> = entry["containerNodes"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).collect();
@@ -791,6 +808,7 @@ pub fn spawn_children(parent: &str, config: &Value) -> crate::engine::ToolOut {
             if let Some(missing) = ids.iter().find(|id| e.doc.find(id).is_none()) {
                 return crate::engine::ToolOut::err(format!("container node not found: {missing}"));
             }
+            e.agent.spawned += 1;
             let child = e.agent.new_profile(Some(parent.to_string()));
             let nodes: Vec<Value> = ids.iter().filter_map(|id| e.doc.find(id).cloned()).collect();
             let context = truncate(&serde_json::to_string(&nodes).unwrap_or_default(), 12000);

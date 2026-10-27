@@ -142,8 +142,25 @@ const text = (r: any) => r.content.map((c: any) => c.text ?? '').join('')
   const jp = '日本語のテキスト'.repeat(10)
   await as('agD', `box = Insert(document, {type:"frame", name:"Box", x:900, width:600, height:400, layout:"vertical"}); for (let i = 0; i < 61; i++) Insert(box, {type:"text", content:"${jp}", fontSize:12, fill:"#111"}); Print(box.id)`)
   const box = (call('layers') as any[]).find((x) => x.name === 'Box').id
-  const spawned = await rpc({ id: 'sp', method: 'tools/call', params: { name: 'spawn_agents', arguments: { config: [{ prompt: 'x', containerNodes: [box] }] } } }, '/mcp/agD')
-  assert(!spawned.result?.isError && text(spawned.result).includes('Started 1 designers'), `spawn_agents survives a container cut inside a multi-byte char: ${JSON.stringify(spawned).slice(0, 200)}`)
+  // A 3× turn: the main agent (agD here) may start two designers, no more, and a designer may start none.
+  call('agent_send', { text: 'three agents', parallel: 3 })
+  const spawn = async (agent: string, n: number) =>
+    (await rpc({ id: 'sp', method: 'tools/call', params: { name: 'spawn_agents', arguments: { config: Array.from({ length: n }, () => ({ prompt: 'x', containerNodes: [box] })) } } }, `/mcp/${agent}`)).result
+  const spawned = await spawn('agD', 1)
+  assert(!spawned.isError && text(spawned).includes('Started 1 designers'), `spawn_agents survives a container cut inside a multi-byte char: ${JSON.stringify(spawned).slice(0, 200)}`)
+  let child = ''
+  for (let t = 0; t < 50 && !child; t++) {
+    await new Promise((r) => setTimeout(r, 100))
+    child = call<any>('poll').events.find((e: any) => e.type === 'agent' && e.kind === 'start' && e.agent.parent)?.agent.id ?? ''
+  }
+  assert(child, 'the spawned designer starts')
+  const nested = await spawn(child, 1)
+  assert(nested.isError && text(nested).includes('only the main agent'), `a designer cannot spawn agents: ${text(nested)}`)
+  const over = await spawn('agD', 2)
+  assert(over.isError && text(over).includes('1 more designer can be'), `a call beyond the turn's budget is refused with what is left: ${text(over)}`)
+  assert(!(await spawn('agD', 1)).isError, 'the last designer of the budget starts')
+  const spent = await spawn('agD', 1)
+  assert(spent.isError && text(spent).includes('0 more designers'), `no designer is left after 3×'s two: ${text(spent)}`)
 
   // A script that runs for seconds must not freeze the window: `call` is synchronous on this one thread,
   // so a core call that waits for the script (it ran under the engine lock) blocks for its whole run.
