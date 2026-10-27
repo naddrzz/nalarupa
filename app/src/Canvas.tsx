@@ -1300,7 +1300,7 @@ export function Canvas(props: {
 
   const visibleFrames = frames.filter((f) => !(f as Box & { placeholder?: boolean }).placeholder).filter((f) => {
     const r = screenRect(painted(f))
-    return r.x < w && r.y < h && r.x + r.w > 0 && r.y + r.h > -20
+    return r.x < w && r.y - 21 < h && r.x + r.w > 0 && r.y + r.h > -20
   })
   const pt = (x: number, y: number) => toScreen(x, y)
   // Rotated outlines and handles collect here during render and paint as one image (`Quads`).

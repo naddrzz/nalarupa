@@ -1002,10 +1002,12 @@ try {
   await sleep(800)
   for (const name of ['Title FlipX', 'Title FlipY']) {
     await app.getByTestId('layers').getByText(name).click()
-    assert(await until(async () => (await app.getByTestId('selection-box').count()) > 0), `${name} is selected`)
-    const box = (await app.getByTestId('selection-box').all())[0].bounds!
-    const label = (await canvas.getByText(name).all())[0].bounds!
-    assert(Math.abs(label.x - box.x) <= 12 && label.y + label.height <= box.y + 2 && label.y >= box.y - 24, `${name}'s title sits above its painted top-left (label ${JSON.stringify(label)}, painted ${JSON.stringify(box)})`)
+    const read = async () => ({ box: (await app.getByTestId('selection-box').all())[0]?.bounds, label: (await canvas.getByText(name).all())[0]?.bounds })
+    const above = (b: { x: number; y: number; height: number }, l: { x: number; y: number; height: number }) => Math.abs(l.x - b.x) <= 12 && l.y + l.height <= b.y + 2 && l.y >= b.y - 24
+    // Retry until the box is the newly selected frame's: FlipY starts with FlipX's box still on screen.
+    const ok = await until(async () => { const { box, label } = await read(); return !!box && !!label && above(box, label) })
+    const { box, label } = await read()
+    assert(ok, `${name}'s title sits above its painted top-left (label ${JSON.stringify(label)}, painted ${JSON.stringify(box)})`)
   }
 
   await canvas.press('escape')
