@@ -79,6 +79,33 @@ try {
   await sleep(250)
   if ((await rows()) !== rows0 || (await app.getByTestId('layer-rename').count())) throw new Error('a quick second chevron click did not collapse (or opened rename)')
 
+  // Rows nested 17 levels deep stay inside the 247 px panel with a readable name: the indent narrows the row
+  // instead of pushing a full-width row off the right edge, where the deepest layers could not be reached.
+  const made = await mcp('execute', { input: `let p = Insert(document, {type:"frame", name:"Deep0", x:0, y:0, width:800, height:800})
+for (let i = 1; i <= 16; i++) p = Insert(p, {type: i % 2 ? "group" : "frame", name: "Level " + i + " with a descriptive name", width: 700 - i * 20, height: 700 - i * 20})
+Insert(p, {type:"text", name:"Deepest text layer", content:"deep", fontSize:20})` })
+  const chain = [...made.matchAll(/^"(?:Deep0|Level \d+ [^"]*|Deepest text layer)": "(\w+)"/gm)].map((m) => m[1])
+  if (chain.length !== 18) throw new Error(`expected 18 nested layers, created ${chain.length}`)
+  const panel = (await app.getByTestId('layers').bounds())!
+  for (const id of chain.slice(0, 17)) {
+    const t = app.getByTestId(`layer-toggle-${id}`)
+    await until(async () => (await t.count()) > 0, `the chevron of layer ${id}`)
+    await t.click()
+    await sleep(100)
+  }
+  const deepest = app.getByTestId('layers').getByText('Deepest text layer')
+  await until(async () => (await deepest.count()) > 0, 'the deepest layer row')
+  for (const [depth, id] of chain.entries()) {
+    const b = (await app.getByTestId(`layer-${id}`).bounds())!
+    if (b.x + b.width > panel.x + panel.width + 0.5 || b.width < 100) throw new Error(`layer row at depth ${depth} is ${JSON.stringify(b)}: it runs off the ${panel.width}px panel or is too narrow`)
+  }
+  const name = (await deepest.bounds())!
+  if (name.width < 40 || name.x + name.width > panel.x + panel.width) throw new Error(`the deepest layer name is ${JSON.stringify(name)}: it is clipped or off the panel`)
+  await mcp('execute', { input: `Delete("${chain[0]}")` })
+  await until(async () => (await rows()) === rows0, 'the deep layers to go away')
+  // The agent's edit opened the Agent tab; the steps below read the Inspector.
+  await app.getByTestId('tab-design').click()
+
   // The eye icon hides and shows its layer (the row's press capture used to swallow the click). A hidden
   // layer keeps its eye while the pointer is away; the click does not select the row.
   const eyeShown = async (want: boolean) => {
