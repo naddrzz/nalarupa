@@ -148,7 +148,8 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
   const listEl = useRef<PublicInstance | null>(null)
   const pinNext = useRef<number | null>(null) // id of the last row at the last send, while the list still waits for its echo
 
-  const spent = useRef<string | null>(null) // the text just sent, until the draft changes: a second submit in the same frame still holds it
+  const spent = useRef<string | null>(null) // the text just sent, until the panel re-renders: a second submit in the same frame still holds it
+  useEffect(() => { spent.current = null })
   const send = (text: string) => {
     const t = text.trim()
     if (!t || t === spent.current) return
@@ -168,7 +169,6 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
       return toast((e as Error).message, true)
     }
     resetChat()
-    spent.current = null
     setChatVersion((n) => n + 1)
     toast('New conversation')
   }
@@ -289,7 +289,6 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
               onKeyDown={(e) => { tabbing.current = e.key === 'tab' }}
               onChange={(e) => {
                 const typed = e.value ?? ''
-                spent.current = null
                 setDraft(typed)
                 // The box drops the tab (and shows its placeholder again) only when the value it is given changes
                 // in a later frame than the tab itself, so the clean draft follows after a pause, unless typing went on.
