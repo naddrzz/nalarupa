@@ -354,6 +354,9 @@ fn size_css(v: Option<&Value>, prop: &str, parent_dir: Option<&str>, horiz_axis:
         Some(Value::String(s)) if s.starts_with("fill_container") => {
             if parent_dir.is_some() && parent_dir != Some("none") {
                 if main_axis { "flex:1 1 0;min-width:0;min-height:0;".into() } else { "align-self:stretch;".into() }
+            } else if let Some(n) = s.find('(').and_then(|i| s[i + 1..].trim_end_matches(')').trim().parse::<f64>().ok()) {
+                // No layout to fill: the canvas uses the fallback in the parentheses.
+                format!("{prop}:{}px;", n.max(0.0))
             } else {
                 format!("{prop}:100%;")
             }
@@ -1129,6 +1132,23 @@ mod tests {
         let id = e.insert_root(json!({"type": "frame", "width": 100, "height": 60, "layout": "horizontal", "children": [{"type": "group", "children": [{"type": "rectangle", "width": 80, "height": 20, "fill": "#ff0000"}]}]})).unwrap();
         let g = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
         assert!(g.contains("width:80px;flex-shrink:0;"), "{g}");
+    }
+
+    /// `fill_container(N)` in a parent without a layout is N px, like the canvas; plain `fill_container` stays 100%.
+    #[test]
+    fn fill_container_fallback_in_unlaid_parent() {
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        e.load_template("empty");
+        let id = e.insert_root(json!({"type": "frame", "width": 300, "height": 200, "layout": "none", "children": [
+            {"type": "rectangle", "name": "A", "width": "fill_container(60)", "height": "fill_container(40)", "fill": "#ff0000"},
+            {"type": "rectangle", "name": "B", "width": "fill_container", "height": "fill_container", "fill": "#00ff00"}]})).unwrap();
+        let h = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false, "includeLayerNames": true})).unwrap();
+        let style = |name: &str| h.split(&format!("data-name=\"{name}\" style=\"")).nth(1).unwrap().split('"').next().unwrap().to_string();
+        let a = style("A");
+        assert!(a.contains("width:60px;") && a.contains("height:40px;") && !a.contains("100%"), "{a}");
+        let b = style("B");
+        assert!(b.contains("width:100%;") && b.contains("height:100%;"), "{b}");
     }
 
     /// `fit_content(N)` on a node with nothing to hug is N, like the canvas; only a layout frame with children hugs.
