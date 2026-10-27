@@ -14,9 +14,13 @@ const assert = (ok: unknown, msg: string) => {
 // with a fresh data folder so the documents saved here never touch the real ones.
 if (!process.env.NALARUPA_CHECK_CHILD) {
   const data = mkdtempSync(join(tmpdir(), 'nalarupa-paint-'))
-  const run = Bun.spawnSync([process.execPath, import.meta.path], { env: { ...process.env, NALARUPA_DATA: data, NALARUPA_CHECK_CHILD: '1' }, stdio: ['inherit', 'inherit', 'inherit'] })
-  rmSync(data, { recursive: true, force: true })
-  process.exit(run.exitCode ?? 1)
+  let code = 1
+  try {
+    code = Bun.spawnSync([process.execPath, import.meta.path], { env: { ...process.env, NALARUPA_DATA: data, NALARUPA_CHECK_CHILD: '1' }, stdio: ['inherit', 'inherit', 'inherit'] }).exitCode ?? 1
+  } finally {
+    rmSync(data, { recursive: true, force: true })
+  }
+  process.exit(code)
 }
 const data = process.env.NALARUPA_DATA!
 const dir = mkdtempSync(join(data, 'doc-'))
