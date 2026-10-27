@@ -300,6 +300,13 @@ impl Engine {
             self.slid.insert(id.to_string());
             return;
         }
+        // A slide is snapshotted alone, so a background blur in it would blur nothing until it settles:
+        // such a node appears in place, and so does a sliding ancestor that now holds it.
+        if self.doc.find(id).is_some_and(crate::svg::doc_has_backdrop_blur) {
+            self.slid.insert(id.to_string());
+            self.renderer.unslide_ancestors(&self.doc, id);
+            return;
+        }
         let room = self.doc.parent_of(id).is_some_and(|(p, _)| self.renderer.can_slide_into(&self.doc, &p));
         if self.slid.insert(id.to_string()) && room {
             self.renderer.slides.push(crate::render::Slide::new(id));

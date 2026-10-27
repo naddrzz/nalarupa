@@ -1565,6 +1565,34 @@ mod tests {
         assert_eq!(e.renderer.slides.len(), 1, "the card carries its children along");
     }
 
+    /// A slide is snapshotted alone, so a glass node would show the backdrop sharp until it settled:
+    /// it appears in place, and so does a sliding card that gets a glass child.
+    #[test]
+    fn glass_nodes_do_not_slide() {
+        let mut e = engine();
+        let out = execute(&mut e, &json!({"input": r##"
+            root = Insert(document, {type:"frame", name:"Root", width:300, height:300, layout:"none"});
+            Insert(root, {type:"rectangle", name:"Glass", width:100, height:100, effect:{type:"background_blur", radius:20}});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        assert!(e.renderer.slides.is_empty());
+
+        let mut e = engine();
+        let out = execute(&mut e, &json!({"input": r##"
+            root = Insert(document, {type:"frame", name:"Root", width:300, height:300, layout:"none"});
+            card = Insert(root, {type:"frame", name:"Card", width:100, height:100, layout:"none"});
+            Insert(card, {type:"rectangle", name:"Plain", width:10, height:10});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        assert_eq!(e.renderer.slides.len(), 1, "a plain card slides");
+        let out = execute(&mut e, &json!({"input": r##"
+            card = Get(n => n.name === "Card" ? n.id : undefined)[0];
+            Insert(card, {type:"rectangle", name:"Glass", width:50, height:50, effect:[{type:"background_blur", radius:20}]});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        assert!(e.renderer.slides.is_empty(), "the card holds a glass node now");
+    }
+
     #[test]
     fn a_running_script_leaves_the_engine_free_and_stops_with_the_agent() {
         // The script ran under the engine lock: the window froze and Stop was dead until it ended.

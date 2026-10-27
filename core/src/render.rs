@@ -422,7 +422,8 @@ impl Renderer {
             for k in chain.iter().flat_map(|a| a.kids.iter()) {
                 let Some(&(ox, oy)) = old.get(k.id.as_str()) else { continue };
                 let (dx, dy) = (ox - k.x, oy - k.y);
-                if dx.abs() < 0.5 && dy.abs() < 0.5 {
+                // A glass node's snapshot would hold no backdrop (see `Engine::slide_in`): it jumps.
+                if (dx.abs() < 0.5 && dy.abs() < 0.5) || crate::svg::has_backdrop_blur(k) {
                     continue;
                 }
                 let room = self.slides.len() < MAX_SLIDES;
@@ -446,6 +447,11 @@ impl Renderer {
     pub fn can_slide_into(&self, doc: &Doc, parent: &str) -> bool {
         self.slides.len() < MAX_SLIDES
             && !self.slides.iter().any(|s| s.fade && (s.id == parent || doc.find(&s.id).and_then(|n| n["children"].as_array()).is_some_and(|k| crate::doc::find_in(k, parent).is_some())))
+    }
+
+    /// Stop the slides-in of the ancestors of `id`: their snapshots would carry it along.
+    pub fn unslide_ancestors(&mut self, doc: &Doc, id: &str) {
+        self.slides.retain(|s| !(s.fade && doc.find(&s.id).and_then(|n| n["children"].as_array()).is_some_and(|k| crate::doc::find_in(k, id).is_some())));
     }
 
     /// Snapshot sliding nodes that are new or whose layer was just rebuilt (so a node edited
