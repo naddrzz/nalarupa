@@ -611,7 +611,12 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
   // A textarea's value cannot be read, so send it: the prompt bubble shows what the composer held (the stand-in
   // replies; on Windows a send would start the real CLI).
   if (standIn) {
+    const tabs = async () => { const d = await app!.getByTestId('tab-design').bounds(); const a = await app!.getByTestId('tab-agent').bounds(); return `${d.x},${d.width},${a.x},${a.width}` }
+    const idleTabs = await tabs()
     await app.getByTestId('agent-send').click()
+    // The running dot widens the Agent label: the two tab buttons must keep their size and position.
+    await until(async () => !!(await app!.getByText('Agent •').count()), 'the Agent tab to show the running dot')
+    if ((await tabs()) !== idleTabs) throw new Error(`the Design/Agent tabs moved while the agent ran: ${idleTabs} -> ${await tabs()}`)
     await until(async () => (await app!.getByText('make the title bigger').count()) > 0, 'the composer draft to survive the Design tab and be sent')
     await until(async () => !(await app!.getByTestId('agent-stop').count()), 'the stand-in agent to finish', 20000)
   }
