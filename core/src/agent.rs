@@ -783,9 +783,10 @@ pub fn spawn_children(parent: &str, config: &Value) -> crate::engine::ToolOut {
     if entries.len() > MAX_CHILDREN {
         return crate::engine::ToolOut::err(format!("at most {MAX_CHILDREN} agents can be spawned at once"));
     }
-    {
-        let e = engine();
-        if e.agent.profile(parent).is_some_and(|p| p.parent.is_some()) {
+    // Checked, reserved and read under one lock: concurrent calls cannot both spend the same remaining slot.
+    let (plans, total, side) = {
+        let mut e = engine();
+        if !e.agent.profile(parent).is_some_and(|p| p.parent.is_none()) {
             return crate::engine::ToolOut::err("only the main agent can spawn agents; do the work yourself");
         }
         let left = (e.agent.parallel.0.saturating_sub(1)).saturating_sub(e.agent.spawned);
@@ -796,27 +797,34 @@ pub fn spawn_children(parent: &str, config: &Value) -> crate::engine::ToolOut {
                 entries.len()
             ));
         }
-    }
-    let mut started = Vec::new();
-    for entry in entries {
-        let ids: Vec<String> = entry["containerNodes"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).collect();
-        if ids.is_empty() {
-            return crate::engine::ToolOut::err("each spawn_agents entry needs at least one container node id");
-        }
-        let (child, context, total) = {
-            let mut e = engine();
+        let mut all_ids = Vec::new();
+        for entry in entries {
+            let ids: Vec<String> = entry["containerNodes"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).collect();
+            if ids.is_empty() {
+                return crate::engine::ToolOut::err("each spawn_agents entry needs at least one container node id");
+            }
             if let Some(missing) = ids.iter().find(|id| e.doc.find(id).is_none()) {
                 return crate::engine::ToolOut::err(format!("container node not found: {missing}"));
             }
-            e.agent.spawned += 1;
-            let child = e.agent.new_profile(Some(parent.to_string()));
-            let nodes: Vec<Value> = ids.iter().filter_map(|id| e.doc.find(id).cloned()).collect();
-            let context = truncate(&serde_json::to_string(&nodes).unwrap_or_default(), 12000);
-            let vars = truncate(&e.doc.variables().to_string(), 4000);
-            (child, format!("{context}\n\nDocument variables: {vars}"), e.agent.parallel.0)
-        };
+            all_ids.push(ids);
+        }
+        e.agent.spawned += entries.len();
+        let vars = truncate(&e.doc.variables().to_string(), 4000);
+        let plans: Vec<(Profile, Vec<String>, String)> = all_ids
+            .into_iter()
+            .map(|ids| {
+                let child = e.agent.new_profile(Some(parent.to_string()));
+                let nodes: Vec<Value> = ids.iter().filter_map(|id| e.doc.find(id).cloned()).collect();
+                let context = truncate(&serde_json::to_string(&nodes).unwrap_or_default(), 12000);
+                (child, ids, format!("{context}\n\nDocument variables: {vars}"))
+            })
+            .collect();
+        (plans, e.agent.parallel.0, e.agent.parallel.1 == "side")
+    };
+    let mut started = Vec::new();
+    for (entry, (child, ids, context)) in entries.iter().zip(plans) {
         let task = entry["prompt"].as_str().unwrap_or("").trim().to_string();
-        let prompt = if engine().agent.parallel.1 == "side" || task.is_empty() {
+        let prompt = if side || task.is_empty() {
             let k = started.len() + 2;
             format!(
                 "You are designer {k} of {total} working side by side on the same brief; each designer has their own frame.\n\
