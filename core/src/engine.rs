@@ -325,6 +325,16 @@ impl Engine {
         refs && crate::resolve::Resolver::new(&self.doc.root, &self.libs, &empty).resolve(n).is_some_and(|r| crate::svg::has_backdrop_blur(&r))
     }
 
+    /// After an edit (update, copy, move, replace) stop every slide whose node now holds a background
+    /// blur, as when an instance's component gained one: its snapshot would show the backdrop sharp.
+    pub fn unslide_glass(&mut self) {
+        if self.renderer.slides.is_empty() {
+            return;
+        }
+        let glass: Vec<String> = self.renderer.slides.iter().filter(|s| self.holds_glass(&s.id)).map(|s| s.id.clone()).collect();
+        self.renderer.slides.retain(|s| !glass.contains(&s.id));
+    }
+
     /// Settled slides go back into the cached view at the next sync (the document is unchanged).
     pub fn expire_slides(&mut self) {
         if self.renderer.expire_slides() {

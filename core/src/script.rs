@@ -207,6 +207,7 @@ fn n_copy(a: &[String]) -> Result<String, String> {
             _ => node_json(e, path, &GetOpts { resolve_vars: false, resolve_inst: true, geometry: true, depth: usize::MAX })?,
         };
         let id = e.doc.copy(&source, parent, (!data.is_null()).then_some(&data))?;
+        e.unslide_glass();
         let named = if data["name"].is_string() { data.clone() } else { source };
         record(ex, &named, &id);
         e.version += 1;
@@ -218,11 +219,7 @@ fn n_update(a: &[String]) -> Result<String, String> {
     let (path, data) = (arg(a, 0), json_arg(a, 1)?);
     with(|e, ex| {
         e.doc.update(path, &data)?;
-        // An update can add a background blur to a node that is sliding (or inside a sliding one).
-        let id = path.split('/').next().unwrap_or(path);
-        if !e.renderer.slides.is_empty() && e.holds_glass(id) {
-            e.renderer.unslide_with(&e.doc, id);
-        }
+        e.unslide_glass();
         ex.touched.push(path.to_string());
         e.version += 1;
         Ok(String::new())
@@ -233,6 +230,7 @@ fn n_replace(a: &[String]) -> Result<String, String> {
     let (path, node) = (arg(a, 0), json_arg(a, 1)?);
     with(|e, ex| {
         let id = e.doc.replace(path, node.clone())?;
+        e.unslide_glass();
         record(ex, &node, &id);
         e.version += 1;
         Ok(id)
@@ -245,6 +243,7 @@ fn n_move(a: &[String]) -> Result<String, String> {
     with(|e, ex| {
         let idx = (index >= 0.0).then_some(index as usize);
         e.doc.move_node(path, (!parent.is_empty()).then_some(parent), idx)?;
+        e.unslide_glass();
         ex.touched.push(path.to_string());
         e.version += 1;
         Ok(String::new())
@@ -1634,6 +1633,45 @@ mod tests {
         "##}));
         assert!(!out.error, "{}", out.text);
         assert!(e.renderer.slides.iter().all(|s| e.doc.find(&s.id).is_some_and(|n| n["name"] != "Card")), "the card does not slide once it holds glass, even at the cap");
+    }
+
+    /// Copy, Move, Replace and an edit of a component definition also stop a card that holds glass afterwards.
+    #[test]
+    fn glass_added_by_copy_move_replace_or_a_component_edit_unslides() {
+        let setup = r##"
+            glass = Insert(document, {type:"rectangle", name:"Glass", x:900, width:50, height:50, effect:{type:"background_blur", radius:20}});
+            comp = Insert(document, {type:"frame", name:"Comp", reusable:true, x:700, width:50, height:50, layout:"none", children:[{type:"rectangle", name:"Pane", width:50, height:50}]});
+            root = Insert(document, {type:"frame", name:"Root", width:300, height:300, layout:"none"});
+            card = Insert(root, {type:"frame", name:"Card", width:100, height:100, layout:"none"});
+            plain = Insert(card, {type:"rectangle", name:"Plain", width:10, height:10});
+        "##;
+        for edit in [
+            r#"Copy(glass, card);"#,
+            r#"Move(glass, card);"#,
+            r#"Replace(plain, {type:"rectangle", name:"G2", width:10, height:10, effect:{type:"background_blur", radius:20}});"#,
+        ] {
+            let mut e = engine();
+            let out = execute(&mut e, &json!({"input": setup}));
+            assert!(!out.error, "{}", out.text);
+            assert_eq!(e.renderer.slides.len(), 1, "{edit}: the card slides first");
+            let out = execute(&mut e, &json!({"input": format!("glass = Get(n => n.name === 'Glass' ? n.id : undefined)[0]; card = Get(n => n.name === 'Card' ? n.id : undefined)[0]; plain = Get(n => n.name === 'Plain' ? n.id : undefined)[0]; {edit}")}));
+            assert!(!out.error, "{edit}: {}", out.text);
+            assert!(e.renderer.slides.is_empty(), "{edit}: the card holds glass now");
+        }
+
+        let mut e = engine();
+        let out = execute(&mut e, &json!({"input": r##"
+            comp = Insert(document, {type:"frame", name:"Comp", reusable:true, x:700, width:50, height:50, layout:"none", children:[{type:"rectangle", name:"Pane", width:50, height:50}]});
+            root = Insert(document, {type:"frame", name:"Root", width:300, height:300, layout:"none"});
+            Insert(root, {type:"ref", ref:comp, width:50, height:50});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        assert_eq!(e.renderer.slides.len(), 1, "the instance slides first");
+        let out = execute(&mut e, &json!({"input": r##"
+            Update(Get(n => n.name === "Pane" ? n.id : undefined)[0], {effect:{type:"background_blur", radius:20}});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        assert!(e.renderer.slides.is_empty(), "the instance's component gained glass");
     }
 
     #[test]
