@@ -25,8 +25,9 @@ type Row = Layer & { index: number; layout: boolean }
 type DropAt = { id: string; pos: 'before' | 'after' | 'inside' }
 const ROW_H = 28
 // A row's indent is a margin, so a deep row narrows instead of running off the panel. The first 6 levels step
-// 14 px, deeper ones 3 px, which keeps the name readable at 17+ levels (imported designs nest that deep).
-const indent = (depth: number) => Math.min(depth, 6) * 14 + Math.max(depth - 6, 0) * 3
+// 14 px, deeper ones 3 px, which keeps the name readable at 17+ levels (imported designs nest that deep). It stops
+// growing at 120 px (level 18), so rows nested 40+ levels keep their icon and chevron; `aria-level` still tells the depth.
+const indent = (depth: number) => Math.min(Math.min(depth, 6) * 14 + Math.max(depth - 6, 0) * 3, 120)
 // A slide row is the 14 px number, an 8 px gap and the framed thumbnail: 14 + 8 + (196 + 4) = 222 px,
 // inside the 223 px the panel leaves after its border and the rows' 12 px padding.
 const THUMB_W = 196
