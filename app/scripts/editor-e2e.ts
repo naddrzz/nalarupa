@@ -1004,11 +1004,13 @@ try {
   const fr = await measureRow.bounds()
   await app.mouse.click({ x: fr.x - 32, y: fr.y + fr.height / 2 }) // its chevron: show the children
   await app.getByTestId('layers').getByText('Measure B').waitFor({ timeoutMs: 6000 })
+  const frameBox = await app.getByTestId('selection-box').bounds()
   await app.getByTestId('layers').getByText('Measure B').click()
-  await until(async () => (await count('selection-box')) === 1)
-  const flipped = (await app.getByTestId('selection-box').all())[0].bounds!
+  // One selection-box shows for any single layer, so wait on its bounds: B's box is narrower than the frame's, A's lies left of B's.
+  assert(await until(async () => (await count('selection-box')) === 1 && (await app.getByTestId('selection-box').bounds()).width < frameBox.width / 2), 'Measure B is selected')
+  const flipped = await app.getByTestId('selection-box').bounds()
   await app.getByTestId('layers').getByText('Measure A').click()
-  await until(async () => (await count('selection-box')) === 1)
+  assert(await until(async () => (await count('selection-box')) === 1 && (await app.getByTestId('selection-box').bounds()).x < flipped.x - 2), 'Measure A is selected')
   await app.mouse.move({ x: flipped.x + flipped.width / 2, y: flipped.y + flipped.height / 2 }, { modifiers: 'alt' })
   assert(await until(async () => (await count('measure-target')) === 1), 'Alt+hover outlines the hovered flipped layer')
   const target = await app.getByTestId('measure-target').bounds()
