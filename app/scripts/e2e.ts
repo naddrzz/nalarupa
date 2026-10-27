@@ -670,7 +670,16 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
     await sleep(200)
     await app.getByTestId('agent-send').click()
     await app.getByText('Got editor state').waitFor({ timeoutMs: 15000 })
-    await app.getByText('Got editor state').click()
+    // The list is still scrolling to the new reply when the row first appears, and a slow renderer can move the row between measuring and clicking: click again until the second detail card (the "Designed" one is still open) is up.
+    for (let tries = 0; tries < 4; tries++) {
+      await app.getByText('Got editor state').click()
+      try {
+        await until(async () => (await app!.getByTestId('tool-detail').count()) > 1, 'the long result to expand', 3000)
+        break
+      } catch (e) {
+        if (tries === 3) throw e
+      }
+    }
     await until(async () => (await app!.getByText('result row 119').count()) > 0, 'the last line of a long tool result')
 
     // Sending while scrolled up in the chat returns the list to the bottom: the echo and the reply are on screen, not off it.
