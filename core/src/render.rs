@@ -419,9 +419,16 @@ impl Renderer {
             if !ancestors_of(root, id, &mut chain) {
                 continue;
             }
-            for k in chain.iter().flat_map(|a| a.kids.iter()) {
+            for (j, k) in chain.iter().enumerate().flat_map(|(j, a)| a.kids.iter().map(move |k| (j, k))) {
                 let Some(&(ox, oy)) = old.get(k.id.as_str()) else { continue };
-                let (dx, dy) = (ox - k.x, oy - k.y);
+                let (mut dx, mut dy) = (ox - k.x, oy - k.y);
+                // `composite_slides` adds a gliding ancestor's offset to its children: the child glides
+                // only the part of its move the ancestor does not carry (the ancestors come first).
+                for a in &chain[1..=j] {
+                    if let Some(&(ax, ay)) = old.get(a.id.as_str()).filter(|_| self.slides.iter().any(|s| s.id == a.id && !s.fade)) {
+                        (dx, dy) = (dx - (ax - a.x), dy - (ay - a.y));
+                    }
+                }
                 if dx.abs() < 0.5 && dy.abs() < 0.5 {
                     continue;
                 }
