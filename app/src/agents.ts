@@ -363,6 +363,8 @@ export function restoreChat(events: any[]) {
     if (it.kind === 'thinking') it.endedAt ??= it.startedAt
     if (it.kind === 'tool' && it.running) Object.assign(it, { running: false, error: true, output: 'Tool call cancelled' })
   }
+  // The run that owned the plan never reached its `done`: its unfinished steps are cancelled, as after a Stop.
+  if (store.running.has(store.todosOwner)) store.todos = store.todos.map((t) => (t.status === 'completed' ? t : { ...t, status: 'cancelled' }))
   store.running.clear()
   store.cursors.clear()
   store.pills.clear()

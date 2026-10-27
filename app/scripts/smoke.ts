@@ -206,6 +206,20 @@ resetChat()
   applyEvents([ev('user', { text: 'go' }), ev('start'), plan, { type: 'agent', kind: 'start', agent: helper }, { type: 'agent', kind: 'error', text: 'boom', agent: helper }, { type: 'agent', kind: 'done', durationMs: 1, usage: {}, agent: helper }], 0)
   assert(store.todos.map((t) => t.status).join(',') === 'completed,in_progress,pending', "a helper's failure leaves the plan owner's steps alone")
 }
+// A chat saved mid-run (crash, kill) reopens with its unfinished plan steps cancelled, not live; a finished run's plan is left as it ended.
+{
+  const agent = { id: 'ag1', name: 'Surya', color: '#38B2AC' }
+  const ev = (kind: string, o: object = {}) => ({ type: 'agent', kind, agent, ...o })
+  const todos = [{ content: 'Build hero', status: 'in_progress', activeForm: 'Building hero' }, { content: 'Build footer', status: 'pending' }]
+  const saved = [ev('user', { text: 'Design a page' }), ev('start'), ev('todos', { todos: [{ content: 'Plan', status: 'completed' }, ...todos] }), ev('message_end')]
+  restoreChat(saved)
+  assert(store.todos.map((t) => t.status).join(',') === 'completed,cancelled,cancelled', 'a plan whose run never finished reopens cancelled')
+  restoreChat([...saved, ev('done', { durationMs: 1, usage: {} })])
+  assert(store.todos.map((t) => t.status).join(',') === 'completed,in_progress,pending', 'a plan whose run finished reopens as it ended')
+  restoreChat([...saved, ev('done', { stopped: true, durationMs: 1, usage: {} })])
+  assert(store.todos.map((t) => t.status).join(',') === 'completed,cancelled,cancelled', 'a stopped run reopens with a cancelled plan')
+  resetChat()
+}
 // A long chat keeps every item, the first prompt included, live and when reopened from history.
 {
   const agent = { id: 'ag1', name: 'Surya', color: '#38B2AC' }
