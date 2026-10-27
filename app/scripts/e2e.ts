@@ -686,6 +686,13 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
       await sleep(200)
       return !(await onScreen('result row 119'))
     }, 'the chat to scroll up from its tail', 20000)
+    // The scroll position survives a Design → Agent round trip (the panel unmounts): the chat does not jump back to its tail.
+    await app.getByTestId('tab-design').click()
+    await until(async () => !(await app!.getByTestId('agent-input').count()), 'the agent panel to close with the chat scrolled up')
+    await app.getByTestId('tab-agent').click()
+    await until(async () => !!(await app!.getByTestId('agent-input').bounds()) && (await app!.getByType('markdown').count()) > 0, 'the chat to come back')
+    await sleep(800)
+    if (await onScreen('result row 119')) throw new Error('the Design tab round trip put the scrolled-up chat back at its tail')
     const oldReplies = new Set((await app.getByType('markdown').all()).map((n) => n.id))
     writeFileSync(join(bin, 'claude'), `#!/bin/sh\necho '${delta('Echo: scrolled reply')}'\n`, { mode: 0o755 })
     await app.getByTestId('agent-input').click()
