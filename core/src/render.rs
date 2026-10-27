@@ -449,9 +449,9 @@ impl Renderer {
             && !self.slides.iter().any(|s| s.fade && (s.id == parent || doc.find(&s.id).and_then(|n| n["children"].as_array()).is_some_and(|k| crate::doc::find_in(k, parent).is_some())))
     }
 
-    /// Stop the slides-in of the ancestors of `id`: their snapshots would carry it along.
-    pub fn unslide_ancestors(&mut self, doc: &Doc, id: &str) {
-        self.slides.retain(|s| !(s.fade && doc.find(&s.id).and_then(|n| n["children"].as_array()).is_some_and(|k| crate::doc::find_in(k, id).is_some())));
+    /// Stop the slides of `id` and the slides-in of its ancestors: their snapshots would carry it along.
+    pub fn unslide_with(&mut self, doc: &Doc, id: &str) {
+        self.slides.retain(|s| s.id != id && !(s.fade && doc.find(&s.id).and_then(|n| n["children"].as_array()).is_some_and(|k| crate::doc::find_in(k, id).is_some())));
     }
 
     /// Snapshot sliding nodes that are new or whose layer was just rebuilt (so a node edited

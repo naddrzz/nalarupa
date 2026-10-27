@@ -295,22 +295,34 @@ impl Engine {
         if self.reduce_motion {
             return;
         }
+        // A slide is snapshotted alone, so a background blur in it would blur nothing until it settles:
+        // such a node appears in place, and so does a sliding ancestor that now holds it.
+        if self.holds_glass(id) {
+            self.slid.insert(id.to_string());
+            self.renderer.unslide_with(&self.doc, id);
+            return;
+        }
         // Past the cap nothing more slides, so skip the parent lookup (a linear search per insert).
         if self.renderer.slides.len() >= crate::render::MAX_SLIDES {
             self.slid.insert(id.to_string());
-            return;
-        }
-        // A slide is snapshotted alone, so a background blur in it would blur nothing until it settles:
-        // such a node appears in place, and so does a sliding ancestor that now holds it.
-        if self.doc.find(id).is_some_and(crate::svg::doc_has_backdrop_blur) {
-            self.slid.insert(id.to_string());
-            self.renderer.unslide_ancestors(&self.doc, id);
             return;
         }
         let room = self.doc.parent_of(id).is_some_and(|(p, _)| self.renderer.can_slide_into(&self.doc, &p));
         if self.slid.insert(id.to_string()) && room {
             self.renderer.slides.push(crate::render::Slide::new(id));
         }
+    }
+
+    /// Whether node `id` shows a background blur, a component instance's content included.
+    pub fn holds_glass(&self, id: &str) -> bool {
+        let Some(n) = self.doc.find(id) else { return false };
+        if crate::svg::doc_has_backdrop_blur(n) {
+            return true;
+        }
+        let mut refs = false;
+        crate::doc::walk(std::slice::from_ref(n), &mut |k| refs |= k["type"] == "ref");
+        let empty = serde_json::Map::new();
+        refs && crate::resolve::Resolver::new(&self.doc.root, &self.libs, &empty).resolve(n).is_some_and(|r| crate::svg::has_backdrop_blur(&r))
     }
 
     /// Settled slides go back into the cached view at the next sync (the document is unchanged).

@@ -218,6 +218,11 @@ fn n_update(a: &[String]) -> Result<String, String> {
     let (path, data) = (arg(a, 0), json_arg(a, 1)?);
     with(|e, ex| {
         e.doc.update(path, &data)?;
+        // An update can add a background blur to a node that is sliding (or inside a sliding one).
+        let id = path.split('/').next().unwrap_or(path);
+        if !e.renderer.slides.is_empty() && e.holds_glass(id) {
+            e.renderer.unslide_with(&e.doc, id);
+        }
         ex.touched.push(path.to_string());
         e.version += 1;
         Ok(String::new())
@@ -1591,6 +1596,44 @@ mod tests {
         "##}));
         assert!(!out.error, "{}", out.text);
         assert!(e.renderer.slides.is_empty(), "the card holds a glass node now");
+    }
+
+    /// Glass inside a component instance, glass added by an update, and glass inserted at the slide
+    /// cap all leave no slide behind either.
+    #[test]
+    fn glass_found_through_instances_updates_and_the_cap() {
+        let mut e = engine();
+        let out = execute(&mut e, &json!({"input": r##"
+            comp = Insert(document, {type:"frame", name:"Comp", reusable:true, x:900, width:50, height:50, layout:"none", children:[{type:"rectangle", name:"Pane", width:50, height:50, effect:{type:"background_blur", radius:20}}]});
+            root = Insert(document, {type:"frame", name:"Root", width:300, height:300, layout:"none"});
+            Insert(root, {type:"ref", ref:comp, width:50, height:50});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        assert!(e.renderer.slides.is_empty(), "an instance of a glass component appears in place");
+
+        let mut e = engine();
+        let out = execute(&mut e, &json!({"input": r##"
+            root = Insert(document, {type:"frame", name:"Root", width:300, height:300, layout:"none"});
+            card = Insert(root, {type:"frame", name:"Card", width:100, height:100, layout:"none"});
+            r = Insert(card, {type:"rectangle", name:"Plain", width:10, height:10});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        assert_eq!(e.renderer.slides.len(), 1);
+        let out = execute(&mut e, &json!({"input": r##"
+            Update(Get(n => n.name === "Plain" ? n.id : undefined)[0], {effect:{type:"background_blur", radius:20}});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        assert!(e.renderer.slides.is_empty(), "the sliding card holds a glass node after the update");
+
+        let mut e = engine();
+        let out = execute(&mut e, &json!({"input": r##"
+            root = Insert(document, {type:"frame", name:"Root", width:300, height:300, layout:"none"});
+            card = Insert(root, {type:"frame", name:"Card", width:100, height:100, layout:"none"});
+            for (let i = 0; i < 40; i++) Insert(root, {type:"rectangle", name:"r"+i, x:i, y:200, width:10, height:10});
+            Insert(card, {type:"rectangle", name:"Glass", width:50, height:50, effect:{type:"background_blur", radius:20}});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        assert!(e.renderer.slides.iter().all(|s| e.doc.find(&s.id).is_some_and(|n| n["name"] != "Card")), "the card does not slide once it holds glass, even at the cap");
     }
 
     #[test]
