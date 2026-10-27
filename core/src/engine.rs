@@ -284,6 +284,11 @@ impl Engine {
         let roots = self.renderer.shift_siblings(&mut cx);
         let rebuilt = self.renderer.sync(&mut cx);
         if !self.renderer.slides.is_empty() {
+            // The settled slides were left out of the layers: sync again with them shown.
+            if self.renderer.settle_covered() {
+                self.synced = 0;
+                return self.sync();
+            }
             self.renderer.refresh_slides(&mut cx, &rebuilt, roots);
         }
         self.synced = self.version;

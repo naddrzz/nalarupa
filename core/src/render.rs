@@ -448,6 +448,39 @@ impl Renderer {
             && !self.slides.iter().any(|s| s.fade && (s.id == parent || doc.find(&s.id).and_then(|n| n["children"].as_array()).is_some_and(|k| crate::doc::find_in(k, parent).is_some())))
     }
 
+    /// Settle the slides a node that does not slide stacks above and overlaps (a `Copy`, an insert
+    /// past the cap): slides paint over the finished view, so they would hide it until they end.
+    /// Latest first, so a settled slide's own content counts against the slides below it.
+    /// True if any settled; the layers hid them, so the caller syncs again.
+    pub fn settle_covered(&mut self) -> bool {
+        let sliding: HashSet<&str> = self.slides.iter().map(|s| s.id.as_str()).collect();
+        let mut gone: HashSet<String> = HashSet::new();
+        for layer in self.order.iter().filter_map(|id| self.layers.get(id)) {
+            let mut mine: Vec<usize> = (0..layer.flat.len()).filter(|&i| sliding.contains(layer.flat[i].id.as_str())).collect();
+            while let Some(i) = mine.pop() {
+                let s = &layer.flat[i];
+                // Everything after its subtree paints above it.
+                let end = layer.flat[i + 1..].iter().position(|f| f.depth <= s.depth).map_or(layer.flat.len(), |p| i + 1 + p);
+                let b = canvas_box(s);
+                let b = (b.0 + 0.5, b.1 + 0.5, b.2 - 1.0, b.3 - 1.0);
+                // Depth of the sliding node whose subtree is being skipped: it paints as a slide, above.
+                let mut under: Option<usize> = None;
+                let covered = layer.flat[end..].iter().any(|f| {
+                    if under.is_some_and(|d| f.depth > d) {
+                        return false;
+                    }
+                    under = (sliding.contains(f.id.as_str()) && !gone.contains(&f.id)).then_some(f.depth);
+                    under.is_none() && f.ty != "group" && overlaps(b, canvas_box(f))
+                });
+                if covered {
+                    gone.insert(s.id.clone());
+                }
+            }
+        }
+        self.slides.retain(|s| !gone.contains(&s.id));
+        !gone.is_empty()
+    }
+
     /// Snapshot sliding nodes that are new or whose layer was just rebuilt (so a node edited
     /// mid-slide shows its edit). Each snapshot leaves out descendants that slide themselves.
     pub fn refresh_slides(&mut self, cx: &mut Ctx, rebuilt: &[String], mut roots: HashMap<usize, Option<RNode>>) {
@@ -618,13 +651,7 @@ impl Renderer {
     /// Nodes that need animated overlays (placeholder frames, pending images), each with the canvas box its
     /// clipping ancestors leave visible (`None` when nothing clips it). A node clipped away entirely is left out.
     pub fn live(&self) -> Vec<(&Flat, Option<Rect>)> {
-        let canvas = |f: &Flat| {
-            let m = f.m.unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
-            let pts = [(f.x, f.y), (f.x + f.w, f.y), (f.x, f.y + f.h), (f.x + f.w, f.y + f.h)].map(|(x, y)| (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]));
-            let lo = |g: fn(&(f64, f64)) -> f64| pts.iter().map(g).fold(f64::MAX, f64::min);
-            let hi = |g: fn(&(f64, f64)) -> f64| pts.iter().map(g).fold(f64::MIN, f64::max);
-            (lo(|p| p.0), lo(|p| p.1), hi(|p| p.0) - lo(|p| p.0), hi(|p| p.1) - lo(|p| p.1))
-        };
+        let canvas = canvas_box;
         let mut out = Vec::new();
         for layer in self.order.iter().filter_map(|id| self.layers.get(id)) {
             let mut path: Vec<usize> = Vec::new();
@@ -947,6 +974,15 @@ fn paint_band(layers: &HashMap<String, Layer>, order: &[String], solo: Option<&s
             }
         }
     }
+}
+
+/// The box on the canvas (bounding box of the painted corners).
+fn canvas_box(f: &Flat) -> Rect {
+    let m = f.m.unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    let pts = [(f.x, f.y), (f.x + f.w, f.y), (f.x, f.y + f.h), (f.x + f.w, f.y + f.h)].map(|(x, y)| (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]));
+    let lo = |g: fn(&(f64, f64)) -> f64| pts.iter().map(g).fold(f64::MAX, f64::min);
+    let hi = |g: fn(&(f64, f64)) -> f64| pts.iter().map(g).fold(f64::MIN, f64::max);
+    (lo(|p| p.0), lo(|p| p.1), hi(|p| p.0) - lo(|p| p.0), hi(|p| p.1) - lo(|p| p.1))
 }
 
 fn overlaps(a: Rect, b: Rect) -> bool {
@@ -1573,6 +1609,48 @@ pub(crate) mod tests {
         sync(&mut r);
         let px = frame(&mut r);
         assert!(red(&px, 150, 101) && !red(&px, 150, 152), "settled in the cached view at its own place");
+    }
+
+    /// A node that does not slide (a `Copy`, an insert past the cap) and stacks above a slide in its
+    /// frame would be covered by it until it ends: the slide settles instead. Slides it does not
+    /// overlap, and ones below it that it only sits beside, keep animating.
+    #[test]
+    fn slide_settles_under_a_later_node_that_does_not_slide() {
+        let json = r##"{"version":"2.19","children":[{"type":"frame","id":"f","x":0,"y":0,"width":400,"height":400,"layout":"none","fill":"#ffffff","children":[
+            {"type":"rectangle","id":"panel","x":100,"y":100,"width":200,"height":200,"fill":"#ff0000"},
+            {"type":"rectangle","id":"apart","x":10,"y":10,"width":20,"height":20,"fill":"#00ff00"},
+            {"type":"frame","id":"card","x":320,"y":320,"width":60,"height":60,"layout":"none","fill":"#0000ff","children":[
+                {"type":"rectangle","id":"inner","x":0,"y":0,"width":10,"height":10,"fill":"#ffff00"}]},
+            {"type":"rectangle","id":"copy","x":150,"y":150,"width":50,"height":50,"fill":"#ffffff"}]}]}"##;
+        let doc = Doc::from_json(json).unwrap();
+        let (mut fonts, mut assets) = offline();
+        let mut r = Renderer::default();
+        r.slides.extend([Slide::new("panel"), Slide::new("apart"), Slide::new("card")]);
+        let mut cx = Ctx { doc: &doc, libs: &[], fonts: &mut fonts, assets: &mut assets };
+        r.sync(&mut cx);
+        assert!(r.settle_covered());
+        let left: Vec<&str> = r.slides.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(left, ["apart", "card"], "only the panel under the copy settles");
+        assert!(!r.settle_covered());
+
+        // The copy slides too: nothing is above the panel that stays put.
+        let mut r = Renderer::default();
+        r.slides.extend([Slide::new("panel"), Slide::new("copy")]);
+        let mut cx = Ctx { doc: &doc, libs: &[], fonts: &mut fonts, assets: &mut assets };
+        r.sync(&mut cx);
+        assert!(!r.settle_covered() && r.slides.len() == 2);
+
+        // The settled panel's content counts for the slide below it: it now stays put above `base`.
+        let json = r##"{"version":"2.19","children":[{"type":"frame","id":"f","x":0,"y":0,"width":400,"height":400,"layout":"none","fill":"#ffffff","children":[
+            {"type":"rectangle","id":"base","x":0,"y":0,"width":300,"height":300,"fill":"#ff0000"},
+            {"type":"rectangle","id":"mid","x":100,"y":100,"width":200,"height":200,"fill":"#00ff00"},
+            {"type":"rectangle","id":"top","x":150,"y":150,"width":50,"height":50,"fill":"#ffffff"}]}]}"##;
+        let doc = Doc::from_json(json).unwrap();
+        let mut r = Renderer::default();
+        r.slides.extend([Slide::new("base"), Slide::new("mid")]);
+        let mut cx = Ctx { doc: &doc, libs: &[], fonts: &mut fonts, assets: &mut assets };
+        r.sync(&mut cx);
+        assert!(r.settle_covered() && r.slides.is_empty(), "mid settles under top, then base under the settled mid");
     }
 
     /// A settled slide repaints the node's descendants, also where they overflow its box.
