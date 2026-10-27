@@ -368,8 +368,8 @@ export function Canvas(props: {
   function renameBox(id: string): Rect | null {
     const f = frames.find((x) => x.id === id)
     if (!f) return null
-    const [x, y] = toScreen(f.x, f.y)
-    return { x: x - 4, y: y - 21, w: Math.max(140, Math.min(f.w * cam.zoom, 240)), h: 20 }
+    const { x, y, w } = screenRect(painted(f))
+    return { x: x - 4, y: y - 21, w: Math.max(140, Math.min(w, 240)), h: 20 }
   }
 
   /** Enter, blur or a press elsewhere commits once (one undo step); Escape clears `renameLive` first. */
@@ -416,8 +416,8 @@ export function Canvas(props: {
   /** Top-level frame whose title label is under a screen point (labels select their frame). */
   function frameLabelAt(sx: number, sy: number): string | undefined {
     return visibleFrames.find((f) => {
-      const [x, y] = toScreen(f.x, f.y)
-      return sx >= x && sx <= x + Math.min(Math.max(40, f.w * cam.zoom), f.name.length * 7 + 8) && sy >= y - 18 && sy <= y - 2
+      const { x, y, w } = screenRect(painted(f))
+      return sx >= x && sx <= x + Math.min(Math.max(40, w), f.name.length * 7 + 8) && sy >= y - 18 && sy <= y - 2
     })?.id
   }
 
@@ -1299,8 +1299,8 @@ export function Canvas(props: {
   }
 
   const visibleFrames = frames.filter((f) => !(f as Box & { placeholder?: boolean }).placeholder).filter((f) => {
-    const [x, y] = toScreen(f.x, f.y)
-    return x < w && y < h && x + f.w * cam.zoom > 0 && y + f.h * cam.zoom > -20
+    const r = screenRect(painted(f))
+    return r.x < w && r.y < h && r.x + r.w > 0 && r.y + r.h > -20
   })
   const pt = (x: number, y: number) => toScreen(x, y)
   // Rotated outlines and handles collect here during render and paint as one image (`Quads`).
@@ -1343,7 +1343,7 @@ export function Canvas(props: {
     >
       <img ref={img} objectFit="fill" style={{ position: 'absolute', left: 0, top: 0, width: w, height: h }} />
       {visibleFrames.map((f) => {
-        const [x, y] = toScreen(f.x, f.y)
+        const { x, y, w: fw } = screenRect(painted(f))
         const active = selection.includes(f.id)
         const r = renaming?.id === f.id ? renameBox(f.id) : null
         if (renaming && r) {
@@ -1369,7 +1369,7 @@ export function Canvas(props: {
           )
         }
         return (
-          <div key={f.id} testId="frame-label" style={{ position: 'absolute', left: x, top: y - 18, height: 16, display: 'flex', maxWidth: Math.max(40, f.w * cam.zoom), pointerEvents: 'none' }}>
+          <div key={f.id} testId="frame-label" style={{ position: 'absolute', left: x, top: y - 18, height: 16, display: 'flex', maxWidth: Math.max(40, fw), pointerEvents: 'none' }}>
             <T size={11} color={active ? C.select : C.muted} style={FRAME_LABEL_TEXT}>{f.name}</T>
           </div>
         )

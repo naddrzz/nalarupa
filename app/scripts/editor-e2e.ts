@@ -994,6 +994,20 @@ try {
   await app.getByTestId('layers').getByText('Inspect rect').click({ modifiers: 'ctrl' })
   assert(await until(async () => (await count('inspector-fill')) > 0), 'a line, a note and a rectangle together keep the Fill field')
 
+  // A flipped top-level frame is titled at the top-left of where it is painted, not at its layout origin.
+  await mcpCall(port, { method: 'tools/call', params: { name: 'execute', arguments: { input: 'Insert(document, {type:"frame", name:"Title FlipX", x:5000, y:100, width:300, height:200, fill:"#EEFFEE", flipX:true}); Insert(document, {type:"frame", name:"Title FlipY", x:5000, y:600, width:300, height:200, fill:"#EEEEFF", flipY:true});' } } })
+  await app.getByTestId('layers').getByText('Title FlipY').waitFor({ timeoutMs: 6000 })
+  await canvas.press('escape')
+  await app.call('keystrokes', { keys: 'shift-1' })
+  await sleep(800)
+  for (const name of ['Title FlipX', 'Title FlipY']) {
+    await app.getByTestId('layers').getByText(name).click()
+    assert(await until(async () => (await app.getByTestId('selection-box').count()) > 0), `${name} is selected`)
+    const box = (await app.getByTestId('selection-box').all())[0].bounds!
+    const label = (await canvas.getByText(name).all())[0].bounds!
+    assert(Math.abs(label.x - box.x) <= 12 && label.y + label.height <= box.y + 2 && label.y >= box.y - 24, `${name}'s title sits above its painted top-left (label ${JSON.stringify(label)}, painted ${JSON.stringify(box)})`)
+  }
+
   await canvas.press('escape')
   await shot('10-final')
   console.log('editor-e2e ok — screenshots in', out)
