@@ -1587,8 +1587,31 @@ mod tests {
             let src = format!(r##"root = Insert(document, {{type:"frame", name:"Root", width:300, height:300, layout:"none"}}); Insert(root, {{type:"rectangle", name:"b", width:10, height:10, {props}}});"##);
             let out = execute(&mut e, &json!({ "input": src }));
             assert!(!out.error, "{name}: {}", out.text);
+            e.sync();
             assert!(e.renderer.slides.is_empty(), "{name}: a blended insert appears in place");
         }
+
+        // A hidden blended child paints nothing, so it does not stop the slide.
+        let mut e = engine();
+        let out = execute(&mut e, &json!({"input": r##"
+            root = Insert(document, {type:"frame", name:"Root", width:300, height:300, layout:"none"});
+            Insert(root, {type:"frame", name:"Card", width:100, height:100, layout:"none", children:[
+                {type:"rectangle", width:10, height:10, enabled:false, fill:{type:"color", color:"#ff8800", blendMode:"multiply"}}]});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        e.sync();
+        assert_eq!(e.renderer.slides.len(), 1, "a disabled blended child is not painted");
+
+        // A blend mode that arrives through a component instance is found in the resolved tree.
+        let mut e = engine();
+        let comp = e.doc.insert("document", json!({"type":"frame", "x":500, "y":0, "width":10, "height":10, "reusable":true, "fill":{"type":"color", "color":"#ff8800", "blendMode":"multiply"}}), None).unwrap();
+        let out = execute(&mut e, &json!({"input": format!(r##"
+            root = Insert(document, {{type:"frame", name:"Root", width:300, height:300, layout:"none"}});
+            Insert(root, {{type:"ref", ref:"{comp}"}});
+        "##)}));
+        assert!(!out.error, "{}", out.text);
+        e.sync();
+        assert!(e.renderer.slides.is_empty(), "a blended instance appears in place");
 
         let mut e = engine();
         let out = execute(&mut e, &json!({"input": r##"
@@ -1597,6 +1620,7 @@ mod tests {
                 {type:"rectangle", width:10, height:10, fill:{type:"color", color:"#ff8800", blendMode:"multiply"}}]});
         "##}));
         assert!(!out.error, "{}", out.text);
+        e.sync();
         assert!(e.renderer.slides.is_empty(), "a blended descendant keeps the card in place");
     }
 

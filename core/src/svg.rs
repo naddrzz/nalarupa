@@ -1577,21 +1577,9 @@ pub fn fills(v: Option<&Value>) -> Vec<&Value> {
 }
 
 /// Whether the node or a descendant paints with a blend mode (a fill, stroke or shadow).
-fn blends(n: &RNode) -> bool {
+pub fn blends(n: &RNode) -> bool {
     let paint = |k: &str| fills(n.p.get(k)).iter().any(|f| blend_mode(f["blendMode"].as_str()).is_some());
     paint("fill") || paint("stroke") || Effects::of(n).shadows.iter().any(|s| s.blend.is_some()) || n.kids.iter().any(blends)
-}
-
-/// `blends` for a document node: a blended paint needs the content beneath it, which a
-/// slide's isolated snapshot does not have.
-pub fn node_blends(n: &Value) -> bool {
-    let paint = |k: &str| fills(n.get(k)).iter().any(|f| blend_mode(f["blendMode"].as_str()).is_some());
-    let shadow = match n.get("effect") {
-        Some(Value::Array(a)) => a.iter().any(|e| e["enabled"] != false && blend_mode(e["blendMode"].as_str()).is_some()),
-        Some(e @ Value::Object(_)) => e["enabled"] != false && blend_mode(e["blendMode"].as_str()).is_some(),
-        _ => false,
-    };
-    paint("fill") || paint("stroke") || shadow || n["children"].as_array().is_some_and(|k| k.iter().any(node_blends))
 }
 
 /// Blend modes as CSS `mix-blend-mode`; linearBurn is multiply and

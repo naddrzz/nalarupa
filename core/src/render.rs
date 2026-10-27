@@ -8,7 +8,7 @@
 use crate::doc::Doc;
 use crate::raster;
 use crate::resolve::{RNode, Resolver};
-use crate::svg::{clip_svg, fxhash, is_turned, own_matrix, Assets, Svg};
+use crate::svg::{blends, clip_svg, fxhash, is_turned, own_matrix, Assets, Svg};
 use crate::text::{Fonts, TextStyle};
 use resvg::{tiny_skia, usvg};
 use serde_json::{json, Map, Value};
@@ -450,7 +450,10 @@ impl Renderer {
 
     /// Snapshot sliding nodes that are new or whose layer was just rebuilt (so a node edited
     /// mid-slide shows its edit). Each snapshot leaves out descendants that slide themselves.
-    pub fn refresh_slides(&mut self, cx: &mut Ctx, rebuilt: &[String], mut roots: HashMap<usize, Option<RNode>>) {
+    /// A node that blends (itself or in its resolved subtree) needs the content beneath, which its
+    /// isolated snapshot lacks: it appears in place instead, and true is returned when any did.
+    pub fn refresh_slides(&mut self, cx: &mut Ctx, rebuilt: &[String], mut roots: HashMap<usize, Option<RNode>>) -> bool {
+        let mut blended = Vec::new();
         let ids: Vec<String> = self.slides.iter().map(|s| s.id.clone()).collect();
         for s in &mut self.slides {
             let Some(top) = top_index(cx.doc, &s.id) else {
@@ -466,6 +469,10 @@ impl Renderer {
                 s.tree = None;
                 continue;
             };
+            if blends(node) {
+                blended.push(s.id.clone());
+                continue;
+            }
             // The settled layer paints the node inside its ancestors' groups: carry their
             // rotation, flips and opacity (as `prepare_layer` and `Svg::node` do).
             let mut chain = Vec::new();
@@ -498,6 +505,8 @@ impl Renderer {
             s.ancestors = ids.iter().filter(|a| **a != s.id && find_rnode(root, a).is_some_and(|an| find_rnode(an, &s.id).is_some())).cloned().collect();
             s.cache = None;
         }
+        self.slides.retain(|s| !blended.contains(&s.id));
+        !blended.is_empty()
     }
 
     /// Drop slides that have settled (or were never shown); true if any ended.
