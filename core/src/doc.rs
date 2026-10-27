@@ -3,6 +3,7 @@
 
 use serde_json::{json, Map, Value};
 use std::cell::Cell;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 pub const FORMAT_VERSION: &str = "2.19";
@@ -80,6 +81,10 @@ impl Doc {
         index_path_in(self.children(), id, &mut acc).then_some(acc)
     }
 
+    fn node_at(&self, ip: &[usize]) -> &Value {
+        ip[1..].iter().fold(&self.root["children"][ip[0]], |cur, &i| &cur["children"][i])
+    }
+
     fn node_at_mut(&mut self, ip: &[usize]) -> &mut Value {
         let mut cur = &mut self.root["children"][ip[0]];
         for &i in &ip[1..] {
@@ -128,10 +133,40 @@ impl Doc {
             }
         }
         visit(self.children(), false, &listed, &mut nested);
+        let mut seen = std::collections::HashSet::new();
         ids.iter()
-            .filter(|id| !nested.contains(id.as_str()) && !id.match_indices('/').any(|(i, _)| listed.contains(&id[..i])))
+            .filter(|id| {
+                // A component instance's rendered descendants ("inst/child") are not in the tree: judge them by the instance.
+                let base = id.split('/').next().unwrap_or_default();
+                !nested.contains(base) && !id.match_indices('/').any(|(i, _)| listed.contains(&id[..i])) && seen.insert(id.as_str())
+            })
             .cloned()
             .collect()
+    }
+
+    /// Index paths of the first node with each of `ids`, found in one walk of the document.
+    fn index_paths<'a>(&self, ids: impl Iterator<Item = &'a str>) -> HashMap<String, Vec<usize>> {
+        let mut want: HashSet<&str> = ids.collect();
+        let mut found = HashMap::new();
+        fn visit(nodes: &[Value], acc: &mut Vec<usize>, want: &mut HashSet<&str>, found: &mut HashMap<String, Vec<usize>>) {
+            for (i, n) in nodes.iter().enumerate() {
+                if want.is_empty() {
+                    return;
+                }
+                acc.push(i);
+                if let Some(id) = n["id"].as_str() {
+                    if want.remove(id) {
+                        found.insert(id.to_string(), acc.clone());
+                    }
+                }
+                if let Some(kids) = n["children"].as_array() {
+                    visit(kids, acc, want, found);
+                }
+                acc.pop();
+            }
+        }
+        visit(self.children(), &mut Vec::new(), &mut want, &mut found);
+        found
     }
 
     pub fn all_ids(&self) -> Vec<String> {
@@ -189,6 +224,22 @@ impl Doc {
         Ok(())
     }
 
+    /// `update` for many nodes: finds them all in one walk instead of one walk each.
+    pub fn update_all(&mut self, items: &[(&str, &Value)]) -> Result<(), String> {
+        let paths = self.index_paths(items.iter().map(|(id, _)| *id).filter(|id| !id.contains('/')));
+        for (id, data) in items {
+            if id.contains('/') {
+                self.update(id, data)?;
+                continue;
+            }
+            let props = data.as_object().ok_or("update data must be an object")?;
+            let ip = paths.get(*id).ok_or_else(|| format!("node not found: {id}"))?;
+            check_depth(ip.len() - 1, data)?;
+            merge_props(self.node_at_mut(ip), props, false);
+        }
+        Ok(())
+    }
+
     pub fn delete(&mut self, path: &str) -> Result<(), String> {
         if path.contains('/') {
             return Err("cannot delete descendants of component instances; override them with {enabled:false}".into());
@@ -196,6 +247,53 @@ impl Doc {
         let ip = self.index_path(path).ok_or_else(|| format!("node not found: {path}"))?;
         let (last, parent_ip) = ip.split_last().unwrap();
         self.children_at_mut(parent_ip).remove(*last);
+        Ok(())
+    }
+
+    /// `delete` for many nodes: finds them all in one walk instead of one walk each.
+    pub fn delete_all(&mut self, ids: &[String]) -> Result<(), String> {
+        if ids.iter().any(|id| id.contains('/')) {
+            return Err("cannot delete descendants of component instances; override them with {enabled:false}".into());
+        }
+        let found = self.index_paths(ids.iter().map(String::as_str));
+        let mut paths = ids.iter().map(|id| found.get(id).ok_or_else(|| format!("node not found: {id}"))).collect::<Result<Vec<_>, _>>()?;
+        // Last first, so a removal never moves a node that is still to go.
+        paths.sort_unstable_by(|a, b| b.cmp(a));
+        paths.dedup();
+        for ip in paths {
+            let (last, parent_ip) = ip.split_last().unwrap();
+            self.children_at_mut(parent_ip).remove(*last);
+        }
+        Ok(())
+    }
+
+    /// `move_node` to the end of `parent` for each of `ids` in turn, finding them all in one walk.
+    pub fn move_all(&mut self, ids: &[String], parent: &str) -> Result<(), String> {
+        if ids.iter().any(|id| id.contains('/')) {
+            return Err("cannot move descendants of component instances".into());
+        }
+        let tip = self.container_path(parent)?;
+        let found = self.index_paths(ids.iter().map(String::as_str));
+        let mut seen = HashSet::new();
+        let mut paths = Vec::new();
+        for id in ids.iter().filter(|id| seen.insert(id.as_str())) {
+            let ip = found.get(id).ok_or_else(|| format!("node not found: {id}"))?;
+            if tip.starts_with(ip) {
+                return Err("cannot move a node into itself".into());
+            }
+            check_depth(tip.len(), self.node_at(ip))?;
+            paths.push(ip);
+        }
+        // Take them out last first (see `delete_all`), then put them back in the order given.
+        let mut order: Vec<usize> = (0..paths.len()).collect();
+        order.sort_unstable_by(|&a, &b| paths[b].cmp(paths[a]));
+        let mut taken: Vec<Option<Value>> = paths.iter().map(|_| None).collect();
+        for k in order {
+            let (last, parent_ip) = paths[k].split_last().unwrap();
+            taken[k] = Some(self.children_at_mut(parent_ip).remove(*last));
+        }
+        let tip = self.container_path(parent)?;
+        self.children_at_mut(&tip).extend(taken.into_iter().flatten());
         Ok(())
     }
 
@@ -604,6 +702,63 @@ mod tests {
         assert!(d.find(&c).is_none());
         d.set_variables(&json!({"bg":{"type":"color","value":[{"value":"#fff","theme":{"mode":"light"}},{"value":"#000","theme":{"mode":"dark"}}]}}), false).unwrap();
         assert_eq!(d.root["themes"]["mode"], json!(["light","dark"]));
+    }
+
+    fn nested_doc() -> Doc {
+        let leaf = |id: &str| json!({"type":"rectangle","id":id});
+        Doc::from_json(&json!({"children":[
+            {"type":"frame","id":"f","children":[leaf("a"), {"type":"group","id":"g","children":[leaf("b"), leaf("c"), leaf("d")]}, leaf("e")]},
+            {"type":"frame","id":"h","children":[leaf("i"), leaf("j")]},
+            {"type":"group","id":"k","children":[]}
+        ]}).to_string()).unwrap()
+    }
+
+    /// The bulk operations are `update` / `delete` / `move_node` over many ids with one walk of the tree.
+    #[test]
+    fn bulk_operations_match_one_node_at_a_time() {
+        let ids = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let (mut one, mut all) = (nested_doc(), nested_doc());
+        let props = json!({"opacity": 0.5, "name": null});
+        let list = ids(&["j", "b", "f", "e", "nope"]);
+        for id in &list[..4] {
+            one.update(id, &props).unwrap();
+        }
+        all.update_all(&list[..4].iter().map(|id| (id.as_str(), &props)).collect::<Vec<_>>()).unwrap();
+        assert_eq!(one.root, all.root);
+        assert_eq!(all.update_all(&[("a", &props), ("nope", &props)]).unwrap_err(), "node not found: nope");
+        assert!(all.update_all(&[("a", &json!(5))]).is_err());
+
+        for id in ["i", "c", "g", "a"] {
+            one.delete(id).unwrap();
+        }
+        all.delete_all(&ids(&["i", "c", "g", "a"])).unwrap();
+        assert_eq!(one.root, all.root);
+        assert_eq!(all.delete_all(&ids(&["e", "nope"])).unwrap_err(), "node not found: nope");
+        assert!(all.delete_all(&ids(&["f/x"])).is_err());
+
+        let (mut one, mut all) = (nested_doc(), nested_doc());
+        for id in ["j", "e", "b", "i"] {
+            one.move_node(id, Some("k"), None).unwrap();
+        }
+        all.move_all(&ids(&["j", "e", "b", "i", "j"]), "k").unwrap();
+        assert_eq!(one.root, all.root);
+        let kept = all.root.clone();
+        assert!(all.move_all(&ids(&["a", "f"]), "g").is_err(), "a node cannot move into its own descendant");
+        assert!(all.move_all(&ids(&["a", "nope"]), "k").is_err());
+        assert!(all.move_all(&ids(&["a"]), "a").is_err());
+        assert_eq!(all.root, kept, "a refused move changes nothing");
+    }
+
+    #[test]
+    fn outermost_drops_nested_and_repeated_ids() {
+        let d = nested_doc();
+        let ids = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(d.outermost(&ids(&["c", "g", "i", "c", "i", "f", "b"])), ids(&["i", "f"]));
+        assert_eq!(d.outermost(&ids(&["c", "i", "c", "d"])), ids(&["c", "i", "d"]));
+        // An instance's rendered descendant goes with the instance or its ancestors, and stays when only unrelated layers are listed.
+        assert_eq!(d.outermost(&ids(&["k/x", "f"])), ids(&["k/x", "f"]));
+        assert_eq!(d.outermost(&ids(&["g/x", "f"])), ids(&["f"]));
+        assert_eq!(d.outermost(&ids(&["g/x", "g"])), ids(&["g"]));
     }
 
     #[test]

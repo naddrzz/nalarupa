@@ -362,6 +362,36 @@ assert(nodeIcon('path') === nodeIcon('polygon') && nodeIcon('frame', true) === '
     rmSync(dir, { recursive: true, force: true })
   }
 }
+// Editing many layers at once is linear in their number: select-all + group, set one property and delete
+// each cost about 4x the time for 4x the layers (grouping was ~16x, 4000 layers took 4.9 s).
+{
+  const bulk = (n: number) => {
+    call('new', { template: 'empty' })
+    const kids = Array.from({ length: n }, (_, i) => ({ type: 'rectangle', name: 'r' + i, x: (i % 100) * 5, y: Math.floor(i / 100) * 5, width: 4, height: 4, fill: '#f00' }))
+    const fr = call('insert', { node: { type: 'frame', name: 'bulk', layout: 'none', width: 5000, height: 5000, children: kids } }).id
+    call('frames')
+    const ids = call<{ id: string }[]>('layers').filter((l) => l.id !== fr).map((l) => l.id)
+    const time = (fn: () => void) => {
+      const t0 = performance.now()
+      fn()
+      return performance.now() - t0
+    }
+    const group = time(() => call('wrap', { ids, kind: 'group' }))
+    const g = node(call<{ id: string; type: string }[]>('layers').find((l) => l.type === 'group')!.id).node
+    assert(g.children.length === n && g.children[0].name === 'r0' && g.children[n - 1].name === 'r' + (n - 1), `grouping ${n} layers keeps all of them, in order`)
+    call('undo')
+    const update = time(() => call('update', { ids, props: { opacity: 0.5 } }))
+    assert(node(ids[n - 1]).node.opacity === 0.5, `updating ${n} layers reaches the last one`)
+    call('undo')
+    const del = time(() => call('delete', { ids }))
+    assert(call<{ id: string }[]>('layers').length === 1, `deleting ${n} layers leaves only the frame`)
+    return [group, update, del]
+  }
+  bulk(500) // warm up
+  const [short, long] = [bulk(1000), bulk(4000)]
+  for (const [i, what] of ['group', 'update', 'delete'].entries())
+    assert(long[i] < Math.max(short[i], 20) * 9 && long[i] < 3000, `${what} of selected layers is linear (1000 layers ${short[i].toFixed(0)} ms, 4000 ${long[i].toFixed(0)} ms)`)
+}
 assert(ICONS.saveAs !== ICONS.open, 'Save as… has its own icon, not the Open folder')
 
 console.log('editor-check ok')
