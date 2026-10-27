@@ -301,7 +301,9 @@ impl Engine {
             return;
         }
         let room = self.doc.parent_of(id).is_some_and(|(p, _)| self.renderer.can_slide_into(&self.doc, &p));
-        if self.slid.insert(id.to_string()) && room {
+        // A blend mode needs the content beneath, which the isolated snapshot lacks: appear in place.
+        let blended = self.doc.find(id).is_some_and(crate::svg::node_blends);
+        if self.slid.insert(id.to_string()) && room && !blended {
             self.renderer.slides.push(crate::render::Slide::new(id));
         }
     }
