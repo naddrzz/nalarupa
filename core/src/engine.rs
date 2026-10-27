@@ -316,18 +316,18 @@ impl Engine {
 
     /// Whether node `id` shows a background blur, a component instance's content included.
     pub fn holds_glass(&self, id: &str) -> bool {
-        self.holds_glass_with(id, &Map::new(), &mut None)
+        self.holds_glass_with(&self.doc, id, &Map::new(), &mut None)
     }
 
     /// `holds_glass` that builds the document-wide `Resolver` at most once across calls sharing `res`.
-    fn holds_glass_with<'a>(&'a self, id: &str, empty: &'a Map<String, Value>, res: &mut Option<crate::resolve::Resolver<'a>>) -> bool {
-        let Some(n) = self.doc.find(id) else { return false };
+    fn holds_glass_with<'a>(&'a self, doc: &'a Doc, id: &str, empty: &'a Map<String, Value>, res: &mut Option<crate::resolve::Resolver<'a>>) -> bool {
+        let Some(n) = doc.find(id) else { return false };
         if crate::svg::doc_has_backdrop_blur(n) {
             return true;
         }
         let mut refs = false;
         crate::doc::walk(std::slice::from_ref(n), &mut |k| refs |= k["type"] == "ref");
-        refs && res.get_or_insert_with(|| crate::resolve::Resolver::new(&self.doc.root, &self.libs, empty)).resolve(n).is_some_and(|r| crate::svg::has_backdrop_blur(&r))
+        refs && res.get_or_insert_with(|| crate::resolve::Resolver::new(&doc.root, &self.libs, empty)).resolve(n).is_some_and(|r| crate::svg::has_backdrop_blur(&r))
     }
 
     /// Stop every slide whose node now holds a background blur (an update, copy, move, an instance
@@ -338,7 +338,11 @@ impl Engine {
             return;
         }
         let (empty, mut res) = (Map::new(), None);
-        let glass: Vec<String> = self.renderer.slides.iter().filter(|s| self.holds_glass_with(&s.id, &empty, &mut res)).map(|s| s.id.clone()).collect();
+        let doc = match &self.preview {
+            Some(p) if !self.executing => p,
+            _ => &self.doc,
+        };
+        let glass: Vec<String> = self.renderer.slides.iter().filter(|s| self.holds_glass_with(doc, &s.id, &empty, &mut res)).map(|s| s.id.clone()).collect();
         self.renderer.slides.retain(|s| !glass.contains(&s.id));
     }
 

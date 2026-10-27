@@ -1690,6 +1690,24 @@ mod tests {
         assert!(e.renderer.slides.is_empty(), "the card holds glass after an inspector edit");
     }
 
+    /// A streamed step that gives a sliding card glass stops the slide: the card lives in the preview
+    /// document, which is the one `sync` renders.
+    #[test]
+    fn glass_added_by_a_streamed_update_unslides() {
+        let mut e = engine();
+        let head = "root = Insert(document, {type:\"frame\", name:\"Root\", width:300, height:300, layout:\"none\"})
+card = Insert(root, {type:\"frame\", name:\"Card\", width:100, height:100, layout:\"none\"})
+";
+        let full = format!("{head}Update(card, {{effect:{{type:\"background_blur\", radius:20}}}})\nx = 1\n");
+        e.stream_update("toolu_1", "ag0", &format!("{head}Update(card"));
+        e.sync();
+        assert!(e.doc.children().is_empty(), "the card exists only in the preview");
+        assert_eq!(e.renderer.slides.len(), 1, "a plain streamed card slides");
+        e.stream_update("toolu_1", "ag0", &full);
+        e.sync();
+        assert!(e.renderer.slides.is_empty(), "the streamed update gave the card glass");
+    }
+
     #[test]
     fn a_running_script_leaves_the_engine_free_and_stops_with_the_agent() {
         // The script ran under the engine lock: the window froze and Stop was dead until it ended.
