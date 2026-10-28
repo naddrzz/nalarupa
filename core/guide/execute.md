@@ -55,8 +55,9 @@ FindEmptySpace({width, height, direction?: "right"|"bottom"|"left"|"top", paddin
 Print(...values): void                          // lines appear in the response
 TakeScreenshot(ids: string[] | "document"): void   // PNGs attached to the response
 Export(ids, "png" | "jpeg" | "webp" | "svg" | "html-css", outputPath, {scale?, quality?, includeLayerNames?, includeLayerIds?, includeHtmlScaffold?})
+                                                // outputPath stays in the document's folder (relative = inside it): a folder for images, a .html / .htm name for html-css
 Export(ids | [], "pdf", outputPath)             // one page per id; [] = every top-level frame (the deck)
-                                                // outputPath stays in the document's folder (relative = inside it); a .pdf / .html name; never the document file itself
+                                                // outputPath stays in the document's folder; a .pdf name; never the document file itself
 Generate("stock" | "ai", nodeId, prompt)        // puts a placeholder photo fill on the node
 Generate("svg", frameId, prompt)                // the AI Pen draws vector artwork into the frame
 ```
