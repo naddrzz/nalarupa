@@ -590,7 +590,12 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
     for (let i = 0; i < 30 && !ok(); i++) await sleep(100)
     return ok()
   }
+  // The settings panel is taller than the room left under the header: the header keeps its 40 px, so the
+  // gear does not move when the panel opens (#452).
+  const gearBefore = await app.getByTestId('agent-settings').bounds()
   await openKeyBox()
+  const gearAfter = await app.getByTestId('agent-settings').bounds()
+  if (gearAfter.y !== gearBefore.y) throw new Error(`opening Agent settings moved the header's gear from y=${gearBefore.y} to y=${gearAfter.y}`)
   await app.getByTestId('api-key').fill('sk-ant-first')
   await app.getByTestId('api-key').press('enter')
   if (!(await settled(() => savedKey() === 'sk-ant-first'))) throw new Error(`typing a key did not save it: ${savedKey()}`)
