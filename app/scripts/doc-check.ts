@@ -141,6 +141,23 @@ exec('p = Insert(document, {type:"frame", name:"Clip", x:100, y:100, width:300, 
   assert(JSON.stringify(img?.clip) === '{"x":100,"y":100,"w":300,"h":200}', `a pending image in a clip frame carries the frame's box (${JSON.stringify(img?.clip)})`)
   assert(lv.find((n: any) => n.name === 'Free')?.clip === null, 'an unclipped pending image has no clip box')
 }
+
+// A round pending image reports its corner radii and its clipping frame's, so the shimmer is cut to that shape.
+exec('Insert(document, {type:"rectangle", name:"Pill", x:0, y:600, width:100, height:100, cornerRadius:[50,50,10,0], fill:{type:"image", url:"nalarupa:pending-qa"}}); p = Insert(document, {type:"frame", name:"Rounded", x:300, y:600, width:100, height:100, layout:"none", clip:true, cornerRadius:30}); Insert(p, {type:"rectangle", name:"InRounded", x:0, y:0, width:100, height:100, fill:{type:"image", url:"nalarupa:pending-qa"}})')
+{
+  const lv = call('live')
+  const pill = lv.find((n: any) => n.name === 'Pill')
+  assert(JSON.stringify(pill?.radius) === '[50,50,10,0]', `a pending image reports its corner radii (${JSON.stringify(pill?.radius)})`)
+  const inner = lv.find((n: any) => n.name === 'InRounded')
+  assert(JSON.stringify(inner?.cuts) === '[{"x":300,"y":600,"w":100,"h":100,"r":[30,30,30,30]}]', `a pending image in a rounded clip frame carries the frame's radii (${JSON.stringify(inner?.cuts)})`)
+  assert(lv.find((n: any) => n.name === 'Img')?.cuts.length === 0, 'a square clip frame has no radii')
+}
+// A square clip frame inside a rounded one leaves the outer frame's corners in force.
+exec('p = Insert(document, {type:"frame", name:"Outer", x:600, y:600, width:100, height:100, layout:"none", clip:true, cornerRadius:30}); p = Insert(p, {type:"frame", name:"Inner", x:0, y:0, width:60, height:60, layout:"none", clip:true}); Insert(p, {type:"rectangle", name:"Deep", x:0, y:0, width:60, height:60, fill:{type:"image", url:"nalarupa:pending-qa"}})')
+{
+  const deep = call('live').find((n: any) => n.name === 'Deep')
+  assert(JSON.stringify(deep?.cuts?.map((c: any) => c.r)) === '[[30,30,30,30]]', `overlapping clip frames keep the rounded one (${JSON.stringify(deep?.cuts)})`)
+}
 call('open', { path: b })
 
 // Open failures leave the open document alone.
