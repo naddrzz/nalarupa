@@ -212,30 +212,43 @@ impl Doc {
 
     /// `update` once the index path of `path`'s node (or of its instance, for a `/` path) is known.
     fn update_at(&mut self, ip: Vec<usize>, path: &str, data: &Value) -> Result<(), String> {
-        let props = data.as_object().ok_or("update data must be an object")?;
-        if let Some((inst, rest)) = path.split_once('/') {
-            let node = self.node_at_mut(&ip);
-            if node["type"] != "ref" {
-                return Err(format!("'{inst}' is not a component instance; '/' paths only address instance descendants"));
-            }
-            check_levels(override_levels(ip.len()), data)?;
-            let desc = ensure_obj(&mut node["descendants"]);
+        self.check_update(&ip, path, data)?;
+        let props = data.as_object().unwrap();
+        if let Some((_, rest)) = path.split_once('/') {
+            let desc = ensure_obj(&mut self.node_at_mut(&ip)["descendants"]);
             let entry = desc.entry(rest.to_string()).or_insert_with(|| json!({}));
             merge_props(entry, props, true);
             return Ok(());
         }
-        check_depth(ip.len() - 1, data)?;
         merge_props(self.node_at_mut(&ip), props, false);
         Ok(())
     }
 
+    /// Everything that can make `update_at` fail, checked before it changes anything.
+    fn check_update(&self, ip: &[usize], path: &str, data: &Value) -> Result<(), String> {
+        data.as_object().ok_or("update data must be an object")?;
+        if let Some((inst, _)) = path.split_once('/') {
+            if self.node_at(ip)["type"] != "ref" {
+                return Err(format!("'{inst}' is not a component instance; '/' paths only address instance descendants"));
+            }
+            return check_levels(override_levels(ip.len()), data);
+        }
+        check_depth(ip.len() - 1, data)
+    }
+
     /// `update` for many nodes: finds them all (and the instances of `/` paths) in one walk instead of one walk each.
+    /// All or nothing: every item is checked before the first one is applied.
     pub fn update_all(&mut self, items: &[(&str, &Value)]) -> Result<(), String> {
         let paths = self.index_paths(items.iter().map(|(id, _)| id.split('/').next().unwrap_or_default()));
+        let mut found = Vec::with_capacity(items.len());
         for (id, data) in items {
             let base = id.split('/').next().unwrap_or_default();
             let ip = paths.get(base).ok_or_else(|| format!("node not found: {base}"))?;
-            self.update_at(ip.clone(), id, data)?;
+            self.check_update(ip, id, data)?;
+            found.push(ip.clone());
+        }
+        for (ip, (id, data)) in found.into_iter().zip(items) {
+            self.update_at(ip, id, data)?;
         }
         Ok(())
     }
@@ -725,8 +738,11 @@ mod tests {
         }
         all.update_all(&list[..4].iter().map(|id| (id.as_str(), &props)).collect::<Vec<_>>()).unwrap();
         assert_eq!(one.root, all.root);
+        let kept = all.root.clone();
         assert_eq!(all.update_all(&[("a", &props), ("nope", &props)]).unwrap_err(), "node not found: nope");
-        assert!(all.update_all(&[("a", &json!(5))]).is_err());
+        assert!(all.update_all(&[("a", &props), ("e", &json!(5))]).is_err());
+        assert!(all.update_all(&[("a", &props), ("e/x", &props)]).is_err());
+        assert_eq!(all.root, kept, "a refused update_all changes nothing, not even the items before the bad one");
         // Instance descendants ("inst/child") become overrides, like `update`; a non-instance is refused.
         let with_ref = json!({"children":[{"type":"ref","id":"r","ref":"c"},{"type":"rectangle","id":"a"}]}).to_string();
         let (mut one_i, mut all_i) = (Doc::from_json(&with_ref).unwrap(), Doc::from_json(&with_ref).unwrap());
