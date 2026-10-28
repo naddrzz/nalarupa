@@ -65,6 +65,11 @@ assert(box(save).w - 2 * 16 - 8 - 10 === kid(save, 'Label')!.w, 'the instance hu
 colour(red, RED, 'a root fill override repaints the instance')
 colour(plain, BLUE, 'and leaves the other instances alone')
 colour(button, BLUE, 'and the component')
+// The Inspector shows what an instance inherits where it has no value of its own: `inherited` on the node reply.
+const inherits = (id: string) => call('node', { id }).inherited
+assert(inherits(plain)?.fill === '#0000ff', `an instance inherits its component's fill: ${JSON.stringify(inherits(plain))}`)
+assert(inherits(red)?.fill === '#0000ff' && call('node', { id: red }).node.fill === '#ff0000', 'an overriding instance keeps its own fill and still reports the inherited one')
+assert(inherits(button) == null, 'a component inherits nothing')
 assert(!kid(red, 'Dot') && kid(red, 'Label'), `enabled:false hides the dot: ${kids(red).map((k) => k.name)}`)
 assert(box(red).w === box(plain).w - 8 - 10, `the hidden dot and its gap leave the layout: ${box(red).w}`)
 const replaced = kid(round, 'Round dot')

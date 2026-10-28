@@ -733,12 +733,7 @@ impl<'a> Svg<'a> {
             let _ = write!(g, r#" transform="{tf}""#);
         }
         let _ = write!(self.out, "<g{g}>");
-        let blur = (fx.blur > 0.0).then(|| {
-            let id = self.id("f");
-            let (x, y, w, h) = inflate(extent(n), 3.0 * fx.blur + fx.reach() + max_stroke(n) + 2.0);
-            let _ = write!(self.defs, r#"<filter id="{id}" filterUnits="userSpaceOnUse" x="{x}" y="{y}" width="{w}" height="{h}" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="{}"/></filter>"#, fx.blur);
-            let _ = write!(self.out, r#"<g filter="url(#{id})">"#);
-        });
+        let blur = self.open_blur(n, &fx);
         match n.ty.as_str() {
             "frame" | "rectangle" | "ellipse" | "polygon" | "path" | "line" => self.shape(n, &fx, outline.as_deref()),
             "group" => self.group(n, &fx, outline.as_deref()),
@@ -753,7 +748,7 @@ impl<'a> Svg<'a> {
             "browser" => self.placeholder(n),
             _ => {}
         }
-        if blur.is_some() {
+        if blur {
             self.out.push_str("</g>");
         }
         self.out.push_str("</g>");
@@ -762,6 +757,61 @@ impl<'a> Svg<'a> {
                 level.1.push(gid);
             }
         }
+    }
+
+    /// Opens the group of `n`'s layer blur, if it has one; the caller closes it when this is true.
+    fn open_blur(&mut self, n: &RNode, fx: &Effects) -> bool {
+        if fx.blur <= 0.0 {
+            return false;
+        }
+        let id = self.id("f");
+        let (x, y, w, h) = inflate(extent(n), 3.0 * fx.blur + fx.reach() + max_stroke(n) + 2.0);
+        let _ = write!(self.defs, r#"<filter id="{id}" filterUnits="userSpaceOnUse" x="{x}" y="{y}" width="{w}" height="{h}" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="{}"/></filter>"#, fx.blur);
+        let _ = write!(self.out, r#"<g filter="url(#{id})">"#);
+        true
+    }
+
+    /// Only what stacks above node `id` inside `n`: for each ancestor of `id`, the siblings after
+    /// the branch, within its rotation, flips, opacity, layer blur and clip (the ancestor's own paint and
+    /// everything below `id` is left out). Repainted over a sliding `id`, which the layer leaves out.
+    pub fn above(&mut self, n: &RNode, id: &str) {
+        let Some(i) = n.kids.iter().position(|k| k.id == id || crate::render::find_rnode(k, id).is_some()) else { return };
+        let opacity = n.f("opacity").unwrap_or(1.0);
+        if opacity <= 0.0 || self.skip.contains(&n.id) {
+            return;
+        }
+        let (tf, clip) = (transform(n), (n.ty == "frame" && n.b("clip")).then(|| geometry(n)));
+        let mut g = String::new();
+        if opacity < 1.0 {
+            let _ = write!(g, r#" opacity="{opacity}""#);
+        }
+        if !tf.is_empty() {
+            let _ = write!(g, r#" transform="{tf}""#);
+        }
+        let _ = write!(self.out, "<g{g}>");
+        let blur = self.open_blur(n, &Effects::of(n));
+        if self.painted.is_empty() {
+            // Siblings with a background blur reference what was painted before them.
+            self.tag = has_backdrop_blur(n);
+        }
+        self.painted.push((!tf.is_empty(), Vec::new()));
+        if let Some(c) = &clip {
+            self.open_clip(c);
+        }
+        if n.kids[i].id != id {
+            self.above(&n.kids[i], id);
+        }
+        for k in &n.kids[i + 1..] {
+            self.node(k);
+        }
+        if clip.is_some() {
+            self.out.push_str("</g>");
+        }
+        self.painted.pop();
+        if blur {
+            self.out.push_str("</g>");
+        }
+        self.out.push_str("</g>");
     }
 
     fn shape(&mut self, n: &RNode, fx: &Effects, outline: Option<&str>) {
@@ -2312,6 +2362,35 @@ VAT office", 230.0, &st);
         svg.gradient(grad("radial", 90.0).as_object().unwrap(), (20.0, 20.0, 160.0, 80.0)).unwrap();
         assert!(svg.defs.contains(r#"gradientTransform="matrix(0 -40 80 0 100 60)""#), "{}", svg.defs);
         assert!(!svg.defs.contains("e-"), "{}", svg.defs);
+    }
+
+    /// The cover built by `above` carries the ancestor's layer blur, and a sibling with a
+    /// background blur in it sees the sibling painted before it.
+    #[test]
+    fn above_keeps_ancestor_blur_and_backdrop() {
+        let mut fonts = Fonts::new(std::env::temp_dir().join("nalarupa-test-fonts"));
+        fonts.online = false;
+        let mut assets = Assets::new(std::env::temp_dir().join("nalarupa-test-assets"));
+        assets.online = false;
+        let mut svg = Svg::new(&mut fonts, &mut assets, None);
+        let b = (0.0, 0.0, 100.0, 100.0);
+        let leaf = |id: &str, p: Value| {
+            let mut n = node("rectangle", p, b);
+            n.id = id.into();
+            n
+        };
+        let mut root = node("frame", json!({"effect": {"type": "blur", "radius": 8}}), b);
+        root.kids = vec![
+            leaf("s", json!({"fill": "#0f0"})),
+            leaf("a", json!({"fill": "#f00"})),
+            leaf("g", json!({"fill": "#00f8", "effect": {"type": "background_blur", "radius": 4}})),
+        ];
+        svg.above(&root, "s");
+        let out = svg.finish(None);
+        assert!(out.contains("feGaussianBlur stdDeviation=\"4\"") && out.contains("<g filter=\"url(#f"), "ancestor blur: {out}");
+        let a = out.split("<g id=\"").nth(1).and_then(|r| r.split('"').next()).expect("siblings are tagged");
+        assert!(out.contains(&format!("<use xlink:href=\"#{a}\"/>")), "backdrop sees the earlier sibling: {out}");
+        assert!(!out.contains("#00ff00") && !out.contains("#0f0"), "the sliding node is left out: {out}");
     }
 
     #[test]
