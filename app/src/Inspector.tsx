@@ -1,14 +1,16 @@
-import { useMemo } from 'react'
+import { useMemo, useRef } from 'react'
 import { tryCall } from './core'
 import { nodeIcon, type IconName } from './icons'
 import { turnAroundCenter } from './geometry'
 import { C } from './theme'
-import { Button, Field, FocusRing, Icon, IconButton, NumField, Row, Section, Segmented, Swatch, T, Toggle, useFieldRing, type Toast } from './ui'
+import { Button, Field, FocusRing, Icon, IconButton, NumField, Row, Section, Segmented, Swatch, T, Toggle, useFieldRing, useScrollToFocus, type Toast } from './ui'
 
 type Props = { version: number; selection: string[]; select: (ids: string[]) => void; toast: Toast }
 type Info = { id: string; node: any; box: { w: number; h: number } | null; local: { bx: number; by: number } | null; parentLayout: string; variables: Record<string, any> }
 
 const str = (v: unknown) => (v === undefined || v === null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v))
+/** Drawn from fixed colors (notes) or from the stroke alone (a line): a fill does nothing. */
+const NO_FILL = ['line', 'note', 'prompt', 'context']
 const isMode = (v: unknown, mode: string) => typeof v === 'string' && v.startsWith(mode)
 let clicks = 0
 
@@ -138,11 +140,14 @@ function TextContent({ value, onSubmit }: { value: string; onSubmit: (v: string)
 }
 
 export function Inspector({ version, selection, select, toast }: Props) {
+  const scroller = useScrollToFocus()
   const remove = () => {
     if (tryCall('delete', { ids: selection }) !== null) select([])
     else toast('Unable to delete the selection. Select the layers again and try again.', true)
   }
   const infos = useMemo(() => selection.map((id) => ({ id, ...tryCall('node', { id }) }) as Info).filter((i) => i.node), [selection, version])
+  // A relative gesture on a mixed field: each layer's current value and the total delta already applied.
+  const stepBase = useRef<{ key: string; vals: Map<string, number>; last: number } | null>(null)
   const update = (props: Record<string, unknown>, coalesce?: string) => {
     const ok = tryCall('update', { ids: selection, props, coalesce }) !== null
     if (!ok) toast(BAD_VALUE, true)
@@ -215,18 +220,35 @@ export function Inspector({ version, selection, select, toast }: Props) {
   const fill = fillMixed ? null : solidColor(n.fill, vars)
   const stroke = solidColor(n.stroke, vars)
 
+  const fresh = (i: Info) => ({ ...i, ...tryCall('node', { id: i.id }) }) as Info
+  /** Up/Down or scrub on a mixed field: every layer moves by the same delta from its own starting value instead of all taking one number. A layer pinned at `min`/`max` moves again as soon as the direction reverses. */
+  const stepEach = (read: (i: Info) => number, write: (i: Info, v: number) => Record<string, unknown> | null, min = -Infinity, max = Infinity) => (delta: number, key: string) => {
+    // Start values and the writer's input come from the document, not the render snapshot, which can predate a gesture that just ended.
+    // Read every layer before the first write: each write invalidates the renderer, so reading inside the loop would resync it per layer.
+    const now = new Map(infos.map((i) => [i.id, fresh(i)]))
+    if (stepBase.current?.key !== key) stepBase.current = { key, last: 0, vals: new Map(infos.map((i) => [i.id, read(now.get(i.id)!)])) }
+    const base = stepBase.current
+    const by = delta - base.last
+    base.last = delta
+    perNode((i) => {
+      const v = Math.min(max, Math.max(min, Math.round(((base.vals.get(i.id) ?? read(i)) + by) * 100) / 100))
+      base.vals.set(i.id, v)
+      return write(now.get(i.id) ?? i, v)
+    }, key)
+  }
   // Rotation turns around the center like the canvas handle: a free layer's origin moves so the center stays put.
   // A group's box starts (bx, by) past its origin.
-  const setRotation = (v: number, key: string) => perNode((i) => {
+  const rotationProps = (i: Info, v: number) => {
     const props: Record<string, unknown> = { rotation: v || null }
     if (!inFlow(i) && i.box) {
       const [fx, fy] = [!!i.node.flipX, !!i.node.flipY]
       ;[props.x, props.y] = turnAroundCenter(Number(i.node.x ?? 0), Number(i.node.y ?? 0), i.box.w, i.box.h, Number(i.node.rotation ?? 0), v, fx, fy, i.local?.bx, i.local?.by)
     }
     return props
-  }, key)
+  }
+  const setRotation = (v: number, key: string) => perNode((i) => rotationProps(i, v), key)
   // W/H: typing a number makes that axis fixed; auto text becomes fixed width (height: fixed size). A group is the union of its children and has no size to set.
-  const setSize = (axis: 'width' | 'height', v: number, key: string) => perNode((i) => {
+  const sizeProps = (i: Info, axis: 'width' | 'height', v: number) => {
     if (i.node.type === 'group') return null
     const p: Record<string, unknown> = { [axis]: Math.max(0, Math.round(v * 100) / 100) }
     if (i.node.type === 'text') {
@@ -234,7 +256,8 @@ export function Inspector({ version, selection, select, toast }: Props) {
       else if ((i.node.textGrowth ?? 'auto') === 'auto') p.textGrowth = 'fixed-width'
     }
     return p
-  }, key)
+  }
+  const setSize = (axis: 'width' | 'height', v: number, key: string) => perNode((i) => sizeProps(i, axis, v), key)
   // Hug / Fill: on = that mode, off = fixed at the current size. Text leaves auto growth first.
   const sizing = (axis: 'width' | 'height', mode: string, on: boolean) => perNode((i) => {
     const size = Math.round(dimOf(i, axis))
@@ -254,7 +277,7 @@ export function Inspector({ version, selection, select, toast }: Props) {
   const fillH = all((i) => isMode(i.node.height, 'fill_container'))
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, overflowY: 'scroll' }}>
+    <div ref={scroller} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, overflowY: 'scroll' }}>
       <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8, padding: 14, borderBottomWidth: 1, borderColor: C.border }}>
         <Icon name={multi ? 'layers' : nodeIcon(n.type, n.reusable)} color={!multi && (n.reusable || n.type === 'ref') ? C.component : C.muted} />
         {multi
@@ -268,21 +291,21 @@ export function Inspector({ version, selection, select, toast }: Props) {
         </Row>
         {!infos.some(inFlow) ? (
           <Row>
-            <NumField label="X" name="X position" {...numOf((i) => i.node.x)} onCommit={(v, k) => update({ x: v }, k)} testId="inspector-x" />
-            <NumField label="Y" name="Y position" {...numOf((i) => i.node.y)} onCommit={(v, k) => update({ y: v }, k)} testId="inspector-y" />
+            <NumField label="X" name="X position" {...numOf((i) => i.node.x)} onCommit={(v, k) => update({ x: v }, k)} onStep={stepEach((i) => Number(i.node.x ?? 0) || 0, (_, v) => ({ x: v }))} testId="inspector-x" />
+            <NumField label="Y" name="Y position" {...numOf((i) => i.node.y)} onCommit={(v, k) => update({ y: v }, k)} onStep={stepEach((i) => Number(i.node.y ?? 0) || 0, (_, v) => ({ y: v }))} testId="inspector-y" />
           </Row>
         ) : null}
         <Row>
-          <NumField label="↻" name="Rotation" {...numOf((i) => i.node.rotation)} onCommit={(v, k) => setRotation(v, k)} testId="inspector-rotation" />
-          <NumField label="α" name="Opacity" {...numOf((i) => (i.node.opacity ?? 1) * 100)} onCommit={(v, k) => update({ opacity: v >= 100 ? null : v / 100 }, k)} min={0} max={100} testId="inspector-opacity" />
+          <NumField label="↻" name="Rotation" {...numOf((i) => i.node.rotation)} onCommit={(v, k) => setRotation(v, k)} onStep={stepEach((i) => Number(i.node.rotation ?? 0) || 0, rotationProps)} testId="inspector-rotation" />
+          <NumField label="α" name="Opacity" {...numOf((i) => (i.node.opacity ?? 1) * 100)} onCommit={(v, k) => update({ opacity: v >= 100 ? null : v / 100 }, k)} onStep={stepEach((i) => (i.node.opacity ?? 1) * 100, (_, v) => ({ opacity: v >= 100 ? null : v / 100 }), 0, 100)} min={0} max={100} testId="inspector-opacity" />
         </Row>
       </Section>
 
       <Section title={!multi && inFlow(infos[0]) ? 'Size (auto layout child)' : 'Size'}>
         {all((i) => i.node.type === 'group') ? null : (
           <Row>
-            <NumField label="W" name="Width" {...numOf((i) => dimOf(i, 'width'))} onCommit={(v, k) => setSize('width', v, k)} min={0} testId="inspector-w" />
-            <NumField label="H" name="Height" {...numOf((i) => dimOf(i, 'height'))} onCommit={(v, k) => setSize('height', v, k)} min={0} testId="inspector-h" />
+            <NumField label="W" name="Width" {...numOf((i) => dimOf(i, 'width'))} onCommit={(v, k) => setSize('width', v, k)} onStep={stepEach((i) => dimOf(i, 'width'), (i, v) => sizeProps(i, 'width', v), 0)} min={0} testId="inspector-w" />
+            <NumField label="H" name="Height" {...numOf((i) => dimOf(i, 'height'))} onCommit={(v, k) => setSize('height', v, k)} onStep={stepEach((i) => dimOf(i, 'height'), (i, v) => sizeProps(i, 'height', v), 0)} min={0} testId="inspector-h" />
           </Row>
         )}
         {canHug || canFill ? (
@@ -365,7 +388,7 @@ export function Inspector({ version, selection, select, toast }: Props) {
         </Section>
       ) : null}
 
-      {all((i) => i.node.type !== 'group') ? (
+      {all((i) => i.node.type !== 'group') && !all((i) => NO_FILL.includes(i.node.type)) ? (
         <Section title="Fill">
           <Row>
             {fill ? <Swatch color={fill} /> : null}
@@ -374,14 +397,14 @@ export function Inspector({ version, selection, select, toast }: Props) {
         </Section>
       ) : null}
 
-      {!multi && ['frame', 'rectangle', 'ellipse', 'polygon', 'path'].includes(n.type) ? (
-        <Section title="Stroke & corners">
+      {!multi && ['frame', 'rectangle', 'ellipse', 'polygon', 'path', 'line'].includes(n.type) ? (
+        <Section title={n.type === 'line' ? 'Stroke' : 'Stroke & corners'}>
           <Row>
             {stroke ? <Swatch color={stroke} /> : null}
             <Field name="Stroke color" value={str(n.stroke)} mono onCommit={setPaint('stroke', vars, n.strokeWidth == null ? { strokeWidth: 1 } : {})} placeholder="#000000" testId="inspector-stroke" />
             <Field name="Stroke width" value={str(n.strokeWidth ?? '')} width={58} onCommit={setChecked('strokeWidth', (v) => strokeWidthOf(v, vars), n.stroke == null || (Array.isArray(n.stroke) && !n.stroke.length) ? { stroke: '#000000' } : {})} placeholder="1" testId="inspector-stroke-width" />
           </Row>
-          {n.type !== 'ellipse' && n.type !== 'path' ? (
+          {!['ellipse', 'path', 'line'].includes(n.type) ? (
             typeof (n.cornerRadius ?? 0) === 'number'
               ? <NumField label="R" name="Corner radius" value={n.cornerRadius ?? 0} onCommit={(v, k) => update({ cornerRadius: v || null }, k)} min={0} testId="inspector-radius" />
               : <Field label="R" name="Corner radius" value={str(n.cornerRadius)} onCommit={setChecked('cornerRadius', (v) => sides(v, vars, [1, 4]))} testId="inspector-radii" />
@@ -420,7 +443,7 @@ export function Inspector({ version, selection, select, toast }: Props) {
         </Row>
         <Row gap={6}>
           <Button onClick={() => exportAs('svg')}>SVG</Button>
-          <Button onClick={() => exportAs('html-css')}>HTML</Button>
+          <Button testId="export-html" focusTestId="export-html-focus" onClick={() => exportAs('html-css')}>HTML</Button>
         </Row>
       </Section>
     </div>

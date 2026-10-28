@@ -155,15 +155,16 @@ fn rpc(msg: &Value, agent: Option<&str>) -> Option<Value> {
                 match agent {
                     Some(a) => args["__agent"] = json!(a),
                     // External agents (Claude Code / Cursor / Codex configured by the user).
-                    None => {
-                        args["__agent"] = json!("external");
-                        engine().emit(json!({"type": "agent", "kind": "external", "text": name}));
-                    }
+                    None => args["__agent"] = json!("external"),
                 }
                 crate::engine::call_tool(name, &args)
             };
             // The engine guard is gone here: rasterize screenshots without blocking the canvas.
             let out = out.finish();
+            // Logged once the call is over, so the chat row says whether the edit landed.
+            if agent.is_none() && name != "spawn_agents" {
+                engine().emit(json!({"type": "agent", "kind": "external", "text": name, "error": out.error}));
+            }
             let mut content = vec![json!({"type": "text", "text": out.text})];
             content.extend(out.images.into_iter().map(|d| json!({"type": "image", "data": d, "mimeType": "image/png"})));
             Ok(json!({"content": content, "isError": out.error}))
