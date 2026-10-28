@@ -921,36 +921,67 @@ fn changed_nodes(old: &Layer, new: &Layer, out: &mut Vec<Rect>) {
         out.extend([old.paint, new.paint]);
         return;
     }
-    let before: HashMap<&str, &Flat> = old.flat.iter().map(|f| (f.id.as_str(), f)).collect();
+    let before: HashMap<&str, usize> = old.flat.iter().enumerate().map(|(i, f)| (f.id.as_str(), i)).collect();
     let mut seen = HashSet::new();
-    let mut changed = Vec::new();
-    for f in &new.flat {
+    // (layer: 0 old, 1 new; index into its `flat`)
+    let mut changed: Vec<(usize, usize)> = Vec::new();
+    for (i, f) in new.flat.iter().enumerate() {
         seen.insert(f.id.as_str());
         match before.get(f.id.as_str()) {
-            Some(o) if o.sig == f.sig => {}
-            Some(o) => changed.extend([*o, f]),
-            None => changed.push(f),
+            Some(&o) if old.flat[o].sig == f.sig => {}
+            Some(&o) => changed.extend([(0, o), (1, i)]),
+            None => changed.push((1, i)),
         }
     }
-    changed.extend(old.flat.iter().filter(|o| !seen.contains(o.id.as_str())));
+    changed.extend(old.flat.iter().enumerate().filter(|(_, o)| !seen.contains(o.id.as_str())).map(|(i, _)| (0, i)));
     // A clip frame that changed or went away cuts (or stops cutting) its descendants, and a node
     // moved under another parent changes which clips cut its own: their signatures stay the same,
-    // so repaint wherever they reach.
-    let mut roots: HashSet<&str> = changed.iter().filter(|f| f.clip).map(|f| f.id.as_str()).collect();
-    roots.extend(new.flat.iter().filter(|f| before.get(f.id.as_str()).is_some_and(|o| o.parent != f.parent)).map(|f| f.id.as_str()));
-    for layer in [old, new] {
-        for (i, f) in layer.flat.iter().enumerate() {
-            if roots.contains(f.id.as_str()) {
-                changed.extend(layer.flat[i + 1..].iter().take_while(|d| d.depth > f.depth));
-            }
-        }
-    }
+    // so repaint wherever they reach. Both are covered by the subtree areas below, except a moved
+    // node's own subtree, which keeps its signatures: add the moved node.
+    let moved = new.flat.iter().enumerate().filter(|(_, f)| before.get(f.id.as_str()).is_some_and(|&o| old.flat[o].parent != f.parent));
+    let moved: Vec<(usize, usize)> = moved.flat_map(|(i, f)| [(0, before[f.id.as_str()]), (1, i)]).collect();
+    changed.extend(moved);
+    let areas = [dirty_areas(old), dirty_areas(new)];
+    let rects: Vec<Rect> = changed.into_iter().map(|(l, i)| areas[l][i]).collect();
     // A rotated/flipped node paints outside its layout box: repaint the whole layer.
-    if changed.iter().any(|f| f.reach.is_infinite()) {
+    if rects.iter().any(|r| !(r.0.is_finite() && r.1.is_finite() && r.2.is_finite() && r.3.is_finite())) {
         out.extend([old.paint, new.paint]);
         return;
     }
-    out.extend(changed.into_iter().map(|f| (f.x - f.reach, f.y - f.reach, f.w + 2.0 * f.reach, f.h + 2.0 * f.reach)));
+    out.extend(rects);
+}
+
+/// Per node of `layer`, what a change of it can repaint. Its own box and reach, joined with its descendants'
+/// (a container's opacity, blend mode, effect or clip applies to its whole subtree, which may stick out of its
+/// box), and grown by the reach of every ancestor that paints past its children (a group's shadow or blur
+/// follows its children's outlines). Two passes over the preorder `flat`, so a bulk edit stays linear.
+fn dirty_areas(layer: &Layer) -> Vec<Rect> {
+    let flat = &layer.flat;
+    let mut parent: Vec<Option<usize>> = vec![None; flat.len()];
+    let mut grow = vec![0.0; flat.len()];
+    let mut stack: Vec<usize> = Vec::new();
+    for (i, f) in flat.iter().enumerate() {
+        while stack.last().is_some_and(|&p| flat[p].depth >= f.depth) {
+            stack.pop();
+        }
+        if let Some(&p) = stack.last() {
+            parent[i] = Some(p);
+            // `reach` is 4 for a node that paints nothing past its box (see `reach`).
+            grow[i] = grow[p] + if flat[p].reach > 4.0 { flat[p].reach } else { 0.0 };
+        }
+        stack.push(i);
+    }
+    let mut area: Vec<Rect> = flat.iter().zip(&grow).map(|(f, g)| {
+        let r = f.reach + g;
+        (f.x - r, f.y - r, f.w + 2.0 * r, f.h + 2.0 * r)
+    }).collect();
+    // Children come after their parent: fold each subtree into it from the back.
+    for i in (0..flat.len()).rev() {
+        if let Some(p) = parent[i] {
+            area[p] = union(area[p], area[i]);
+        }
+    }
+    area
 }
 
 /// Generous paint reach outside a node's box from its effects, stroke and text overflow.
@@ -1308,6 +1339,48 @@ pub(crate) mod tests {
             let mut cold = Renderer::default();
             sync(&mut cold, &doc);
             assert!(incremental == frame(&mut cold), "stale pixels after rotating to {deg} degrees");
+        }
+    }
+
+    /// A container's opacity or effect changes its whole subtree, which may stick out of its box, and a group's
+    /// shadow follows its children's outlines: after either edit the incremental frame equals a cold render.
+    #[test]
+    fn subtree_and_ancestor_effects_leave_no_stale_pixels() {
+        let docs = [
+            // A frame that does not clip, its child sticking out; then its opacity, blur, fill and fill blend mode.
+            (r##"{"version":"2.19","children":[{"type":"frame","id":"f","x":0,"y":0,"width":400,"height":300,"layout":"none","fill":"#ffffff","children":[
+                {"type":"frame","id":"o","x":20,"y":20,"width":100,"height":100,"layout":"none","fill":"#ff000080","children":[
+                    {"type":"rectangle","id":"r","x":60,"y":30,"width":80,"height":40,"fill":"#000000"}]}]}]}"##,
+             vec![("o", json!({"opacity": 0.5})), ("o", json!({"opacity": 0})), ("o", json!({"effect": {"type": "blur", "radius": 6}})), ("o", json!({"fill": "#00ff0080"})),
+                  ("o", json!({"fill": {"type": "color", "color": "#00ff0080", "blendMode": "multiply"}}))]),
+            // A child of a shadowed group; then the child's opacity and position.
+            (r##"{"version":"2.19","children":[{"type":"frame","id":"f","x":0,"y":0,"width":400,"height":300,"layout":"none","fill":"#ffffff","children":[
+                {"type":"group","id":"g","x":40,"y":30,"effect":{"type":"shadow","offset":{"x":12,"y":12},"blur":0,"color":"#000000"},"children":[
+                    {"type":"rectangle","id":"a","x":0,"y":0,"width":60,"height":50,"fill":"#000000"},
+                    {"type":"rectangle","id":"b","x":70,"y":60,"width":40,"height":40,"fill":"#0000ff"}]}]}]}"##,
+             vec![("b", json!({"opacity": 0.2})), ("b", json!({"x": 90})), ("g", json!({"opacity": 0.2}))]),
+            // A group whose child's drop shadow sticks out of the group's box; then the group's opacity.
+            (r##"{"version":"2.19","children":[{"type":"frame","id":"f","x":0,"y":0,"width":300,"height":300,"layout":"none","fill":"#ffffff","children":[
+                {"type":"group","id":"g","x":19,"y":40,"children":[
+                    {"type":"frame","id":"box","x":26,"y":111,"width":144,"height":157,"layout":"none","effect":{"type":"shadow","offset":{"x":-8,"y":10},"blur":4,"color":"#00000080"}},
+                    {"type":"rectangle","id":"r","x":30,"y":120,"width":60,"height":60,"fill":"#ff0000"}]}]}]}"##,
+             vec![("g", json!({"opacity": 0.2}))]),
+        ];
+        let frame = |r: &mut Renderer| r.render(400, 300, 0.0, 0.0, 1.0, [255, 255, 255], None, true).to_vec();
+        for (json, edits) in docs {
+            for (id, props) in edits {
+                let mut doc = Doc::from_json(json).unwrap();
+                let mut live = Renderer::default();
+                sync(&mut live, &doc);
+                frame(&mut live);
+                doc.update(id, &props).unwrap();
+                sync(&mut live, &doc);
+                let incremental = frame(&mut live);
+                let mut cold = Renderer::default();
+                sync(&mut cold, &doc);
+                let stale = incremental.iter().zip(frame(&mut cold)).filter(|(a, b)| a.abs_diff(*b) > 10).count();
+                assert!(stale == 0, "{stale} stale channels after {id} {props}");
+            }
         }
     }
 
