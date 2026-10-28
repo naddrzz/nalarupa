@@ -994,6 +994,22 @@ try {
   await app.getByTestId('layers').getByText('Inspect rect').click({ modifiers: 'ctrl' })
   assert(await until(async () => (await count('inspector-fill')) > 0), 'a line, a note and a rectangle together keep the Fill field')
 
+  // A flipped top-level frame is titled at the top-left of where it is painted, not at its layout origin.
+  await mcpCall(port, { method: 'tools/call', params: { name: 'execute', arguments: { input: 'Insert(document, {type:"frame", name:"Title FlipX", x:5000, y:100, width:300, height:200, fill:"#EEFFEE", flipX:true}); Insert(document, {type:"frame", name:"Title FlipY", x:5000, y:600, width:300, height:200, fill:"#EEEEFF", flipY:true});' } } })
+  await app.getByTestId('layers').getByText('Title FlipY').waitFor({ timeoutMs: 6000 })
+  await canvas.press('escape')
+  await app.call('keystrokes', { keys: 'shift-1' })
+  await sleep(800)
+  for (const name of ['Title FlipX', 'Title FlipY']) {
+    await app.getByTestId('layers').getByText(name).click()
+    const read = async () => ({ box: (await app.getByTestId('selection-box').all())[0]?.bounds, label: (await canvas.getByText(name).all())[0]?.bounds })
+    const above = (b: { x: number; y: number; height: number }, l: { x: number; y: number; height: number }) => Math.abs(l.x - b.x) <= 12 && l.y + l.height <= b.y + 2 && l.y >= b.y - 24
+    // Retry until the box is the newly selected frame's: FlipY starts with FlipX's box still on screen.
+    const ok = await until(async () => { const { box, label } = await read(); return !!box && !!label && above(box, label) })
+    const { box, label } = await read()
+    assert(ok, `${name}'s title sits above its painted top-left (label ${JSON.stringify(label)}, painted ${JSON.stringify(box)})`)
+  }
+
   // Alt-hover measures to where a flipped layer is painted: its outline sits on the layer and the distance runs to
   // its painted edge (the unflipped box lies 100 further right, in empty space).
   await mcpCall(port, { method: 'tools/call', params: { name: 'execute', arguments: { input: 'const f = Insert(document, {type:"frame", name:"Measure frame", layout:"none", x:4000, y:0, width:700, height:900, fill:"#FFFFFF"}); Insert(f, {type:"rectangle", name:"Measure A", x:100, y:760, width:100, height:60, fill:"#FF0000"}); Insert(f, {type:"rectangle", name:"Measure B", x:500, y:760, width:100, height:60, fill:"#0000FF", flipX:true})' } } })
