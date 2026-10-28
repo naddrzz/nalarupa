@@ -1018,6 +1018,29 @@ try {
   await app.getByTestId('layers').getByText('Inspect rect').click({ modifiers: 'ctrl' })
   assert(await until(async () => (await count('inspector-fill')) > 0), 'a line, a note and a rectangle together keep the Fill field')
 
+  // Alt-hover measures to where a flipped layer is painted: its outline sits on the layer and the distance runs to
+  // its painted edge (the unflipped box lies 100 further right, in empty space).
+  await mcpCall(port, { method: 'tools/call', params: { name: 'execute', arguments: { input: 'const f = Insert(document, {type:"frame", name:"Measure frame", layout:"none", x:4000, y:0, width:700, height:900, fill:"#FFFFFF"}); Insert(f, {type:"rectangle", name:"Measure A", x:100, y:760, width:100, height:60, fill:"#FF0000"}); Insert(f, {type:"rectangle", name:"Measure B", x:500, y:760, width:100, height:60, fill:"#0000FF", flipX:true})' } } })
+  const measureRow = app.getByTestId('layers').getByText('Measure frame')
+  await measureRow.waitFor({ timeoutMs: 6000 })
+  await measureRow.click()
+  await canvas.press('shift-2')
+  const fr = await measureRow.bounds()
+  await app.mouse.click({ x: fr.x - 32, y: fr.y + fr.height / 2 }) // its chevron: show the children
+  await app.getByTestId('layers').getByText('Measure B').waitFor({ timeoutMs: 6000 })
+  const frameBox = await app.getByTestId('selection-box').bounds()
+  await app.getByTestId('layers').getByText('Measure B').click()
+  // One selection-box shows for any single layer, so wait on its bounds: B's box is narrower than the frame's, A's lies left of B's.
+  assert(await until(async () => (await count('selection-box')) === 1 && (await app.getByTestId('selection-box').bounds()).width < frameBox.width / 2), 'Measure B is selected')
+  const flipped = await app.getByTestId('selection-box').bounds()
+  await app.getByTestId('layers').getByText('Measure A').click()
+  assert(await until(async () => (await count('selection-box')) === 1 && (await app.getByTestId('selection-box').bounds()).x < flipped.x - 2), 'Measure A is selected')
+  await app.mouse.move({ x: flipped.x + flipped.width / 2, y: flipped.y + flipped.height / 2 }, { modifiers: 'alt' })
+  assert(await until(async () => (await count('measure-target')) === 1), 'Alt+hover outlines the hovered flipped layer')
+  const target = await app.getByTestId('measure-target').bounds()
+  assert(Math.abs(target.x - flipped.x) <= 2 && Math.abs(target.width - flipped.width) <= 2, `the Alt outline sits on the painted flipped layer (${target.x},${target.width} vs ${flipped.x},${flipped.width})`)
+  assert(await app.getByTestId('measure-line').getByText('200').count(), 'Alt+hover measures to the painted edge of a flipped layer (200, not 300)')
+
   await canvas.press('escape')
   await shot('10-final')
   console.log('editor-e2e ok — screenshots in', out)
