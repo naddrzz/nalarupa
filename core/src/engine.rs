@@ -19,24 +19,32 @@ pub struct ToolOut {
     /// Icons still downloading when the call ended (warning, library, name, weight): `finish` waits for
     /// them without the engine lock and reports the ones that turn out not to exist.
     pub icons: Vec<(String, String, String, u32)>,
+    /// The document the screenshots were taken of, kept only when icons were still downloading: `finish`
+    /// redraws the shots from it, since the live document may have changed (or been switched) meanwhile.
+    pub shot_doc: Option<Doc>,
 }
 
 impl ToolOut {
     pub fn ok(text: impl Into<String>) -> ToolOut {
-        ToolOut { text: text.into(), images: Vec::new(), error: false, shots: Vec::new(), icons: Vec::new() }
+        ToolOut { text: text.into(), images: Vec::new(), error: false, shots: Vec::new(), icons: Vec::new(), shot_doc: None }
     }
     pub fn err(text: impl Into<String>) -> ToolOut {
         ToolOut { error: true, ..ToolOut::ok(text) }
     }
     /// Rasterize pending screenshots and settle pending icons. Call without holding `engine()`.
     pub fn finish(mut self) -> ToolOut {
-        let settled = !self.icons.is_empty();
         self.settle_icons();
-        for (id, mut tree, mut scale) in std::mem::take(&mut self.shots) {
-            // The tree was built while the icons were still downloading, so it has none of them.
-            if settled {
-                if let Ok((fresh, s)) = crate::script::shot_tree(&mut engine(), &id) {
-                    (tree, scale) = (fresh, s);
+        let shot_doc = self.shot_doc.take();
+        for (id, mut tree, scale) in std::mem::take(&mut self.shots) {
+            // The tree was built while the icons were still downloading, so it has none of them: redraw it
+            // from the same document, not whatever the live one is now.
+            if let Some(doc) = &shot_doc {
+                let target = crate::script::shot_target(doc, &id);
+                let mut e = engine();
+                let e = &mut *e;
+                let mut cx = Ctx { doc, libs: &e.libs, fonts: &mut e.fonts, assets: &mut e.assets };
+                if let Ok(fresh) = cx.node_tree_at(&target, scale) {
+                    tree = fresh;
                 }
             }
             match crate::render::encode_tree(&tree, "png", scale, 0) {

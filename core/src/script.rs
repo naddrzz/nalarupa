@@ -894,15 +894,21 @@ fn finish(e: &mut Engine, prep: Prepared, result: Result<Map<String, Value>, Str
             Err(err) => text += &format!("\nExport failed: {err}\n"),
         }
     }
-    ToolOut { text, images: Vec::new(), error: false, shots, icons }
+    let shot_doc = (!shots.is_empty() && !icons.is_empty()).then(|| e.doc.clone());
+    ToolOut { text, images: Vec::new(), error: false, shots, icons, shot_doc }
 }
 
 /// The render tree and scale of a screenshot target (`document` is the first top-level node).
 pub fn shot_tree(e: &mut Engine, id: &str) -> Result<(resvg::usvg::Tree, f64), String> {
-    let target = if id == "document" { e.doc.children().first().and_then(|n| n["id"].as_str()).unwrap_or("").to_string() } else { id.to_string() };
+    let target = shot_target(&e.doc, id);
     e.sync();
     let scale = e.renderer.find(&target).map(|f| (1400.0 / f.w.max(f.h).max(1.0)).min(2.0)).unwrap_or(1.0).clamp(0.05, 8.0);
     e.ctx().node_tree_at(&target, scale).map(|tree| (tree, scale))
+}
+
+/// The node a screenshot of `id` draws: `document` is the first top-level node.
+pub fn shot_target(doc: &crate::doc::Doc, id: &str) -> String {
+    if id == "document" { doc.children().first().and_then(|n| n["id"].as_str()).unwrap_or("").to_string() } else { id.to_string() }
 }
 
 /// Layout and content checks on nodes touched by this call, plus the icons still downloading (their
