@@ -44,6 +44,15 @@ const val = async (testId: string) => {
   const e = await app.getByTestId(testId).element()
   return String(e.customProps?.value ?? e.text ?? '')
 }
+// The Inspector's inputs cannot be read: ask the document over this app's MCP port. A hidden layer is skipped by a
+// `Get` visit, so read it by id.
+const exec = async (input: string) => {
+  const port = (await ports()).filter((p) => !portsBefore.has(p))[0]
+  const res: any = await (await mcpCall(port, { method: 'tools/call', params: { name: 'execute', arguments: { input } } })).json()
+  return String(res.result?.content?.[0]?.text ?? '')
+}
+const rectId = async () => (await exec('Get(undefined, n => { if (n.name === "Rectangle") Print("id=" + n.id) })')).match(/id=(\S+)/)?.[1] ?? ''
+const xOf = async (id: string) => Number((await exec(`Print("x=" + Get(${JSON.stringify(id)}, {depth: 0}).x)`)).match(/x=(-?[\d.]+)/)?.[1])
 try {
   await app.getByTestId('template-blank').waitFor({ timeoutMs: 30000 })
   await app.getByTestId('template-blank').click()
@@ -173,18 +182,32 @@ try {
   await sleep(300)
   assert((await size()).join() === [rw0, rh0].join(), 'one undo step reverts the flip')
 
-  // A hidden layer has no render box: the Inspector still reports its own size, not 0 × 0. Hiding drops the
-  // selection (no box to select), so pick the layer from the Layers panel again.
+  // A hidden layer has no render box: the Inspector still reports its own size, not 0 × 0. It stays selected
+  // through Hide and further edits (arrow nudge, Inspector field), so Show stays one click away.
   const rectRow = app.getByTestId('layers').getByText('Rectangle')
+  const hid = await rectId()
+  const hx0 = await xOf(hid)
   await app.getByTestId('inspector-visibility').click()
-  assert(await until(async () => !(await count('inspector-visibility'))), 'hiding the layer clears the selection')
-  await rectRow.click()
-  assert(await until(async () => (await app.getByText(`Hidden ${rw0} × ${rh0}`).count()) > 0), `a hidden layer still shows its ${rw0} × ${rh0} size in the Inspector`)
+  assert(await until(async () => (await app.getByText(`Hidden ${rw0} × ${rh0}`).count()) > 0), `hiding keeps the layer selected: the Inspector shows its ${rw0} × ${rh0} size`)
   assert(!(await app.getByText('× 0 ·').count()), 'a hidden layer is not reported as 0 tall')
+  assert((await count('inspector-visibility')) > 0, 'the Inspector offers Show for the hidden layer')
+  await canvas.press('right')
+  assert(await until(async () => (await xOf(hid)) === hx0 + 1), 'an arrow key nudges the selected hidden layer')
+  // Click into the field and type (as the X / rotation steps do): `fill()` can miss the input and leave the value as it was.
+  const hxf = await app.getByTestId('inspector-x').bounds()
+  await app.mouse.click({ x: hxf.x + hxf.width - 10, y: hxf.y + hxf.height / 2 })
+  await sleep(300)
+  await app.call('keystrokes', { keys: 'ctrl-a' })
+  await app.call('keystrokes', { keys: `${hx0 + 7}`.split('').join(' ') })
+  await app.call('keystrokes', { keys: 'enter' })
+  assert(await until(async () => (await xOf(hid)) === hx0 + 7), 'an Inspector field edit applies to the hidden layer')
+  await sleep(800)
+  assert((await count('inspector-x')) > 0 && (await app.getByText(`Hidden ${rw0} × ${rh0}`).count()) > 0, 'the hidden layer is still selected after the edits')
+  await sleep(1300) // past the canvas hand-back window, so the keys go to the canvas
   await canvas.press('ctrl-z')
-  await sleep(600) // past the double-click window, or the second row click would start a rename
-  await rectRow.click()
-  assert(await until(async () => (await app.getByText(`Rendered ${rw0} × ${rh0}`).count()) > 0), 'one undo step shows the layer again at its rendered size')
+  await canvas.press('ctrl-z')
+  await canvas.press('ctrl-z')
+  assert(await until(async () => (await app.getByText(`Rendered ${rw0} × ${rh0}`).count()) > 0 && (await xOf(hid)) === hx0), 'undoing the edits and the Hide shows the layer again at its rendered size, still selected')
 
   // Deleting from the Inspector unmounts the focused button: the keys go back to the canvas, so Ctrl+Z (sent
   // to whatever has focus, not to the canvas by id) still undoes it.
@@ -197,11 +220,9 @@ try {
   await rectRow.click()
   assert(await until(async () => (await count('inspector-visibility')) > 0), 'the Layers row selects the restored layer')
   await app.getByTestId('inspector-visibility').click()
-  assert(await until(async () => !(await count('inspector-visibility'))), 'the Inspector Hide button hides the layer')
+  assert(await until(async () => (await app.getByText(`Hidden ${rw0} × ${rh0}`).count()) > 0), 'the Inspector Hide button hides the layer')
   await sleep(1200) // past the whole canvas hand-back window (App.tsx)
   await app.call('keystrokes', { keys: 'ctrl-z' })
-  await sleep(600)
-  await rectRow.click()
   assert(await until(async () => (await app.getByText(`Rendered ${rw0} × ${rh0}`).count()) > 0), 'Ctrl+Z works right after the Inspector Hide button unmounted')
 
   await app.getByTestId('tool-rectangle').click()
@@ -1079,6 +1100,24 @@ try {
   await app.getByTestId('layers').getByText('Inspect rect').click({ modifiers: 'ctrl' })
   assert(await until(async () => (await count('inspector-fill')) > 0), 'a line, a note and a rectangle together keep the Fill field')
 
+  // A layer inside a component instance cannot be deleted or duplicated: the Inspector offers Hide (an `enabled:false` override) instead.
+  await mcpCall(port, { method: 'tools/call', params: { name: 'execute', arguments: { input: 'comp = Insert(document, {type:"frame", name:"Inst btn", x:700, y:700, width:120, height:40, reusable:true, fill:"#3366ff", layout:"none"}); Insert(comp, {type:"text", name:"Inst label", content:"Click", fontSize:16, fill:"#ffffff", x:10, y:10}); Insert(document, {type:"ref", name:"Inst copy", ref:comp, x:900, y:700})' } } })
+  await app.getByTestId('layers').getByText('Inst copy').waitFor({ timeoutMs: 6000 })
+  await app.getByTestId('layers').getByText('Inst copy').click()
+  await canvas.press('shift-2') // it was inserted outside the fitted view
+  // The previous mixed selection's box lingers until the click renders: wait for the instance's own 3:1 box.
+  const instBox = async () => (await count('selection-box')) === 1 && Math.abs((b => b.width / b.height)(await app.getByTestId('selection-box').bounds()) - 3) < 0.1
+  assert(await until(instBox, 6000), 'the instance alone is selected and in view')
+  const inst = await app.getByTestId('selection-box').bounds()
+  const k = inst.width / 120
+  const label = { x: inst.x + 25 * k, y: inst.y + 20 * k }
+  await app.mouse.move(label) // GPUIX needs a hover before the click lands
+  await sleep(300)
+  await app.mouse.click(label, { modifiers: 'ctrl' })
+  assert(await until(async () => (await count('hide-instance-child')) > 0), 'ctrl-click on an instance picks its child, which offers Hide')
+  assert(!(await app.getByText('Duplicate').count()) && !(await app.getByText('Delete').count()), 'an instance child offers no Duplicate or Delete')
+  await app.getByTestId('hide-instance-child').click()
+  assert(await until(async () => !(await count('hide-instance-child'))), 'Hide clears the instance child selection')
   // A component instance without its own fill shows the component's fill (its swatch; the color is the field's placeholder),
   // not an empty field that reads as white.
   await mcpCall(port, { method: 'tools/call', params: { name: 'execute', arguments: { input: 'const c = Insert(document, {type:"frame", name:"Inspect button", reusable:true, x:0, y:400, width:120, height:40, fill:"#336699", cornerRadius:8}); Insert(document, {type:"ref", name:"Inspect instance", ref:c, x:200, y:400})' } } })

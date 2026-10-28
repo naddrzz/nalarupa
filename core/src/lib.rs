@@ -180,8 +180,10 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             let flat = e.renderer.find(id).map(rect);
             // A component instance holds only its overrides: what it inherits, for the Inspector to show where it has none.
             let empty = serde_json::Map::new();
-            let inherited = raw.as_ref().filter(|n| n["type"] == "ref").and_then(|n| resolve::Resolver::new(&e.doc.root, &e.libs, &empty).inherited(n));
-            Ok(json!({"node": raw, "inherited": inherited, "box": flat, "local": local, "parent": parent, "parentLayout": parent_layout,
+            let resolver = resolve::Resolver::new(&e.doc.root, &e.libs, &empty);
+            let inherited = raw.as_ref().filter(|n| n["type"] == "ref").and_then(|n| resolver.inherited(n));
+            let exists = raw.is_some() || resolver.has_path(id);
+            Ok(json!({"node": raw, "exists": exists, "inherited": inherited, "box": flat, "local": local, "parent": parent, "parentLayout": parent_layout,
                       "variables": e.doc.root.get("variables").cloned().unwrap_or(json!({}))}))
         }
         "select" => {

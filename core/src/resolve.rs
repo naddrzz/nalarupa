@@ -115,6 +115,24 @@ impl<'a> Resolver<'a> {
         self.index.get(id).copied()
     }
 
+    /// Whether `path` names a node: a document id, or an instance path (`inst/child`, `inst/nested/child`) into
+    /// the expanded component, hidden descendants included (they resolve to nothing, so the render tree lacks them).
+    pub fn has_path(&self, path: &str) -> bool {
+        let mut segs = path.split('/');
+        let Some(mut node) = segs.next().and_then(|id| self.node(id)).cloned() else { return false };
+        let mut scope = String::new();
+        let theme = self.scopes[""].1.clone();
+        for seg in segs {
+            if node["type"] != "ref" {
+                return false;
+            }
+            let Some((merged, s)) = self.expand(&node, &scope, &theme, 0) else { return false };
+            let Some(next) = crate::doc::find_in(merged["children"].as_array().map(Vec::as_slice).unwrap_or(&[]), seg).cloned() else { return false };
+            (node, scope) = (next, s);
+        }
+        true
+    }
+
     pub fn resolve(&self, node: &Value) -> Option<RNode> {
         self.resolve_in(node, "", &self.scopes[""].1.clone(), "", 0)
     }
@@ -269,6 +287,19 @@ impl<'a> Resolver<'a> {
             .or_else(|| list.iter().rev().find(matches))
             .or_else(|| list.first()).map(|e| e.get("value").cloned().unwrap_or_else(|| e.clone()))
     }
+}
+
+/// `key` of each node on `chain` (a top-level node of `root` down to one of its plain
+/// descendants), its variables substituted for the theme active at that node.
+pub fn along(root: &Value, chain: &[&Value], key: &str) -> Vec<Value> {
+    let empty = Map::new();
+    let scopes = HashMap::from([("", (root["variables"].as_object().unwrap_or(&empty), theme_defaults(root)))]);
+    let r = Resolver { scopes, index: HashMap::new() };
+    let mut theme = r.scopes[""].1.clone();
+    chain.iter().map(|n| {
+        apply_theme(&mut theme, n);
+        r.subst(&n[key], "", &theme, 0)
+    }).collect()
 }
 
 impl RNode {
@@ -435,6 +466,22 @@ pub fn migrate(root: &mut Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn has_path_reaches_hidden_instance_descendants() {
+        let root = json!({"children": [
+            {"type": "frame", "id": "C", "reusable": true, "children": [{"type": "frame", "id": "row", "children": [{"type": "text", "id": "t"}]}, {"type": "ref", "id": "n", "ref": "D"}]},
+            {"type": "frame", "id": "D", "reusable": true, "children": [{"type": "rectangle", "id": "r"}]},
+            {"type": "ref", "id": "i", "ref": "C", "enabled": false, "descendants": {"t": {"enabled": false}}}]});
+        let empty = Map::new();
+        let r = Resolver::new(&root, &[], &empty);
+        for p in ["i", "i/t", "i/row", "i/n", "i/n/r", "C", "row"] {
+            assert!(r.has_path(p), "{p}");
+        }
+        for p in ["nope", "i/nope", "i/n/t", "i/t/x", "row/t"] {
+            assert!(!r.has_path(p), "{p}");
+        }
+    }
 
     #[test]
     fn instances_and_themes() {

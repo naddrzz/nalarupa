@@ -165,6 +165,53 @@ fn drop_pending(v: &mut Value, inflight: &std::collections::HashSet<String>) {
     }
 }
 
+/// Copy every image fill whose url is a file directly in `from` into `<dir>/images` and point the url
+/// at the copy (`./images/<name>`, relative to the document). Missing files keep their url. Every file
+/// and folder it creates goes into `created`, so a failed save can remove them again.
+fn localize_images(v: &mut Value, from: &Path, dir: &Path, created: &mut Vec<PathBuf>) -> Result<(), String> {
+    match v {
+        Value::Array(a) => a.iter_mut().try_for_each(|x| localize_images(x, from, dir, created)),
+        Value::Object(o) => {
+            if o.get("type").and_then(Value::as_str) == Some("image") {
+                if let Some(Value::String(url)) = o.get_mut("url") {
+                    let src = PathBuf::from(url.as_str());
+                    if src.parent() == Some(from) && src.is_file() {
+                        let name = copy_image(&src, &dir.join("images"), created)?;
+                        *url = format!("./images/{name}");
+                    }
+                }
+            }
+            o.values_mut().try_for_each(|x| localize_images(x, from, dir, created))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// The name of a copy of `src` in `images`: its own name, or `<stem>-2.<ext>`, … when that name holds a
+/// different file (an identical one is reused, never replaced).
+fn copy_image(src: &Path, images: &Path, created: &mut Vec<PathBuf>) -> Result<String, String> {
+    if !images.exists() {
+        std::fs::create_dir_all(images).map_err(|e| e.to_string())?;
+        created.push(images.to_path_buf());
+    }
+    let bytes = std::fs::read(src).map_err(|e| format!("cannot read {}: {e}", src.display()))?;
+    let stem = src.file_stem().unwrap_or_default().to_string_lossy();
+    let ext = src.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+    for i in 1.. {
+        let name = if i == 1 { format!("{stem}{ext}") } else { format!("{stem}-{i}{ext}") };
+        let dst = images.join(&name);
+        if !dst.exists() {
+            std::fs::write(&dst, &bytes).map_err(|e| format!("cannot copy {}: {e}", src.display()))?;
+            created.push(dst);
+            return Ok(name);
+        }
+        if std::fs::read(&dst).is_ok_and(|b| b == bytes) {
+            return Ok(name);
+        }
+    }
+    unreachable!()
+}
+
 /// A file saved while an agent was still building a frame keeps its `placeholder` flag, and no run will ever
 /// clear it: the frame would show "Generating" forever. Frames in `pens` are being drawn by an AI Pen of this
 /// process, which still clears them (only passed when the same file is reopened: pen frames are ids of that file).
@@ -333,8 +380,16 @@ impl Engine {
         let mut cx = Ctx { doc, libs: &self.libs, fonts: &mut self.fonts, assets: &mut self.assets };
         let roots = self.renderer.shift_siblings(&mut cx);
         let rebuilt = self.renderer.sync(&mut cx);
-        // A slide dropped for a blend mode goes back into the cached view at the next sync.
-        let dropped = !self.renderer.slides.is_empty() && self.renderer.refresh_slides(&mut cx, &rebuilt, roots);
+        let mut dropped = false;
+        if !self.renderer.slides.is_empty() {
+            // The settled slides were left out of the layers: sync again with them shown.
+            if self.renderer.settle_covered() {
+                self.synced = 0;
+                return self.sync();
+            }
+            // A slide dropped for a blend mode goes back into the cached view at the next sync.
+            dropped = self.renderer.refresh_slides(&mut cx, &rebuilt, roots);
+        }
         self.synced = if dropped { 0 } else { self.version };
     }
 
@@ -810,12 +865,19 @@ impl Engine {
         if let Some(from) = &moved_from {
             Doc::relocate(&mut self.doc.root, from, &to);
         }
-        if let Err(err) = self.doc.save(&target) {
+        // Images generated while Untitled live in the data folder; the file refers to them next to itself.
+        let mut saved = Doc { root: self.doc.root.clone(), path: None };
+        let mut created = Vec::new();
+        if let Err(err) = localize_images(&mut saved.root, &self.data_dir.join("images"), &to, &mut created).and_then(|_| saved.save(&target)) {
+            for p in created.iter().rev() {
+                let _ = if p.is_dir() { std::fs::remove_dir(p) } else { std::fs::remove_file(p) };
+            }
             if let Some(root) = backup {
                 self.doc.root = root;
             }
             return Err(err);
         }
+        self.doc.root = saved.root;
         if let (Some(from), Some(before)) = (&moved_from, &backup) {
             let relocate = |v: &mut Value| Doc::relocate(v, from, &to);
             // During a drag the history steps lead back from the document as the drag began.
@@ -1392,6 +1454,65 @@ mod tests {
         assert!(e.set_setting("k", json!("new")).is_err());
         assert!(!blocker.exists(), "a failed rename must not leave the new settings in the temp file");
         assert_eq!(e.setting("k"), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An image generated while Untitled sits in the data folder: Save copies it next to the file and
+    /// refers to it relatively; the SVG export inlines it.
+    #[test]
+    fn save_localizes_generated_images_and_svg_export_embeds_them() {
+        let dir = std::env::temp_dir().join(format!("nalarupa-test-localize-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut e = Engine::new(dir.join("data"));
+        e.offline();
+        e.load_template("empty");
+        std::fs::create_dir_all(dir.join("data/images")).unwrap();
+        let pic = dir.join("data/images/abc.png");
+        std::fs::write(&pic, resvg::tiny_skia::Pixmap::new(2, 2).unwrap().encode_png().unwrap()).unwrap();
+        let url = pic.to_string_lossy().replace('\\', "/");
+        let id = e.insert_root(json!({"type": "frame", "x": 0, "y": 0, "width": 40, "height": 40, "layout": "none",
+            "fill": {"type": "image", "url": url, "mode": "fill"}})).unwrap();
+
+        let saved = dir.join("proj/doc.pen");
+        e.save(Some(saved.to_str().unwrap())).unwrap();
+        let file: Value = serde_json::from_str(&std::fs::read_to_string(&saved).unwrap()).unwrap();
+        assert_eq!(file["children"][0]["fill"]["url"], "./images/abc.png");
+        assert!(dir.join("proj/images/abc.png").is_file() && pic.is_file());
+        assert_eq!(e.doc.root["children"][0]["fill"]["url"], "./images/abc.png");
+
+        let out = dir.join("out");
+        let files = crate::html::plan(&mut e, &[id], "svg", out.to_str().unwrap(), &json!({})).unwrap().run().unwrap();
+        let svg = std::fs::read_to_string(&files[0]).unwrap();
+        assert!(svg.contains("xlink:href=\"data:image/png;base64,"), "{svg}");
+        assert!(!svg.contains("images/abc.png"), "{svg}");
+
+        // Save as into another folder keeps the localized image reachable.
+        let moved = dir.join("other/doc.pen");
+        e.save(Some(moved.to_str().unwrap())).unwrap();
+        assert_eq!(e.doc.root["children"][0]["fill"]["url"], "../proj/images/abc.png");
+
+        // A different file already under the name is not replaced; an identical one is reused.
+        let png = |w| resvg::tiny_skia::Pixmap::new(w, 2).unwrap().encode_png().unwrap();
+        let fresh = dir.join("data/images/new.png");
+        std::fs::write(&fresh, png(3)).unwrap();
+        std::fs::create_dir_all(dir.join("third/images")).unwrap();
+        std::fs::write(dir.join("third/images/new.png"), png(5)).unwrap();
+        let fresh_url = fresh.to_string_lossy().replace('\\', "/");
+        e.insert_root(json!({"type": "rectangle", "width": 4, "height": 4, "fill": {"type": "image", "url": fresh_url}})).unwrap();
+        e.insert_root(json!({"type": "rectangle", "width": 4, "height": 4, "fill": {"type": "image", "url": url}})).unwrap();
+        std::fs::write(dir.join("third/images/abc.png"), png(2)).unwrap();
+        e.save(Some(dir.join("third/doc.pen").to_str().unwrap())).unwrap();
+        let urls: Vec<_> = e.doc.root["children"].as_array().unwrap().iter().map(|n| n["fill"]["url"].as_str().unwrap().to_string()).collect();
+        assert_eq!(urls[1..], ["./images/new-2.png", "./images/abc.png"]);
+        assert_eq!(std::fs::read(dir.join("third/images/new.png")).unwrap(), png(5));
+        assert_eq!(std::fs::read(dir.join("third/images/new-2.png")).unwrap(), png(3));
+
+        // A failed save leaves no copies behind.
+        let blocked = dir.join("fourth/doc.pen");
+        std::fs::create_dir_all(&blocked).unwrap(); // a folder where the file should go
+        e.insert_root(json!({"type": "rectangle", "width": 4, "height": 4, "fill": {"type": "image", "url": fresh_url}})).unwrap();
+        assert!(e.save(Some(blocked.to_str().unwrap())).is_err());
+        assert!(!dir.join("fourth/images").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
