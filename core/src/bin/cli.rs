@@ -38,8 +38,9 @@ fn run(args: &[String]) -> Result<(), String> {
         "svg" => {
             let mut e = engine();
             e.open(Path::new(arg(2)?))?;
-            let svg = e.ctx().export_svg(arg(3)?).ok_or("node not found")?;
-            std::fs::write(arg(4)?, svg).map_err(|e| e.to_string())
+            let (svg, embedded) = e.ctx().export_svg(arg(3)?).ok_or("node not found")?;
+            drop(e);
+            std::fs::write(arg(4)?, nalarupa_core::svg::inline_embedded(&svg, &embedded)).map_err(|e| e.to_string())
         }
         "html" => {
             let mut e = engine();

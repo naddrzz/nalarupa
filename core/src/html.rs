@@ -63,6 +63,8 @@ pub struct ExportJob {
 
 enum Output {
     Bytes(Vec<u8>),
+    /// SVG markup and the image files it inlines once written (see `Svg::embedded`).
+    Svg(String, crate::svg::Embedded),
     Image(usvg::Tree, String, f64, u8),
     Pdf(Vec<usvg::Tree>),
 }
@@ -80,6 +82,7 @@ impl ExportJob {
             }
             let bytes = match output {
                 Output::Bytes(b) => b,
+                Output::Svg(svg, embedded) => crate::svg::inline_embedded(&svg, &embedded).into_bytes(),
                 Output::Image(tree, format, scale, quality) => crate::render::encode_tree(&tree, &format, scale, quality)?,
                 Output::Pdf(trees) => crate::render::encode_pdf(&trees)?,
             };
@@ -103,7 +106,8 @@ pub fn plan(e: &mut Engine, ids: &[String], format: &str, out: &str, opts: &Valu
                 let file = dir.join(format!("{}.{format}", file_stem(id)));
                 let output = if format == "svg" {
                     let mut cx = e.ctx();
-                    Output::Bytes(cx.export_svg(id).ok_or_else(|| cx.missing(id))?.into_bytes())
+                    let (svg, embedded) = cx.export_svg(id).ok_or_else(|| cx.missing(id))?;
+                    Output::Svg(svg, embedded)
                 } else {
                     let scale = scale.clamp(0.05, 8.0);
                     Output::Image(e.ctx().node_tree_at(id, scale)?, format.to_string(), scale, quality)
@@ -967,6 +971,46 @@ mod tests {
 
     fn export(e: &mut Engine, ids: &[String], format: &str, out: &str, opts: &serde_json::Value) -> Result<Vec<String>, String> {
         super::plan(e, ids, format, out, opts)?.run()
+    }
+
+    /// An SVG export inlines its image files after the engine lock is released: planning (under the lock)
+    /// leaves them unread, and the written file carries them as data URIs. A file gone by then keeps its href,
+    /// and text that looks like a placeholder stays as written.
+    #[test]
+    fn svg_export_reads_images_after_planning() {
+        use base64::Engine as _;
+        let dir = std::env::temp_dir().join(format!("nalarupa-test-svg-embed-later-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let png = base64::engine::general_purpose::STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAAUAAAAFCAYAAACNbyblAAAAHElEQVQI12P4//8/w38GIAXDIBKE0DHxgljNBAAO9TXL0Y4OHwAAAABJRU5ErkJggg==").unwrap();
+        for f in ["photo.png", "gone.png"] {
+            std::fs::write(dir.join(f), &png).unwrap();
+        }
+        let mut e = Engine::new(dir.join("data"));
+        e.doc.path = Some(dir.join("doc.nala"));
+        let mut ids = Vec::new();
+        // An SVG nested past the depth limit: its depth is checked when the file is written, not while planning.
+        let deep = 6000;
+        std::fs::write(dir.join("deep.svg"), format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">{}<rect width="5" height="5"/>{}</svg>"#, "<g>".repeat(deep), "</g>".repeat(deep))).unwrap();
+        for (i, f) in ["photo.png", "gone.png", "deep.svg"].into_iter().enumerate() {
+            ids.push(e.doc.insert(crate::doc::ROOT, json!({"type": "rectangle", "x": i * 60, "y": 0, "width": 50, "height": 50,
+                "fill": {"type": "image", "url": format!("./{f}"), "mode": "fill"}}), None).unwrap());
+        }
+        let job = super::plan(&mut e, &ids, "svg", "out", &json!({})).unwrap();
+        for (_, out) in &job.files {
+            let super::Output::Svg(svg, _) = out else { panic!("an SVG export plans an SVG") };
+            assert!(!svg.contains("data:image/png"), "planning reads no image file");
+        }
+        std::fs::remove_file(dir.join("gone.png")).unwrap();
+        let files = job.run().unwrap();
+        let read = |i: usize| std::fs::read_to_string(&files[i]).unwrap();
+        assert!(read(0).contains("data:image/png;base64,") && !read(0).contains("nalarupa-embed-"), "the written SVG inlines the image");
+        assert!(read(1).contains("gone.png") && !read(1).contains("data:image/png"), "a file gone before the write keeps its href");
+        assert!(!read(2).contains("deep.svg") && !read(2).contains("data:image/svg"), "an SVG nested too deep is left out, as when rendering");
+        // Only this export's keyed tokens are replaced, not text that merely looks like one.
+        let fake = crate::svg::Embedded { tag: "nalarupa-embed-0000000000000001:".into(), hrefs: vec![dir.join("photo.png").display().to_string()] };
+        assert_eq!(crate::svg::inline_embedded("nalarupa-embed:0 and nalarupa-embed-0000000000000002:0", &fake), "nalarupa-embed:0 and nalarupa-embed-0000000000000002:0");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The `style` of a rectangle exported as an HTML fragment, plus the whole fragment.
