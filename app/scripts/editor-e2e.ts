@@ -53,6 +53,12 @@ try {
   const at = (x: number, y: number) => ({ x: c.x + x, y: c.y + y })
   const canvas = app.getByTestId('canvas')
 
+  // An icon-only button names itself (and its shortcut) in a tooltip after a short hover; leaving it hides the tooltip.
+  await app.getByTestId('tool-frame').hover()
+  assert(await until(async () => (await app.getByTestId('tooltip').getByText('Frame (F / A)').count()) > 0), 'hovering the Frame tool shows "Frame (F / A)"')
+  await app.mouse.move(at(400, 400))
+  assert(await until(async () => !(await count('tooltip'))), 'the tooltip goes when the pointer leaves the button')
+
   // A real mouse wheel pans a little. GPUIX reports a notch as 60 px with precise=false; reading that
   // as lines (×40) threw the view ~2400 px per notch and the canvas looked empty. The automation wheel
   // only sends pixel deltas, so post a real WM_MOUSEWHEEL to this window (no cursor move, no focus).
@@ -606,6 +612,20 @@ try {
     await sleep(1200)
   }
   assert((await app.getByTestId('inspector-name').bounds())!.y >= c.y + 3, 'Shift+Tab back to the name field keeps it, ring included, below the panel top')
+  // Tab entering the Inspector from another panel while it is scrolled to its end scrolls back up to the name field.
+  const nameTop = (await app.getByTestId('inspector-name').bounds())!.y
+  assert(await until(async () => {
+    await app.getByTestId('inspector-w').wheel(0, -2000)
+    return (await app.getByTestId('inspector-name').bounds())!.y < nameTop - 10
+  }), 'the wheel scrolls the Inspector down')
+  await app.getByTestId('tab-design').click()
+  for (let i = 0; i < 4 && !(await count('inspector-name-ring')); i++) {
+    await app.call('keystrokes', { keys: 'tab' })
+    await sleep(300)
+  }
+  assert(await until(async () => !!(await count('inspector-name-ring'))), 'Tab from the Design/Agent tabs reaches the name field')
+  assert(await until(async () => (await app.getByTestId('inspector-name').bounds())!.y >= nameTop - 1),
+    'Tab into the scrolled Inspector scrolls the name field, ring included, back into view')
 
   // Handle centers (canvas px), tl, tr, br, bl. Each sits 12 px in at radius 0 and slides toward the middle
   // (80 px for a 180×160 box) as the radius grows: inset = 12 + radius·68/80.
@@ -1058,6 +1078,23 @@ try {
   assert(!(await count('inspector-fill')), 'a line and a note together have no Fill field')
   await app.getByTestId('layers').getByText('Inspect rect').click({ modifiers: 'ctrl' })
   assert(await until(async () => (await count('inspector-fill')) > 0), 'a line, a note and a rectangle together keep the Fill field')
+
+  // A component instance without its own fill shows the component's fill (its swatch; the color is the field's placeholder),
+  // not an empty field that reads as white.
+  await mcpCall(port, { method: 'tools/call', params: { name: 'execute', arguments: { input: 'const c = Insert(document, {type:"frame", name:"Inspect button", reusable:true, x:0, y:400, width:120, height:40, fill:"#336699", cornerRadius:8}); Insert(document, {type:"ref", name:"Inspect instance", ref:c, x:200, y:400})' } } })
+  await app.getByTestId('layers').getByText('Inspect instance').waitFor({ timeoutMs: 6000 })
+  await app.getByTestId('layers').getByText('Inspect line').click()
+  assert(await until(async () => !(await count('inspector-fill'))), 'the line is selected again before the instance')
+  await app.getByTestId('layers').getByText('Inspect instance').click()
+  assert(await until(async () => (await count('inspector-fill-swatch')) > 0), 'an instance shows the fill it inherits from its component')
+  // Typing a color overrides the fill on the instance only; the component keeps its own.
+  const fills = async () => {
+    const res: any = await (await mcpCall(port, { method: 'tools/call', params: { name: 'execute', arguments: { input: 'Get(undefined, n => { if (n.name === "Inspect instance" || n.name === "Inspect button") Print(n.name + "=" + n.fill) })' } } })).json()
+    return String(res.result?.content?.[0]?.text ?? '').toLowerCase()
+  }
+  await typeInto('inspector-fill', 'ctrl-a # f f 0 0 0 0')
+  assert(await until(async () => { const t = await fills(); return t.includes('inspect instance=#ff0000') && t.includes('inspect button=#336699') }), `a color typed on the instance overrides its fill only (${await fills()})`)
+  assert(await count('inspector-fill-swatch'), 'the overridden instance shows its own fill')
 
   // A flipped top-level frame is titled at the top-left of where it is painted, not at its layout origin.
   await mcpCall(port, { method: 'tools/call', params: { name: 'execute', arguments: { input: 'Insert(document, {type:"frame", name:"Title FlipX", x:5000, y:100, width:300, height:200, fill:"#EEFFEE", flipX:true}); Insert(document, {type:"frame", name:"Title FlipY", x:5000, y:600, width:300, height:200, fill:"#EEEEFF", flipY:true});' } } })

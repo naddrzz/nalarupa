@@ -153,6 +153,24 @@ call('tool', { name: 'execute', args: { input: 'Insert("sld01", {type:"rectangle
 assert(!call('state').animating, 'no slide-in under reduced motion')
 call('undo')
 call('reduce_motion', { on: false })
+// A finished agent design never comes back as "Generating": undo/redo of the step that cleared `placeholder` keeps it off.
+{
+  const ex = (input: string) => {
+    const out = call('tool', { name: 'execute', args: { input, __agent: 'ag1' } })
+    assert(!out.error, `execute failed: ${out.text}`)
+    return out
+  }
+  const live = () => call('live').filter((l: any) => l.name === 'PhHero').length
+  ex('f = Insert(document, {type:"frame", name:"PhHero", x:5000, y:0, width:600, height:400, fill:"#ffffff", placeholder:true})')
+  ex('Insert(f, {type:"text", name:"PhT", content:"Hi", fontSize:40, fill:"#111111"})')
+  ex('Update(f, {placeholder:false})')
+  assert(live() === 0, 'a finished design is not generating')
+  call('undo')
+  assert(live() === 0, 'undo does not bring "Generating" back onto a finished design')
+  call('redo')
+  assert(live() === 0, 'redo does not either')
+  call('undo'); call('undo'); call('undo')
+}
 // Constants check only (style is unreadable under automation): the frame label style Canvas.tsx applies ellipsizes instead of slicing.
 assert(FRAME_LABEL_TEXT.textOverflow === 'ellipsis' && FRAME_LABEL_TEXT.overflow === 'hidden' && FRAME_LABEL_TEXT.whiteSpace === 'nowrap', 'canvas frame labels must ellipsize')
 
@@ -333,8 +351,10 @@ resetChat()
   cursor.lastActivity = 0
   assert(!needsFrame(3000, true, 0) && needsFrame(6000, true, 0) && !needsFrame(7000, true, 0), 'reduced motion: a finished cursor repaints only while it fades out')
   store.pills.set('a', { text: 'hi', at: 5000 })
-  assert(needsFrame(6000, true, 0) && !needsFrame(8500, true, 0), 'reduced motion: a pill repaints until it expires')
+  assert(needsFrame(7000, false, 0) && !needsFrame(8500, false, 0), 'a pill repaints every frame until it expires')
+  assert(!needsFrame(7000, true, 0) && !needsFrame(7000, true, 0, 5500), 'reduced motion: a pill that is showing and unchanged does not repaint')
   assert(needsFrame(8001, true, 0, 7990) && !needsFrame(8001, true, 0, 8001), 'reduced motion: a pill still on screen at its expiry gets one more repaint')
+  assert(!needsFrame(7000, false, 0, 7000, true) && !needsFrame(8001, true, 0, 7990, true), 'a pill hidden behind the open chat tab needs no frames')
   store.pills.clear()
   store.cursors.clear()
 }
