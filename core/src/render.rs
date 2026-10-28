@@ -456,7 +456,9 @@ impl Renderer {
             let Some(top) = top_index(cx.doc, id) else { continue };
             // A brand-new top-level node has no old positions: nothing moved.
             let Some(layer) = cx.doc.children()[top]["id"].as_str().and_then(|t| self.layers.get(t)) else { continue };
-            let old: HashMap<&str, (f64, f64)> = layer.flat.iter().map(|f| (f.id.as_str(), (f.x, f.y))).collect();
+            // Compared by origin, not box: a group's box is the union of its children, so it moves
+            // when a child is added beyond it while the group's own content stays put.
+            let old: HashMap<&str, (f64, f64)> = layer.flat.iter().map(|f| (f.id.as_str(), (f.x - f.local.0[0], f.y - f.local.0[1]))).collect();
             let Some(root) = roots.entry(top).or_insert_with(|| cx.laid_out_live(top)).as_ref() else { continue };
             let mut chain = Vec::new();
             if !ancestors_of(root, id, &mut chain) {
@@ -466,7 +468,7 @@ impl Renderer {
             let mut glides: HashMap<&str, (f64, f64)> = HashMap::new();
             for (j, k) in chain.iter().enumerate().flat_map(|(j, a)| a.kids.iter().map(move |k| (j, k))) {
                 let Some(&(ox, oy)) = old.get(k.id.as_str()) else { continue };
-                let (mut dx, mut dy) = (ox - k.x, oy - k.y);
+                let (mut dx, mut dy) = (ox - (k.x - k.bx), oy - (k.y - k.by));
                 // `composite_slides` adds a gliding ancestor's offset to its children: the child glides
                 // only the part of its move the ancestor does not carry (the ancestors come first).
                 for a in &chain[1..=j] {
@@ -2079,6 +2081,39 @@ pub(crate) mod tests {
         let px = r.render(400, 400, 0.0, 0.0, 1.0, [30, 30, 30], None, true).to_vec();
         let red = |x: usize, y: usize| px[(y * 400 + x) * 4] > 200 && px[(y * 400 + x) * 4 + 2] < 100;
         assert!(red(50, 240) && !red(50, 120), "the sibling starts at its old position");
+    }
+
+    /// Inserting into a group up/left of its children moves the group's box origin (the union of
+    /// its children) but not its content: the group must not glide, only the new node slides.
+    #[test]
+    fn group_growing_up_left_does_not_glide() {
+        let doc = |kids: &str| {
+            Doc::from_json(&format!(
+                r##"{{"version":"2.19","children":[{{"type":"frame","id":"f","x":0,"y":0,"width":400,"height":400,"layout":"none","fill":"#ffffff","children":[
+                {{"type":"group","id":"g","children":[{kids}]}}]}}]}}"##
+            ))
+            .unwrap()
+        };
+        let r_node = r##"{"type":"rectangle","id":"r","x":200,"y":200,"width":100,"height":100,"fill":"#ff0000"}"##;
+        let before = doc(r_node);
+        let after = doc(&format!(r##"{r_node},{{"type":"rectangle","id":"n","x":20,"y":20,"width":100,"height":100,"fill":"#00ff00"}}"##));
+        let (mut fonts, mut assets) = offline();
+        let mut r = Renderer::default();
+        let mut sync = |r: &mut Renderer, doc: &Doc| {
+            let mut cx = Ctx { doc, libs: &[], fonts: &mut fonts, assets: &mut assets };
+            let roots = r.shift_siblings(&mut cx);
+            let rebuilt = r.sync(&mut cx);
+            r.refresh_slides(&mut cx, &rebuilt, roots);
+        };
+        sync(&mut r, &before);
+        assert_eq!(r.find("g").map(|f| (f.x, f.y)), Some((200.0, 200.0)));
+        r.slides.push(Slide::new("n"));
+        sync(&mut r, &after);
+        assert_eq!(r.find("g").map(|f| (f.x, f.y)), Some((20.0, 20.0)), "the group's box origin moved");
+        assert!(r.slides.iter().all(|s| s.id != "g"), "the group does not glide: its content did not move");
+        let px = r.render(400, 400, 0.0, 0.0, 1.0, [30, 30, 30], None, true).to_vec();
+        let red = |x: usize, y: usize| px[(y * 400 + x) * 4] > 200 && px[(y * 400 + x) * 4 + 2] < 100;
+        assert!(red(250, 250), "the existing child stays in place on the first frame");
     }
 
     /// A sliding node with a drop or inner shadow is drawn by resvg; its filter layers stay
