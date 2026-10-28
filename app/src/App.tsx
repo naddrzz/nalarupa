@@ -348,7 +348,8 @@ export function App() {
           recent={tryCall<{ recent?: string[] }>('settings_get')?.recent ?? []}
           // The polled flag lags an edit by up to 120 ms, so ask the core when a template or file is picked.
           dirty={() => tryCall<State>('state')?.dirty ?? state.dirty}
-          busy={() => tryCall<State>('state')?.agentRunning ?? state.agentRunning}
+          // An agent run or an MCP `execute` in progress: the core refuses the switch either way.
+          busy={() => { const s = tryCall<State>('state') ?? state; return s.agentRunning || !!s.executing }}
           title={state.title}
           save={() => {
             try {

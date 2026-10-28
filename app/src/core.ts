@@ -63,6 +63,6 @@ export function renderPixels(w: number, h: number, camX: number, camY: number, z
 
 /** A laid-out node box; `m` = its painted rotation/flip transform (see geometry.ts `M`), absent when none. */
 export type Box = { id: string; name: string; type: string; x: number; y: number; w: number; h: number; parent?: string | null; depth?: number; m?: M | null }
-export type State = { version: number; title: string; path: string | null; dirty: boolean; selection: string[]; agentRunning: boolean; mcpPort: number; animating?: boolean }
+export type State = { version: number; title: string; path: string | null; dirty: boolean; selection: string[]; agentRunning: boolean; executing?: boolean; mcpPort: number; animating?: boolean }
 export type Layer = { id: string; name: string; type: string; depth: number; parent: string; reusable: boolean; hidden: boolean; children: number }
 export type AgentEvent = { type: 'agent'; kind: 'user' | 'text' | 'note' | 'tool' | 'error' | 'done' | 'external'; text: string }
