@@ -5,7 +5,7 @@ import { applyEvents, clearPresence, store } from './agents'
 import { Canvas, fitCam, isMovable, type Cam, type Mods, type Tool } from './Canvas'
 import { defaultSavePath } from './paths'
 import { readClipboard, writeClipboard } from './clipboard'
-import { LeftPanel } from './Layers'
+import { LeftPanel, type LeftSaved } from './Layers'
 import { Inspector } from './Inspector'
 import { AgentPanel } from './Agent'
 import { Home } from './Home'
@@ -50,6 +50,9 @@ export function App() {
   const [hoverId, setHoverId] = useState<string | null>(null)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const canvasEl = useRef<PublicInstance>(null)
+  // The left panel's tab and expanded rows, kept across Present and Home (which unmount the editor); opening a
+  // document clears them.
+  const leftSaved = useRef<LeftSaved>({})
 
   const cw = Math.max(100, (win?.width ?? 1440) - LEFT_W - RIGHT_W)
   const ch = Math.max(100, (win?.height ?? 900) - TOP_H)
@@ -75,6 +78,7 @@ export function App() {
   }, [cw, ch])
 
   const openedDoc = useCallback(() => {
+    leftSaved.current = {}
     clearPresence()
     setSelection([])
     setOpened(true)
@@ -389,7 +393,7 @@ export function App() {
         <IconButton icon="saveAs" title="Save as… (Ctrl+Shift+S)" onClick={() => save(true)} />
       </div>
       <div style={{ flexGrow: 1, minHeight: 0, display: 'flex', flexDirection: 'row' }}>
-        <Left version={state.version} selection={selection} select={select} focus={focusLayer} present={present} toast={toast} hover={setHoverId} onShortcut={panelShortcut} />
+        <Left version={state.version} selection={selection} select={select} focus={focusLayer} present={present} toast={toast} hover={setHoverId} onShortcut={panelShortcut} saved={leftSaved} />
         <Canvas
           w={cw} h={ch} cam={cam} setCam={setCam} version={state.version} selection={selection}
           select={select} tool={tool} setTool={setTool} toast={toast} onShortcut={onShortcut} penKeyRef={penKeyRef} chatOpen={rightTab === 'agent'} hoverId={hoverId}

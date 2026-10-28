@@ -137,13 +137,29 @@ Insert(p, {type:"text", name:"Deepest text layer", content:"deep", fontSize:20})
   // Present starts at the slide holding the selection, also when a layer inside it is selected.
   await app.getByTestId('layer-toggle-sld03').click()
   await app.getByTestId('layers').getByText('Thanks').click()
+  await app.getByTestId('layer-toggle-sld01').click()
   await sleep(500)
+  const rowsBeforePresent = await rows()
   await app.getByTestId('present').click()
   await app.getByText('3 / 3 · Esc to exit').waitFor({ timeoutMs: 10000 }).catch(() => { throw new Error('Present from a layer inside slide 3 did not open on slide 3') })
   await app.getByTestId('presentation').press('escape')
   await sleep(500)
+  // Leaving Present returns to the panel as it was: slide 1, which is no ancestor of the selection, stays expanded.
+  await until(async () => (await app!.getByTestId('layers').count()) > 0, 'the Layers panel after Present')
+  if ((await rows()) !== rowsBeforePresent) throw new Error('leaving Present collapsed (or expanded) Layers rows')
+  await app.getByTestId('layer-toggle-sld01').click()
   await app.getByTestId('layer-toggle-sld03').click()
   await app.getByTestId('canvas').press('escape')
+  await sleep(250)
+
+  // Present from the Slides tab comes back to the Slides tab.
+  await app.getByText('Slides').click()
+  await app.getByTestId('present-from-slides').click()
+  await app.getByText('Esc to exit').waitFor({ timeoutMs: 10000 })
+  await app.getByTestId('presentation').press('escape')
+  await until(async () => (await app!.getByTestId('present-from-slides').count()) > 0, 'the Slides tab after Present')
+  if (await app.getByTestId('layers').count()) throw new Error('leaving Present from the Slides tab came back to Layers')
+  await app.getByText('Layers').click()
   await sleep(250)
 
   // Layers as a keyboard tree (rows topmost first: sld03, sld02, sld01). Keys without an element id go
