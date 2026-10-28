@@ -333,8 +333,16 @@ impl Engine {
         let mut cx = Ctx { doc, libs: &self.libs, fonts: &mut self.fonts, assets: &mut self.assets };
         let roots = self.renderer.shift_siblings(&mut cx);
         let rebuilt = self.renderer.sync(&mut cx);
-        // A slide dropped for a blend mode goes back into the cached view at the next sync.
-        let dropped = !self.renderer.slides.is_empty() && self.renderer.refresh_slides(&mut cx, &rebuilt, roots);
+        let mut dropped = false;
+        if !self.renderer.slides.is_empty() {
+            // The settled slides were left out of the layers: sync again with them shown.
+            if self.renderer.settle_covered() {
+                self.synced = 0;
+                return self.sync();
+            }
+            // A slide dropped for a blend mode goes back into the cached view at the next sync.
+            dropped = self.renderer.refresh_slides(&mut cx, &rebuilt, roots);
+        }
         self.synced = if dropped { 0 } else { self.version };
     }
 
