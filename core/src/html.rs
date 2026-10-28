@@ -173,7 +173,9 @@ pub fn export(ids: &[String], format: &str, out: &str, opts: &Value) -> Result<V
     job.run()
 }
 
-/// Plan an export of nodes; `ExportJob::run` writes the files.
+/// Plan an export of nodes; `ExportJob::run` writes the files. Nothing slow runs here: a job that is `stale` (its
+/// files lack downloads or script output) is meant to be `settle`d off the engine lock and planned again first, as
+/// `export` and `ToolOut::finish` do.
 pub fn plan(e: &mut Engine, ids: &[String], format: &str, out: &str, opts: &Value) -> Result<ExportJob, String> {
     let data_dir = e.data_dir.clone();
     plan_in(&mut e.ctx(), &data_dir, ids, format, out, opts)
