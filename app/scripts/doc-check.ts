@@ -1,5 +1,5 @@
 // Documents, export, variables, settings and edit commands through the core (no window): `bun scripts/doc-check.ts`
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { call } from '../src/core'
@@ -67,6 +67,35 @@ const b = join(data, 'b.pen')
 call('save', { path: b })
 assert(readFileSync(a, 'utf8') === readFileSync(b, 'utf8'), 'save → open → save is byte-identical')
 
+// Saving through a symlink updates the real file and keeps the link; a failed save leaves no temp file behind.
+const folder = join(data, 'folder')
+mkdirSync(folder)
+throws(() => call('save', { path: folder }), /cannot save/, 'saving over a folder')
+assert(!existsSync(`${folder}.tmp-nalarupa`), 'a failed save removes its temp file')
+const real = join(data, 'real.pen')
+const link = join(data, 'link.pen')
+writeFileSync(real, '{"version":"2.19","children":[]}')
+let linked = true
+try {
+  symlinkSync(real, link)
+} catch (e) {
+  const code = (e as NodeJS.ErrnoException).code
+  if (process.platform !== 'win32' || (code !== 'EPERM' && code !== 'EACCES')) throw e
+  linked = false // creating a symlink needs a privilege on Windows
+}
+if (linked) {
+  call('open', { path: link })
+  exec('Insert("document", {type:"rectangle", name:"via-link", width:5, height:5, fill:"#ff0000"})')
+  assert(call('save').path === link, 'save keeps the document path')
+  assert(lstatSync(link).isSymbolicLink(), 'saving through a symlink keeps the link')
+  assert(readFileSync(real, 'utf8').includes('via-link'), 'saving through a symlink updates the real file')
+  assert(!existsSync(join(data, 'link.pen.tmp-nalarupa')) && !existsSync(join(data, 'real.pen.tmp-nalarupa')), 'a save leaves no temp file')
+  const dangling = join(data, 'dangling.pen')
+  symlinkSync(join(data, 'missing.pen'), dangling)
+  throws(() => call('save', { path: dangling }), /cannot resolve/, 'saving through a dangling symlink')
+  assert(lstatSync(dangling).isSymbolicLink(), 'a dangling symlink is not replaced by a save')
+}
+
 // A file saved while a generated image was still loading keeps its pending url; reopening it counts that as a failed load.
 for (const url of ['nalarupa:pending-image-1-ab', 'pencil:pending-1']) {
   const pend = join(data, 'pending.pen')
@@ -112,6 +141,39 @@ throws(() => call('open'), /path required/, 'open without a path')
   assert(cb.w > 0 && cb.h > 0, `a library component's internal ref resolves (card box ${cb.w}x${cb.h})`)
   const fill = JSON.parse(exec('Print(JSON.stringify(Get("b",{resolveInstances:true,resolveVariables:true})))').split('Print output\n')[1]).fill
   assert(fill === '#ff0000', `a library variable resolves for its own nodes (fill ${fill})`)
+  call('open', { path: b })
+}
+
+// Save as into another folder keeps relative images and imports pointing at the same files, in the open
+// document, in the saved copy when reopened, and in undo history.
+{
+  const dir = mkdtempSync(join(data, 'saveas-'))
+  mkdirSync(join(dir, 'a', 'img'), { recursive: true })
+  mkdirSync(join(dir, 'b'))
+  writeFileSync(join(dir, 'a', 'img', 'red.svg'), '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8" fill="#ff0000"/></svg>')
+  writeFileSync(join(dir, 'a', 'lib.pen'), JSON.stringify({ version: '2.19', children: [{ id: 'comp', type: 'frame', reusable: true, width: 40, height: 40, fill: '#00ff00' }] }))
+  writeFileSync(join(dir, 'a', 'doc.pen'), JSON.stringify({ version: '2.19', imports: { lib: 'lib.pen' }, children: [{ id: 'f', type: 'frame', width: 100, height: 100, fill: '#ffffff', layout: 'none', children: [
+    { id: 'r', type: 'rectangle', x: 0, y: 0, width: 50, height: 50, fill: { type: 'image', url: 'img/red.svg', mode: 'fill' } },
+    { id: 'i', type: 'ref', ref: 'lib:comp', x: 50, y: 50 }] }] }))
+  const shot = () => call('png', { id: 'f' }) as string
+  call('open', { path: join(dir, 'a', 'doc.pen') })
+  const before = shot()
+  call('update', { ids: ['i'], props: { x: 55 } })
+  const edited = shot()
+  call('save', { path: join(dir, 'b', 'doc.pen') })
+  assert(shot() === edited, 'the open document still shows its image and component after Save as')
+  const saved = JSON.parse(readFileSync(join(dir, 'b', 'doc.pen'), 'utf8'))
+  assert(saved.children[0].children[0].fill.url === '../a/img/red.svg' && saved.imports.lib === '../a/lib.pen', `Save as rewrites relative references (${JSON.stringify([saved.children[0].children[0].fill.url, saved.imports])})`)
+  assert(edited !== before, 'the edit before Save as moved the component')
+  call('undo')
+  assert(call('state').path === join(dir, 'b', 'doc.pen') && shot() === before, 'an undo after Save as brings back the earlier state with its image and component')
+  call('redo')
+  call('save', { path: join(dir, 'b', 'doc.pen') })
+  call('open', { path: join(dir, 'b', 'doc.pen') })
+  assert(shot() === edited, 'the saved copy reopens with its image and imported component')
+  // Saving again in place leaves the paths alone.
+  call('save')
+  assert(JSON.parse(readFileSync(join(dir, 'b', 'doc.pen'), 'utf8')).imports.lib === '../a/lib.pen', 'a plain save keeps the paths')
   call('open', { path: b })
 }
 
@@ -192,9 +254,11 @@ assert(htmlOf({ fill: ['#ff0000', '#0000ff80'] }).includes('background:linear-gr
 assert(htmlOf({ fill: grad({ opacity: 0.4 }) }).includes('rgba(255, 0, 0, 0.400) 0%'), 'html applies gradient fill opacity')
 assert(htmlOf({ fill: grad({ gradientType: 'angular' }) }).includes('conic-gradient(from -90deg at 50% 50%'), 'html exports an angular gradient as conic')
 assert(htmlOf({ fill: grad({ size: { height: 0.5 } }) }).includes('x1=%220.75%22 y1=%220.5%22 x2=%220.25%22'), 'html exports a shortened linear gradient as an svg background')
+assert(htmlOf({ fill: grad({ rotation: 60 }) }).includes('data:image/svg+xml,%3Csvg') && !htmlOf({ fill: grad({ rotation: 60 }) }).includes('linear-gradient(-60deg'), 'html exports a slanted linear gradient as an svg background')
 assert(htmlOf({ fill: grad({ gradientType: 'radial', rotation: 45, size: { width: 0.3, height: 0.8 } }) }).includes('matrix(0.106066 -0.106066 0.282843 0.282843 0.5 0.5)'), 'html exports a rotated radial gradient as an svg background with the canvas ellipse')
 assert(htmlOf({ fill: '#ff0000', effect: { type: 'blur', radius: 4 } }).includes('filter:blur(2px)'), 'html exports layer blur')
 assert(/padding:12px;background:linear-gradient/.test(htmlOf({ fill: '#ffff00', stroke: grad(), strokeWidth: 12 })), 'html exports a gradient stroke')
+assert(/inset:-3px;border-radius:50%;box-shadow:inset 0 0 0 6px #000000;/.test(htmlOf({ type: 'ellipse', width: 120, height: 80, fill: '#f0c000', stroke: '#000000', strokeWidth: 6 })), 'html draws a centered stroke as one ring, not two abutting shadows with a hairline between them')
 // A bottom fill or stroke with a blend mode blends with the layers beneath the element: an overlay with mix-blend-mode
 // outside any isolated box, not a background (background-blend-mode only blends the element's own layers).
 const blendHtml = htmlOf({ fill: [{ type: 'color', color: '#00ffff', blendMode: 'multiply' }] })
@@ -243,6 +307,21 @@ const frame = call('insert', { parent: 'document', node: { type: 'frame', width:
 const kid = call('insert', { parent: frame, node: rect({ name: 'kid', flipX: true, x: 150, y: 20 }) }).id
 const kidSvg = readFileSync(call('export', { ids: [kid], format: 'svg', path: out })[0], 'utf8')
 assert(kidSvg.includes('width="100" height="60" viewBox="500 500 100 60"'), `a flipped child of a frame exports its painted box: ${kidSvg.slice(0, 160)}`)
+// Text lines past a fixed-width-height box are painted, so the export covers them (not just the layer box).
+{
+  const over = (name: string, extra: object = {}) => call('insert', { parent: 'document', node: { type: 'text', name, content: 'a\nb\nc\nd\ne', textGrowth: 'fixed-width-height', width: 120, height: 40, fontSize: 24, fill: '#000000', x: 900, y: 900, ...extra } }).id
+  const top = over('overflow')
+  const p = png(top)
+  assert(p.w === 120 && p.h > 100, `an overflowing text exports its lines, not the 120x40 box (got ${p.w}x${p.h})`)
+  const svg = readFileSync(call('export', { ids: [top], format: 'svg', path: out })[0], 'utf8')
+  assert(svg.includes(`height="${p.h}" viewBox="900 900 120 ${p.h}`), `svg of an overflowing text is as tall as the png: ${svg.slice(0, 160)}`)
+  assert(readFileSync(call('export', { ids: [top], format: 'pdf', path: join(out, 'overflow.pdf') })[0], 'latin1').includes(`/MediaBox[0 0 120 ${p.h}]`), 'pdf page of an overflowing text covers its lines')
+  const lowId = over('overflow-bottom', { textAlignVertical: 'bottom', y: 1200 })
+  const low = png(lowId)
+  assert(low.w === 120 && low.h === p.h, `a bottom-aligned overflowing text exports the same height (got ${low.w}x${low.h})`)
+  const lowSvg = readFileSync(call('export', { ids: [lowId], format: 'svg', path: out })[0], 'utf8')
+  assert(lowSvg.includes(`viewBox="900 ${1240 - low.h} 120 ${low.h}"`), `a bottom-aligned overflow reaches above its box: ${lowSvg.slice(0, 160)}`)
+}
 
 // HTML export reserves the rotated bounding box of a child in an auto layout, like the canvas does.
 {
