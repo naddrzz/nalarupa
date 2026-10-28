@@ -1754,6 +1754,8 @@ mod tests {
             assert!(!out.error, "{}", out.text);
             assert_eq!(e.renderer.slides.len(), slides, "{theme}: opacity from a variable");
         }
+    }
+
     /// A rolled-back script's slides had no node to paint and no clock: `animating` stayed true
     /// until `SLIDE_WAIT`. Slides of nodes that survive (an earlier call's) are kept.
     #[test]
