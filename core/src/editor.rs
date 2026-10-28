@@ -778,10 +778,68 @@ pub fn copy(e: &mut Engine, ids: &[String]) -> Value {
         nodes.push(n);
         boxes.push(v.rect(id).map_or(Value::Null, |r| json!([r.0, r.1, r.2, r.3])));
     }
-    let payload = json!({"source": session(), "localData": ids, "worldPositions": true, "boxes": boxes, "remoteData": {"nodes": nodes}});
+    let (variables, themes, components) = needs(&e.doc, &nodes);
+    let payload = json!({"source": session(), "localData": ids, "worldPositions": true, "boxes": boxes, "remoteData": {"nodes": nodes},
+        "variables": variables, "themes": themes, "components": components});
     let b64 = base64::engine::general_purpose::STANDARD.encode(payload.to_string());
     let label = if ids.len() == 1 { format!("Node ID: {}", ids[0]) } else { format!("Node IDs: {}", ids.join(", ")) };
     json!({"html": format!("<meta charset=\"utf-8\"><span {MARK}=\"{b64}\">{label}</span>"), "text": label, "ids": ids})
+}
+
+/// Every `$name` string and instance `ref` target under `v` (overrides included).
+fn scan(v: &Value, vars: &mut HashSet<String>, refs: &mut HashSet<String>) {
+    match v {
+        Value::String(s) => {
+            if let Some(name) = s.strip_prefix('$') {
+                vars.insert(name.to_string());
+            }
+        }
+        Value::Array(a) => a.iter().for_each(|x| scan(x, vars, refs)),
+        Value::Object(o) => {
+            if let (Some("ref"), Some(r)) = (o.get("type").and_then(Value::as_str), o.get("ref").and_then(Value::as_str)) {
+                refs.insert(r.to_string());
+            }
+            o.values().for_each(|x| scan(x, vars, refs));
+        }
+        _ => {}
+    }
+}
+
+/// What copied nodes lean on besides themselves, so a paste into another document looks the same:
+/// the variables they use (chained ones too) with the theme axes those name, and the components
+/// their instances point at (instances of instances too).
+fn needs(doc: &Doc, nodes: &[Value]) -> (Map<String, Value>, Map<String, Value>, Vec<Value>) {
+    let (mut vars, mut refs) = (HashSet::new(), HashSet::new());
+    nodes.iter().for_each(|n| scan(n, &mut vars, &mut refs));
+    let (mut seen_vars, mut seen_refs) = (HashSet::new(), HashSet::new());
+    let (mut variables, mut components) = (Map::new(), Vec::new());
+    loop {
+        let mut grew = false;
+        for r in refs.clone().into_iter().filter(|r| seen_refs.insert(r.clone())) {
+            grew = true;
+            if let Some(c) = doc.find(&r) {
+                scan(c, &mut vars, &mut refs);
+                components.push(c.clone());
+            }
+        }
+        for name in vars.clone().into_iter().filter(|n| seen_vars.insert(n.clone())) {
+            grew = true;
+            if let Some(def) = doc.root["variables"].get(&name) {
+                scan(def, &mut vars, &mut refs);
+                variables.insert(name, def.clone());
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    let mut themes = Map::new();
+    for axis in variables.values().filter_map(|d| d["value"].as_array()).flatten().filter_map(|e| e["theme"].as_object()).flat_map(|t| t.keys()) {
+        if let Some(list) = doc.root["themes"].get(axis) {
+            themes.insert(axis.clone(), list.clone());
+        }
+    }
+    (variables, themes, components)
 }
 
 struct Clip {
@@ -794,6 +852,8 @@ struct Clip {
     /// Plain text / SVG: always lands centered (no meaningful position).
     center: bool,
     text: bool,
+    /// Variables, theme axes and components of the source document the nodes use.
+    needs: Value,
 }
 
 fn svg_size(svg: &str) -> (f64, f64) {
@@ -825,12 +885,13 @@ fn decode(html: &str, text: &str) -> Result<Clip, String> {
         }).collect();
         let same = p["source"] == session();
         let sources = if same { p["localData"].as_array().map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_string)).collect()).unwrap_or_default() } else { Vec::new() };
-        return Ok(Clip { nodes, origins, boxes, sources, center: false, text: false });
+        let needs = json!({"variables": p["variables"], "themes": p["themes"], "components": p["components"]});
+        return Ok(Clip { nodes, origins, boxes, sources, center: false, text: false, needs });
     }
     if let Some(figma) = crate::figma::decode(html)? {
         let (nodes, boxes): (Vec<Value>, Vec<Rect>) = figma.into_iter().unzip();
         let origins = boxes.iter().map(|b| (b.0, b.1)).collect();
-        return Ok(Clip { nodes, origins, boxes, sources: Vec::new(), center: false, text: false });
+        return Ok(Clip { nodes, origins, boxes, sources: Vec::new(), center: false, text: false, needs: Value::Null });
     }
     let t = text.trim();
     let svg = t.starts_with("<svg") || (t.starts_with("<?xml") && t.contains("<svg"));
@@ -843,9 +904,9 @@ fn decode(html: &str, text: &str) -> Result<Clip, String> {
         let w = text.lines().map(|l| l.chars().count()).max().unwrap_or(0) as f64 * 7.0;
         (json!({"type": "text", "name": "Text", "content": text, "fontFamily": "Inter", "fontSize": 12, "fill": "#000000"}), w, lines * 15.0)
     } else {
-        return Ok(Clip { nodes: Vec::new(), origins: Vec::new(), boxes: Vec::new(), sources: Vec::new(), center: true, text: false });
+        return Ok(Clip { nodes: Vec::new(), origins: Vec::new(), boxes: Vec::new(), sources: Vec::new(), center: true, text: false, needs: Value::Null });
     };
-    Ok(Clip { nodes: vec![node], origins: vec![(0.0, 0.0)], boxes: vec![(0.0, 0.0, w, h)], sources: Vec::new(), center: true, text: !svg })
+    Ok(Clip { nodes: vec![node], origins: vec![(0.0, 0.0)], boxes: vec![(0.0, 0.0, w, h)], sources: Vec::new(), center: true, text: !svg, needs: Value::Null })
 }
 
 /// Ctrl+V. Nodes go into each selected container (centered, or in place when copied from
@@ -857,7 +918,7 @@ pub fn paste(e: &mut Engine, html: &str, text: &str, targets: &[String], view: O
         return Ok(Vec::new());
     }
     e.sync();
-    let plan: Vec<(String, Vec<Value>)> = {
+    let (plan, comps): (Vec<(String, Vec<Value>)>, Vec<Value>) = {
         let v = View::new(e);
         let u = union(clip.boxes.iter().copied()).unwrap_or_default();
         let center_on = |r: Rect| ((r.0 + r.2 / 2.0 - u.0 - u.2 / 2.0).round(), (r.1 + r.3 / 2.0 - u.1 - u.3 / 2.0).round());
@@ -889,7 +950,18 @@ pub fn paste(e: &mut Engine, html: &str, text: &str, targets: &[String], view: O
         } else {
             vec![(ROOT.to_string(), view.map(center_on).unwrap_or_default())]
         };
-        places.into_iter().map(|(p, (sx, sy))| {
+        // Components the nodes use that this document lacks go in a row right of everything, ids intact.
+        let (mut cx, cy) = match union(e.doc.children().iter().filter_map(|n| v.rect(n["id"].as_str()?)).chain([u])) {
+            Some(r) => (r.0 + r.2 + 100.0, r.1),
+            None => (0.0, 0.0),
+        };
+        let comps = clip.needs["components"].as_array().map(Vec::as_slice).unwrap_or(&[]).iter().filter(|c| c["id"].as_str().is_some_and(|id| e.doc.find(id).is_none())).map(|c| {
+            let mut c = c.clone();
+            (c["x"], c["y"]) = (num(cx), num(cy));
+            cx += c["width"].as_f64().unwrap_or(0.0).max(100.0) + 100.0;
+            c
+        }).collect();
+        let plan = places.into_iter().map(|(p, (sx, sy))| {
             let po = v.origin(&p).unwrap_or((0.0, 0.0));
             let flow = v.layout(&p).is_some();
             let nodes = clip.nodes.iter().zip(&clip.origins).map(|(n, o)| {
@@ -906,9 +978,23 @@ pub fn paste(e: &mut Engine, html: &str, text: &str, targets: &[String], view: O
                 n
             }).collect();
             (p, nodes)
-        }).collect()
+        }).collect();
+        (plan, comps)
     };
     e.edit_or_drag(|d| {
+        // Variables the nodes use that this document lacks (its own win on a name clash), with their theme axes.
+        let vars: Map<String, Value> = clip.needs["variables"].as_object().into_iter().flatten().filter(|(k, _)| d.root["variables"].get(k.as_str()).is_none()).map(|(k, v)| (k.clone(), v.clone())).collect();
+        if !vars.is_empty() {
+            for (axis, list) in clip.needs["themes"].as_object().into_iter().flatten() {
+                if d.root["themes"].get(axis).is_none() {
+                    d.root["themes"][axis] = list.clone();
+                }
+            }
+            d.set_variables(&Value::Object(vars), false)?;
+        }
+        for c in comps {
+            d.import_component(c)?;
+        }
         let mut out = Vec::new();
         for (p, nodes) in plan {
             for n in nodes {

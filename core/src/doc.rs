@@ -167,6 +167,13 @@ impl Doc {
         Ok(id)
     }
 
+    /// Insert a component pasted from another document at the top level with its ids kept
+    /// (instance overrides are keyed on them).
+    pub fn import_component(&mut self, node: Value) -> Result<String, String> {
+        validate_node(&node)?;
+        self.insert_prepared(ROOT, node)
+    }
+
     /// Merge properties into a node; `null` removes a property. Paths with `/`
     /// address descendants of component instances and become overrides.
     pub fn update(&mut self, path: &str, data: &Value) -> Result<(), String> {
