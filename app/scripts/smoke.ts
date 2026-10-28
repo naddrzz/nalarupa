@@ -351,8 +351,10 @@ resetChat()
   cursor.lastActivity = 0
   assert(!needsFrame(3000, true, 0) && needsFrame(6000, true, 0) && !needsFrame(7000, true, 0), 'reduced motion: a finished cursor repaints only while it fades out')
   store.pills.set('a', { text: 'hi', at: 5000 })
-  assert(needsFrame(6000, true, 0) && !needsFrame(8500, true, 0), 'reduced motion: a pill repaints until it expires')
+  assert(needsFrame(7000, false, 0) && !needsFrame(8500, false, 0), 'a pill repaints every frame until it expires')
+  assert(!needsFrame(7000, true, 0) && !needsFrame(7000, true, 0, 5500), 'reduced motion: a pill that is showing and unchanged does not repaint')
   assert(needsFrame(8001, true, 0, 7990) && !needsFrame(8001, true, 0, 8001), 'reduced motion: a pill still on screen at its expiry gets one more repaint')
+  assert(!needsFrame(7000, false, 0, 7000, true) && !needsFrame(8001, true, 0, 7990, true), 'a pill hidden behind the open chat tab needs no frames')
   store.pills.clear()
   store.cursors.clear()
 }
