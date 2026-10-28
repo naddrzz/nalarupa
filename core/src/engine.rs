@@ -155,6 +155,23 @@ fn drop_pending(v: &mut Value, inflight: &std::collections::HashSet<String>) {
     }
 }
 
+/// Rewrite a history `stack` (its last step applies to the document `old`) as if `f` had been applied to every
+/// state, where `new` is `f(old)`: replay the steps back from `old`, apply `f` to each state they reach, and diff
+/// the rewritten neighbours. A step is a patch, not a document, so `f` cannot be applied to it directly.
+fn relocate_history(stack: &mut Vec<Patch>, old: &Value, new: &Value, f: impl Fn(&mut Value)) {
+    let (mut old, mut new) = (old.clone(), new.clone());
+    let mut out = Vec::with_capacity(stack.len());
+    for step in stack.drain(..).rev() {
+        step.apply(&mut old);
+        let mut prev = old.clone();
+        f(&mut prev);
+        out.push(diff(&new, &prev).unwrap_or_default());
+        new = prev;
+    }
+    out.reverse();
+    *stack = out;
+}
+
 /// `ours` with the changes that turned `base` into `theirs` applied; where both changed the same
 /// value, `theirs` wins. Lists of nodes (`id`) merge per node, the rest as a whole.
 fn merge3(base: &Value, theirs: &Value, ours: &Value) -> Value {
@@ -559,9 +576,11 @@ impl Engine {
         self.keep_clean(clean);
     }
 
-    /// The document as it is now is the saved one.
+    /// The document as it is now is the saved one. An open coalesced edit ends here, so the next
+    /// edit is its own undo step and undo can land on the saved document.
     fn mark_saved(&mut self) {
         self.saved = self.version;
+        self.coalesce = None;
         self.saved_root = self.doc.root.clone();
     }
 
@@ -671,10 +690,10 @@ impl Engine {
             }
             return Err(err);
         }
-        if let (Some(from), Some(old)) = (&moved_from, backup) {
+        if let (Some(from), Some(before)) = (&moved_from, &backup) {
             let relocate = |v: &mut Value| Doc::relocate(v, from, &to);
-            crate::history::rewrite(&mut self.undo, old.clone(), self.doc.root.clone(), relocate);
-            crate::history::rewrite(&mut self.redo, old, self.doc.root.clone(), relocate);
+            relocate_history(&mut self.undo, before, &self.doc.root, relocate);
+            relocate_history(&mut self.redo, before, &self.doc.root, relocate);
             if let Some(v) = self.drag_before.as_mut() {
                 relocate(v);
             }
@@ -1041,6 +1060,13 @@ mod tests {
         assert!(e.dirty(), "past the saved document");
         e.redo();
         assert!(!e.dirty(), "forward to the saved document");
+        // A save in the middle of a coalesced field edit: undo after it still stops at the saved document.
+        e.edit_coalesced("x", |d| Ok(d.root["children"][0]["x"] = json!(30))).unwrap();
+        e.mark_saved();
+        e.edit_coalesced("x", |d| Ok(d.root["children"][0]["x"] = json!(40))).unwrap();
+        e.undo();
+        assert_eq!(e.doc.root["children"][0]["x"], 30);
+        assert!(!e.dirty(), "a coalesced edit does not merge across a save");
     }
 
     #[test]
@@ -1116,6 +1142,27 @@ mod tests {
         e.drag_before = Some(e.doc.root.clone());
         e.save(Some(root.join("b").join("y.pen").to_str().unwrap())).unwrap();
         assert_eq!(e.drag_before.as_ref().unwrap()["children"][0]["fill"]["url"], "../a/img.png");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The undo history holds patches between states: after Save as into another folder, undo and redo
+    /// bring back each earlier state with its relative urls rewritten, not the ones of the old folder.
+    #[test]
+    fn save_as_relocates_the_undo_history() {
+        let root = std::env::temp_dir().join("nalarupa-test-save-as-history");
+        let mut e = Engine::new(root.join("data"));
+        e.doc.path = Some(root.join("a").join("x.pen"));
+        e.doc.root = json!({"children": [{"id": "i", "type": "rectangle", "fill": {"type": "image", "url": "./one.png"}}]});
+        let url = |e: &Engine| e.doc.root["children"][0]["fill"]["url"].clone();
+        e.edit(|d| d.update("i", &json!({"fill": {"type": "image", "url": "./two.png"}}))).unwrap();
+        e.edit(|d| d.update("i", &json!({"fill": {"type": "image", "url": "./three.png"}}))).unwrap();
+        assert!(e.undo());
+        e.save(Some(root.join("b").join("y.pen").to_str().unwrap())).unwrap();
+        assert_eq!(url(&e), "../a/two.png");
+        assert!(e.redo());
+        assert_eq!(url(&e), "../a/three.png");
+        assert!(e.undo() && e.undo());
+        assert_eq!(url(&e), "../a/one.png");
         let _ = std::fs::remove_dir_all(&root);
     }
 

@@ -116,19 +116,6 @@ impl Patch {
     }
 }
 
-/// Rewrite every document a stack of steps leads to with `f` (a patch alone has no context to rewrite):
-/// `from` is the document the last step applies to, `to` the same document already rewritten.
-pub fn rewrite(steps: &mut [Patch], mut from: Value, mut to: Value, f: impl Fn(&mut Value)) {
-    for step in steps.iter_mut().rev() {
-        let mut next = from.clone();
-        std::mem::take(step).apply(&mut next);
-        let mut next_to = next.clone();
-        f(&mut next_to);
-        *step = diff(&to, &next_to).unwrap_or_default();
-        (from, to) = (next, next_to);
-    }
-}
-
 fn reorder(m: &mut Map<String, Value>, order: &[String]) {
     let mut rest = std::mem::take(m);
     for k in order {
@@ -196,25 +183,6 @@ mod tests {
         assert!(diff(&json!({"x": 10}), &json!({"x": 10.0})).is_none());
         assert!(diff(&json!({"c": [{"x": 1}]}), &json!({"c": [{"x": 1.0}]})).is_none());
         assert!(diff(&json!({"x": 10}), &json!({"x": 10.5})).is_some());
-    }
-
-    #[test]
-    fn rewrite_reaches_every_state() {
-        let tag = |v: &mut Value| v["children"].as_array_mut().unwrap().iter_mut().for_each(|n| n["url"] = json!(format!("new/{}", n["url"].as_str().unwrap())));
-        let s0 = json!({"children": [{"id": "a", "url": "x.png"}]});
-        let s1 = json!({"children": [{"id": "a", "url": "y.png"}]});
-        let s2 = json!({"children": [{"id": "a", "url": "y.png"}, {"id": "b", "url": "z.png"}]});
-        // Undo stack at s2: the last step goes back to s1, the one before it to s0.
-        let mut steps = vec![diff(&s1, &s0).unwrap(), diff(&s2, &s1).unwrap()];
-        let mut cur = s2.clone();
-        tag(&mut cur);
-        rewrite(&mut steps, s2, cur.clone(), tag);
-        for want in [s1, s0] {
-            steps.pop().unwrap().apply(&mut cur);
-            let mut want = want;
-            tag(&mut want);
-            assert_eq!(cur, want);
-        }
     }
 
     #[test]
