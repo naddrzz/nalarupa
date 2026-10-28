@@ -24,6 +24,22 @@ type Box = { id: string; x: number; y: number; w: number; h: number }
 const kids = (id: string) => call<Box[]>('children_boxes', { id })
 const shows = (id: string) => kids(id).length
 const update = (id: string, props: object) => call('update', { ids: [id], props })
+// Scripts run in the background (the engine lock is never held while one runs): wait until they are all done and
+// the layers are rebuilt, as the canvas does (it renders, so the core syncs, and polls while `animating`).
+const frame = () => {
+  call('poll')
+  call('children_boxes', { id: 'page' })
+}
+const settle = async () => {
+  const until = Date.now() + 10_000
+  frame()
+  while (call<{ animating?: boolean }>('state').animating) {
+    assert(Date.now() < until, 'scripts finish')
+    await Bun.sleep(20)
+    frame()
+  }
+  frame()
+}
 
 // Bars whose height is the node's height times Math.random() (seeded the same on every run); `count` is clamped to 1..5.
 file('bars.js', '/** @schema 2.19\n * @input count: number(min=1, max=5) = 3\n * @input mode: enum("a", "b") = "a" */\nconst out = [];\nfor (let i = 0; i < nalarupa.input.count; i++) out.push({type: "rectangle", x: i * 10, y: 0, width: 8, height: nalarupa.height * Math.random(), fill: "#ff0000"});\nreturn out;')
@@ -50,6 +66,7 @@ const doc = {
 writeFileSync(join(dir, 'doc.pen'), JSON.stringify(doc))
 call('init')
 call('open', { path: join(dir, 'doc.pen') })
+await settle()
 
 // Output becomes children placed in the node's local space; the declared default applies without inputs.
 const def = kids('def')
@@ -67,11 +84,14 @@ assert(chain.at(-1) === 'def', `hit on a generated bar ends at the script node: 
 
 // Changing the inputs or the size re-runs the script; undo goes back.
 update('def', { inputs: { count: 2 } })
+await settle()
 assert(shows('def') === 2, `changed inputs re-run the script: ${shows('def')}`)
 update('def', { height: 100 })
+await settle()
 assert(Math.abs(kids('def')[0].h - def[0].h * 2) < 1e-9, `a taller node scales the output: ${kids('def')[0].h} vs ${def[0].h}`)
 call('undo')
 call('undo')
+await settle()
 assert(shows('def') === 3 && Math.abs(kids('def')[0].h - def[0].h) < 1e-9, 'undo returns to the first output')
 
 // A script that cannot run shows its error inside the node and generates nothing; the rest of the document is intact.
@@ -100,5 +120,31 @@ const def2 = page.children.find((n: { id: string }) => n.id === 'def')
 assert(def2.type === 'script' && !def2.children && !readFileSync(saved, 'utf8').includes('def/0'), `the saved script node has no generated children: ${JSON.stringify(def2)}`)
 call('new', { template: 'empty' })
 call('open', { path: saved })
+await settle()
 assert(shows('def') === 3 && shows('big') === 5, 'reopening regenerates the output')
+
+// A slow script never holds the engine: polling, rendering and box queries stay fast while it runs, the node shows
+// its previous output while a newer size is computed, and the newest size wins.
+file('slow.js', '/** @schema 2.19 */\nconst s = Date.now(); while (Date.now() - s < 500) {}\nreturn [{type: "rectangle", x: 0, y: 0, width: nalarupa.width, height: nalarupa.height, fill: "#ff0000"}]')
+const timed = (f: () => unknown) => {
+  const t = Date.now()
+  f()
+  return Date.now() - t
+}
+const slow = call<{ id: string }>('insert', { parent: 'page', node: script('slow', 0, './slow.js', { y: 100 }) }).id
+assert(timed(() => call('children_boxes', { id: slow })) < 300, 'a new slow script does not hold up the box query')
+assert(shows(slow) === 0 && call('state').animating, 'no output yet, and the canvas is told to keep redrawing')
+assert(timed(() => call('poll')) < 300 && timed(() => call('state')) < 300, 'poll stays responsive while the script runs')
+await settle()
+assert(shows(slow) === 1 && kids(slow)[0].w === 100, 'the finished run is shown')
+for (const w of [101, 102, 103]) {
+  const ms = timed(() => {
+    update(slow, { width: w })
+    kids(slow)
+  })
+  assert(ms < 300, `resizing to ${w} does not wait for the script (${ms} ms)`)
+}
+assert(kids(slow)[0]?.w === 100, 'the previous output stays until the new size is computed')
+await settle()
+assert(kids(slow)[0].w === 103, `the newest size is shown: ${kids(slow)[0].w}`)
 console.log('scriptnode-check ok')

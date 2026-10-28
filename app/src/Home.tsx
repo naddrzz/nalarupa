@@ -19,9 +19,9 @@ const TEMPLATES: { id: string; title: string; desc: string; icon: IconName }[] =
   { id: 'empty', title: 'Empty canvas', desc: 'Start from nothing', icon: 'plus' },
 ]
 
-/** `dirty` documents ask Save / Don't save / Cancel before a new or opened one replaces them; `back` returns to the open document. */
-export function Home({ recent, dirty, title, save, back, onOpened, toast }: {
-  recent: string[]; dirty: () => boolean; title: string; save: () => boolean; back?: () => void; onOpened: () => void; toast: Toast
+/** `dirty` documents ask Save / Don't save / Cancel before a new or opened one replaces them (unless `busy`: the core refuses that switch outright); `back` returns to the open document. */
+export function Home({ recent, dirty, busy, title, save, back, onOpened, toast }: {
+  recent: string[]; dirty: () => boolean; busy: () => boolean; title: string; save: () => boolean; back?: () => void; onOpened: () => void; toast: Toast
 }) {
   const renderer = useGpuixRequired()
   const [pending, setPending] = useState<(() => void) | null>(null)
@@ -35,7 +35,8 @@ export function Home({ recent, dirty, title, save, back, onOpened, toast }: {
       toast(msg.startsWith('Stop the agent') ? msg : failed, true)
     }
   }
-  const guarded = (go: () => void) => (dirty() ? setPending(() => go) : go())
+  // A running agent blocks the switch whatever the document holds, so the core's refusal comes before any Save prompt.
+  const guarded = (go: () => void) => (dirty() && !busy() ? setPending(() => go) : go())
   const create = (template: string) => guarded(() => switchTo('new', { template }, 'Unable to create that document.'))
   const open = (path: string) => guarded(() => switchTo('open', { path }, `Unable to open ${basename(path)}. Check that the file still exists and is a .nala or .pen document.`))
   const proceed = (saveFirst: boolean) => {

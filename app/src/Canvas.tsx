@@ -4,6 +4,7 @@ import type { CursorValue } from '@gpuix/native/host'
 import { useGpuixRequired, type ImgInstance, type PublicInstance } from '@gpuix/react'
 import { call, renderPixels, tryCall, type Box } from './core'
 import { CANVAS_BG, C, DPR, FONT, FRAME_LABEL_TEXT, LEFT_W, TOP_H } from './theme'
+
 import { FocusRing, setKeyboardFocus, SvgOverlay, T, useRing, type Toast } from './ui'
 import { AgentLayer } from './AgentLayer'
 import {
@@ -15,6 +16,9 @@ import {
   mirrored, other, overlay, pointAt, pt as ptOf, round, roundRay, shownHandles, snapPoints, snapRay, split, toggleSmooth,
   type Anchor, type Contour, type Seg, type Side,
 } from './pen'
+
+// The canvas background behind the bitmap, as CSS (shown until the first frame is drawn).
+const CANVAS_BG_CSS = `#${CANVAS_BG.toString(16).padStart(6, '0')}`
 
 export type Tool = 'move' | 'frame' | 'rectangle' | 'ellipse' | 'text' | 'hand' | 'pen'
 export type Cam = { x: number; y: number; zoom: number }
@@ -44,15 +48,15 @@ type Quad = { pts: Pt[]; stroke: string; width: number; fill?: string }
 type Drag =
   | { mode: 'pan'; sx: number; sy: number; cam: Cam }
   | {
-      mode: 'move'; sx: number; sy: number; dx0: number; dy0: number; ids: string[]; narrow?: string; moved: boolean
+      mode: 'move'; sx: number; sy: number; dx0: number; dy0: number; ids: string[]; narrow?: string; toggle?: string; moved: boolean
       start: Rect; sentX: number; sentY: number; anchors: Pt[]; parent: string; pm: M | null; groupOf?: string; from?: string; mixed?: boolean; flow: boolean
-      container: Drop | null; index?: number; deferred?: Drop; dup?: { originals: string[]; offAt?: number }
+      container: Drop | null; index?: number; deferred?: Drop; lock?: 0 | 1; dup?: { originals: string[]; offAt?: number }
     }
   // `box` and the start point `f0` are in the selection frame's coordinates; `m` maps them to the canvas.
   | { mode: 'resize'; handle: Handle; f0: Pt; box: Rect; m: M | null; items: Item[]; anchors: Pt[] }
   | { mode: 'rotate'; cx: number; cy: number; a0: number; rot0: number; flipX: boolean; flipY: boolean; id: string; box: Box; x0: number; y0: number; movable: boolean }
   | { mode: 'radius'; id: string; corner: number; f0: Pt; m: M | null; r0: number[] }
-  | { mode: 'create'; dx0: number; dy0: number; dx1: number; dy1: number }
+  | { mode: 'create'; tool: Tool; dx0: number; dy0: number; dx1: number; dy1: number }
   | { mode: 'marquee'; sx: number; sy: number; dx0: number; dy0: number; base: string[]; deep: boolean; shift: boolean; moved: boolean }
   | { mode: 'pen'; sx: number; sy: number; moved: boolean; target: PenDrag; click?: () => void }
 
@@ -239,8 +243,13 @@ export function Canvas(props: {
   // a sharp frame replaces it.
   const pending = useRef<ReturnType<typeof setTimeout> | null>(null)
   const settle = useRef<ReturnType<typeof setTimeout> | null>(null)
-  // What the bitmap shows: a pan paints right away, so the commit's scheduled frame can skip it.
-  const drawn = useRef(live.current)
+  // What the bitmap shows (null until the first frame): a pan paints right away, so the commit's
+  // scheduled frame can skip it, but a fresh mount has nothing to skip.
+  const drawn = useRef<typeof live.current | null>(null)
+  // The bitmap stays 0×0 until it holds a frame: GPUI can present a new <img> (a fresh mount, as
+  // when leaving Present) before any commit-time draw, and an empty one shows its placeholder.
+  const [hasFrame, setHasFrame] = useState(false)
+  const framed = useRef(false)
   const draw = (sharp: boolean) => {
     drawn.current = live.current
     const { cam: c, w: vw, h: vh } = live.current
@@ -248,7 +257,13 @@ export function Canvas(props: {
     const pw = Math.round(vw * DPR)
     const ph = Math.round(vh * DPR)
     const px = renderPixels(pw, ph, c.x, c.y, c.zoom * DPR, CANVAS_BG, undefined, sharp)
-    if (px) img.current?.setImagePixels(pw, ph, px)
+    if (px && img.current) {
+      img.current.setImagePixels(pw, ph, px)
+      if (!framed.current) {
+        framed.current = true
+        setHasFrame(true)
+      }
+    }
   }
   /** Camera moves from pans and the wheel: paint the bitmap now, in the same task as the overlays'
    *  re-render, instead of after the commit and a timer (each pan step used to wait ~10–20 ms). */
@@ -258,11 +273,13 @@ export function Canvas(props: {
     setCam(next)
   }
   const schedule = () => {
+    // The first frame draws in the commit itself: GPUI may present the new <img> before a timer runs.
+    if (!drawn.current) draw(false)
     if (!pending.current) {
       pending.current = setTimeout(() => {
         pending.current = null
         const [a, b] = [drawn.current, live.current]
-        if (a.cam !== b.cam || a.w !== b.w || a.h !== b.h || a.version !== b.version) draw(false)
+        if (!a || a.cam !== b.cam || a.w !== b.w || a.h !== b.h || a.version !== b.version) draw(false)
       }, 0)
     }
     if (settle.current) clearTimeout(settle.current)
@@ -368,8 +385,8 @@ export function Canvas(props: {
   function renameBox(id: string): Rect | null {
     const f = frames.find((x) => x.id === id)
     if (!f) return null
-    const [x, y] = toScreen(f.x, f.y)
-    return { x: x - 4, y: y - 21, w: Math.max(140, Math.min(f.w * cam.zoom, 240)), h: 20 }
+    const { x, y, w } = screenRect(painted(f))
+    return { x: x - 4, y: y - 21, w: Math.max(140, Math.min(w, 240)), h: 20 }
   }
 
   /** Enter, blur or a press elsewhere commits once (one undo step); Escape clears `renameLive` first. */
@@ -416,8 +433,8 @@ export function Canvas(props: {
   /** Top-level frame whose title label is under a screen point (labels select their frame). */
   function frameLabelAt(sx: number, sy: number): string | undefined {
     return visibleFrames.find((f) => {
-      const [x, y] = toScreen(f.x, f.y)
-      return sx >= x && sx <= x + Math.min(Math.max(40, f.w * cam.zoom), f.name.length * 7 + 8) && sy >= y - 18 && sy <= y - 2
+      const { x, y, w } = screenRect(painted(f))
+      return sx >= x && sx <= x + Math.min(Math.max(40, w), f.name.length * 7 + 8) && sy >= y - 18 && sy <= y - 2
     })?.id
   }
 
@@ -531,6 +548,13 @@ export function Canvas(props: {
 
   function moveTo(d: Extract<Drag, { mode: 'move' }>, dx: number, dy: number, m?: EventModifiers) {
     const ctrl = !!m?.ctrl
+    // Shift keeps the move on one axis (the dominant one at its first motion; releasing Shift frees it).
+    if (!m?.shift) d.lock = undefined
+    else {
+      d.lock ??= Math.abs(dx - d.dx0) >= Math.abs(dy - d.dy0) ? 1 : 0
+      if (d.lock === 1) dy = d.dy0
+      else dx = d.dx0
+    }
     setDup(d, !!m?.alt)
     const tx = Math.round(dx - d.dx0)
     const ty = Math.round(dy - d.dy0)
@@ -564,7 +588,7 @@ export function Canvas(props: {
     let [ox, oy] = [0, 0]
     let found: Guide[] = []
     if (snapOn && !d.flow) {
-      const r = snap(dragPoints({ ...d.start, x: d.start.x + tx, y: d.start.y + ty }), d.anchors, SNAP_PX / cam.zoom)
+      const r = snap(dragPoints({ ...d.start, x: d.start.x + tx, y: d.start.y + ty }), d.anchors, SNAP_PX / cam.zoom, [d.lock !== 0, d.lock !== 1])
       ;[ox, oy] = r.offset
       found = r.guides
     }
@@ -1070,7 +1094,7 @@ export function Canvas(props: {
     if (e.button !== 0) return
     if (pen.current || tool === 'pen') return penDown(sx, sy, [dx, dy], e)
     if (tool !== 'move') {
-      drag.current = { mode: 'create', dx0: dx, dy0: dy, dx1: dx, dy1: dy }
+      drag.current = { mode: 'create', tool, dx0: dx, dy0: dy, dx1: dx, dy1: dy }
       return
     }
     const mods = e.modifiers
@@ -1108,13 +1132,15 @@ export function Canvas(props: {
       return
     }
     let ids = selection
-    if (!inside && target) {
-      ids = shift ? (selection.includes(target) ? selection.filter((s) => s !== target) : [...selection, target]) : [target]
+    // Shift adds an unselected layer on press; a selected one stays so it can drag, and leaves on a release without a drag.
+    const toggle = shift && target && selection.includes(target) ? target : undefined
+    if (!inside && target && !toggle) {
+      ids = shift ? [...selection, target] : [target]
       select(ids)
     }
     const narrow = !target || isArtboard(chain, target) ? '' : target
     drag.current = {
-      mode: 'move', sx, sy, dx0: dx, dy0: dy, ids: ids.filter((id) => !id.includes('/')), narrow: inside ? narrow : undefined, moved: false,
+      mode: 'move', sx, sy, dx0: dx, dy0: dy, ids: ids.filter((id) => !id.includes('/')), narrow: inside ? narrow : undefined, toggle, moved: false,
       start: { x: dx, y: dy, w: 0, h: 0 }, sentX: 0, sentY: 0, anchors: [], parent: 'document', pm: null, flow: false, container: null,
     }
   }
@@ -1206,6 +1232,7 @@ export function Canvas(props: {
     }
     if (d.mode === 'move') {
       if (!d.moved) {
+        if (d.toggle) return select(liveSel.current.filter((s) => s !== d.toggle))
         const next = d.narrow ? [d.narrow] : []
         if (d.narrow !== undefined && liveSel.current.join() !== next.join()) select(next)
         return
@@ -1222,6 +1249,8 @@ export function Canvas(props: {
     }
     if (d.mode !== 'create') return
     setGhost(null)
+    // The tool the draw started with: a tool key pressed mid-drag already switched `tool`.
+    const tool = d.tool
     const x0 = Math.round(Math.min(d.dx0, d.dx1))
     const y0 = Math.round(Math.min(d.dy0, d.dy1))
     let bw = Math.round(Math.abs(d.dx1 - d.dx0))
@@ -1291,6 +1320,11 @@ export function Canvas(props: {
     const m = e.modifiers
     const mods = { mod: !!(m?.ctrl || m?.cmd), shift: !!m?.shift, alt: !!m?.alt }
     if (pen.current && penKey(key, mods)) return
+    // Escape mid-draw cancels it: the release then creates nothing.
+    if (key === 'escape' && drag.current?.mode === 'create') {
+      drag.current = null
+      setGhost(null)
+    }
     // Enter on a single text layer edits it, on a path its points (other Enter handling lives in onShortcut).
     const one = key === 'enter' && !mods.mod && !mods.shift && selection.length === 1 ? tryCall('node', { id: selection[0] })?.node?.type : undefined
     if (one === 'text') return startEdit(selection[0])
@@ -1299,8 +1333,8 @@ export function Canvas(props: {
   }
 
   const visibleFrames = frames.filter((f) => !(f as Box & { placeholder?: boolean }).placeholder).filter((f) => {
-    const [x, y] = toScreen(f.x, f.y)
-    return x < w && y < h && x + f.w * cam.zoom > 0 && y + f.h * cam.zoom > -20
+    const r = screenRect(painted(f))
+    return r.x < w && r.y - 21 < h && r.x + r.w > 0 && r.y + r.h > -20
   })
   const pt = (x: number, y: number) => toScreen(x, y)
   // Rotated outlines and handles collect here during render and paint as one image (`Quads`).
@@ -1337,13 +1371,13 @@ export function Canvas(props: {
         if (key === 'alt') setMeasured(null)
       }}
       style={{
-        position: 'relative', width: w, height: h, overflow: 'hidden', flexShrink: 0, userSelect: 'none',
+        position: 'relative', width: w, height: h, overflow: 'hidden', flexShrink: 0, userSelect: 'none', backgroundColor: CANVAS_BG_CSS,
         cursor: panning ? 'grabbing' : tool === 'hand' || spaceDown ? 'grab' : tool === 'move' ? cursor : 'crosshair',
       }}
     >
-      <img ref={img} objectFit="fill" style={{ position: 'absolute', left: 0, top: 0, width: w, height: h }} />
+      <img ref={img} objectFit="fill" style={{ position: 'absolute', left: 0, top: 0, width: hasFrame ? w : 0, height: hasFrame ? h : 0 }} />
       {visibleFrames.map((f) => {
-        const [x, y] = toScreen(f.x, f.y)
+        const { x, y, w: fw } = screenRect(painted(f))
         const active = selection.includes(f.id)
         const r = renaming?.id === f.id ? renameBox(f.id) : null
         if (renaming && r) {
@@ -1369,7 +1403,7 @@ export function Canvas(props: {
           )
         }
         return (
-          <div key={f.id} testId="frame-label" style={{ position: 'absolute', left: x, top: y - 18, height: 16, display: 'flex', maxWidth: Math.max(40, f.w * cam.zoom), pointerEvents: 'none' }}>
+          <div key={f.id} testId="frame-label" style={{ position: 'absolute', left: x, top: y - 18, height: 16, display: 'flex', maxWidth: Math.max(40, fw), pointerEvents: 'none' }}>
             <T size={11} color={active ? C.select : C.muted} style={FRAME_LABEL_TEXT}>{f.name}</T>
           </div>
         )
@@ -1499,7 +1533,7 @@ export function Canvas(props: {
         return <div testId="pen-dot" style={{ position: 'absolute', left: x - 4, top: y - 4, width: 8, height: 8, borderRadius: 4, borderWidth: 1, borderColor: PEN_BLUE, backgroundColor: '#FFFFFF', pointerEvents: 'none' }} />
       })() : null}
       <AgentLayer cam={cam} w={w} h={h} version={version} chatOpen={!!props.chatOpen} />
-      {ghost ? <div style={{ position: 'absolute', left: ghost.x, top: ghost.y, width: ghost.w, height: ghost.h, borderWidth: 1, borderColor: C.select, backgroundColor: '#3B82F622', pointerEvents: 'none' }} /> : null}
+      {ghost ? <div testId="draw-ghost" style={{ position: 'absolute', left: ghost.x, top: ghost.y, width: ghost.w, height: ghost.h, borderWidth: 1, borderColor: C.select, backgroundColor: '#3B82F622', pointerEvents: 'none' }} /> : null}
       {editing ? (() => {
         // The field stays upright but is centered on where the (rotated/flipped) text is painted.
         const p = painted(editing.box)

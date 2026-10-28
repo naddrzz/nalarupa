@@ -6,6 +6,7 @@
 //! rasterized by vello_cpu (`raster.rs`), or by resvg alone with `NALARUPA_RASTER=resvg`.
 
 use crate::doc::Doc;
+use crate::hit::Shape;
 use crate::raster;
 use crate::resolve::{RNode, Resolver};
 use crate::svg::{blends, clip_svg, fxhash, is_turned, own_matrix, Assets, Svg};
@@ -56,13 +57,16 @@ pub struct Slide {
     /// (the ancestor and those above it). The snapshot sits at the settled spot and is moved, so
     /// the clips are applied when it is painted, not baked into it.
     clips: Vec<(usvg::Tree, Vec<String>)>,
+    /// What its own top-level frame stacks above it (later siblings of it and of its ancestors),
+    /// repainted over it: the frame's layer leaves it out, so it would show over them.
+    over: Option<usvg::Tree>,
     /// Raster of `tree` at (zoom, device rect).
     cache: Option<(f64, (i32, i32, u32, u32), tiny_skia::Pixmap)>,
 }
 
 impl Slide {
     pub fn new(id: &str) -> Slide {
-        Slide { id: id.to_string(), added: Instant::now(), start: None, from: (0.0, SLIDE_OFFSET), fade: true, fresh: true, tree: None, lin: [1.0, 0.0, 0.0, 1.0], ancestors: Vec::new(), clips: Vec::new(), cache: None }
+        Slide { id: id.to_string(), added: Instant::now(), start: None, from: (0.0, SLIDE_OFFSET), fade: true, fresh: true, tree: None, lin: [1.0, 0.0, 0.0, 1.0], ancestors: Vec::new(), clips: Vec::new(), over: None, cache: None }
     }
 
     /// (offset x, offset y, opacity) now.
@@ -97,8 +101,12 @@ pub struct Flat {
     pub m: Option<[f64; 6]>,
     /// Local bounds' offset from the origin (non-zero for groups) and the node's own effective rotation and flips.
     pub local: ([f64; 2], f64, bool, bool),
+    /// Corner radii [tl, tr, br, bl] of a rectangle or frame (zero for other types; an ellipse is round by its type).
+    pub radius: [f64; 4],
     /// Clips its children to its box (a `clip` frame), so they cannot be hit outside it.
     pub clip: bool,
+    /// What an ellipse, path, line or stroke-only rectangle paints; `None` = its box is the hit surface.
+    shape: Option<Arc<Shape>>,
     /// Own props, box, parent and sibling index: a change means this node must repaint.
     sig: u64,
     /// How far shadows, blurs and strokes paint outside the box; infinite when the node or an
@@ -114,6 +122,9 @@ pub struct Layer {
     /// Everything this layer paints, including shadows and blur outside a clipping frame.
     paint: Rect,
     pub flat: Vec<Flat>,
+    /// Holds a script node: built when this many background script runs had finished, so a later
+    /// finished run rebuilds the layer (the node's JSON, and so `hash`, did not change).
+    scripted: Option<u64>,
 }
 
 type Rect = (f64, f64, f64, f64);
@@ -210,19 +221,29 @@ pub struct Ctx<'a> {
 }
 
 impl Ctx<'_> {
-    /// Resolve + lay out the top-level node at `index`.
+    /// Resolve + lay out the top-level node at `index`; script nodes run to completion first.
     pub fn laid_out(&mut self, index: usize) -> Option<RNode> {
-        let empty = Map::new();
-        let r = Resolver::new(&self.doc.root, self.libs, &empty);
-        self.laid_out_in(&r, index)
+        self.laid_out_with(index, false)
     }
 
-    /// `laid_out` with a resolver built by the caller, so a pass over many layers indexes the document once.
-    fn laid_out_in(&mut self, r: &Resolver, index: usize) -> Option<RNode> {
+    /// As `laid_out`, for callers that hold the engine lock: a script node whose run is not
+    /// finished shows its previous output (or a "running" box) and finishes in the background.
+    pub fn laid_out_live(&mut self, index: usize) -> Option<RNode> {
+        self.laid_out_with(index, true)
+    }
+
+    fn laid_out_with(&mut self, index: usize, live: bool) -> Option<RNode> {
+        let empty = Map::new();
+        let r = Resolver::new(&self.doc.root, self.libs, &empty);
+        self.laid_out_in(&r, index, live)
+    }
+
+    /// `laid_out_with` with a resolver built by the caller, so a pass over many layers indexes the document once.
+    fn laid_out_in(&mut self, r: &Resolver, index: usize, live: bool) -> Option<RNode> {
         let mut n = r.resolve(self.doc.children().get(index)?)?;
         crate::layout::layout(&mut n, self.fonts);
         // Script nodes need their laid-out size before they can run.
-        crate::script::expand_scripts(&mut n, r, self.fonts, self.doc.dir().as_deref());
+        crate::script::expand_scripts(&mut n, r, self.fonts, self.doc.dir().as_deref(), self.doc.path.as_deref(), live);
         Some(n)
     }
 
@@ -284,30 +305,31 @@ impl Ctx<'_> {
         encode_tree(&self.node_tree_at(id, scale)?, format, scale, quality)
     }
 
-    /// One PDF page per node (1 px = 1 pt), in the given order; text stays selectable.
-    pub fn nodes_pdf(&mut self, ids: &[String]) -> Result<Vec<u8>, String> {
-        let mut pdf = krilla::Document::new();
-        // krilla decodes late and fails the whole document on one damaged image: leave those out.
+    /// The trees of one PDF page per node, in the given order. The PDF library decodes images late and fails the
+    /// whole document on one damaged image: these trees leave those out (encode with `encode_pdf`).
+    pub fn pdf_trees(&mut self, ids: &[String]) -> Result<Vec<usvg::Tree>, String> {
         self.assets.verify(true);
-        let pages = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ids.iter().try_for_each(|id| self.pdf_page(&mut pdf, id))));
+        let trees = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ids.iter().map(|id| self.node_tree(id)).collect()));
         self.assets.verify(false);
-        pages.unwrap_or_else(|p| std::panic::resume_unwind(p))?;
-        pdf.finish().map_err(|e| format!("PDF export failed: {e:?}"))
+        trees.unwrap_or_else(|p| std::panic::resume_unwind(p))
     }
+}
 
-    fn pdf_page(&mut self, pdf: &mut krilla::Document, id: &str) -> Result<(), String> {
-        use krilla_svg::SurfaceExt;
-        let tree = self.node_tree(id)?;
+/// One PDF page per tree (1 px = 1 pt); text stays selectable. Needs no engine state, like `encode_tree`.
+pub fn encode_pdf(trees: &[usvg::Tree]) -> Result<Vec<u8>, String> {
+    use krilla_svg::SurfaceExt;
+    let mut pdf = krilla::Document::new();
+    for tree in trees {
         let size = tree.size();
         let settings = krilla::page::PageSettings::from_wh(size.width(), size.height()).ok_or("empty page")?;
         let mut page = pdf.start_page_with(settings);
         let mut surface = page.surface();
         let pt = krilla::geom::Size::from_wh(size.width(), size.height()).ok_or("empty page")?;
-        surface.draw_svg(&tree, pt, krilla_svg::SvgSettings::default());
+        surface.draw_svg(tree, pt, krilla_svg::SvgSettings::default());
         surface.finish();
         page.finish();
-        Ok(())
     }
+    pdf.finish().map_err(|e| format!("PDF export failed: {e:?}"))
 }
 
 pub fn top_index(doc: &Doc, id: &str) -> Option<usize> {
@@ -356,6 +378,7 @@ fn shared_hash(doc: &Doc, libs: &[(String, Value)], fonts: u64) -> u64 {
 impl Renderer {
     /// Rebuild layers whose content changed since the last sync; returns their ids.
     pub fn sync(&mut self, cx: &mut Ctx) -> Vec<String> {
+        let finished = crate::script::finished();
         let shared = shared_hash(cx.doc, cx.libs, cx.fonts.generation);
         let reshared = std::mem::replace(&mut self.shared, shared) != shared;
         let hidden: HashSet<String> = self.slides.iter().map(|s| s.id.clone()).collect();
@@ -373,10 +396,10 @@ impl Renderer {
                 hash ^= fxhash(h).rotate_left(29);
             }
             match self.layers.remove(&id) {
-                Some(l) if l.hash == hash => {
+                Some(l) if l.hash == hash && l.scripted.is_none_or(|f| f == finished) => {
                     keep.insert(id.clone(), l);
                 }
-                old => built.push((id.clone(), prepare_layer(cx, &resolver, i, hash, &hidden), old)),
+                old => built.push((id.clone(), prepare_layer(cx, &resolver, i, hash, finished, &hidden), old)),
             }
             order.push(id);
         }
@@ -434,7 +457,7 @@ impl Renderer {
             // A brand-new top-level node has no old positions: nothing moved.
             let Some(layer) = cx.doc.children()[top]["id"].as_str().and_then(|t| self.layers.get(t)) else { continue };
             let old: HashMap<&str, (f64, f64)> = layer.flat.iter().map(|f| (f.id.as_str(), (f.x, f.y))).collect();
-            let Some(root) = roots.entry(top).or_insert_with(|| cx.laid_out(top)).as_ref() else { continue };
+            let Some(root) = roots.entry(top).or_insert_with(|| cx.laid_out_live(top)).as_ref() else { continue };
             let mut chain = Vec::new();
             if !ancestors_of(root, id, &mut chain) {
                 continue;
@@ -452,7 +475,8 @@ impl Renderer {
                     }
                 }
                 glides.insert(k.id.as_str(), (dx, dy));
-                if dx.abs() < 0.5 && dy.abs() < 0.5 {
+                // A glass node's snapshot would hold no backdrop (see `Engine::slide_in`): it jumps.
+                if (dx.abs() < 0.5 && dy.abs() < 0.5) || crate::svg::has_backdrop_blur(k) {
                     continue;
                 }
                 let room = self.slides.len() < MAX_SLIDES;
@@ -478,6 +502,11 @@ impl Renderer {
             && !self.slides.iter().any(|s| s.fade && (s.id == parent || doc.find(&s.id).and_then(|n| n["children"].as_array()).is_some_and(|k| crate::doc::find_in(k, parent).is_some())))
     }
 
+    /// Stop the slides of `id` and the slides-in of its ancestors: their snapshots would carry it along.
+    pub fn unslide_with(&mut self, doc: &Doc, id: &str) {
+        self.slides.retain(|s| s.id != id && !(s.fade && doc.find(&s.id).and_then(|n| n["children"].as_array()).is_some_and(|k| crate::doc::find_in(k, id).is_some())));
+    }
+
     /// Snapshot sliding nodes that are new or whose layer was just rebuilt (so a node edited
     /// mid-slide shows its edit). Each snapshot leaves out descendants that slide themselves.
     /// A node that blends (itself or in its resolved subtree) needs the content beneath, which its
@@ -494,7 +523,7 @@ impl Renderer {
             if s.tree.is_some() && !rebuilt.iter().any(|r| r == top_id) {
                 continue;
             }
-            let root = roots.entry(top).or_insert_with(|| cx.laid_out(top));
+            let root = roots.entry(top).or_insert_with(|| cx.laid_out_live(top));
             let Some((root, node)) = root.as_ref().and_then(|r| Some((r, find_rnode(r, &s.id)?))) else {
                 s.tree = None;
                 continue;
@@ -532,6 +561,16 @@ impl Renderer {
             svg.wrap(m, alpha);
             let text = svg.finish(None);
             s.tree = usvg::Tree::from_str(&text, &cx.tree_options()).ok();
+            // Skipped for a top-level node, or when nothing follows it or its ancestors.
+            let path: Vec<&RNode> = chain.iter().copied().chain([node]).collect();
+            s.over = None;
+            if path.windows(2).any(|w| w[0].kids.last().is_some_and(|l| l.id != w[1].id)) {
+                let mut svg = Svg::new(cx.fonts, cx.assets, cx.doc.dir());
+                svg.skip = ids.iter().filter(|i| **i != s.id).cloned().collect();
+                svg.above(root, &s.id);
+                let text = svg.finish(None);
+                s.over = usvg::Tree::from_str(&text, &cx.tree_options()).ok();
+            }
             s.ancestors = ids.iter().filter(|a| **a != s.id && find_rnode(root, a).is_some_and(|an| find_rnode(an, &s.id).is_some())).cloned().collect();
             s.cache = None;
         }
@@ -624,7 +663,7 @@ impl Renderer {
             }
             let pm = cut.as_ref().unwrap_or(pm);
             out.draw_pixmap(px, py, pm.as_ref(), &paint, tiny_skia::Transform::identity(), None);
-            // Top-level frames stacked above the slide's own cover it, as they do once it settles.
+            // What stacks above the slide (in its frame, then the frames above) covers it, as it does once it settles.
             let own = self.order.iter().position(|id| self.layers.get(id).is_some_and(|l| l.flat.iter().any(|f| f.id == s.id)));
             let above = own.map_or(&[][..], |i| &self.order[i + 1..]);
             let (cw, ch) = (pm.width() as i32, pm.height() as i32);
@@ -633,7 +672,8 @@ impl Renderer {
                 continue;
             }
             let cover = ((cx0 + vx) as f64 / zoom, (cy0 + vy) as f64 / zoom, (cx1 - cx0) as f64 / zoom, (cy1 - cy0) as f64 / zoom);
-            let trees: Vec<&usvg::Tree> = above.iter().filter(|id| solo.is_none_or(|s| s == id.as_str())).filter_map(|id| self.layers.get(id)).filter(|l| overlaps(l.paint, cover)).filter_map(|l| l.tree.as_ref()).collect();
+            let frames = above.iter().filter(|id| solo.is_none_or(|s| s == id.as_str())).filter_map(|id| self.layers.get(id)).filter(|l| overlaps(l.paint, cover)).filter_map(|l| l.tree.as_ref());
+            let trees: Vec<&usvg::Tree> = s.over.iter().chain(frames).collect();
             if trees.is_empty() {
                 continue;
             }
@@ -655,15 +695,23 @@ impl Renderer {
     }
 
     /// Nodes that need animated overlays (placeholder frames, pending images), each with the canvas box its
-    /// clipping ancestors leave visible (`None` when nothing clips it). A node clipped away entirely, or with
-    /// opacity 0 itself or in an ancestor, is left out.
-    pub fn live(&self) -> Vec<(&Flat, Option<Rect>)> {
+    /// clipping ancestors leave visible (`None` when nothing clips it) and the box and painted corner radii of each of
+    /// those ancestors that rounds its corners (a rotated one is only its bounding box). A node clipped away entirely,
+    /// or with opacity 0 itself or in an ancestor, is left out.
+    pub fn live(&self) -> Vec<(&Flat, Option<Rect>, Vec<(Rect, [f64; 4])>)> {
         let canvas = |f: &Flat| {
             let m = f.m.unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
             let pts = [(f.x, f.y), (f.x + f.w, f.y), (f.x, f.y + f.h), (f.x + f.w, f.y + f.h)].map(|(x, y)| (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]));
             let lo = |g: fn(&(f64, f64)) -> f64| pts.iter().map(g).fold(f64::MAX, f64::min);
             let hi = |g: fn(&(f64, f64)) -> f64| pts.iter().map(g).fold(f64::MIN, f64::max);
             (lo(|p| p.0), lo(|p| p.1), hi(|p| p.0) - lo(|p| p.0), hi(|p| p.1) - lo(|p| p.1))
+        };
+        // A flipped frame paints its corners mirrored: the radii as they show on the canvas.
+        let shown = |f: &Flat| {
+            let [a, b, c, d] = f.radius;
+            let m = f.m.unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+            let (a, b, c, d) = if m[0] < 0.0 { (b, a, d, c) } else { (a, b, c, d) };
+            if m[3] < 0.0 { [d, c, b, a] } else { [a, b, c, d] }
         };
         let mut out = Vec::new();
         for layer in self.order.iter().filter_map(|id| self.layers.get(id)) {
@@ -672,14 +720,17 @@ impl Renderer {
                 path.truncate(f.depth);
                 if (f.placeholder || f.pending) && !f.faded {
                     // A rotated clipping frame is cut by its canvas bounding box (its corners may still show).
-                    let clip = path.iter().map(|&p| &layer.flat[p]).filter(|p| p.clip).map(canvas).reduce(|a, b| {
+                    let frames: Vec<&Flat> = path.iter().map(|&p| &layer.flat[p]).filter(|p| p.clip).collect();
+                    let clip = frames.iter().map(|p| canvas(p)).reduce(|a, b| {
                         let (x0, y0, x1, y1) = (a.0.max(b.0), a.1.max(b.1), (a.0 + a.2).min(b.0 + b.2), (a.1 + a.3).min(b.1 + b.3));
                         (x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0))
                     });
+                    let cuts: Vec<(Rect, [f64; 4])> = frames.iter().filter(|p| !p.m.is_some_and(|m| m[1].abs() > 1e-9 || m[2].abs() > 1e-9))
+                        .map(|p| (canvas(p), shown(p))).filter(|(_, r)| r.iter().any(|&v| v > 0.0)).collect();
                     let own = canvas(f);
                     let seen = clip.is_none_or(|c| c.2 > 0.0 && c.3 > 0.0 && c.0 < own.0 + own.2 && c.0 + c.2 > own.0 && c.1 < own.1 + own.3 && c.1 + c.3 > own.1);
                     if seen {
-                        out.push((f, clip));
+                        out.push((f, clip, cuts));
                     }
                 }
                 path.push(i);
@@ -1054,9 +1105,9 @@ fn has_hairline(g: &usvg::Group) -> bool {
 }
 
 /// Lay out a top-level node and emit its SVG; the tree is parsed later (in parallel).
-fn prepare_layer(cx: &mut Ctx, resolver: &Resolver, index: usize, hash: u64, hidden: &HashSet<String>) -> (Layer, Option<String>) {
-    let Some(root) = cx.laid_out_in(resolver, index) else {
-        return (Layer { hash, tree: None, scene: None, bbox: (0.0, 0.0, 0.0, 0.0), paint: (0.0, 0.0, 0.0, 0.0), flat: Vec::new() }, None);
+fn prepare_layer(cx: &mut Ctx, resolver: &Resolver, index: usize, hash: u64, finished: u64, hidden: &HashSet<String>) -> (Layer, Option<String>) {
+    let Some(root) = cx.laid_out_in(resolver, index, true) else {
+        return (Layer { hash, tree: None, scene: None, bbox: (0.0, 0.0, 0.0, 0.0), paint: (0.0, 0.0, 0.0, 0.0), flat: Vec::new(), scripted: None }, None);
     };
     let mut flat = Vec::new();
     let mut stack: Vec<String> = Vec::new();
@@ -1066,9 +1117,11 @@ fn prepare_layer(cx: &mut Ctx, resolver: &Resolver, index: usize, hash: u64, hid
     let mut mats: Vec<Option<[f64; 6]>> = Vec::new();
     // Per depth: this node or an ancestor is hidden while it slides.
     let mut sliding: Vec<bool> = Vec::new();
+    let mut scripted = false;
     // Per depth: this node or an ancestor has opacity 0.
     let mut faded: Vec<bool> = Vec::new();
     root.visit(&mut |n, depth| {
+        scripted |= n.ty == "script";
         stack.truncate(depth);
         index.truncate(depth + 1);
         turned.truncate(depth);
@@ -1111,7 +1164,9 @@ fn prepare_layer(cx: &mut Ctx, resolver: &Resolver, index: usize, hash: u64, hid
             faded: faded[depth],
             m: mats[depth],
             local: ([n.bx, n.by], n.f("rotation").unwrap_or(0.0), n.b("flipX"), n.b("flipY")),
+            radius: if matches!(n.ty.as_str(), "rectangle" | "frame") { crate::svg::radii(n) } else { [0.0; 4] },
             clip: n.ty == "frame" && n.b("clip"),
+            shape: Shape::of(n).map(Arc::new),
             sig: fxhash(&sig),
             reach: if turned[depth] { f64::INFINITY } else { reach(n) },
         });
@@ -1127,7 +1182,7 @@ fn prepare_layer(cx: &mut Ctx, resolver: &Resolver, index: usize, hash: u64, hid
     let mut svg = Svg::new(cx.fonts, cx.assets, cx.doc.dir());
     svg.skip = hidden.clone();
     svg.node(&root);
-    (Layer { hash, tree: None, scene: None, bbox, paint: padded, flat }, Some(svg.finish(None)))
+    (Layer { hash, tree: None, scene: None, bbox, paint: padded, flat, scripted: scripted.then_some(finished) }, Some(svg.finish(None)))
 }
 
 /// `p ∘ m` (m applies first).
@@ -1151,12 +1206,14 @@ pub fn unapply(m: [f64; 6], x: f64, y: f64) -> (f64, f64) {
 /// The deepest node is the last-painted one whose box holds the point; a child can be hit outside
 /// its parent's box unless an ancestor clips it. A group's union box is not a hit surface, so only its
 /// children can be hit: a point inside its box but on none of them falls through to the layers below.
+/// The same goes for the empty part of an ellipse's, path's or line's box (see `Shape`).
 pub fn hit_chain(r: &Renderer, x: f64, y: f64) -> Vec<String> {
     for id in r.order.iter().rev() {
         let Some(layer) = r.layers.get(id) else { continue };
         let inside = |f: &Flat| {
             let (x, y) = f.m.map_or((x, y), |m| unapply(m, x, y));
-            x >= f.x && y >= f.y && x <= f.x + f.w && y <= f.y + f.h
+            // A shape's own test also takes the stroke it paints outside its box.
+            f.shape.as_ref().map_or_else(|| x >= f.x && y >= f.y && x <= f.x + f.w && y <= f.y + f.h, |s| s.hits(x, y))
         };
         // Per node, in paint order: is it reachable (no clipping ancestor misses the point), and is it
         // under a script node (whose generated children select the script node).
@@ -1482,9 +1539,41 @@ pub(crate) mod tests {
         let doc = Doc::from_json(&json).unwrap();
         let mut r = Renderer::default();
         sync(&mut r, &doc);
-        let live: Vec<_> = r.live().into_iter().map(|(f, c)| (f.id.as_str(), c)).collect();
+        let live: Vec<_> = r.live().into_iter().map(|(f, c, _)| (f.id.as_str(), c)).collect();
         // `img` sits at doc (250, 150) and sticks out of the frame (x 100..400, y 100..300).
         assert_eq!(live, [("img", Some((100.0, 100.0, 300.0, 200.0))), ("free", None)]);
+    }
+
+    /// A round placeholder is cut to its corners, and so is one inside rounded clipping frames (each of them, as painted).
+    #[test]
+    fn live_overlays_report_corner_radii() {
+        let pending = r##"{"type":"image","url":"nalarupa:pending-x"}"##;
+        let json = format!(r##"{{"version":"2.19","children":[
+            {{"type":"rectangle","id":"round","x":0,"y":0,"width":100,"height":100,"cornerRadius":[50,50,10,0],"fill":{pending}}},
+            {{"type":"ellipse","id":"oval","x":200,"y":0,"width":100,"height":100,"fill":{pending}}},
+            {{"type":"frame","id":"c","x":400,"y":0,"width":100,"height":100,"layout":"none","clip":true,"cornerRadius":30,"children":[
+                {{"type":"rectangle","id":"in","x":0,"y":0,"width":100,"height":100,"fill":{pending}}}]}},
+            {{"type":"frame","id":"tilt","x":600,"y":0,"width":100,"height":100,"layout":"none","clip":true,"cornerRadius":30,"rotation":10,"children":[
+                {{"type":"rectangle","id":"tin","x":0,"y":0,"width":100,"height":100,"fill":{pending}}}]}},
+            {{"type":"frame","id":"outer","x":800,"y":0,"width":100,"height":100,"layout":"none","clip":true,"cornerRadius":30,"children":[
+                {{"type":"frame","id":"inner","x":0,"y":0,"width":60,"height":60,"layout":"none","clip":true,"children":[
+                    {{"type":"rectangle","id":"deep","x":0,"y":0,"width":60,"height":60,"fill":{pending}}}]}}]}},
+            {{"type":"frame","id":"flip","x":1000,"y":0,"width":100,"height":100,"layout":"none","clip":true,"cornerRadius":[40,0,0,0],"flipX":true,"children":[
+                {{"type":"rectangle","id":"fin","x":0,"y":0,"width":100,"height":100,"fill":{pending}}}]}}]}}"##);
+        let doc = Doc::from_json(&json).unwrap();
+        let mut r = Renderer::default();
+        sync(&mut r, &doc);
+        let live: Vec<_> = r.live().into_iter().map(|(f, c, cuts)| (f.id.as_str(), f.radius, c.is_some(), cuts.into_iter().map(|c| c.1).collect::<Vec<_>>())).collect();
+        assert_eq!(live[..5], [
+            ("round", [50.0, 50.0, 10.0, 0.0], false, vec![]),
+            ("oval", [0.0; 4], false, vec![]),
+            ("in", [0.0; 4], true, vec![[30.0; 4]]),
+            ("tin", [0.0; 4], true, vec![]),
+            // The square inner frame leaves the outer frame's rounded corner in force.
+            ("deep", [0.0; 4], true, vec![[30.0; 4]]),
+        ]);
+        // A flipped frame's rounded corner is on the other side.
+        assert_eq!(live[5], ("fin", [0.0; 4], true, vec![[0.0, 40.0, 0.0, 0.0]]));
     }
 
     /// A node painted fully transparent (own or ancestor opacity 0) shows no overlay.
@@ -1502,7 +1591,7 @@ pub(crate) mod tests {
         let doc = Doc::from_json(&json).unwrap();
         let mut r = Renderer::default();
         sync(&mut r, &doc);
-        let live: Vec<_> = r.live().into_iter().map(|(f, _)| f.id.as_str()).collect();
+        let live: Vec<_> = r.live().into_iter().map(|(f, _, _)| f.id.as_str()).collect();
         assert_eq!(live, ["visible", "half"]);
     }
 
@@ -1526,6 +1615,29 @@ pub(crate) mod tests {
         assert_eq!(hit_chain(&r, 320.0, 320.0), ["f", "g", "b"]);
         assert_eq!(hit_chain(&r, 510.0, 10.0), ["t", "c"]);
         assert!(hit_chain(&r, 600.0, 100.0).is_empty(), "inside a top-level group's box only");
+    }
+
+    /// A click lands on what a shape paints: the empty corner of an ellipse's box, the far end of a diagonal
+    /// path's box and the inside of a stroke-only rectangle fall through to the layer painted there.
+    #[test]
+    fn shape_box_does_not_swallow_hits() {
+        let json = r##"{"version":"2.19","children":[
+            {"type":"frame","id":"f","x":0,"y":0,"width":400,"height":300,"layout":"none","fill":"#ffffff","children":[
+                {"type":"rectangle","id":"card","x":20,"y":20,"width":360,"height":260,"fill":"#3b82f6"},
+                {"type":"ellipse","id":"avatar","x":100,"y":100,"width":100,"height":100,"fill":"#ef4444"},
+                {"type":"path","id":"diag","x":220,"y":40,"width":150,"height":150,"geometry":"M0 0 L150 150","stroke":"#000000","strokeWidth":2},
+                {"type":"rectangle","id":"outline","x":230,"y":200,"width":100,"height":60,"stroke":"#000000","strokeWidth":2},
+                {"type":"ellipse","id":"ring","x":40,"y":220,"width":40,"height":40,"stroke":"#000000","strokeWidth":6,"strokeAlignment":"outer"}]}]}"##;
+        let doc = Doc::from_json(json).unwrap();
+        let mut r = Renderer::default();
+        sync(&mut r, &doc);
+        assert_eq!(hit_chain(&r, 150.0, 150.0), ["f", "avatar"]);
+        assert_eq!(hit_chain(&r, 103.0, 103.0), ["f", "card"], "outside the circle, inside its box");
+        assert_eq!(hit_chain(&r, 295.0, 115.0), ["f", "diag"]);
+        assert_eq!(hit_chain(&r, 360.0, 50.0), ["f", "card"], "far from the line, inside its box");
+        assert_eq!(hit_chain(&r, 230.0, 230.0), ["f", "outline"]);
+        assert_eq!(hit_chain(&r, 280.0, 230.0), ["f", "card"], "inside the unfilled rectangle");
+        assert_eq!(hit_chain(&r, 60.0, 216.0), ["f", "ring"], "an outer stroke is hit outside its box");
     }
 
     /// Horizontal/vertical stroked lines have no layer box; both rasterizers must still draw them
@@ -1788,6 +1900,33 @@ pub(crate) mod tests {
         // k sits at 120..220 x 120..220 (6.8 low mid-slide); q covers x ≥ 150.
         assert_eq!(at(&px, 180, 150), [255, 255, 0], "the frame above covers the sliding node");
         assert!(at(&px, 130, 150)[0] > 100, "the part outside that frame still shows the sliding node");
+    }
+
+    /// Inside one top-level frame a sibling above the sliding node's container (an overlay, a
+    /// header) covers it mid-slide as it does once settled; the container's own paint does not.
+    #[test]
+    fn slide_stays_under_siblings_above_its_container() {
+        let json = r##"{"version":"2.19","children":[
+            {"type":"frame","id":"d","x":0,"y":0,"width":640,"height":400,"layout":"none","fill":"#1c1c1f","children":[
+                {"type":"frame","id":"p","x":100,"y":100,"width":500,"height":300,"layout":"none","fill":"#dddddd","children":[
+                    {"type":"rectangle","id":"n","x":150,"y":100,"width":300,"height":150,"fill":"#00ff00"}]},
+                {"type":"rectangle","id":"q","x":200,"y":150,"width":300,"height":200,"fill":"#ff0000"}]}]}"##;
+        let doc = Doc::from_json(json).unwrap();
+        let (mut fonts, mut assets) = offline();
+        let mut r = Renderer::default();
+        r.slides.push(Slide::new("n"));
+        let mut cx = Ctx { doc: &doc, libs: &[], fonts: &mut fonts, assets: &mut assets };
+        let roots = r.shift_siblings(&mut cx);
+        let rebuilt = r.sync(&mut cx);
+        r.refresh_slides(&mut cx, &rebuilt, roots);
+        let at = |px: &[u8], x: usize, y: usize| px[(y * 640 + x) * 4..(y * 640 + x) * 4 + 3].to_vec();
+        r.render(640, 400, 0.0, 0.0, 1.0, [30, 30, 30], None, true);
+        r.slides[0].start = Some(Instant::now() - Duration::from_millis(100));
+        let px = r.render(640, 400, 0.0, 0.0, 1.0, [30, 30, 30], None, true).to_vec();
+        // n spans x 250..550, y 200..350 (6.8 low mid-slide); q spans x 200..500, y 150..350.
+        assert_eq!(at(&px, 300, 300), [255, 0, 0], "the sibling above the container covers the sliding node");
+        assert!(at(&px, 520, 300)[1] > 60, "the part outside it still shows the sliding node");
+        assert_eq!(at(&px, 120, 120), [221, 221, 221], "the container's own paint is not repainted over it");
     }
 
     /// Two slides in different frames: the lower one's cover pass must not erase the higher
