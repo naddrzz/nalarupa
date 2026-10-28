@@ -1,7 +1,7 @@
 // The feedback `execute` gives an agent after a call, through the core (no window): `bun scripts/issues-check.ts`
 // "Issues detected" (layout and content warnings for the nodes the call touched), Generate errors,
 // and the Export / TakeScreenshot lines of the report.
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { call } from '../src/core'
@@ -100,14 +100,44 @@ assert(bad.error && /Generate\("svg"\) draws into a frame/.test(bad.text), `svg 
 assert(JSON.stringify(call('layers')) === before, 'a failed Generate leaves nothing behind')
 
 // Export: written files are listed; a bad format or node is reported in the text, not thrown.
-const dir = mkdtempSync(join(tmpdir(), 'nalarupa-issues-out-'))
+// A relative path lands in the export folder (the data folder's `exports` while the document is unsaved).
+const dir = 'shots'
 const fid = call('frames').find((fr: { name: string }) => fr.name === 'Clean').id
 out = run(`Export(["${fid}"], "png", ${JSON.stringify(dir)}, {scale: 0.5})`)
 const file = out.match(/Exported: (.+)/)?.[1]
 assert(file && existsSync(file) && readFileSync(file).subarray(1, 4).toString() === 'PNG', `Export writes a PNG: ${out}`)
 assert(/Export failed: unknown export format 'bmp'/.test(run(`Export(["${fid}"], "bmp", ${JSON.stringify(dir)})`)), 'an unknown export format is reported')
 assert(/Export failed: node not found: nope/.test(run(`Export(["nope"], "png", ${JSON.stringify(dir)})`)), 'a missing node is reported')
-rmSync(dir, { recursive: true, force: true })
+
+// Export never writes over the open document or any other file, and stays in the document's folder.
+const work = mkdtempSync(join(tmpdir(), 'nalarupa-issues-out-'))
+const doc = join(work, 'design.nala')
+const victim = join(work, 'victim.txt')
+call('save', { path: doc })
+writeFileSync(victim, 'precious')
+const saved = readFileSync(doc, 'utf8')
+const outside = mkdtempSync(join(tmpdir(), 'nalarupa-issues-outside-'))
+const escape = join(outside, 'escape.pdf')
+const elsewhere = join(outside, 'elsewhere')
+for (const [format, path] of [['pdf', doc], ['html-css', doc], ['pdf', victim], ['html-css', victim], ['pdf', join(work, '.hidden.pdf')], ['pdf', escape], ['png', elsewhere]]) {
+  out = run(`Export([], ${JSON.stringify(format)}, ${JSON.stringify(path)})`)
+  assert(/Export failed: .*ask the user|Export failed: .*file name/.test(out) && !out.includes('Exported:'), `Export ${format} to ${path} is refused: ${out}`)
+}
+assert(readFileSync(doc, 'utf8') === saved && readFileSync(victim, 'utf8') === 'precious', 'a refused Export leaves the files as they were')
+assert(!existsSync(escape) && !existsSync(elsewhere) && !existsSync(join(work, '.hidden.pdf')), 'a refused Export creates nothing')
+// The open document itself, even when its name passes the format check.
+for (const [format, name] of [['pdf', 'self.pdf'], ['html-css', 'self.html']]) {
+  const self = join(work, name)
+  call('save', { path: self })
+  const kept = readFileSync(self, 'utf8')
+  out = run(`Export([], ${JSON.stringify(format)}, ${JSON.stringify(self)})`)
+  assert(/Export failed: .*never over the open document/.test(out) && readFileSync(self, 'utf8') === kept, `Export ${format} over the open document is refused: ${out}`)
+}
+call('save', { path: doc })
+out = run('Export([], "pdf", "deck.pdf")')
+assert(readFileSync(join(work, 'deck.pdf')).subarray(0, 5).toString() === '%PDF-', `a PDF named like one inside the document's folder is written: ${out}`)
+rmSync(work, { recursive: true, force: true })
+rmSync(outside, { recursive: true, force: true })
 
 // TakeScreenshot attaches an image; a missing node is a line in the report.
 assert(ex(`TakeScreenshot(["${fid}"])`).images === 1, 'TakeScreenshot attaches one image')

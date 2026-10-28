@@ -473,7 +473,9 @@ impl Renderer {
             let Some(top) = top_index(cx.doc, id) else { continue };
             // A brand-new top-level node has no old positions: nothing moved.
             let Some(layer) = cx.doc.children()[top]["id"].as_str().and_then(|t| self.layers.get(t)) else { continue };
-            let old: HashMap<&str, (f64, f64)> = layer.flat.iter().map(|f| (f.id.as_str(), (f.x, f.y))).collect();
+            // Compared by origin, not box: a group's box is the union of its children, so it moves
+            // when a child is added beyond it while the group's own content stays put.
+            let old: HashMap<&str, (f64, f64)> = layer.flat.iter().map(|f| (f.id.as_str(), (f.x - f.local.0[0], f.y - f.local.0[1]))).collect();
             let Some(root) = roots.entry(top).or_insert_with(|| cx.laid_out_live(top)).as_ref() else { continue };
             let mut chain = Vec::new();
             if !ancestors_of(root, id, &mut chain) {
@@ -483,7 +485,7 @@ impl Renderer {
             let mut glides: HashMap<&str, (f64, f64)> = HashMap::new();
             for (j, k) in chain.iter().enumerate().flat_map(|(j, a)| a.kids.iter().map(move |k| (j, k))) {
                 let Some(&(ox, oy)) = old.get(k.id.as_str()) else { continue };
-                let (mut dx, mut dy) = (ox - k.x, oy - k.y);
+                let (mut dx, mut dy) = (ox - (k.x - k.bx), oy - (k.y - k.by));
                 // `composite_slides` adds a gliding ancestor's offset to its children: the child glides
                 // only the part of its move the ancestor does not carry (the ancestors come first).
                 for a in &chain[1..=j] {
@@ -522,6 +524,68 @@ impl Renderer {
     pub fn can_slide_into(&self, doc: &Doc, parent: &str) -> bool {
         self.slides.len() < MAX_SLIDES
             && !self.slides.iter().any(|s| s.fade && (s.id == parent || doc.find(&s.id).and_then(|n| n["children"].as_array()).is_some_and(|k| crate::doc::find_in(k, parent).is_some())))
+    }
+
+    /// Settle the slides a node that does not slide stacks above and overlaps (a `Copy`, an insert
+    /// past the cap): slides paint over the finished view, so they would hide it until they end.
+    /// Latest first, so a settled slide's own content counts against the slides below it.
+    /// True if any settled; the layers hid them, so the caller syncs again.
+    pub fn settle_covered(&mut self) -> bool {
+        let sliding: HashSet<&str> = self.slides.iter().map(|s| s.id.as_str()).collect();
+        let mut gone: HashSet<String> = HashSet::new();
+        for layer in self.order.iter().filter_map(|id| self.layers.get(id)) {
+            let mut mine: Vec<usize> = (0..layer.flat.len()).filter(|&i| sliding.contains(layer.flat[i].id.as_str())).collect();
+            while let Some(i) = mine.pop() {
+                let s = &layer.flat[i];
+                // Everything after its subtree paints above it.
+                let end = layer.flat[i + 1..].iter().position(|f| f.depth <= s.depth).map_or(layer.flat.len(), |p| i + 1 + p);
+                // Its snapshot paints the box and the descendants that overflow it (not those a clip frame
+                // cuts, nor ones that slide themselves), inset so boxes that only touch do not count.
+                let inset = |b: Rect| {
+                    let (dx, dy) = (if b.2 > 1.0 { 0.5 } else { 0.0 }, if b.3 > 1.0 { 0.5 } else { 0.0 });
+                    (b.0 + dx, b.1 + dy, b.2 - 2.0 * dx, b.3 - 2.0 * dy)
+                };
+                // Clipping ancestors cut the snapshot (`refresh_slides`): what they cut paints nothing.
+                let mut depth = s.depth;
+                let cuts: Vec<Rect> = layer.flat[..i].iter().rev().filter(|a| {
+                    let up = a.depth < depth;
+                    if up {
+                        depth = a.depth;
+                    }
+                    up && a.clip
+                }).map(canvas_box).collect();
+                let visible = |b: Rect| cuts.iter().try_fold(b, |b, &c| {
+                    let (x0, y0) = (b.0.max(c.0), b.1.max(c.1));
+                    let (x1, y1) = ((b.0 + b.2).min(c.0 + c.2), (b.1 + b.3).min(c.1 + c.3));
+                    (x1 >= x0 && y1 >= y0).then_some((x0, y0, x1 - x0, y1 - y0))
+                });
+                let mut boxes: Vec<Rect> = visible(canvas_box(s)).map(inset).into_iter().collect();
+                let mut skip: Option<usize> = s.clip.then_some(s.depth);
+                for f in &layer.flat[i + 1..end] {
+                    if skip.is_some_and(|d| f.depth > d) {
+                        continue;
+                    }
+                    skip = (f.clip || sliding.contains(f.id.as_str())).then_some(f.depth);
+                    if !sliding.contains(f.id.as_str()) {
+                        boxes.extend(visible(canvas_box(f)).map(inset));
+                    }
+                }
+                // Depth of the sliding node whose subtree is being skipped: it paints as a slide, above.
+                let mut under: Option<usize> = None;
+                let covered = layer.flat[end..].iter().any(|f| {
+                    if under.is_some_and(|d| f.depth > d) {
+                        return false;
+                    }
+                    under = (sliding.contains(f.id.as_str()) && !gone.contains(&f.id)).then_some(f.depth);
+                    under.is_none() && f.ty != "group" && boxes.iter().any(|&b| overlaps(b, canvas_box(f)))
+                });
+                if covered {
+                    gone.insert(s.id.clone());
+                }
+            }
+        }
+        self.slides.retain(|s| !gone.contains(&s.id));
+        !gone.is_empty()
     }
 
     /// Stop the slides of `id` and the slides-in of its ancestors: their snapshots would carry it along.
@@ -721,13 +785,7 @@ impl Renderer {
     /// those ancestors that rounds its corners (a rotated one is only its bounding box). A node clipped away entirely,
     /// or with opacity 0 itself or in an ancestor, is left out.
     pub fn live(&self) -> Vec<(&Flat, Option<Rect>, Vec<(Rect, [f64; 4])>)> {
-        let canvas = |f: &Flat| {
-            let m = f.m.unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
-            let pts = [(f.x, f.y), (f.x + f.w, f.y), (f.x, f.y + f.h), (f.x + f.w, f.y + f.h)].map(|(x, y)| (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]));
-            let lo = |g: fn(&(f64, f64)) -> f64| pts.iter().map(g).fold(f64::MAX, f64::min);
-            let hi = |g: fn(&(f64, f64)) -> f64| pts.iter().map(g).fold(f64::MIN, f64::max);
-            (lo(|p| p.0), lo(|p| p.1), hi(|p| p.0) - lo(|p| p.0), hi(|p| p.1) - lo(|p| p.1))
-        };
+        let canvas = canvas_box;
         // A flipped frame paints its corners mirrored: the radii as they show on the canvas.
         let shown = |f: &Flat| {
             let [a, b, c, d] = f.radius;
@@ -943,36 +1001,67 @@ fn changed_nodes(old: &Layer, new: &Layer, out: &mut Vec<Rect>) {
         out.extend([old.paint, new.paint]);
         return;
     }
-    let before: HashMap<&str, &Flat> = old.flat.iter().map(|f| (f.id.as_str(), f)).collect();
+    let before: HashMap<&str, usize> = old.flat.iter().enumerate().map(|(i, f)| (f.id.as_str(), i)).collect();
     let mut seen = HashSet::new();
-    let mut changed = Vec::new();
-    for f in &new.flat {
+    // (layer: 0 old, 1 new; index into its `flat`)
+    let mut changed: Vec<(usize, usize)> = Vec::new();
+    for (i, f) in new.flat.iter().enumerate() {
         seen.insert(f.id.as_str());
         match before.get(f.id.as_str()) {
-            Some(o) if o.sig == f.sig => {}
-            Some(o) => changed.extend([*o, f]),
-            None => changed.push(f),
+            Some(&o) if old.flat[o].sig == f.sig => {}
+            Some(&o) => changed.extend([(0, o), (1, i)]),
+            None => changed.push((1, i)),
         }
     }
-    changed.extend(old.flat.iter().filter(|o| !seen.contains(o.id.as_str())));
+    changed.extend(old.flat.iter().enumerate().filter(|(_, o)| !seen.contains(o.id.as_str())).map(|(i, _)| (0, i)));
     // A clip frame that changed or went away cuts (or stops cutting) its descendants, and a node
     // moved under another parent changes which clips cut its own: their signatures stay the same,
-    // so repaint wherever they reach.
-    let mut roots: HashSet<&str> = changed.iter().filter(|f| f.clip).map(|f| f.id.as_str()).collect();
-    roots.extend(new.flat.iter().filter(|f| before.get(f.id.as_str()).is_some_and(|o| o.parent != f.parent)).map(|f| f.id.as_str()));
-    for layer in [old, new] {
-        for (i, f) in layer.flat.iter().enumerate() {
-            if roots.contains(f.id.as_str()) {
-                changed.extend(layer.flat[i + 1..].iter().take_while(|d| d.depth > f.depth));
-            }
-        }
-    }
+    // so repaint wherever they reach. Both are covered by the subtree areas below, except a moved
+    // node's own subtree, which keeps its signatures: add the moved node.
+    let moved = new.flat.iter().enumerate().filter(|(_, f)| before.get(f.id.as_str()).is_some_and(|&o| old.flat[o].parent != f.parent));
+    let moved: Vec<(usize, usize)> = moved.flat_map(|(i, f)| [(0, before[f.id.as_str()]), (1, i)]).collect();
+    changed.extend(moved);
+    let areas = [dirty_areas(old), dirty_areas(new)];
+    let rects: Vec<Rect> = changed.into_iter().map(|(l, i)| areas[l][i]).collect();
     // A rotated/flipped node paints outside its layout box: repaint the whole layer.
-    if changed.iter().any(|f| f.reach.is_infinite()) {
+    if rects.iter().any(|r| !(r.0.is_finite() && r.1.is_finite() && r.2.is_finite() && r.3.is_finite())) {
         out.extend([old.paint, new.paint]);
         return;
     }
-    out.extend(changed.into_iter().map(|f| (f.x - f.reach, f.y - f.reach, f.w + 2.0 * f.reach, f.h + 2.0 * f.reach)));
+    out.extend(rects);
+}
+
+/// Per node of `layer`, what a change of it can repaint. Its own box and reach, joined with its descendants'
+/// (a container's opacity, blend mode, effect or clip applies to its whole subtree, which may stick out of its
+/// box), and grown by the reach of every ancestor that paints past its children (a group's shadow or blur
+/// follows its children's outlines). Two passes over the preorder `flat`, so a bulk edit stays linear.
+fn dirty_areas(layer: &Layer) -> Vec<Rect> {
+    let flat = &layer.flat;
+    let mut parent: Vec<Option<usize>> = vec![None; flat.len()];
+    let mut grow = vec![0.0; flat.len()];
+    let mut stack: Vec<usize> = Vec::new();
+    for (i, f) in flat.iter().enumerate() {
+        while stack.last().is_some_and(|&p| flat[p].depth >= f.depth) {
+            stack.pop();
+        }
+        if let Some(&p) = stack.last() {
+            parent[i] = Some(p);
+            // `reach` is 4 for a node that paints nothing past its box (see `reach`).
+            grow[i] = grow[p] + if flat[p].reach > 4.0 { flat[p].reach } else { 0.0 };
+        }
+        stack.push(i);
+    }
+    let mut area: Vec<Rect> = flat.iter().zip(&grow).map(|(f, g)| {
+        let r = f.reach + g;
+        (f.x - r, f.y - r, f.w + 2.0 * r, f.h + 2.0 * r)
+    }).collect();
+    // Children come after their parent: fold each subtree into it from the back.
+    for i in (0..flat.len()).rev() {
+        if let Some(p) = parent[i] {
+            area[p] = union(area[p], area[i]);
+        }
+    }
+    area
 }
 
 /// Generous paint reach outside a node's box from its effects, stroke and text overflow.
@@ -1060,6 +1149,15 @@ fn paint_band(layers: &HashMap<String, Layer>, order: &[String], solo: Option<&s
             }
         }
     }
+}
+
+/// The box on the canvas (bounding box of the painted corners).
+fn canvas_box(f: &Flat) -> Rect {
+    let m = f.m.unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    let pts = [(f.x, f.y), (f.x + f.w, f.y), (f.x, f.y + f.h), (f.x + f.w, f.y + f.h)].map(|(x, y)| (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]));
+    let lo = |g: fn(&(f64, f64)) -> f64| pts.iter().map(g).fold(f64::MAX, f64::min);
+    let hi = |g: fn(&(f64, f64)) -> f64| pts.iter().map(g).fold(f64::MIN, f64::max);
+    (lo(|p| p.0), lo(|p| p.1), hi(|p| p.0) - lo(|p| p.0), hi(|p| p.1) - lo(|p| p.1))
 }
 
 fn overlaps(a: Rect, b: Rect) -> bool {
@@ -1330,6 +1428,48 @@ pub(crate) mod tests {
             let mut cold = Renderer::default();
             sync(&mut cold, &doc);
             assert!(incremental == frame(&mut cold), "stale pixels after rotating to {deg} degrees");
+        }
+    }
+
+    /// A container's opacity or effect changes its whole subtree, which may stick out of its box, and a group's
+    /// shadow follows its children's outlines: after either edit the incremental frame equals a cold render.
+    #[test]
+    fn subtree_and_ancestor_effects_leave_no_stale_pixels() {
+        let docs = [
+            // A frame that does not clip, its child sticking out; then its opacity, blur, fill and fill blend mode.
+            (r##"{"version":"2.19","children":[{"type":"frame","id":"f","x":0,"y":0,"width":400,"height":300,"layout":"none","fill":"#ffffff","children":[
+                {"type":"frame","id":"o","x":20,"y":20,"width":100,"height":100,"layout":"none","fill":"#ff000080","children":[
+                    {"type":"rectangle","id":"r","x":60,"y":30,"width":80,"height":40,"fill":"#000000"}]}]}]}"##,
+             vec![("o", json!({"opacity": 0.5})), ("o", json!({"opacity": 0})), ("o", json!({"effect": {"type": "blur", "radius": 6}})), ("o", json!({"fill": "#00ff0080"})),
+                  ("o", json!({"fill": {"type": "color", "color": "#00ff0080", "blendMode": "multiply"}}))]),
+            // A child of a shadowed group; then the child's opacity and position.
+            (r##"{"version":"2.19","children":[{"type":"frame","id":"f","x":0,"y":0,"width":400,"height":300,"layout":"none","fill":"#ffffff","children":[
+                {"type":"group","id":"g","x":40,"y":30,"effect":{"type":"shadow","offset":{"x":12,"y":12},"blur":0,"color":"#000000"},"children":[
+                    {"type":"rectangle","id":"a","x":0,"y":0,"width":60,"height":50,"fill":"#000000"},
+                    {"type":"rectangle","id":"b","x":70,"y":60,"width":40,"height":40,"fill":"#0000ff"}]}]}]}"##,
+             vec![("b", json!({"opacity": 0.2})), ("b", json!({"x": 90})), ("g", json!({"opacity": 0.2}))]),
+            // A group whose child's drop shadow sticks out of the group's box; then the group's opacity.
+            (r##"{"version":"2.19","children":[{"type":"frame","id":"f","x":0,"y":0,"width":300,"height":300,"layout":"none","fill":"#ffffff","children":[
+                {"type":"group","id":"g","x":19,"y":40,"children":[
+                    {"type":"frame","id":"box","x":26,"y":111,"width":144,"height":157,"layout":"none","effect":{"type":"shadow","offset":{"x":-8,"y":10},"blur":4,"color":"#00000080"}},
+                    {"type":"rectangle","id":"r","x":30,"y":120,"width":60,"height":60,"fill":"#ff0000"}]}]}]}"##,
+             vec![("g", json!({"opacity": 0.2}))]),
+        ];
+        let frame = |r: &mut Renderer| r.render(400, 300, 0.0, 0.0, 1.0, [255, 255, 255], None, true).to_vec();
+        for (json, edits) in docs {
+            for (id, props) in edits {
+                let mut doc = Doc::from_json(json).unwrap();
+                let mut live = Renderer::default();
+                sync(&mut live, &doc);
+                frame(&mut live);
+                doc.update(id, &props).unwrap();
+                sync(&mut live, &doc);
+                let incremental = frame(&mut live);
+                let mut cold = Renderer::default();
+                sync(&mut cold, &doc);
+                let stale = incremental.iter().zip(frame(&mut cold)).filter(|(a, b)| a.abs_diff(*b) > 10).count();
+                assert!(stale == 0, "{stale} stale channels after {id} {props}");
+            }
         }
     }
 
@@ -1793,6 +1933,85 @@ pub(crate) mod tests {
         assert!(red(&px, 150, 101) && !red(&px, 150, 152), "settled in the cached view at its own place");
     }
 
+    /// A node that does not slide (a `Copy`, an insert past the cap) and stacks above a slide in its
+    /// frame would be covered by it until it ends: the slide settles instead. Slides it does not
+    /// overlap, and ones below it that it only sits beside, keep animating.
+    #[test]
+    fn slide_settles_under_a_later_node_that_does_not_slide() {
+        let json = r##"{"version":"2.19","children":[{"type":"frame","id":"f","x":0,"y":0,"width":400,"height":400,"layout":"none","fill":"#ffffff","children":[
+            {"type":"rectangle","id":"panel","x":100,"y":100,"width":200,"height":200,"fill":"#ff0000"},
+            {"type":"rectangle","id":"apart","x":10,"y":10,"width":20,"height":20,"fill":"#00ff00"},
+            {"type":"frame","id":"card","x":320,"y":320,"width":60,"height":60,"layout":"none","fill":"#0000ff","children":[
+                {"type":"rectangle","id":"inner","x":0,"y":0,"width":10,"height":10,"fill":"#ffff00"}]},
+            {"type":"rectangle","id":"copy","x":150,"y":150,"width":50,"height":50,"fill":"#ffffff"}]}]}"##;
+        let doc = Doc::from_json(json).unwrap();
+        let (mut fonts, mut assets) = offline();
+        let mut r = Renderer::default();
+        r.slides.extend([Slide::new("panel"), Slide::new("apart"), Slide::new("card")]);
+        let mut cx = Ctx { doc: &doc, libs: &[], fonts: &mut fonts, assets: &mut assets };
+        r.sync(&mut cx);
+        assert!(r.settle_covered());
+        let left: Vec<&str> = r.slides.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(left, ["apart", "card"], "only the panel under the copy settles");
+        assert!(!r.settle_covered());
+
+        // The copy slides too: nothing is above the panel that stays put.
+        let mut r = Renderer::default();
+        r.slides.extend([Slide::new("panel"), Slide::new("copy")]);
+        let mut cx = Ctx { doc: &doc, libs: &[], fonts: &mut fonts, assets: &mut assets };
+        r.sync(&mut cx);
+        assert!(!r.settle_covered() && r.slides.len() == 2);
+
+        // The settled panel's content counts for the slide below it: it now stays put above `base`.
+        let json = r##"{"version":"2.19","children":[{"type":"frame","id":"f","x":0,"y":0,"width":400,"height":400,"layout":"none","fill":"#ffffff","children":[
+            {"type":"rectangle","id":"base","x":0,"y":0,"width":300,"height":300,"fill":"#ff0000"},
+            {"type":"rectangle","id":"mid","x":100,"y":100,"width":200,"height":200,"fill":"#00ff00"},
+            {"type":"rectangle","id":"top","x":150,"y":150,"width":50,"height":50,"fill":"#ffffff"}]}]}"##;
+        let doc = Doc::from_json(json).unwrap();
+        let mut r = Renderer::default();
+        r.slides.extend([Slide::new("base"), Slide::new("mid")]);
+        let mut cx = Ctx { doc: &doc, libs: &[], fonts: &mut fonts, assets: &mut assets };
+        r.sync(&mut cx);
+        assert!(r.settle_covered() && r.slides.is_empty(), "mid settles under top, then base under the settled mid");
+
+        // A slide at most 1 unit wide still counts, and so does a child overflowing its frame; a
+        // clip frame cuts its child, so that one does not.
+        let json = r##"{"version":"2.19","children":[{"type":"frame","id":"f","x":0,"y":0,"width":400,"height":400,"layout":"none","fill":"#ffffff","children":[
+            {"type":"rectangle","id":"thin","x":100,"y":100,"width":1,"height":50,"fill":"#ff0000"},
+            {"type":"frame","id":"box","x":200,"y":0,"width":20,"height":20,"layout":"none","children":[
+                {"type":"rectangle","id":"spill","x":0,"y":100,"width":20,"height":20,"fill":"#00ff00"}]},
+            {"type":"frame","id":"cut","x":300,"y":0,"width":20,"height":20,"layout":"none","clip":true,"children":[
+                {"type":"rectangle","id":"hidden","x":0,"y":100,"width":20,"height":20,"fill":"#00ff00"}]},
+            {"type":"rectangle","id":"over_thin","x":90,"y":110,"width":30,"height":10,"fill":"#ffffff"},
+            {"type":"rectangle","id":"over_spill","x":195,"y":105,"width":30,"height":10,"fill":"#ffffff"},
+            {"type":"rectangle","id":"over_hidden","x":295,"y":105,"width":30,"height":10,"fill":"#ffffff"}]}]}"##;
+        let doc = Doc::from_json(json).unwrap();
+        let mut r = Renderer::default();
+        r.slides.extend([Slide::new("thin"), Slide::new("box"), Slide::new("cut")]);
+        let mut cx = Ctx { doc: &doc, libs: &[], fonts: &mut fonts, assets: &mut assets };
+        r.sync(&mut cx);
+        assert!(r.settle_covered());
+        let left: Vec<&str> = r.slides.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(left, ["cut"], "thin and the overflowing box settle; the clipped child is not painted");
+    }
+
+    /// A clip frame above the slide cuts its overflow in the snapshot, so a later node over the cut part does not settle it.
+    #[test]
+    fn settle_ignores_overflow_cut_by_clipping_ancestor() {
+        let json = r##"{"version":"2.19","children":[{"type":"frame","id":"f","x":0,"y":0,"width":400,"height":400,"layout":"none","fill":"#ffffff","children":[
+            {"type":"frame","id":"cl","x":0,"y":0,"width":100,"height":100,"layout":"none","clip":true,"children":[
+                {"type":"frame","id":"box","x":10,"y":10,"width":20,"height":20,"layout":"none","children":[
+                    {"type":"rectangle","id":"spill","x":0,"y":150,"width":20,"height":20,"fill":"#00ff00"}]}]},
+            {"type":"rectangle","id":"over","x":5,"y":160,"width":30,"height":10,"fill":"#ffffff"}]}]}"##;
+        let doc = Doc::from_json(json).unwrap();
+        let (mut fonts, mut assets) = offline();
+        let mut r = Renderer::default();
+        r.slides.push(Slide::new("box"));
+        let mut cx = Ctx { doc: &doc, libs: &[], fonts: &mut fonts, assets: &mut assets };
+        r.sync(&mut cx);
+        assert!(!r.settle_covered() && r.slides.len() == 1, "the cut spill is not painted, so it does not count");
+    }
+
     /// A settled slide repaints the node's descendants, also where they overflow its box.
     #[test]
     fn settled_slide_repaints_overflowing_children() {
@@ -2030,6 +2249,65 @@ pub(crate) mod tests {
         assert!(red(50, 240) && !red(50, 120), "the sibling starts at its old position");
     }
 
+    /// Inserting into a group up/left of its children moves the group's box origin (the union of
+    /// its children) but not its content: the group must not glide, only the new node slides.
+    #[test]
+    fn group_growing_up_left_does_not_glide() {
+        let doc = |kids: &str| {
+            Doc::from_json(&format!(
+                r##"{{"version":"2.19","children":[{{"type":"frame","id":"f","x":0,"y":0,"width":400,"height":400,"layout":"none","fill":"#ffffff","children":[
+                {{"type":"group","id":"g","children":[{kids}]}}]}}]}}"##
+            ))
+            .unwrap()
+        };
+        let r_node = r##"{"type":"rectangle","id":"r","x":200,"y":200,"width":100,"height":100,"fill":"#ff0000"}"##;
+        let before = doc(r_node);
+        let after = doc(&format!(r##"{r_node},{{"type":"rectangle","id":"n","x":20,"y":20,"width":100,"height":100,"fill":"#00ff00"}}"##));
+        let (mut fonts, mut assets) = offline();
+        let mut r = Renderer::default();
+        let mut sync = |r: &mut Renderer, doc: &Doc| {
+            let mut cx = Ctx { doc, libs: &[], fonts: &mut fonts, assets: &mut assets };
+            let roots = r.shift_siblings(&mut cx);
+            let rebuilt = r.sync(&mut cx);
+            r.refresh_slides(&mut cx, &rebuilt, roots);
+        };
+        sync(&mut r, &before);
+        assert_eq!(r.find("g").map(|f| (f.x, f.y)), Some((200.0, 200.0)));
+        r.slides.push(Slide::new("n"));
+        sync(&mut r, &after);
+        assert_eq!(r.find("g").map(|f| (f.x, f.y)), Some((20.0, 20.0)), "the group's box origin moved");
+        assert!(r.slides.iter().all(|s| s.id != "g"), "the group does not glide: its content did not move");
+        let px = r.render(400, 400, 0.0, 0.0, 1.0, [30, 30, 30], None, true).to_vec();
+        let red = |x: usize, y: usize| px[(y * 400 + x) * 4] > 200 && px[(y * 400 + x) * 4 + 2] < 100;
+        assert!(red(250, 250), "the existing child stays in place on the first frame");
+    }
+
+    /// A sliding node with a drop or inner shadow is drawn by resvg; its filter layers stay
+    /// within the frame (plus a margin), however big the node is (it once allocated the node's area).
+    #[test]
+    fn sliding_huge_shadowed_node_renders_quickly() {
+        for shadow in ["outer", "inner"] {
+            let json = format!(
+                r##"{{"version":"2.19","children":[{{"type":"frame","id":"f","x":0,"y":0,"width":400,"height":400,"layout":"none","children":[
+                {{"type":"frame","id":"n","x":0,"y":0,"width":100000,"height":100000,"fill":"#ff0000","effect":{{"type":"shadow","shadowType":"{shadow}","blur":10}}}}]}}]}}"##
+            );
+            let doc = Doc::from_json(&json).unwrap();
+            let (mut fonts, mut assets) = offline();
+            let mut r = Renderer::default();
+            r.slides.push(Slide::new("n"));
+            let mut cx = Ctx { doc: &doc, libs: &[], fonts: &mut fonts, assets: &mut assets };
+            let roots = r.shift_siblings(&mut cx);
+            let rebuilt = r.sync(&mut cx);
+            r.refresh_slides(&mut cx, &rebuilt, roots);
+            r.slides[0].start = Some(Instant::now() - Duration::from_millis(300));
+            let t = Instant::now();
+            let px = r.render(400, 400, 0.0, 0.0, 1.0, [30, 30, 30], None, true).to_vec();
+            assert!(t.elapsed() < Duration::from_secs(5), "{shadow} shadow: took {:?}", t.elapsed());
+            let at = (200 * 400 + 200) * 4;
+            assert!(px[at] > 100 && px[at + 1] < 100, "{shadow} shadow: the node still paints, got {:?}", &px[at..at + 3]);
+        }
+    }
+
     /// A node still fading in that a later insert reflows glides to its new place too, without
     /// restarting its fade, and its slide outlives the fade until the glide has settled.
     #[test]
@@ -2099,31 +2377,5 @@ pub(crate) mod tests {
         assert!(!r.expire_slides() && r.slides.iter().any(|s| s.id == "a"), "a far glide is not cut short");
         r.slides.iter_mut().find(|s| s.id == "a").unwrap().start = Some(Instant::now() - Duration::from_millis(900));
         assert!(r.expire_slides() && !r.slides.iter().any(|s| s.id == "a"), "it ends once settled");
-    }
-
-    /// A sliding node with a drop or inner shadow is drawn by resvg; its filter layers stay
-    /// within the frame (plus a margin), however big the node is (it once allocated the node's area).
-    #[test]
-    fn sliding_huge_shadowed_node_renders_quickly() {
-        for shadow in ["outer", "inner"] {
-            let json = format!(
-                r##"{{"version":"2.19","children":[{{"type":"frame","id":"f","x":0,"y":0,"width":400,"height":400,"layout":"none","children":[
-                {{"type":"frame","id":"n","x":0,"y":0,"width":100000,"height":100000,"fill":"#ff0000","effect":{{"type":"shadow","shadowType":"{shadow}","blur":10}}}}]}}]}}"##
-            );
-            let doc = Doc::from_json(&json).unwrap();
-            let (mut fonts, mut assets) = offline();
-            let mut r = Renderer::default();
-            r.slides.push(Slide::new("n"));
-            let mut cx = Ctx { doc: &doc, libs: &[], fonts: &mut fonts, assets: &mut assets };
-            let roots = r.shift_siblings(&mut cx);
-            let rebuilt = r.sync(&mut cx);
-            r.refresh_slides(&mut cx, &rebuilt, roots);
-            r.slides[0].start = Some(Instant::now() - Duration::from_millis(300));
-            let t = Instant::now();
-            let px = r.render(400, 400, 0.0, 0.0, 1.0, [30, 30, 30], None, true).to_vec();
-            assert!(t.elapsed() < Duration::from_secs(5), "{shadow} shadow: took {:?}", t.elapsed());
-            let at = (200 * 400 + 200) * 4;
-            assert!(px[at] > 100 && px[at + 1] < 100, "{shadow} shadow: the node still paints, got {:?}", &px[at..at + 3]);
-        }
     }
 }
