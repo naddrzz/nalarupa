@@ -1577,7 +1577,7 @@ pub fn fills(v: Option<&Value>) -> Vec<&Value> {
 }
 
 /// Whether the node or a descendant paints with a blend mode (a fill, stroke or shadow).
-fn blends(n: &RNode) -> bool {
+pub fn blends(n: &RNode) -> bool {
     let paint = |k: &str| fills(n.p.get(k)).iter().any(|f| blend_mode(f["blendMode"].as_str()).is_some());
     paint("fill") || paint("stroke") || Effects::of(n).shadows.iter().any(|s| s.blend.is_some()) || n.kids.iter().any(blends)
 }

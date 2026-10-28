@@ -283,10 +283,9 @@ impl Engine {
         let mut cx = Ctx { doc, libs: &self.libs, fonts: &mut self.fonts, assets: &mut self.assets };
         let roots = self.renderer.shift_siblings(&mut cx);
         let rebuilt = self.renderer.sync(&mut cx);
-        if !self.renderer.slides.is_empty() {
-            self.renderer.refresh_slides(&mut cx, &rebuilt, roots);
-        }
-        self.synced = self.version;
+        // A slide dropped for a blend mode goes back into the cached view at the next sync.
+        let dropped = !self.renderer.slides.is_empty() && self.renderer.refresh_slides(&mut cx, &rebuilt, roots);
+        self.synced = if dropped { 0 } else { self.version };
     }
 
     /// An agent `Insert` below the top level slides into place.
