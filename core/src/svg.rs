@@ -438,23 +438,53 @@ fn gunzip_capped(gz: &[u8]) -> Option<Vec<u8>> {
     (out.len() <= MAX_SVGZ_BYTES).then_some(out)
 }
 
-/// The file at `href` (a `data:` URI stays as it is) as a `data:` URI.
-/// Stands in for an image `href` an SVG export inlines later (see `Svg::embedded`).
-pub const EMBED_TOKEN: &str = "nalarupa-embed:";
+/// Image files an SVG export inlines once the engine lock is released (`Svg::embedded`): each `<image>` href
+/// is written as `tag` + its index here. The tag carries a random key, so text in the document never matches it.
+#[derive(Default)]
+pub struct Embedded {
+    pub tag: String,
+    pub hrefs: Vec<String>,
+}
 
-/// `svg` with each `EMBED_TOKEN<i>` replaced by `hrefs[i]` as a `data:` URI. Slow (reads and encodes every
-/// file), so it runs without the engine lock. A file that cannot be inlined (unreadable, or a gzip bomb
-/// past the cap) keeps its file href.
-pub fn inline_embedded(svg: &str, hrefs: &[String]) -> String {
-    let mut out = svg.to_string();
-    // Last first, so `…:1` never matches inside `…:10`.
-    for (i, href) in hrefs.iter().enumerate().rev() {
-        let uri = data_uri(href).unwrap_or_else(|| href.clone());
-        out = out.replace(&format!("{EMBED_TOKEN}{i}"), &esc(&uri));
+impl Embedded {
+    fn token(&mut self, href: String) -> String {
+        if self.tag.is_empty() {
+            self.tag = format!("nalarupa-embed-{:016x}:", crate::doc::random_u64());
+        }
+        self.hrefs.push(href);
+        format!("{}{}", self.tag, self.hrefs.len() - 1)
     }
+}
+
+/// `svg` with each token of `embedded` replaced by its file as a `data:` URI, in one pass. Slow (reads and
+/// encodes every file), so it runs without the engine lock. A file that cannot be inlined (unreadable, or a
+/// gzip bomb past the cap) keeps its file href.
+pub fn inline_embedded(svg: &str, embedded: &Embedded) -> String {
+    if embedded.hrefs.is_empty() {
+        return svg.to_string();
+    }
+    let mut out = String::with_capacity(svg.len());
+    let mut rest = svg;
+    while let Some(at) = rest.find(&embedded.tag) {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + embedded.tag.len()..];
+        let digits = after.bytes().take_while(u8::is_ascii_digit).count();
+        match after[..digits].parse::<usize>().ok().and_then(|i| embedded.hrefs.get(i)) {
+            Some(href) => {
+                out.push_str(&esc(&data_uri(href).unwrap_or_else(|| href.clone())));
+                rest = &after[digits..];
+            }
+            None => {
+                out.push_str(&embedded.tag);
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
     out
 }
 
+/// The file at `href` (a `data:` URI stays as it is) as a `data:` URI.
 fn data_uri(href: &str) -> Option<String> {
     if href.starts_with("data:") {
         return Some(href.to_string());
@@ -702,15 +732,15 @@ pub struct Svg<'a> {
     /// How far the paints being built reach outside the node box (a stroke's outer half): image patterns grow by it so they do not tile there.
     pad: f64,
     /// Inline image fills as `data:` URIs (SVG export) instead of linking local files (rendering). The files
-    /// are not read here: each href is listed in `embedded` and written as `EMBED_TOKEN<index>`, which
+    /// are not read here: each href goes into `embedded` and is written as its token, which
     /// `inline_embedded` replaces once the engine lock is released.
     pub embed: bool,
-    pub embedded: Vec<String>,
+    pub embedded: Embedded,
 }
 
 impl<'a> Svg<'a> {
     pub fn new(fonts: &'a mut Fonts, assets: &'a mut Assets, base: Option<PathBuf>) -> Self {
-        Svg { fonts, assets, base, defs: String::new(), out: String::new(), uid: 0, painted: Vec::new(), tag: false, skip: Default::default(), outline: None, pad: 0.0, embed: false, embedded: Vec::new() }
+        Svg { fonts, assets, base, defs: String::new(), out: String::new(), uid: 0, painted: Vec::new(), tag: false, skip: Default::default(), outline: None, pad: 0.0, embed: false, embedded: Embedded::default() }
     }
 
     /// Number ids from `uid` on, so several inline SVGs in one page do not share ids; read back with `uid`.
@@ -1305,8 +1335,7 @@ impl<'a> Svg<'a> {
                                 if !self.embed || h.starts_with("data:") {
                                     return h;
                                 }
-                                self.embedded.push(h);
-                                format!("{EMBED_TOKEN}{}", self.embedded.len() - 1)
+                                self.embedded.token(h)
                             });
                             match href {
                                 Some(href) => {

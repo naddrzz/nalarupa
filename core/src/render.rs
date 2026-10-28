@@ -258,16 +258,16 @@ impl Ctx<'_> {
         self.node_svg_at(id, 1.0, false).map(|(svg, view, _)| (svg, view))
     }
 
-    /// The SVG file export: image fills are inlined, so it renders outside this machine.
-    /// SVG export: the markup with image files still to inline (`svg::inline_embedded`, after the engine lock).
-    pub fn export_svg(&mut self, id: &str) -> Option<(String, Vec<String>)> {
+    /// The SVG file export: image fills are inlined, so it renders outside this machine. Returns the markup
+    /// with the image files still to inline (`svg::inline_embedded`, after the engine lock).
+    pub fn export_svg(&mut self, id: &str) -> Option<(String, crate::svg::Embedded)> {
         self.node_svg_at(id, 1.0, true).map(|(svg, _, embedded)| (svg, embedded))
     }
 
     /// Raster export: the node's visual bounds (shadows, blur and outer stroke
     /// included) from their unrounded corner, `ceil((max − min) · scale)` pixels in each axis. The
     /// float arithmetic matches JS, so e.g. y = 3266.9999999999995 + 933 exports 934 rows.
-    fn node_svg_at(&mut self, id: &str, scale: f64, embed: bool) -> Option<(String, (f64, f64, f64, f64), Vec<String>)> {
+    fn node_svg_at(&mut self, id: &str, scale: f64, embed: bool) -> Option<(String, (f64, f64, f64, f64), crate::svg::Embedded)> {
         let top = top_index(self.doc, id)?;
         let root = self.laid_out(top)?;
         let node = find_rnode(&root, id)?;
