@@ -673,11 +673,18 @@ impl Engine {
         }
         if let (Some(from), Some(before)) = (&moved_from, &backup) {
             let relocate = |v: &mut Value| Doc::relocate(v, from, &to);
-            relocate_history(&mut self.undo, before, &self.doc.root, relocate);
-            relocate_history(&mut self.redo, before, &self.doc.root, relocate);
-            if let Some(v) = self.drag_before.as_mut() {
-                relocate(v);
-            }
+            // During a drag the history steps lead back from the document as the drag began.
+            let (old, new) = match self.drag_before.take() {
+                Some(start) => {
+                    let mut moved = start.clone();
+                    relocate(&mut moved);
+                    self.drag_before = Some(moved.clone());
+                    (start, moved)
+                }
+                None => (before.clone(), self.doc.root.clone()),
+            };
+            relocate_history(&mut self.undo, &old, &new, relocate);
+            relocate_history(&mut self.redo, &old, &new, relocate);
         }
         self.doc.path = Some(target.clone());
         self.saved = self.version;
@@ -1116,6 +1123,18 @@ mod tests {
         assert!(e.redo());
         assert_eq!(url(&e), "../a/three.png");
         assert!(e.undo() && e.undo());
+        assert_eq!(url(&e), "../a/one.png");
+        // Save as during a drag: the history leads back from the snapshot taken when the drag began.
+        let mut e = Engine::new(root.join("data"));
+        e.doc.path = Some(root.join("a").join("x.pen"));
+        e.doc.root = json!({"children": [{"id": "i", "type": "rectangle", "fill": {"type": "image", "url": "./one.png"}}]});
+        e.edit(|d| d.update("i", &json!({"fill": {"type": "image", "url": "./two.png"}}))).unwrap();
+        e.drag_before = Some(e.doc.root.clone());
+        e.doc.update("i", &json!({"fill": {"type": "image", "url": "./drag.png"}})).unwrap();
+        e.save(Some(root.join("b").join("y.pen").to_str().unwrap())).unwrap();
+        assert_eq!(e.drag_before.as_ref().unwrap()["children"][0]["fill"]["url"], "../a/two.png");
+        e.doc.root = e.drag_before.take().unwrap();
+        assert!(e.undo());
         assert_eq!(url(&e), "../a/one.png");
         let _ = std::fs::remove_dir_all(&root);
     }
