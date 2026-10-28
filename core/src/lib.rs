@@ -447,7 +447,8 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
         "png" => {
             let id = req["id"].as_str().ok_or("id required")?;
             let scale = req["scale"].as_f64().unwrap_or(1.0).clamp(0.05, 8.0);
-            let tree = engine().ctx().node_tree_at(id, scale)?;
+            // A script node runs after the guard drops, not under it.
+            let tree = script::off_lock(|| engine().ctx().node_tree_at(id, scale))?;
             let png = render::encode_tree(&tree, "png", scale, 0)?;
             Ok(json!(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, png)))
         }

@@ -888,12 +888,13 @@ fn finish(e: &mut Engine, prep: Prepared, result: Result<Map<String, Value>, Str
         }
     }
     // Only the trees are built under the engine lock; `ToolOut::finish` rasterizes screenshots and writes exports.
-    let (mut shots, mut downloads) = (Vec::new(), Vec::new());
+    let (mut shots, mut downloads, mut runs) = (Vec::new(), Vec::new(), Runs::default());
     for id in &ex.shots {
         match shot_tree(e, id) {
-            Ok((tree, scale, waits)) => {
+            Ok((tree, scale, waits, needs)) => {
                 shots.push((id.clone(), tree, scale));
                 downloads.extend(waits);
+                runs.extend(needs);
             }
             Err(err) => text += &format!("Screenshot of {id} failed: {err}\n"),
         }
@@ -908,22 +909,24 @@ fn finish(e: &mut Engine, prep: Prepared, result: Result<Map<String, Value>, Str
         }
     }
     // The shots are redrawn and the exports planned again in `ToolOut::finish` once the icons and images they show
-    // have downloaded, from this document and these libraries (the live ones may change meanwhile).
-    let redraw = !shots.is_empty() && (!icons.is_empty() || !downloads.is_empty());
-    let call_doc = (redraw || exports.iter().any(|job| !job.waits.is_empty())).then(|| (e.doc.clone(), e.libs.clone()));
-    ToolOut { text, images: Vec::new(), error: false, shots, icons, downloads, call_doc, exports }
+    // have downloaded and their script nodes have run, from this document and these libraries (the live ones may change meanwhile).
+    let redraw = !shots.is_empty() && (!icons.is_empty() || !downloads.is_empty() || !runs.is_empty());
+    let call_doc = (redraw || exports.iter().any(|job| job.stale())).then(|| (e.doc.clone(), e.libs.clone()));
+    ToolOut { text, images: Vec::new(), error: false, shots, icons, downloads, runs, call_doc, exports }
 }
 
-/// The render tree and scale of a screenshot target (`document` is the first top-level node), and the
-/// icons and images it shows that are still downloading.
-pub fn shot_tree(e: &mut Engine, id: &str) -> Result<(resvg::usvg::Tree, f64, Vec<String>), String> {
+/// The render tree and scale of a screenshot target (`document` is the first top-level node), the
+/// icons and images it shows that are still downloading and the script runs it drew as running.
+pub fn shot_tree(e: &mut Engine, id: &str) -> Result<(resvg::usvg::Tree, f64, Vec<String>, Runs), String> {
     let target = shot_target(&e.doc, id);
     e.sync();
     let scale = e.renderer.find(&target).map(|f| (1400.0 / f.w.max(f.h).max(1.0)).min(2.0)).unwrap_or(1.0).clamp(0.05, 8.0);
     e.assets.record();
+    record_runs();
     let tree = e.ctx().node_tree_at(&target, scale);
+    let runs = recorded_runs();
     let waits = e.assets.recorded();
-    tree.map(|tree| (tree, scale, waits))
+    tree.map(|tree| (tree, scale, waits, runs))
 }
 
 /// The node a screenshot of `id` draws: `document` is the first top-level node.
@@ -1499,6 +1502,84 @@ fn run_job(j: &Job) -> ScriptRun {
     run_script(&j.src, &j.file, &j.input).and_then(|out| script_output(&out, &j.schema))
 }
 
+fn remember(key: u64, r: ScriptRun) {
+    let mut guard = scripts();
+    let g = guard.get_or_insert_with(Scripts::default);
+    if g.cache.len() > 256 {
+        g.cache.clear();
+    }
+    g.cache.insert(key, r);
+}
+
+thread_local! {
+    /// While an export or screenshot is planned (`record_runs`): the script runs it needed that were not cached.
+    static ASKED: RefCell<Option<Vec<Job>>> = const { RefCell::new(None) };
+}
+
+/// Script runs an export or screenshot needed while it was planned under the engine lock: it drew them as
+/// running, so `run` them once the lock is released and plan again.
+#[derive(Default)]
+pub struct Runs(Vec<Job>);
+
+impl Runs {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn extend(&mut self, more: Runs) {
+        for job in more.0 {
+            if !self.0.iter().any(|j| j.key == job.key) {
+                self.0.push(job);
+            }
+        }
+    }
+
+    /// Run each (at most `WORKERS` at once) unless its output is cached meanwhile, and cache the outputs.
+    /// Call without holding `engine()`.
+    pub fn run(&self) {
+        for jobs in self.0.chunks(WORKERS) {
+            std::thread::scope(|scope| {
+                for job in jobs {
+                    if scripts().as_ref().is_some_and(|s| s.cache.contains_key(&job.key)) {
+                        continue;
+                    }
+                    scope.spawn(|| {
+                        let r = std::panic::catch_unwind(|| run_job(job)).unwrap_or_else(|_| Err(Status::error("An internal error occurred", None)));
+                        remember(job.key, r);
+                    });
+                }
+            });
+        }
+    }
+}
+
+/// From now on, a script node laid out on this thread without a slot (an export or screenshot, under the
+/// engine lock) does not run: it draws as running and is noted for `recorded_runs`.
+pub fn record_runs() {
+    ASKED.set(Some(Vec::new()));
+}
+
+/// Stop noting; the runs noted since `record_runs`.
+pub fn recorded_runs() -> Runs {
+    Runs(ASKED.take().unwrap_or_default())
+}
+
+/// `draw` (which takes the engine lock itself) without running a script node under the lock: the runs it
+/// needs are run after it returns, and it draws again.
+pub fn off_lock<T>(mut draw: impl FnMut() -> T) -> T {
+    record_runs();
+    let out = draw();
+    let runs = recorded_runs();
+    if runs.is_empty() {
+        return out;
+    }
+    runs.run();
+    record_runs();
+    let out = draw();
+    recorded_runs();
+    out
+}
+
 /// Background runs finished so far.
 pub fn finished() -> u64 {
     FINISHED.load(std::sync::atomic::Ordering::Acquire)
@@ -1585,15 +1666,22 @@ pub fn script_node(uri: &str, dir: Option<&std::path::Path>, inputs: Option<&Map
         return r.clone();
     }
     let Some(slot) = slot else {
-        // Not under the lock of a render: wait for the run, with the cache unlocked meanwhile.
         drop(guard);
+        // An export or screenshot planned under the engine lock: note the run for after the lock instead.
+        let Some(job) = ASKED.with_borrow_mut(|asked| match asked {
+            Some(asked) => {
+                if !asked.iter().any(|j| j.key == key) {
+                    asked.push(job);
+                }
+                None
+            }
+            None => Some(job),
+        }) else {
+            return Err(Status { kind: "running", title: "Running script".into(), description: None, code: None });
+        };
+        // Not under the lock of a render: wait for the run, with the cache unlocked meanwhile.
         let r = run_job(&job);
-        let mut guard = scripts();
-        let g = guard.get_or_insert_with(Scripts::default);
-        if g.cache.len() > 256 {
-            g.cache.clear();
-        }
-        g.cache.insert(key, r.clone());
+        remember(key, r.clone());
         return r;
     };
     g.tick += 1;
@@ -2587,6 +2675,8 @@ Insert(document, {type:'frame', name:'C', width:10, height:10})
 
     #[test]
     fn live_script_runs_off_the_lock() {
+        // `busy()` counts every slot: a screenshot test's sync on the global engine queues runs too.
+        let _serial = global_execute();
         let dir = script_dir("live", &[("slow.js", "/** @schema 2.19 */\nconst s = Date.now(); while (Date.now() - s < 400) {}\nreturn [{type: 'rectangle', width: nalarupa.width, height: 10}];")]);
         let doc = json!({"version": "2.19", "children": [
             {"type": "frame", "id": "page", "x": 0, "y": 0, "width": 300, "height": 200, "layout": "none", "children": [
@@ -2631,6 +2721,62 @@ Insert(document, {type:'frame', name:'C', width:10, height:10})
         assert!(scripts().as_ref().unwrap().slots["back-slot"].next.is_none(), "the stale size no longer waits");
         wait(&|| !busy());
         assert_eq!(call(101.0).unwrap()[0]["width"], 101.0);
+    }
+
+    /// Puts the global engine's document back when dropped: a script may export only into the open document's folder.
+    struct RestoreDoc(Option<crate::doc::Doc>);
+
+    impl Drop for RestoreDoc {
+        fn drop(&mut self) {
+            let mut e = crate::engine::engine();
+            e.doc = self.0.take().unwrap();
+            e.touch();
+        }
+    }
+
+    /// A script node in a 100 px page, opened in the global engine until the guard drops.
+    fn open_slow_script(name: &str, src: &str) -> (std::path::PathBuf, RestoreDoc) {
+        let dir = script_dir(name, &[("slow.js", src)]);
+        let doc = json!({"version": "2.19", "children": [
+            {"type": "frame", "id": "page", "x": 0, "y": 0, "width": 100, "height": 100, "layout": "none", "fill": "#ffffff", "children": [
+                {"type": "script", "id": "s", "x": 0, "y": 0, "width": 100, "height": 100, "scriptUri": "./slow.js"}]}
+        ]});
+        std::fs::write(dir.join("doc.pen"), doc.to_string()).unwrap();
+        let mut e = crate::engine::engine();
+        let before = e.doc.clone();
+        e.open(&dir.join("doc.pen")).unwrap();
+        (dir, RestoreDoc(Some(before)))
+    }
+
+    /// Exporting a script node never runs its JavaScript under the engine lock, and the file still shows its output.
+    #[test]
+    fn ui_exports_run_script_nodes_off_the_lock() {
+        let _serial = global_execute();
+        let (dir, _restore) = open_slow_script("ui-export-lock", "/** @schema 2.19 */\nconst s = Date.now(); while (Date.now() - s < 1000) {}\nreturn [{type: 'rectangle', width: nalarupa.width, height: nalarupa.height, fill: '#ff0000'}];");
+        let (ids, opts) = (vec!["page".to_string()], json!({"scale": 1}));
+        let started = Instant::now();
+        let planned = crate::html::plan(&mut crate::engine::engine(), &ids, "png", dir.join("planned").to_str().unwrap(), &opts);
+        assert!(planned.is_ok() && started.elapsed() < Duration::from_millis(500), "planning under the lock waited for the script: {:?}", started.elapsed());
+        let files = crate::html::export(&ids, "png", dir.join("ui").to_str().unwrap(), &opts).unwrap();
+        assert!(red_middle(&std::fs::read(&files[0]).unwrap()), "the script's output is in the export");
+    }
+
+    /// The agent's screenshots and exports of a script node run it after the tool call, off the engine lock.
+    #[test]
+    fn agent_shots_and_exports_run_script_nodes_off_the_lock() {
+        let _serial = global_execute();
+        let (dir, _restore) = open_slow_script("agent-export-lock", "/** @schema 2.19 */\nconst s = Date.now(); while (Date.now() - s < 1000) {}\nreturn [{type: 'rectangle', width: nalarupa.width, height: nalarupa.height, fill: '#ff0101'}];");
+        let src = format!("TakeScreenshot(\"page\")\nExport(\"page\", \"png\", {:?}, {{scale: 1}})", dir.join("agent").to_str().unwrap());
+        let started = Instant::now();
+        let out = crate::engine::engine().tool("execute", &json!({"input": src}));
+        assert!(!out.error, "{}", out.text);
+        assert!(started.elapsed() < Duration::from_millis(500), "the tool call waited for the script under the lock: {:?}", started.elapsed());
+        let out = out.finish();
+        assert!(out.text.contains("Exported:"), "{}", out.text);
+        let shot = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &out.images[0]).unwrap();
+        assert!(red_middle(&shot), "the script's output is in the screenshot");
+        let file = std::fs::read_dir(dir.join("agent")).unwrap().next().unwrap().unwrap().path();
+        assert!(red_middle(&std::fs::read(file).unwrap()), "the script's output is in the export");
     }
 
     /// The settled layer composites a semi-transparent parent with its children as one group, which a

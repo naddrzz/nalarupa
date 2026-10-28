@@ -31,6 +31,9 @@ pub struct ToolOut {
     /// Icons and images the screenshots show that were still downloading: `finish` waits for them too
     /// (and for each export's `waits`).
     pub downloads: Vec<String>,
+    /// Script runs the screenshots drew as running (none run under the engine lock): `finish` runs them (and each
+    /// export's `runs`) and redraws.
+    pub runs: crate::script::Runs,
     /// The document and libraries the screenshots and exports were made of, kept only when icons or images were still
     /// downloading: `finish` redraws and replans them from it, since the live ones may have changed (or been switched) meanwhile.
     pub call_doc: Option<(Doc, Vec<(String, Value)>)>,
@@ -40,16 +43,20 @@ pub struct ToolOut {
 
 impl ToolOut {
     pub fn ok(text: impl Into<String>) -> ToolOut {
-        ToolOut { text: text.into(), images: Vec::new(), error: false, shots: Vec::new(), icons: Vec::new(), downloads: Vec::new(), call_doc: None, exports: Vec::new() }
+        ToolOut { text: text.into(), images: Vec::new(), error: false, shots: Vec::new(), icons: Vec::new(), downloads: Vec::new(), runs: Default::default(), call_doc: None, exports: Vec::new() }
     }
     pub fn err(text: impl Into<String>) -> ToolOut {
         ToolOut { error: true, ..ToolOut::ok(text) }
     }
     /// Settle pending icons, rasterize pending screenshots and write pending exports once the icons and images
-    /// they show have downloaded. Call without holding `engine()`.
+    /// they show have downloaded and their script nodes have run. Call without holding `engine()`.
     pub fn finish(mut self) -> ToolOut {
         let until = std::time::Instant::now() + std::time::Duration::from_secs(12);
-        let redraw = !self.icons.is_empty() || !self.downloads.is_empty();
+        let redraw = !self.icons.is_empty() || !self.downloads.is_empty() || !self.runs.is_empty();
+        self.runs.run();
+        for job in &self.exports {
+            job.runs.run();
+        }
         self.settle_icons(until);
         wait_downloads(self.downloads.iter().chain(self.exports.iter().flat_map(|job| &job.waits)), until);
         self.downloads.clear();
@@ -62,7 +69,11 @@ impl ToolOut {
                 let mut e = engine();
                 let e = &mut *e;
                 let mut cx = Ctx { doc, libs, fonts: &mut e.fonts, assets: &mut e.assets };
-                if let Ok(fresh) = cx.node_tree_at(&target, scale) {
+                // A script node whose output is gone from the cache meanwhile draws as running, not under the lock.
+                crate::script::record_runs();
+                let fresh = cx.node_tree_at(&target, scale);
+                crate::script::recorded_runs();
+                if let Ok(fresh) = fresh {
                     tree = fresh;
                 }
             }
@@ -73,7 +84,7 @@ impl ToolOut {
         }
         for mut job in std::mem::take(&mut self.exports) {
             // Planned without the icons or images still downloading then: plan it again from the same document.
-            if let Some((doc, libs)) = call_doc.as_ref().filter(|_| !job.waits.is_empty()) {
+            if let Some((doc, libs)) = call_doc.as_ref().filter(|_| job.stale()) {
                 let mut e = engine();
                 let e = &mut *e;
                 let mut cx = Ctx { doc, libs, fonts: &mut e.fonts, assets: &mut e.assets };

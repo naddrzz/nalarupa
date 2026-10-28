@@ -87,6 +87,8 @@ pub struct ExportJob {
     /// Icon keys and image urls the files draw that were still downloading: they are drawn without them,
     /// so the caller waits for these (without the lock) and plans again (`replan`).
     pub waits: Vec<String>,
+    /// Script runs the files drew as running (none run under the engine lock): the caller runs them and plans again.
+    pub runs: crate::script::Runs,
     /// What was asked for (ids, format, out, opts), for `replan`.
     request: (Vec<String>, String, String, Value),
 }
@@ -100,6 +102,17 @@ enum Output {
 }
 
 impl ExportJob {
+    /// The files lack downloads or script output still to come: `settle`, then plan again.
+    pub fn stale(&self) -> bool {
+        !self.waits.is_empty() || !self.runs.is_empty()
+    }
+
+    /// Run the script nodes and wait for the downloads (until `until`) the files need. Call without holding `engine()`.
+    pub fn settle(&self, until: std::time::Instant) {
+        self.runs.run();
+        crate::engine::wait_downloads(&self.waits, until);
+    }
+
     /// Plan the same export again, from `cx` (once `waits` have landed).
     pub fn replan(&self, cx: &mut Ctx, data_dir: &Path) -> Result<ExportJob, String> {
         let (ids, format, out, opts) = &self.request;
@@ -140,18 +153,19 @@ impl ExportJob {
     }
 }
 
-/// Export nodes for the UI: plan under the engine lock; when the targets draw icons or images still downloading, wait
-/// for them without the lock (at most 12 s, as screenshots do) and plan again from the same document (the live one may
-/// change or be switched meanwhile); then write the files without the lock.
+/// Export nodes for the UI: plan under the engine lock; when the targets draw icons or images still downloading or
+/// script nodes not run yet, run those and wait for the downloads without the lock (at most 12 s, as screenshots do)
+/// and plan again from the same document (the live one may change or be switched meanwhile); then write the files
+/// without the lock.
 pub fn export(ids: &[String], format: &str, out: &str, opts: &Value) -> Result<Vec<String>, String> {
     let (mut job, then) = {
         let mut e = crate::engine::engine();
         let job = plan(&mut e, ids, format, out, opts)?;
-        let then = (!job.waits.is_empty()).then(|| (e.doc.clone(), e.libs.clone()));
+        let then = job.stale().then(|| (e.doc.clone(), e.libs.clone()));
         (job, then)
     };
     if let Some((doc, libs)) = then {
-        crate::engine::wait_downloads(&job.waits, std::time::Instant::now() + std::time::Duration::from_secs(12));
+        job.settle(std::time::Instant::now() + std::time::Duration::from_secs(12));
         let mut e = crate::engine::engine();
         let e = &mut *e;
         job = job.replan(&mut Ctx { doc: &doc, libs: &libs, fonts: &mut e.fonts, assets: &mut e.assets }, &e.data_dir)?;
@@ -168,9 +182,11 @@ pub fn plan(e: &mut Engine, ids: &[String], format: &str, out: &str, opts: &Valu
 /// `plan` from a document and libraries that may not be the engine's (a script's, kept for `ToolOut::finish`).
 fn plan_in(cx: &mut Ctx, data_dir: &Path, ids: &[String], format: &str, out: &str, opts: &Value) -> Result<ExportJob, String> {
     cx.assets.record();
+    crate::script::record_runs();
     let files = plan_files(cx, data_dir, ids, format, out, opts);
+    let runs = crate::script::recorded_runs();
     let waits = cx.assets.recorded();
-    Ok(ExportJob { files: files?, script: false, waits, request: (ids.to_vec(), format.to_string(), out.to_string(), opts.clone()) })
+    Ok(ExportJob { files: files?, script: false, waits, runs, request: (ids.to_vec(), format.to_string(), out.to_string(), opts.clone()) })
 }
 
 fn plan_files(cx: &mut Ctx, data_dir: &Path, ids: &[String], format: &str, out: &str, opts: &Value) -> Result<Vec<(PathBuf, Output)>, String> {
