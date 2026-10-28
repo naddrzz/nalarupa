@@ -26,6 +26,12 @@
     "drag-check": "bun scripts/drag-check.ts",
     "viewport-check": "bun scripts/viewport-check.ts",
     "issues-check": "bun scripts/issues-check.ts",
+    "layout-check": "bun scripts/layout-check.ts",
+    "text-check": "bun scripts/text-check.ts",
+    "scriptnode-check": "bun scripts/scriptnode-check.ts",
+    "shader-check": "bun scripts/shader-check.ts",
+    "paint-check": "bun scripts/paint-check.ts",
+    "component-check": "bun scripts/component-check.ts",
     "typecheck": "tsc --noEmit",
     "exe-check": "bun scripts/exe-check.ts",
     "shots": "bun scripts/shots.ts"

@@ -225,7 +225,7 @@ export function Canvas(props: {
   const [marquee, setMarquee] = useState<Rect | null>(null)
   const [drop, setDrop] = useState<Drop | null>(null)
   const [float, setFloat] = useState<Rect | null>(null)
-  const [measured, setMeasured] = useState<{ s: Rect; t: Rect; lines: Measure[] } | null>(null)
+  const [measured, setMeasured] = useState<{ s: Rect; t: Box; lines: Measure[] } | null>(null)
   const [cursor, setCursor] = useState<CursorValue>('default')
   // Vector editing (pen tool, point editing) mutates `pen` in place; `penRedraw` repaints the overlay.
   const pen = useRef<PenEdit | null>(null)
@@ -1148,7 +1148,7 @@ export function Canvas(props: {
         setHover(b ?? null)
         // Alt: distances from the selection to the hovered layer (or the selection's parent).
         const t = e.modifiers?.alt && selUnion ? b ?? (selBoxes[0]?.parent ? (tryCall<Box[]>('boxes', { ids: [selBoxes[0].parent] }) ?? [])[0] : null) : null
-        setMeasured(t && selUnion ? { s: selUnion, t, lines: measure(selUnion, t) } : null)
+        setMeasured(t && selUnion ? { s: selUnion, t, lines: measure(selUnion, painted(t)) } : null)
         const hh = hitHandle(sx, sy)
         const next: CursorValue = hh ? (hh.rotate ? 'grab' : resizeCursor(hh.handle, frame?.m)) : 'default'
         if (next !== cursor) setCursor(next)
@@ -1434,7 +1434,7 @@ export function Canvas(props: {
       {measured ? (
         <>
           <Outline r={screenRect(measured.s)} color={SNAP} />
-          <Outline r={screenRect(measured.t)} color={SNAP} />
+          {outline(measured.t, SNAP, 1, 'measure-target')}
           {measured.lines.map((m, i) => {
             const [x1, y1] = pt(m.x1, m.y1)
             const [x2, y2] = pt(m.x2, m.y2)
@@ -1517,7 +1517,7 @@ export function Canvas(props: {
               onChange={(ev) => setEditing((s) => (s ? { ...s, value: ev.value ?? '' } : s))}
               onSubmit={(ev) => { commitEdit(ev.value ?? editing.value); refocus() }}
               onBlur={() => commitEdit(editing.value)}
-              onKeyDown={(ev) => { if ((ev.key ?? '').toLowerCase() === 'escape') { editLive.current = null; setEditing(null); refocus() } }}
+              onKeyDown={(ev) => { if ((ev.key ?? '').toLowerCase() === 'escape') { commitEdit(editing.value); refocus() } }}
               style={{ fontSize: Math.max(10, Math.min(72, editing.size * cam.zoom)), color: '#111111', fontFamily: FONT, width: '100%' }}
             />
           </div>

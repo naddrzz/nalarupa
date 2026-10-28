@@ -78,7 +78,11 @@ fn pad(n: &RNode, ax: usize) -> f64 {
     if ax == 0 { p[1] + p[3] } else { p[0] + p[2] }
 }
 
+/// Main-axis gap; space_between/space_around ignore it everywhere (hug, fill share, placement).
 fn gap(n: &RNode) -> f64 {
+    if matches!(n.s("justifyContent"), Some("space_between" | "space_around")) {
+        return 0.0;
+    }
     n.f("gap").unwrap_or(0.0)
 }
 
@@ -137,18 +141,28 @@ fn init(n: &mut RNode, fonts: &mut Fonts) {
     }
 }
 
+/// Whether a fit_content size on this axis follows the children (a frame with a layout and an in-flow, non-fill child).
+/// Anything else keeps the value in `fit_content(N)`.
+pub fn hugs(n: &RNode, ax: usize) -> bool {
+    dir(n).is_some() && sizing(n, ax) == Sizing::Fit && n.kids.iter().any(|k| in_flow(k) && sizing(k, ax) != Sizing::Fill)
+}
+
+/// A hugging node with a fill child on this axis: the fill child gets what its siblings leave, but a CSS flex item adds
+/// its content width to a shrink-to-fit container, so `fit-content` would size the node differently from the canvas.
+pub fn hugs_fill(n: &RNode, ax: usize) -> bool {
+    hugs(n, ax) && n.kids.iter().any(|k| in_flow(k) && sizing(k, ax) == Sizing::Fill)
+}
+
 /// Post-order: a fit_content node with a layout hugs its in-flow, non-fill children.
 fn fit(n: &mut RNode, ax: usize, fonts: &mut Fonts) {
     for k in &mut n.kids {
         fit(k, ax, fonts);
     }
-    if let Some(d) = dir(n).filter(|_| sizing(n, ax) == Sizing::Fit) {
+    if let Some(d) = dir(n).filter(|_| hugs(n, ax)) {
         let sized: Vec<f64> = n.kids.iter().filter(|k| in_flow(k) && sizing(k, ax) != Sizing::Fill).map(|k| outer(k, ax)).collect();
-        if !sized.is_empty() {
-            let content = if d == ax { sized.iter().sum::<f64>() + gap(n) * (sized.len() - 1) as f64 } else { sized.iter().copied().fold(0.0, f64::max) };
-            let v = content + pad(n, ax);
-            commit(n, ax, v, fonts);
-        }
+        let content = if d == ax { sized.iter().sum::<f64>() + gap(n) * (sized.len() - 1) as f64 } else { sized.iter().copied().fold(0.0, f64::max) };
+        let v = content + pad(n, ax);
+        commit(n, ax, v, fonts);
     }
     if n.ty == "group" {
         group_bounds(n);
@@ -185,7 +199,7 @@ fn fill(n: &mut RNode, ax: usize, fonts: &mut Fonts) {
     }
 }
 
-/// Place in-flow children: justify along the main axis (space_* ignore gap and may go negative),
+/// Place in-flow children: justify along the main axis (space_* ignore gap and never go negative: overflow packs from the start, like CSS),
 /// align on the cross axis; each child's rotated/flipped bounding box lands on its slot.
 fn position(n: &mut RNode) {
     if let Some(e) = dir(n) {
@@ -204,9 +218,9 @@ fn position(n: &mut RNode) {
                 Some("end") => cur[e] += free - gaps,
                 Some("center") => cur[e] += (free - gaps) / 2.0,
                 // One child divides by zero; the step is never used then.
-                Some("space_between") => step = free / (o - 1) as f64,
+                Some("space_between") => step = free.max(0.0) / (o - 1) as f64,
                 Some("space_around") => {
-                    step = free / o as f64;
+                    step = free.max(0.0) / o as f64;
                     cur[e] += step / 2.0;
                 }
                 _ => {}
@@ -258,6 +272,7 @@ fn commit(n: &mut RNode, ax: usize, v: f64, fonts: &mut Fonts) {
 fn text_bounds(n: &mut RNode, fonts: &mut Fonts) {
     let st = TextStyle::of(n);
     let line_h = fonts.metrics(&st).line_h;
+    n.line_h = line_h;
     let content = match n.p.get("content") {
         Some(Value::String(s)) => s.clone(),
         Some(Value::Number(v)) => v.to_string(),
@@ -357,7 +372,8 @@ mod tests {
                 {"type":"rectangle","id":"c","width":50,"height":40}]}));
         assert_eq!((n.w, n.h), (300.0, 100.0));
         let b = &n.kids[1];
-        assert_eq!(b.w, 300.0 - 20.0 - 100.0 - 20.0);
+        // space_between ignores the gap, so the fill child takes everything the others leave.
+        assert_eq!(b.w, 300.0 - 20.0 - 100.0);
         assert_eq!(b.h, 80.0);
         assert_eq!(n.kids[0].x, 20.0);
         assert_eq!(n.kids[0].y, 20.0 + 10.0 + 30.0);
@@ -413,9 +429,27 @@ mod tests {
         assert_eq!(n.kids.iter().map(|k| k.x).collect::<Vec<_>>(), [0.0, 40.0, 80.0]);
         let n = row("space_around", 90.0);
         assert_eq!(n.kids.iter().map(|k| k.x).collect::<Vec<_>>(), [5.0, 35.0, 65.0]);
-        // Overflow makes the spacing negative instead of clamping.
-        let n = row("space_between", 40.0);
-        assert_eq!(n.kids.iter().map(|k| k.x).collect::<Vec<_>>(), [0.0, 10.0, 20.0]);
+        // Overflow packs the children from the start instead of overlapping them (CSS never uses negative space).
+        for j in ["space_between", "space_around"] {
+            let n = row(j, 40.0);
+            assert_eq!(n.kids.iter().map(|k| k.x).collect::<Vec<_>>(), [0.0, 20.0, 40.0], "{j}");
+        }
+    }
+
+    #[test]
+    fn space_with_fill_child_keeps_no_gap() {
+        for j in ["space_between", "space_around"] {
+            let n = lay(json!({"type":"frame","id":"f","width":300,"height":100,"gap":18,"justifyContent":j,"children":[
+                rect(json!(40), json!(20)), rect(json!("fill_container"), json!(20)), rect(json!(27), json!(20))]}));
+            assert_eq!(n.kids.iter().map(|k| (k.x, k.w)).collect::<Vec<_>>(), [(0.0, 40.0), (40.0, 233.0), (273.0, 27.0)], "{j}");
+        }
+        // start keeps the gap.
+        let n = lay(json!({"type":"frame","id":"f","width":300,"height":100,"gap":18,"children":[
+            rect(json!(40), json!(20)), rect(json!("fill_container"), json!(20)), rect(json!(27), json!(20))]}));
+        assert_eq!(n.kids.iter().map(|k| (k.x, k.w)).collect::<Vec<_>>(), [(0.0, 40.0), (58.0, 197.0), (273.0, 27.0)]);
+        // A fit row with space_between hugs the children without the gap, like the HTML export.
+        let n = lay(json!({"type":"frame","id":"f","gap":18,"justifyContent":"space_between","children":[rect(json!(40), json!(20)), rect(json!(27), json!(20))]}));
+        assert_eq!(n.w, 67.0);
     }
 
     #[test]

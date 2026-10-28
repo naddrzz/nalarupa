@@ -8,6 +8,7 @@ pub mod editor;
 pub mod engine;
 pub mod figma;
 pub mod guide;
+pub mod history;
 pub mod html;
 pub mod layout;
 pub mod mcp;
@@ -48,7 +49,7 @@ fn layers(e: &Engine) -> Value {
             let layout = n["type"] == "frame" && n["layout"] != "none";
             let content = n["content"].as_str().filter(|_| n["type"] == "text").map(|c| c.lines().next().unwrap_or(c));
             out.push(json!({
-                "id": id, "name": n["name"].as_str().or(content).unwrap_or(n["type"].as_str().unwrap_or("node")),
+                "id": id, "name": n["name"].as_str().filter(|s| !s.trim().is_empty()).or(content).unwrap_or(n["type"].as_str().unwrap_or("node")),
                 "type": n["type"], "depth": depth, "parent": parent, "index": index, "layout": layout,
                 "reusable": n["reusable"] == true, "hidden": n["enabled"] == false,
                 "children": n["children"].as_array().map(|c| c.len()).unwrap_or(0),
@@ -139,7 +140,8 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             let mut e = engine();
             e.sync();
             let sel = ids(&req["ids"]);
-            let b = if sel.is_empty() { e.renderer.bounds() } else { editor::painted_bounds(&e, &sel) };
+            // No ids: every top-level layer, as painted.
+            let b = if sel.is_empty() { editor::fit_bounds(&e) } else { editor::painted_bounds(&e, &sel) };
             Ok(b.map_or(Value::Null, |(x, y, w, h)| json!({"x": x, "y": y, "w": w, "h": h})))
         }
         "hit" => {
@@ -247,7 +249,10 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             e.edit_or_drag(|d| {
                 // Final slot of the previous layer per parent: a one-step move must not pass it (the block stays in order at either end).
                 let mut last: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
-                for (k, (id, parent, _)) in items.iter().enumerate() {
+                // Position within the block per parent: front/back slots count from each parent's own end.
+                let mut rank: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+                for (id, parent, _) in items.iter() {
+                    let k = *rank.entry(parent.as_str()).and_modify(|n| *n += 1).or_insert(0);
                     let (_, idx) = d.parent_of(id).ok_or("node not found")?;
                     let count = if parent == ROOT { d.children().len() } else { d.find(parent).and_then(|p| p["children"].as_array()).map_or(1, |c| c.len()) };
                     let to = match dir.as_str() {
