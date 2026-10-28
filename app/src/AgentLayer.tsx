@@ -4,7 +4,7 @@
 // Positions are kept in document units and projected with the camera every frame.
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { tryCall, type Box } from './core'
-import { FADE_DELAY, FADE_DUR, FADE_IN, GONE, PILL_MS, PRESENCE, cursorFaded, needsFrame, profileOf, store, type CursorState } from './agents'
+import { FADE_DELAY, FADE_DUR, FADE_IN, GONE, PILL_MS, PRESENCE, cursorFaded, needsFrame, pillShown, profileOf, store, type CursorState } from './agents'
 import { ICONS } from './icons'
 import { painted, pointIn, shimmerHalves, turned, type M, type Rect } from './geometry'
 import { SvgOverlay } from './ui'
@@ -104,10 +104,10 @@ export function AgentLayer({ cam, w, h, version, chatOpen }: { cam: Cam; w: numb
   // 60 fps while anything animates; idle otherwise (under reduced motion only while a fade is due).
   useEffect(() => {
     const t = setInterval(() => {
-      if (needsFrame(performance.now(), REDUCED_MOTION, live.length, lastFrame.current)) setFrame((f) => (f + 1) % 1_000_000)
+      if (needsFrame(performance.now(), REDUCED_MOTION, live.length, lastFrame.current, chatOpen)) setFrame((f) => (f + 1) % 1_000_000)
     }, 16)
     return () => clearInterval(t)
-  }, [live.length])
+  }, [live.length, chatOpen])
 
   const now = performance.now()
   const dt = clamp((now - lastFrame.current) / 1000, 0, 0.1)
@@ -361,7 +361,7 @@ export function AgentLayer({ cam, w, h, version, chatOpen }: { cam: Cam; w: numb
   }
 
   // ── agent message pills (bottom center) ───────────────────────────────────
-  const pills = [...store.pills.entries()].filter(([id, p]) => now - p.at < PILL_MS && !(chatOpen && !profileOf(id).parent))
+  const pills = [...store.pills.entries()].filter(([id, p]) => now - p.at < PILL_MS && pillShown(id, chatOpen))
   const pulse = REDUCED_MOTION ? 1 : 0.55 + 0.45 * Math.sin(now / 250)
 
   return (
