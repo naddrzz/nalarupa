@@ -28,7 +28,7 @@ jobs:
         with: { bun-version: 1.4.3 }
       - run: cargo build --release && cargo test --release
         working-directory: core
-      - run: bun install --frozen-lockfile && bun run typecheck && bun run smoke && bun run editor-check && bun run mcp-check && bun run doc-check && bun run script-check && bun run chat-check && bun run mcp-install-check && bun run drag-check && bun run viewport-check && bun run issues-check
+      - run: bun install --frozen-lockfile && bun run typecheck && bun run smoke && bun run editor-check && bun run mcp-check && bun run doc-check && bun run script-check && bun run chat-check && bun run mcp-install-check && bun run drag-check && bun run viewport-check && bun run issues-check && bun run layout-check && bun run text-check && bun run scriptnode-check && bun run shader-check && bun run paint-check && bun run component-check
         working-directory: app
       # Step timeouts: a hung suite fails its step, which claude-ci-fix picks up, instead of cancelling the job.
       - run: bash scripts/wl-run.sh bun run e2e
