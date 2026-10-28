@@ -156,6 +156,9 @@ const text = (r: any) => r.content.map((c: any) => c.text ?? '').join('')
   let rejected = ''
   try { call('agent_permission', { id: 'no-such-request', answer: 'dney' }) } catch (e) { rejected = (e as Error).message }
   assert(rejected.includes('Unknown permission answer'), `an unknown answer is rejected as such (got ${rejected})`)
+  let missing = ''
+  try { call('agent_permission', { id: 'no-such-request' }) } catch (e) { missing = (e as Error).message }
+  assert(missing.includes('answer required'), `a missing answer is rejected, not read as deny (got ${missing})`)
 
   // A script that runs for seconds must not freeze the window: `call` is synchronous on this one thread,
   // so a core call that waits for the script (it ran under the engine lock) blocks for its whole run.
