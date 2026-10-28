@@ -541,7 +541,7 @@ pub(crate) fn path_allowed(file: &Path, tool: &str, workspace: Option<&Path>, do
 /// resolved too: the deepest existing ancestor is canonicalized (the OS follows links and `..` there),
 /// the not-yet-existing rest is appended lexically. A dangling link (it cannot be canonicalized) is followed
 /// by hand; a link loop resolves to the empty path, which is inside nothing. Nothing resolvable is left lexical.
-fn normalize(p: &Path) -> PathBuf {
+pub(crate) fn normalize(p: &Path) -> PathBuf {
     resolve(p, 0)
 }
 

@@ -901,7 +901,8 @@ fn finish(e: &mut Engine, prep: Prepared, result: Result<Map<String, Value>, Str
     let mut exports = Vec::new();
     for (ids, format, out, opts) in ex.exports {
         // Checked before the job is planned, so nothing is written for a refused path.
-        match crate::html::check_script_export(e, &format, &out).and_then(|()| crate::html::plan(e, &ids, &format, &out, &opts)) {
+        let job = crate::html::check_script_export(e, &format, &out).and_then(|()| crate::html::plan(e, &ids, &format, &out, &opts));
+        match job.and_then(|job| crate::html::claim_script_files(e, &job).map(|()| job)) {
             Ok(job) => exports.push(job),
             Err(err) => text += &format!("\nExport failed: {err}\n"),
         }
@@ -2116,6 +2117,35 @@ card = Insert(root, {type:\"frame\", name:\"Card\", width:100, height:100, layou
         assert!(out.text.contains("Exported:"), "{}", out.text);
         let file = std::fs::read_dir(&dir).unwrap().next().unwrap().unwrap().path();
         assert!(std::fs::read(file).unwrap().starts_with(b"\x89PNG"));
+    }
+
+    #[test]
+    fn script_export_never_replaces_a_file_it_did_not_write() {
+        let _serial = global_execute();
+        // `Export([], "pdf", "report.pdf")` silently replaced the user's own report.pdf in the document's folder.
+        let dir = std::env::temp_dir().join(format!("nalarupa-test-export-keep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("shots")).unwrap();
+        let mut e = engine();
+        e.doc.path = Some(dir.join("design.nala"));
+        let out = e.tool("execute", &json!({"input": "Insert(document, {type:\"frame\", width:100, height:80, fill:\"#ff0000\"})"}));
+        assert!(!out.error, "{}", out.text);
+        let id = e.doc.children()[0]["id"].as_str().unwrap().to_string();
+        let users = [("report.pdf", "pdf", "report.pdf"), ("page.html", "html-css", "page.html"), (&*format!("shots/{id}.png"), "png", "shots")];
+        for (file, format, out) in users {
+            std::fs::write(dir.join(file), "the user's own file").unwrap();
+            let src = format!("Export([{id:?}], {format:?}, {out:?})");
+            let res = e.tool("execute", &json!({"input": src})).finish();
+            assert!(res.text.contains("Export failed") && res.text.contains("already exists") && !res.text.contains("Exported:"), "{file}: {}", res.text);
+            assert_eq!(std::fs::read_to_string(dir.join(file)).unwrap(), "the user's own file", "{file} is kept");
+        }
+        // A file the script exported itself is written again (the agent fixes a slide and re-exports).
+        for _ in 0..2 {
+            let res = e.tool("execute", &json!({"input": format!("Export([{id:?}], \"pdf\", \"deck.pdf\")")})).finish();
+            assert!(res.text.contains("Exported:"), "{}", res.text);
+        }
+        assert!(std::fs::read(dir.join("deck.pdf")).unwrap().starts_with(b"%PDF-"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

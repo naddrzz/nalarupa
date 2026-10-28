@@ -49,6 +49,18 @@ pub fn check_script_export(e: &Engine, format: &str, out: &str) -> Result<(), St
     Ok(())
 }
 
+/// A script's export never replaces a file it did not write: each file of the job must be new, or one an earlier
+/// script export wrote. Claims the job's files, so the agent can export the same file again after a fix.
+pub fn claim_script_files(e: &mut Engine, job: &ExportJob) -> Result<(), String> {
+    let files: Vec<PathBuf> = job.files.iter().map(|(f, _)| crate::agent::normalize(f)).collect();
+    // `symlink_metadata`: a link counts as an existing file even when it dangles.
+    if let Some(f) = files.iter().find(|f| f.symlink_metadata().is_ok() && !e.script_exports.contains(*f)) {
+        return Err(format!("{} already exists and Export did not write it; export under a new name, or ask the user before replacing it", f.display()));
+    }
+    e.script_exports.extend(files);
+    Ok(())
+}
+
 /// A node id as a file name: anything but letters, digits, `-` and `_` (a separator, `..`) becomes `_`.
 fn file_stem(id: &str) -> String {
     id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect()

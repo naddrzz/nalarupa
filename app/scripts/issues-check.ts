@@ -115,15 +115,18 @@ const doc = join(work, 'design.nala')
 const victim = join(work, 'victim.txt')
 call('save', { path: doc })
 writeFileSync(victim, 'precious')
+// A file named like an export is still the user's own (#596).
+const kept = [join(work, 'report.pdf'), join(work, 'page.html')]
+for (const f of kept) writeFileSync(f, 'precious')
 const saved = readFileSync(doc, 'utf8')
 const outside = mkdtempSync(join(tmpdir(), 'nalarupa-issues-outside-'))
 const escape = join(outside, 'escape.pdf')
 const elsewhere = join(outside, 'elsewhere')
-for (const [format, path] of [['pdf', doc], ['html-css', doc], ['pdf', victim], ['html-css', victim], ['pdf', join(work, '.hidden.pdf')], ['pdf', escape], ['png', elsewhere]]) {
+for (const [format, path] of [['pdf', doc], ['html-css', doc], ['pdf', victim], ['html-css', victim], ['pdf', kept[0]], ['html-css', kept[1]], ['pdf', join(work, '.hidden.pdf')], ['pdf', escape], ['png', elsewhere]]) {
   out = run(`Export([], ${JSON.stringify(format)}, ${JSON.stringify(path)})`)
   assert(/Export failed: .*ask the user|Export failed: .*file name/.test(out) && !out.includes('Exported:'), `Export ${format} to ${path} is refused: ${out}`)
 }
-assert(readFileSync(doc, 'utf8') === saved && readFileSync(victim, 'utf8') === 'precious', 'a refused Export leaves the files as they were')
+assert(readFileSync(doc, 'utf8') === saved && [victim, ...kept].every(f => readFileSync(f, 'utf8') === 'precious'), 'a refused Export leaves the files as they were')
 assert(!existsSync(escape) && !existsSync(elsewhere) && !existsSync(join(work, '.hidden.pdf')), 'a refused Export creates nothing')
 // The open document itself, even when its name passes the format check.
 for (const [format, name] of [['pdf', 'self.pdf'], ['html-css', 'self.html']]) {
