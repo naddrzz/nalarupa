@@ -604,10 +604,10 @@ impl Effects {
 }
 
 /// Fill outline of a shape node in absolute coordinates.
-struct Geo {
-    d: String,
-    evenodd: bool,
-    closed: bool,
+pub(crate) struct Geo {
+    pub(crate) d: String,
+    pub(crate) evenodd: bool,
+    pub(crate) closed: bool,
 }
 
 impl Geo {
@@ -1926,7 +1926,7 @@ fn rect_stroke_d(n: &RNode, w: [f64; 4], trim: bool, round_join: bool) -> String
     d
 }
 
-fn geometry(n: &RNode) -> Geo {
+pub(crate) fn geometry(n: &RNode) -> Geo {
     let evenodd = n.s("fillRule") == Some("evenodd");
     match n.ty.as_str() {
         // Holes and arcs are drawn as nested contours, so the ellipse always needs evenodd.
