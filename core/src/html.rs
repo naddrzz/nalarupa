@@ -105,12 +105,20 @@ impl ExportJob {
 }
 
 /// Export nodes for the UI: plan under the engine lock; when the targets draw icons or images still downloading, wait
-/// for them without the lock (at most 12 s, as screenshots do) and plan again; then write the files without the lock.
+/// for them without the lock (at most 12 s, as screenshots do) and plan again from the same document (the live one may
+/// change or be switched meanwhile); then write the files without the lock.
 pub fn export(ids: &[String], format: &str, out: &str, opts: &Value) -> Result<Vec<String>, String> {
-    let mut job = plan(&mut crate::engine::engine(), ids, format, out, opts)?;
-    if !job.waits.is_empty() {
+    let (mut job, then) = {
+        let mut e = crate::engine::engine();
+        let job = plan(&mut e, ids, format, out, opts)?;
+        let then = (!job.waits.is_empty()).then(|| (e.doc.clone(), e.libs.clone()));
+        (job, then)
+    };
+    if let Some((doc, libs)) = then {
         crate::engine::wait_downloads(&job.waits, std::time::Instant::now() + std::time::Duration::from_secs(12));
-        job = plan(&mut crate::engine::engine(), ids, format, out, opts)?;
+        let mut e = crate::engine::engine();
+        let e = &mut *e;
+        job = job.replan(&mut Ctx { doc: &doc, libs: &libs, fonts: &mut e.fonts, assets: &mut e.assets }, &e.data_dir)?;
     }
     job.run()
 }

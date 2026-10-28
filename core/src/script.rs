@@ -2147,8 +2147,18 @@ card = Insert(root, {type:\"frame\", name:\"Card\", width:100, height:100, layou
             (e.doc.children().last().unwrap()["id"].as_str().unwrap().to_string(), dir)
         };
         let was = std::mem::replace(&mut crate::engine::engine().assets.online, true);
-        let files = crate::html::export(&[id], "png", dir.to_str().unwrap(), &json!({"scale": 1}));
-        crate::engine::engine().assets.online = was;
+        let export = std::thread::spawn(move || crate::html::export(&[id], "png", dir.to_str().unwrap(), &json!({"scale": 1})));
+        // Switching documents while the export waits does not change what it exports.
+        let until = Instant::now() + Duration::from_secs(5);
+        while !crate::engine::engine().assets.loading(&url) && !export.is_finished() && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let before = std::mem::take(&mut crate::engine::engine().doc);
+        let files = export.join().unwrap();
+        let mut e = crate::engine::engine();
+        e.doc = before;
+        e.assets.online = was;
+        drop(e);
         let files = files.unwrap();
         assert!(red_middle(&std::fs::read(&files[0]).unwrap()), "the image is in the export");
     }
