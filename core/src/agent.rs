@@ -78,6 +78,9 @@ pub struct AgentState {
     pub cook: (usize, String),
     /// Frames an AI Pen is still drawing into, one entry per running pen: its `placeholder` flag is the pen's to clear.
     pub pens: Vec<String>,
+    /// Frames the built-in agents flagged `placeholder` in this run: the only ones the run's end clears.
+    /// An external agent's frames are its own to clear.
+    flagged: Vec<String>,
 }
 
 pub struct Chat {
@@ -388,18 +391,37 @@ fn start_thread(p: Profile, prompt: String, child: Option<String>) -> bool {
     true
 }
 
-/// The run is over: frames still flagged `placeholder` (Stop, an error or a dead process came before the
-/// call that clears it) stop showing as "Generating". Silent and out of the undo history, like the AI Pen's own finish.
-fn clear_generating(e: &mut Engine) {
-    let mut stale = Vec::new();
-    crate::doc::walk(e.doc.children(), &mut |n| {
-        if n["placeholder"] == true && n["id"].as_str().is_some_and(|id| !e.agent.pens.iter().any(|p| p == id)) {
-            stale.push(n["id"].as_str().unwrap_or_default().to_string());
+/// An `execute` call of `agent` came out of `before`: remember the frames it newly flagged `placeholder`,
+/// when `agent` is a built-in one (see `clear_generating`).
+pub fn note_flagged(e: &mut Engine, agent: &str, before: &Value) {
+    if e.agent.profile(agent).is_none() {
+        return;
+    }
+    let mut old = std::collections::HashSet::new();
+    crate::doc::walk(before["children"].as_array().map(Vec::as_slice).unwrap_or(&[]), &mut |n| {
+        if n["placeholder"] == true {
+            old.insert(n["id"].as_str().unwrap_or_default());
         }
     });
+    let mut new = Vec::new();
+    crate::doc::walk(e.doc.children(), &mut |n| {
+        if n["placeholder"] == true && n["id"].as_str().is_some_and(|id| !old.contains(id)) {
+            new.push(n["id"].as_str().unwrap_or_default().to_string());
+        }
+    });
+    e.agent.flagged.extend(new);
+}
+
+/// The run is over: frames its agents flagged `placeholder` that are still flagged (Stop, an error or a dead
+/// process came before the call that clears it) stop showing as "Generating"; an external agent's frames keep
+/// their flag. Silent and out of the undo history, like the AI Pen's own finish.
+fn clear_generating(e: &mut Engine) {
+    let flagged = std::mem::take(&mut e.agent.flagged);
     let off = json!({"placeholder": false}).as_object().cloned().unwrap_or_default();
-    for id in stale {
-        e.apply_generated(&id, &off, true);
+    for id in flagged {
+        if e.doc.find(&id).is_some_and(|n| n["placeholder"] == true) && !e.agent.pens.contains(&id) {
+            e.apply_generated(&id, &off, true);
+        }
     }
 }
 
@@ -477,12 +499,15 @@ pub fn ask_permission(agent: &str, args: &Value) -> crate::engine::ToolOut {
 /// `agent_permission`: the user's answer to a permission card: "allow", "deny", or "auto"
 /// (allow, and from the next turn on let Claude Code's auto mode decide; kept as a setting).
 pub fn answer_permission(id: &str, answer: &str) -> Result<(), String> {
+    if !matches!(answer, "allow" | "deny" | "auto") {
+        return Err(format!("Unknown permission answer \"{answer}\"; use allow, deny or auto."));
+    }
     let mut e = engine();
+    let (_, waiting) = e.agent.permissions.remove(id).ok_or("This permission request is no longer waiting.")?;
     if answer == "auto" {
         e.settings.insert("agent_auto_permissions".into(), json!(true));
         let _ = e.save_settings(); // still auto for this run when it did not save; never block the answer
     }
-    let (_, waiting) = e.agent.permissions.remove(id).ok_or("This permission request is no longer waiting.")?;
     let _ = waiting.send(answer != "deny");
     Ok(())
 }
@@ -1306,7 +1331,16 @@ fn run_claude_code(p: &Profile, prompt: &str, child: bool, model: Option<String>
 fn error_cause(ev: &Value) -> Option<String> {
     let result = ev["result"].as_str().map(str::trim).filter(|t| !t.is_empty());
     let errors: Vec<&str> = ev["errors"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::trim).filter(|t| !t.is_empty()).collect();
-    result.map(str::to_string).or_else(|| (!errors.is_empty()).then(|| errors.join("\n"))).map(|t| clip_ends(&t, ERROR_MAX))
+    result.map(str::to_string).or_else(|| (!errors.is_empty()).then(|| errors.join("\n"))).map(|t| sign_in_hint(&t).unwrap_or_else(|| clip_ends(&t, ERROR_MAX)))
+}
+
+/// The CLI tells a signed-out user to run `/login`, a command of its own terminal UI; point at what works here.
+/// Checked on the whole text, before clipping can drop the phrase; a bare path like `/login.js` is no match.
+fn sign_in_hint(text: &str) -> Option<String> {
+    let text = text.to_lowercase();
+    (text.contains("run /login") || text.contains("not logged in")).then(|| {
+        "Claude Code is not signed in. Open a terminal, run `claude` and sign in with /login, or switch the backend to the Claude API in Agent settings (gear icon).".into()
+    })
 }
 
 /// Longest error text kept in the chat card and the saved chat (tool output is capped at 6000).
@@ -1322,7 +1356,7 @@ fn exit_error(status: &str, stderr: &str, reported: bool) -> String {
     } else if stderr.is_empty() {
         prefix
     } else {
-        format!("{prefix}: {}", clip_ends(stderr, ERROR_MAX.saturating_sub(prefix.len() + 2)))
+        sign_in_hint(stderr).unwrap_or_else(|| format!("{prefix}: {}", clip_ends(stderr, ERROR_MAX.saturating_sub(prefix.len() + 2))))
     }
 }
 
@@ -1447,9 +1481,25 @@ mod tests {
     #[test]
     fn error_cause_reads_result_then_errors() {
         assert_eq!(error_cause(&json!({"result": " Credit balance is too low "})).as_deref(), Some("Credit balance is too low"));
-        assert_eq!(error_cause(&json!({"result": "", "errors": ["", "Not logged in", " Run /login "]})).as_deref(), Some("Not logged in\nRun /login"));
+        assert_eq!(error_cause(&json!({"result": "", "errors": ["", "Quota exceeded", " Try later "]})).as_deref(), Some("Quota exceeded\nTry later"));
         assert_eq!(error_cause(&json!({"result": "  ", "errors": []})), None, "no cause: the exit error shows stderr instead");
         assert_eq!(error_cause(&json!({})), None);
+    }
+
+    #[test]
+    fn a_signed_out_cli_points_at_the_terminal_and_the_settings() {
+        let hint = error_cause(&json!({"result": "Not logged in · Please run /login"})).unwrap();
+        assert!(hint.starts_with("Claude Code is not signed in") && hint.contains("Agent settings"), "{hint}");
+        assert_eq!(error_cause(&json!({"result": "Invalid API key · Please run /login"})).unwrap(), hint);
+        assert_eq!(exit_error("exit status: 1", "Error: Not logged in", false), hint);
+        assert_eq!(error_cause(&json!({"result": "Credit balance is too low"})).as_deref(), Some("Credit balance is too low"));
+        // A path that merely contains /login keeps the real cause.
+        assert_eq!(exit_error("exit status: 1", "Cannot find module /app/login.js", false), "claude exited with exit status: 1: Cannot find module /app/login.js");
+        assert_eq!(error_cause(&json!({"result": "ENOENT: /srv/login/config.json"})).as_deref(), Some("ENOENT: /srv/login/config.json"));
+        // The phrase in the middle of a long text, where clipping would drop it, still gives the hint.
+        let long = format!("{}Not logged in · Please run /login{}", "x".repeat(5000), "y".repeat(5000));
+        assert_eq!(error_cause(&json!({"result": long})).unwrap(), hint);
+        assert_eq!(exit_error("exit status: 1", &long, false), hint);
     }
 
     #[test]
@@ -1557,21 +1607,38 @@ mod tests {
         assert!(take_queue(&mut engine()).is_none(), "the queue is empty after it is taken");
     }
 
-    /// A run that ends before the call that clears `placeholder` must not leave frames "Generating", except
-    /// the one an AI Pen is still drawing into.
+    /// A run that ends before the call that clears `placeholder` must not leave the frames its agents flagged
+    /// "Generating", except the one an AI Pen is still drawing into, and must not touch an external agent's frames.
     #[test]
     fn run_end_clears_stale_placeholders() {
         let mut e = engine();
         let old = e.doc.root.clone();
-        let frame = |name: &str| json!({"type": "frame", "name": name, "x": 0, "y": 0, "width": 100, "height": 100, "placeholder": true});
-        let (a, drawing) = (e.doc.insert("document", frame("A"), None).unwrap(), e.doc.insert("document", frame("B"), None).unwrap());
-        let nested = e.doc.insert(&a, frame("Nested"), None).unwrap();
+        e.agent.profiles.push(Profile { id: "agT".into(), name: "T".into(), color: "#000000".into(), parent: None });
+        let run = |e: &mut Engine, agent: &str, src: &str| {
+            let out = e.tool("execute", &json!({"input": src, "__agent": agent}));
+            assert!(!out.error, "{}", out.text);
+        };
+        let frame = "{type:'frame', width:100, height:100, placeholder:true";
+        run(&mut e, "agT", &format!("a = Insert(document, {frame}, name:'A'}})\nn = Insert(a, {frame}, name:'Nested'}})\nb = Insert(document, {frame}, name:'B'}})"));
+        run(&mut e, "external", &format!("Insert(document, {frame}, name:'External'}})"));
+        let id = |e: &Engine, name: &str| {
+            let mut found = String::new();
+            crate::doc::walk(e.doc.children(), &mut |n| {
+                if n["name"] == name {
+                    found = n["id"].as_str().unwrap_or_default().to_string();
+                }
+            });
+            found
+        };
+        let (a, nested, drawing, external) = (id(&e, "A"), id(&e, "Nested"), id(&e, "B"), id(&e, "External"));
         e.agent.pens.push(drawing.clone());
         clear_generating(&mut e);
         let flag = |e: &Engine, id: &str| e.doc.find(id).unwrap()["placeholder"] == true;
-        assert!(!flag(&e, &a) && !flag(&e, &nested), "stale flags are cleared, nested frames too");
+        assert!(!flag(&e, &a) && !flag(&e, &nested), "flags the built-in agent set are cleared, nested frames too");
         assert!(flag(&e, &drawing), "a frame an AI Pen draws into keeps its flag");
+        assert!(flag(&e, &external), "a frame an external agent flagged keeps its flag");
         e.agent.pens.clear();
+        e.agent.profiles.retain(|p| p.id != "agT");
         e.doc.root = old;
     }
 
