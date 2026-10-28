@@ -296,14 +296,17 @@ export function Field({ label, value, onCommit, width, mono, testId, placeholder
     setDraft(value)
     typed.current = sent.current = value
   }, [value])
+  /** False when `onCommit` rejected the value (the field reverts and keeps focus, so it can be fixed). */
   const commit = (v = typed.current) => {
     typed.current = v
-    if (v === sent.current) return
+    if (v === sent.current) return true
     sent.current = v
     if (onCommit(v) === false) {
       typed.current = sent.current = value
       setDraft(value)
+      return false
     }
+    return true
   }
   return (
     <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, width, flexGrow: width ? undefined : 1, minWidth: 0 }}>
@@ -315,7 +318,7 @@ export function Field({ label, value, onCommit, width, mono, testId, placeholder
         mono={mono}
         placeholder={placeholder}
         onChange={(e) => setDraft((typed.current = e.value ?? ''))}
-        onSubmit={(e) => { commit(e.value ?? typed.current); back?.() }}
+        onSubmit={(e) => { if (commit(e.value ?? typed.current)) back?.() }}
         onBlur={() => commit()}
         theme={{ caret: C.accent }}
       />
@@ -370,11 +373,14 @@ export function NumField({ label, name = label, value, mixed, onCommit, onStep, 
     setDraft(latest.current)
     onCommit(v, k)
   }
+  /** False when the draft is not a number: the field reverts and keeps focus. */
   const typed = () => {
-    if (draft === shown) return
+    if (draft === shown) return true
     // An empty field is not 0: Number('') would commit it as 0.
     const t = draft.trim()
-    commit(t === '' ? NaN : Number(t))
+    const v = t === '' ? NaN : Number(t)
+    commit(v)
+    return Number.isFinite(v)
   }
   return (
     <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, width, flexGrow: width ? undefined : 1, minWidth: 0 }}>
@@ -400,7 +406,7 @@ export function NumField({ label, name = label, value, mixed, onCommit, onStep, 
         value={draft}
         placeholder={mixed ? 'Mixed' : undefined}
         onChange={(e) => setDraft(e.value ?? '')}
-        onSubmit={() => { typed(); back?.() }}
+        onSubmit={() => { if (typed()) back?.() }}
         onBlur={() => {
           typed()
           session.current = null

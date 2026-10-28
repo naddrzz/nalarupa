@@ -244,8 +244,8 @@ try {
     assert(await until(async () => Number(await val(field)) === (field === 'inspector-x' ? fx0 : fy0)), `one undo step restores the origin after ${key}`)
   }
 
-  // Enter commits an Inspector field but it keeps the keys: Ctrl+Z sent to the focused field (not the canvas) must
-  // still undo the edit, for a number field and a text field alike.
+  // Enter commits an Inspector field and hands keyboard focus back to the canvas (FocusBack). Ctrl+Z sent to whatever
+  // has focus afterwards must still undo the edit, for a number field and a text field alike.
   const selX = async () => Math.round((await app.getByTestId('selection-box').all())[0]?.bounds?.x ?? NaN)
   const x0 = await selX()
   const xf = await app.getByTestId('inspector-x').bounds()
