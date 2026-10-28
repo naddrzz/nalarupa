@@ -1665,6 +1665,13 @@ pub fn expand_scripts(n: &mut RNode, r: &crate::resolve::Resolver, fonts: &mut c
 mod tests {
     use super::*;
 
+    /// Tests that run `execute` or `ToolOut::finish` against the process-wide engine hold this, so one's script
+    /// (`executing`) never makes another's call fail with "Another execute call is still running".
+    static GLOBAL_EXECUTE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    fn global_execute() -> std::sync::MutexGuard<'static, ()> {
+        GLOBAL_EXECUTE.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     fn engine() -> Engine {
         let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
         e.offline();
@@ -1961,6 +1968,7 @@ card = Insert(root, {type:\"frame\", name:\"Card\", width:100, height:100, layou
 
     #[test]
     fn a_running_script_leaves_the_engine_free_and_stops_with_the_agent() {
+        let _serial = global_execute();
         // The script ran under the engine lock: the window froze and Stop was dead until it ended.
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
@@ -1990,6 +1998,7 @@ card = Insert(root, {type:\"frame\", name:\"Card\", width:100, height:100, layou
 
     #[test]
     fn screenshots_rasterize_after_the_tool_call() {
+        let _serial = global_execute();
         // Rasterizing inside `tool` held the engine lock for up to ~0.5 s and froze the canvas.
         let mut e = engine();
         let out = e.tool("execute", &json!({"input": "c = Insert(document, {type:\"frame\", width:300, height:200, fill:\"#ff0000\"})\nTakeScreenshot(c)"}));
@@ -2004,6 +2013,7 @@ card = Insert(root, {type:\"frame\", name:\"Card\", width:100, height:100, layou
     /// A screenshot of an image still downloading waits for it (without the engine lock) and shows it.
     #[test]
     fn screenshots_wait_for_images_still_downloading() {
+        let _serial = global_execute();
         use std::io::{Read, Write};
         let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}/shot.png", server.local_addr().unwrap());
@@ -2038,6 +2048,7 @@ card = Insert(root, {type:\"frame\", name:\"Card\", width:100, height:100, layou
 
     #[test]
     fn script_exports_write_after_the_tool_call() {
+        let _serial = global_execute();
         // Rasterizing and encoding inside `tool` held the engine lock for the whole export.
         let dir = std::env::temp_dir().join("nalarupa-test-script-export");
         let _ = std::fs::remove_dir_all(&dir);
