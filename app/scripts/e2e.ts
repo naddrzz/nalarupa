@@ -620,6 +620,21 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
   await app.mouse.click({ x: one.x + one.width / 2, y: one.y + one.height / 2 })
   await app.getByTestId('agent-input').fill('')
 
+  // Two submits before the panel re-renders (Enter+Enter, Enter+Send) send the draft once.
+  if (standIn) {
+    for (const [name, second] of [['enter', () => app!.getByTestId('agent-input').press('enter')], ['send', () => app!.getByTestId('agent-send').click()]] as const) {
+      const text = `dup ${name} twice`
+      await app.getByTestId('agent-input').click()
+      await app.getByTestId('agent-input').fill(text)
+      await Promise.all([app.getByTestId('agent-input').press('enter'), second()])
+      await until(async () => (await app!.getByText(text).count()) > 0, `the "${text}" bubble`)
+      await sleep(1000)
+      const n = await app.getByText(text).count()
+      if (n !== 1) throw new Error(`two submits in one frame (${name}) sent "${text}" ${n} times, expected once`)
+      await until(async () => !(await app!.getByTestId('agent-stop').count()), 'the stand-in agent to finish', 30000)
+    }
+  }
+
   // The agent message pill: a reply long enough to fill the pill must not squash its status dot.
   if (standIn) {
     await app.getByTestId('tab-agent').click()

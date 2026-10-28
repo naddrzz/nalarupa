@@ -148,12 +148,15 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
   const listEl = useRef<PublicInstance | null>(null)
   const pinNext = useRef<number | null>(null) // id of the last row at the last send, while the list still waits for its echo
 
+  const spent = useRef<string | null>(null) // the text just sent, until the panel re-renders: a second submit in the same frame still holds it
+  useEffect(() => { spent.current = null })
   const send = (text: string) => {
     const t = text.trim()
-    if (!t) return
+    if (!t || t === spent.current) return
     const lastRow = items[items.length - 1]?.id ?? -1 // read before the call: the echo may be pushed while it runs
     if (tryCall('agent_send', { text: t, parallel: Number(parallel), mode, designs, iterate: cookMode }) !== null) {
       setDraft('')
+      spent.current = t
       pinNext.current = lastRow
       onSent?.()
     } else toast('Unable to start the agent. Check the backend in Agent settings and try again.', true)
