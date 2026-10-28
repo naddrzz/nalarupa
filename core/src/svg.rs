@@ -517,8 +517,7 @@ fn image_ext(b: &[u8]) -> &'static str {
     }
 }
 
-/// Largest SVGZ image the SVG export decompresses, like the Figma clipboard's archive cap: a small
-/// gzip bomb would otherwise expand without limit.
+/// Largest SVGZ image the SVG export decompresses (a small gzip can expand without limit).
 const MAX_SVGZ_BYTES: usize = 256 << 20;
 
 /// `gz` decompressed; None when it is broken or larger than `MAX_SVGZ_BYTES`.
@@ -548,8 +547,8 @@ impl Embedded {
 }
 
 /// `svg` with each token of `embedded` replaced by its file as a `data:` URI, in one pass. Slow (reads and
-/// encodes every file), so it runs without the engine lock. A file that cannot be inlined (unreadable, or a
-/// gzip bomb past the cap) keeps its file href; an SVG nested past `MAX_SVG_DEPTH` is left out.
+/// encodes every file), so it runs without the engine lock. A file that cannot be inlined (unreadable, a gzip
+/// bomb past the cap, or an SVG nested past `MAX_SVG_DEPTH`) is left out.
 pub fn inline_embedded(svg: &str, embedded: &Embedded) -> String {
     if embedded.hrefs.is_empty() {
         return svg.to_string();
@@ -564,7 +563,8 @@ pub fn inline_embedded(svg: &str, embedded: &Embedded) -> String {
             // An SVG nested too deep stays unavailable, as when rendering: the image is left out.
             Some(href) if deep_key(href).is_some() && svg_too_deep(href) => rest = &after[digits..],
             Some(href) => {
-                out.push_str(&esc(&data_uri(href).unwrap_or_else(|| href.clone())));
+                // Not inlinable: left out, never linked by its path on this machine.
+                out.push_str(&data_uri(href).map(|uri| esc(&uri)).unwrap_or_default());
                 rest = &after[digits..];
             }
             None => {
