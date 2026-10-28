@@ -114,6 +114,9 @@ pub struct Layer {
     /// Everything this layer paints, including shadows and blur outside a clipping frame.
     paint: Rect,
     pub flat: Vec<Flat>,
+    /// Holds a script node: built when this many background script runs had finished, so a later
+    /// finished run rebuilds the layer (the node's JSON, and so `hash`, did not change).
+    scripted: Option<u64>,
 }
 
 type Rect = (f64, f64, f64, f64);
@@ -210,19 +213,29 @@ pub struct Ctx<'a> {
 }
 
 impl Ctx<'_> {
-    /// Resolve + lay out the top-level node at `index`.
+    /// Resolve + lay out the top-level node at `index`; script nodes run to completion first.
     pub fn laid_out(&mut self, index: usize) -> Option<RNode> {
-        let empty = Map::new();
-        let r = Resolver::new(&self.doc.root, self.libs, &empty);
-        self.laid_out_in(&r, index)
+        self.laid_out_with(index, false)
     }
 
-    /// `laid_out` with a resolver built by the caller, so a pass over many layers indexes the document once.
-    fn laid_out_in(&mut self, r: &Resolver, index: usize) -> Option<RNode> {
+    /// As `laid_out`, for callers that hold the engine lock: a script node whose run is not
+    /// finished shows its previous output (or a "running" box) and finishes in the background.
+    pub fn laid_out_live(&mut self, index: usize) -> Option<RNode> {
+        self.laid_out_with(index, true)
+    }
+
+    fn laid_out_with(&mut self, index: usize, live: bool) -> Option<RNode> {
+        let empty = Map::new();
+        let r = Resolver::new(&self.doc.root, self.libs, &empty);
+        self.laid_out_in(&r, index, live)
+    }
+
+    /// `laid_out_with` with a resolver built by the caller, so a pass over many layers indexes the document once.
+    fn laid_out_in(&mut self, r: &Resolver, index: usize, live: bool) -> Option<RNode> {
         let mut n = r.resolve(self.doc.children().get(index)?)?;
         crate::layout::layout(&mut n, self.fonts);
         // Script nodes need their laid-out size before they can run.
-        crate::script::expand_scripts(&mut n, r, self.fonts, self.doc.dir().as_deref());
+        crate::script::expand_scripts(&mut n, r, self.fonts, self.doc.dir().as_deref(), self.doc.path.as_deref(), live);
         Some(n)
     }
 
@@ -356,6 +369,7 @@ fn shared_hash(doc: &Doc, libs: &[(String, Value)], fonts: u64) -> u64 {
 impl Renderer {
     /// Rebuild layers whose content changed since the last sync; returns their ids.
     pub fn sync(&mut self, cx: &mut Ctx) -> Vec<String> {
+        let finished = crate::script::finished();
         let shared = shared_hash(cx.doc, cx.libs, cx.fonts.generation);
         let reshared = std::mem::replace(&mut self.shared, shared) != shared;
         let hidden: HashSet<String> = self.slides.iter().map(|s| s.id.clone()).collect();
@@ -373,10 +387,10 @@ impl Renderer {
                 hash ^= fxhash(h).rotate_left(29);
             }
             match self.layers.remove(&id) {
-                Some(l) if l.hash == hash => {
+                Some(l) if l.hash == hash && l.scripted.is_none_or(|f| f == finished) => {
                     keep.insert(id.clone(), l);
                 }
-                old => built.push((id.clone(), prepare_layer(cx, &resolver, i, hash, &hidden), old)),
+                old => built.push((id.clone(), prepare_layer(cx, &resolver, i, hash, finished, &hidden), old)),
             }
             order.push(id);
         }
@@ -434,7 +448,7 @@ impl Renderer {
             // A brand-new top-level node has no old positions: nothing moved.
             let Some(layer) = cx.doc.children()[top]["id"].as_str().and_then(|t| self.layers.get(t)) else { continue };
             let old: HashMap<&str, (f64, f64)> = layer.flat.iter().map(|f| (f.id.as_str(), (f.x, f.y))).collect();
-            let Some(root) = roots.entry(top).or_insert_with(|| cx.laid_out(top)).as_ref() else { continue };
+            let Some(root) = roots.entry(top).or_insert_with(|| cx.laid_out_live(top)).as_ref() else { continue };
             let mut chain = Vec::new();
             if !ancestors_of(root, id, &mut chain) {
                 continue;
@@ -500,7 +514,7 @@ impl Renderer {
             if s.tree.is_some() && !rebuilt.iter().any(|r| r == top_id) {
                 continue;
             }
-            let root = roots.entry(top).or_insert_with(|| cx.laid_out(top));
+            let root = roots.entry(top).or_insert_with(|| cx.laid_out_live(top));
             let Some((root, node)) = root.as_ref().and_then(|r| Some((r, find_rnode(r, &s.id)?))) else {
                 s.tree = None;
                 continue;
@@ -1029,9 +1043,9 @@ fn has_hairline(g: &usvg::Group) -> bool {
 }
 
 /// Lay out a top-level node and emit its SVG; the tree is parsed later (in parallel).
-fn prepare_layer(cx: &mut Ctx, resolver: &Resolver, index: usize, hash: u64, hidden: &HashSet<String>) -> (Layer, Option<String>) {
-    let Some(root) = cx.laid_out_in(resolver, index) else {
-        return (Layer { hash, tree: None, scene: None, bbox: (0.0, 0.0, 0.0, 0.0), paint: (0.0, 0.0, 0.0, 0.0), flat: Vec::new() }, None);
+fn prepare_layer(cx: &mut Ctx, resolver: &Resolver, index: usize, hash: u64, finished: u64, hidden: &HashSet<String>) -> (Layer, Option<String>) {
+    let Some(root) = cx.laid_out_in(resolver, index, true) else {
+        return (Layer { hash, tree: None, scene: None, bbox: (0.0, 0.0, 0.0, 0.0), paint: (0.0, 0.0, 0.0, 0.0), flat: Vec::new(), scripted: None }, None);
     };
     let mut flat = Vec::new();
     let mut stack: Vec<String> = Vec::new();
@@ -1041,9 +1055,11 @@ fn prepare_layer(cx: &mut Ctx, resolver: &Resolver, index: usize, hash: u64, hid
     let mut mats: Vec<Option<[f64; 6]>> = Vec::new();
     // Per depth: this node or an ancestor is hidden while it slides.
     let mut sliding: Vec<bool> = Vec::new();
+    let mut scripted = false;
     // Per depth: this node or an ancestor has opacity 0.
     let mut faded: Vec<bool> = Vec::new();
     root.visit(&mut |n, depth| {
+        scripted |= n.ty == "script";
         stack.truncate(depth);
         index.truncate(depth + 1);
         turned.truncate(depth);
@@ -1102,7 +1118,7 @@ fn prepare_layer(cx: &mut Ctx, resolver: &Resolver, index: usize, hash: u64, hid
     let mut svg = Svg::new(cx.fonts, cx.assets, cx.doc.dir());
     svg.skip = hidden.clone();
     svg.node(&root);
-    (Layer { hash, tree: None, scene: None, bbox, paint: padded, flat }, Some(svg.finish(None)))
+    (Layer { hash, tree: None, scene: None, bbox, paint: padded, flat, scripted: scripted.then_some(finished) }, Some(svg.finish(None)))
 }
 
 /// `p ∘ m` (m applies first).

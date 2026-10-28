@@ -46,6 +46,8 @@ pub struct Engine {
     pub renderer: Renderer,
     pub version: u64,
     synced: u64,
+    /// `script::finished()` at the last `expire_slides`.
+    scripts_seen: u64,
     pub saved: u64,
     /// Each step turns the current document into the one before (undo) or after (redo) it.
     undo: Vec<Patch>,
@@ -259,6 +261,7 @@ impl Engine {
             renderer: Renderer::default(),
             version: 1,
             synced: 0,
+            scripts_seen: 0,
             saved: 1,
             undo: Vec::new(),
             redo: Vec::new(),
@@ -366,7 +369,9 @@ impl Engine {
 
     /// Settled slides go back into the cached view at the next sync (the document is unchanged).
     pub fn expire_slides(&mut self) {
-        if self.renderer.expire_slides() {
+        // A finished background script run changes a script node's output, not the document.
+        let scripts = crate::script::finished();
+        if self.renderer.expire_slides() || std::mem::replace(&mut self.scripts_seen, scripts) != scripts {
             self.synced = 0;
         }
     }
