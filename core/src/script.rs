@@ -844,7 +844,7 @@ fn finish(e: &mut Engine, prep: Prepared, result: Result<Map<String, Value>, Str
         e.script.failed.remove(id);
     }
     crate::agent::note_flagged(e, &agent, &before);
-    e.script.globals.entry(agent).or_default().extend(new_globals.clone());
+    e.script.globals.entry(agent.clone()).or_default().extend(new_globals.clone());
     e.commit(before);
     let edit = json!({"type": "agent_edit", "ids": ex.touched, "read": ex.read});
     e.script.edit = Some(edit.clone());
@@ -855,7 +855,7 @@ fn finish(e: &mut Engine, prep: Prepared, result: Result<Map<String, Value>, Str
             let size = e.renderer.find(frame).map_or((400.0, 400.0), |f| (f.w.max(1.0), f.h.max(1.0)));
             // Its own flag, set by Stop even after a later turn replaced the run's. It starts set when a Stop came while
             // this script ran or its run is being stopped; an earlier Stop's flag does not stop a later call's pen.
-            let cancel = Arc::new(AtomicBool::new(crate::agent::stopped_since(e, stops)));
+            let cancel = Arc::new(AtomicBool::new(crate::agent::stopped_since(e, stops, &agent)));
             e.agent.pens.push((frame.clone(), cancel.clone()));
             crate::pen::start(frame.clone(), prompt.clone(), size, cancel);
         }

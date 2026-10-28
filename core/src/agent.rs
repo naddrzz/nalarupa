@@ -441,11 +441,11 @@ fn drop_queue(e: &mut Engine) {
     }
 }
 
-/// Whether a pen asked for by an `execute` that began at `mark` (`agent.stops` then) starts stopped: a Stop came
+/// Whether a pen asked for by `agent`'s `execute` that began at `mark` (`agent.stops` then) starts stopped: a Stop came
 /// while its script ran (the engine is not held meanwhile, and an MCP client's call has no run whose flag Stop sets),
-/// or the run it belongs to is being stopped.
-pub fn stopped_since(e: &Engine, mark: u64) -> bool {
-    e.agent.stops != mark || (e.agent.running && e.agent.cancel.load(Ordering::SeqCst))
+/// or it is a built-in agent's call and their run is being stopped. An external agent's later call is not that run's.
+pub fn stopped_since(e: &Engine, mark: u64, agent: &str) -> bool {
+    e.agent.stops != mark || (e.agent.profile(agent).is_some() && e.agent.running && e.agent.cancel.load(Ordering::SeqCst))
 }
 
 pub fn stop() {
@@ -1600,11 +1600,18 @@ mod tests {
             let mut e = engine();
             (e.agent.stops, std::mem::replace(&mut e.agent.running, false))
         };
-        assert!(!stopped_since(&engine(), mark), "no Stop: the pen draws");
+        assert!(!stopped_since(&engine(), mark, "external"), "no Stop: the pen draws");
         stop();
         let mut e = engine();
-        assert!(stopped_since(&e, mark), "a Stop while the script ran stops its pen, with no run going on");
-        assert!(!stopped_since(&e, e.agent.stops), "a call that began after the Stop draws");
+        assert!(stopped_since(&e, mark, "external"), "a Stop while the script ran stops its pen, with no run going on");
+        let after = e.agent.stops;
+        assert!(!stopped_since(&e, after, "external"), "a call that began after the Stop draws");
+        // While the stopped built-in run winds down, its own later calls start stopped; an external agent's do not.
+        e.agent.running = true;
+        e.agent.profiles.push(Profile { id: "agS".into(), name: "S".into(), color: "#000000".into(), parent: None });
+        assert!(stopped_since(&e, after, "agS"), "the stopping run's own call starts stopped");
+        assert!(!stopped_since(&e, after, "external"), "an external call during the run's wind-down draws");
+        e.agent.profiles.retain(|p| p.id != "agS");
         e.agent.cancel = Arc::new(AtomicBool::new(false));
         e.agent.running = running;
     }
