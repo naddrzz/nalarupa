@@ -181,6 +181,15 @@ call('undo')
   assert(order() === 'ABCD', `send backward at the back keeps the order (${order()})`)
   call('reorder', { ids: [r.B, r.C], dir: 'up' })
   assert(order() === 'ADBC', `bring forward moves a free block one step (${order()})`)
+  // Layers from two parents in one call: front/back count from each parent's own end.
+  const RG = call('insert', { node: { type: 'frame', name: 'RG', x: 2600, y: 0, width: 500, height: 300, layout: 'none' } }).id
+  const g: Record<string, string> = {}
+  for (const n of ['E', 'F', 'G']) g[n] = call('insert', { parent: RG, node: { type: 'rectangle', name: n, x: 0, y: 0, width: 10, height: 10 } }).id
+  const orderG = () => call<B[]>('children_boxes', { id: RG }).map((k) => Object.keys(g).find((n) => g[n] === k.id)).join('')
+  call('reorder', { ids: [r.A, g.E], dir: 'front' })
+  assert(order() === 'DBCA' && orderG() === 'FGE', `bring to front across parents (${order()}, ${orderG()})`)
+  call('reorder', { ids: [r.A, g.E], dir: 'back' })
+  assert(order() === 'ADBC' && orderG() === 'EFG', `send to back across parents (${order()}, ${orderG()})`)
 }
 
 // Clipboard: copy → paste lands in place next to the visible source; text and SVG paste.
@@ -322,6 +331,17 @@ const icons = Object.fromEntries(['frame', 'group', 'rectangle', 'ellipse', 'tex
 assert(new Set(Object.values(icons)).size === Object.keys(icons).length, `layer types share an icon ${JSON.stringify(icons)}`)
 assert(nodeIcon('path') === nodeIcon('polygon') && nodeIcon('frame', true) === 'component', 'path/polygon and reusable icons')
 
+// A blank or whitespace-only name is labelled like a missing one (the type, or a text layer's content), in Layers and for the frame label / Slides caption.
+{
+  call('new', { template: 'empty' })
+  const fr = call('insert', { node: { type: 'frame', name: '   ', x: 0, y: 0, width: 200, height: 100 } }).id
+  const ids = ['rectangle', 'ellipse'].map((type, i) => call('insert', { parent: fr, node: { type, name: i ? '' : '   ', x: 10, y: 10, width: 20, height: 20 } }).id)
+  const tx = call('insert', { parent: fr, node: { type: 'text', name: ' ', content: 'blank name', x: 10, y: 50, fontSize: 14 } }).id
+  const names = Object.fromEntries(call<{ id: string; name: string }[]>('layers').map((l) => [l.id, l.name]))
+  assert(names[fr] === 'frame' && names[ids[0]] === 'rectangle' && names[ids[1]] === 'ellipse' && names[tx] === 'blank name', `blank names fall back in Layers (${JSON.stringify(names)})`)
+  assert(call<{ id: string; name: string }[]>('frames').find((f) => f.id === fr)?.name === 'frame', 'a blank frame name falls back to its type for the canvas label')
+}
+
 // Save as… into a folder that already holds <title>.nala picks a free name instead of replacing it.
 {
   const dir = mkdtempSync(join(tmpdir(), 'nala-saveas-'))
@@ -342,6 +362,27 @@ assert(nodeIcon('path') === nodeIcon('polygon') && nodeIcon('frame', true) === '
     rmSync(dir, { recursive: true, force: true })
   }
 }
+// Fit all frames the union of what the top-level layers paint: a flipped frame (x -600..0) or a
+// turned one (y -300..300) is inside it, and there is no margin on the unflipped side.
+call('new', { template: 'empty' })
+call('insert', { parent: 'document', node: { type: 'frame', name: 'A', x: 0, y: 0, width: 400, height: 300, fill: '#eee' } })
+const FB = call('insert', { parent: 'document', node: { type: 'frame', name: 'B', x: 0, y: 500, width: 600, height: 300, fill: '#fcc', flipX: true } }).id
+const fa = call<B>('bounds', {})
+assert(same({ ...fa, id: '' }, { id: '', x: -600, y: 0, w: 1000, h: 800 }), `fit-all bounds with a flipped frame ${JSON.stringify(fa)}`)
+call('update', { ids: [FB], props: { flipX: false, x: 0, y: 300, rotation: 90 } })
+const ft = call<B>('bounds', {})
+assert(same({ ...ft, id: '' }, { id: '', x: 0, y: -300, w: 400, h: 600 }), `fit-all bounds with a turned frame ${JSON.stringify(ft)}`)
+
+// A child overflowing an unclipped frame is part of Fit all; a clipping frame cuts it off.
+call('new', { template: 'empty' })
+const FO = call('insert', { parent: 'document', node: { type: 'frame', name: 'O', x: 0, y: 0, width: 400, height: 300, layout: 'none', fill: '#eee' } }).id
+call('insert', { parent: FO, node: { type: 'rectangle', x: 300, y: 200, width: 500, height: 400, fill: '#f00' } })
+const fo = call<B>('bounds', {})
+assert(same({ ...fo, id: '' }, { id: '', x: 0, y: 0, w: 800, h: 600 }), `fit-all bounds with an overflowing child ${JSON.stringify(fo)}`)
+call('update', { ids: [FO], props: { clip: true } })
+const fc = call<B>('bounds', {})
+assert(same({ ...fc, id: '' }, { id: '', x: 0, y: 0, w: 400, h: 300 }), `fit-all bounds with a clipping frame ${JSON.stringify(fc)}`)
+
 assert(ICONS.saveAs !== ICONS.open, 'Save as… has its own icon, not the Open folder')
 
 console.log('editor-check ok')
