@@ -4,7 +4,7 @@
 import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { call } from '../src/core'
+import { call, renderPixels } from '../src/core'
 
 const assert = (ok: unknown, msg: string) => {
   if (!ok) throw new Error(`mcp-check failed: ${msg}`)
@@ -172,6 +172,40 @@ const text = (r: any) => r.content.map((c: any) => c.text ?? '').join('')
   assert(!(await spawn(main, 1)).isError, 'the last designer of the budget starts')
   const spent = await spawn(main, 1)
   assert(spent.isError && text(spent).includes('0 more designers'), `no designer is left after 3×'s two: ${text(spent)}`)
+
+  // A remote image downloads in the background: a slow server must not hold the engine (render, state and
+  // get_editor_state answer meanwhile), and the image is drawn once it has arrived.
+  const red = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAUAAAAFCAYAAACNbyblAAAAHElEQVQI12P4//8/w38GIAXDIBKE0DHxgljNBAAO9TXL0Y4OHwAAAABJRU5ErkJggg==', 'base64')
+  let requested = false
+  const img = Bun.serve({ port: 0, async fetch() { requested = true; await Bun.sleep(1500); return new Response(red) } })
+  const frame = call('insert', { parent: 'document', node: { type: 'frame', name: 'Img', x: 3000, y: 0, width: 200, height: 200, layout: 'none', fill: '#ffffff' } }).id
+  call('insert', { parent: frame, node: { type: 'rectangle', x: 0, y: 0, width: 100, height: 100, fill: { type: 'image', url: `http://127.0.0.1:${img.port}/a.png`, mode: 'fill' } } })
+  const shot = () => renderPixels(200, 200, 3000, 0, 1, 0xffffff)!
+  const at = (): number[] => Array.from(shot().slice((50 * 200 + 50) * 4, (50 * 200 + 50) * 4 + 3))
+  let t = performance.now()
+  const first = shot()
+  const slowRender = performance.now() - t
+  // Whole image area (not one pixel): a placeholder outline for the unavailable image would show up on its edge.
+  const blank = [...Array(100 * 100).keys()].every((i) => { const o = ((Math.floor(i / 100)) * 200 + (i % 100)) * 4; return first[o] === 255 && first[o + 1] === 255 && first[o + 2] === 255 })
+  // The download has started, so the calls below really run while it is in flight.
+  for (let i = 0; i < 50 && !requested; i++) await new Promise((r) => setTimeout(r, 20))
+  assert(requested, 'the image download started')
+  t = performance.now()
+  call('state')
+  await rpc({ id: 'img', method: 'tools/call', params: { name: 'get_editor_state', arguments: {} } })
+  const slowState = performance.now() - t
+  assert(slowRender < 1000 && slowState < 1000, `render and state answer while an image downloads (render ${slowRender.toFixed(0)} ms, state ${slowState.toFixed(0)} ms)`)
+  assert(blank, 'nothing is drawn for the image yet')
+  const drawn = async () => {
+    for (let i = 0; i < 80; i++) {
+      const p = at()
+      if (Math.max(...p) > 200 && Math.min(...p) < 80) return true
+      await new Promise((r) => setTimeout(r, 100))
+    }
+    return false
+  }
+  assert(await drawn(), `the downloaded image is drawn: ${at()}`)
+  img.stop(true)
 
   // A stale permission card (the run ended, the request is gone) must fail without saving "Switch to Auto";
   // an unknown answer is rejected instead of counting as allow.

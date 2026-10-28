@@ -1382,9 +1382,9 @@ mod tests {
 
     /// Held by the tests that make the shared engine's agent "running" and queue prompts: run in parallel,
     /// one finishing flips `running` back under the other, whose prompt then starts a turn instead of queueing.
+    /// The crate-wide lock, so they also never overlap a script test's `execute` on the same engine.
     fn agent_busy() -> std::sync::MutexGuard<'static, ()> {
-        static BUSY: Mutex<()> = Mutex::new(());
-        BUSY.lock().unwrap_or_else(|e| e.into_inner())
+        crate::engine::engine_test_lock()
     }
 
     #[test]
@@ -1611,6 +1611,7 @@ mod tests {
     /// "Generating", except the one an AI Pen is still drawing into, and must not touch an external agent's frames.
     #[test]
     fn run_end_clears_stale_placeholders() {
+        let _busy = agent_busy();
         let mut e = engine();
         let old = e.doc.root.clone();
         e.agent.profiles.push(Profile { id: "agT".into(), name: "T".into(), color: "#000000".into(), parent: None });

@@ -14,12 +14,24 @@ use std::path::{Path, PathBuf};
 
 type Rect = (f64, f64, f64, f64);
 
+/// Downloads that run at the same time; the rest of a document's missing assets wait their turn.
+const MAX_DOWNLOADS: usize = 8;
+
+type Download = Box<dyn FnOnce() -> bool + Send>;
+
 /// Icon SVGs and remote images, fetched once and cached on disk.
 pub struct Assets {
     dir: PathBuf,
     icons: HashMap<String, Option<String>>,
-    /// Image URLs whose download failed this session (not retried on every layer rebuild).
+    /// Icon keys and image URLs whose download failed this session (not retried on every layer rebuild).
     failed: std::collections::HashSet<String>,
+    /// Downloads in flight (icon key or image url), run on background threads so they never hold the engine.
+    loading: std::collections::HashSet<String>,
+    /// Downloads waiting for a free thread (at most `MAX_DOWNLOADS` run at once), and how many run now.
+    queue: std::collections::VecDeque<(String, Download)>,
+    running: usize,
+    /// Bumped when a download ends; the renderer rebuilds every layer when it changes.
+    pub generation: u64,
     /// Whether a `data:` image is within the size limit, by url hash (its header is decoded once, not per use).
     data_ok: HashMap<u64, bool>,
     /// Too-deep verdicts of SVG images, keyed by `deep_key` and valid while the stamp matches.
@@ -30,13 +42,15 @@ pub struct Assets {
     /// Full-decode verdicts by href hash, kept for one verifying export.
     decoded: HashMap<u64, bool>,
     pub online: bool,
+    /// While a screenshot's tree is built (`record`): the downloads in flight that it asked for.
+    asked: Option<Vec<String>>,
 }
 
 impl Assets {
     pub fn new(dir: PathBuf) -> Assets {
         let _ = std::fs::create_dir_all(dir.join("icons"));
         let _ = std::fs::create_dir_all(dir.join("images"));
-        Assets { dir, icons: HashMap::new(), failed: Default::default(), data_ok: HashMap::new(), deep: HashMap::new(), verify: false, decoded: HashMap::new(), online: true }
+        Assets { dir, icons: HashMap::new(), failed: Default::default(), loading: Default::default(), queue: Default::default(), running: 0, generation: 0, data_ok: HashMap::new(), deep: HashMap::new(), verify: false, decoded: HashMap::new(), online: true, asked: None }
     }
 
     /// Turn the full-decode check of `image` on or off; each switch drops the cached verdicts, as files may change between exports.
@@ -50,37 +64,84 @@ impl Assets {
         self.icon_weight(library, name, 200.0)
     }
 
+    /// The icon's SVG, or None while it downloads in the background (the renderer draws again when it lands).
     pub fn icon_weight(&mut self, library: &str, name: &str, weight: f64) -> Option<String> {
-        let lib = library.to_ascii_lowercase();
-        let (url, tag) = match lib.as_str() {
-            "feather" => (format!("https://unpkg.com/feather-icons@4.29.2/dist/icons/{name}.svg"), "feather".to_string()),
-            "phosphor" => {
-                // Phosphor names carry the style: "house-fill", "gear-thin".
-                let style = ["thin", "light", "bold", "fill", "duotone"].into_iter().find(|s| name.ends_with(&format!("-{s}"))).unwrap_or("regular");
-                (format!("https://unpkg.com/@phosphor-icons/core@2.1.1/assets/{style}/{name}.svg"), "phosphor".to_string())
-            }
-            l if l.starts_with("material") => {
-                let variant = if l.contains("rounded") { "rounded" } else if l.contains("sharp") { "sharp" } else { "outlined" };
-                let w = ((weight / 100.0).round() * 100.0).clamp(100.0, 700.0) as u16;
-                (format!("https://unpkg.com/@material-symbols/svg-{w}@0.27.0/{variant}/{name}.svg"), format!("material_{variant}_{w}"))
-            }
-            _ => (format!("https://unpkg.com/lucide-static@0.563.0/icons/{name}.svg"), "lucide_0.563".to_string()),
-        };
+        let (url, tag) = icon_url(library, name, weight);
         let key = format!("{tag}/{name}");
         if let Some(v) = self.icons.get(&key) {
             return v.clone();
         }
         let file = self.dir.join("icons").join(format!("{tag}-{}.svg", name.replace(['/', '\\', '.'], "_")));
-        let svg = std::fs::read_to_string(&file).ok().or_else(|| {
-            if !self.online || name.is_empty() {
-                return None;
-            }
-            let text = crate::net::get_text(&url).filter(|t| t.contains("<svg"))?;
-            let _ = std::fs::write(&file, &text);
-            Some(text)
-        });
+        let svg = std::fs::read_to_string(&file).ok();
+        if svg.is_none() && self.online && !name.is_empty() && !self.failed.contains(&key) {
+            self.spawn(key.clone(), move || crate::net::get_text(&url).filter(|t| t.contains("<svg")).is_some_and(|t| store(&file, t.as_bytes())));
+            self.note(&key);
+            return None;
+        }
         self.icons.insert(key, svg.clone());
         svg
+    }
+
+    /// This icon is still downloading, so None from `icon_weight` does not mean it does not exist.
+    pub fn icon_loading(&self, library: &str, name: &str, weight: f64) -> bool {
+        self.loading(&format!("{}/{name}", icon_url(library, name, weight).1))
+    }
+
+    /// A download of this icon key or image url is still running.
+    pub fn loading(&self, key: &str) -> bool {
+        self.loading.contains(key)
+    }
+
+    /// Start noting the downloads in flight that icons and images asked for from now on (a screenshot's).
+    pub fn record(&mut self) {
+        self.asked = Some(Vec::new());
+    }
+
+    /// Stop noting; the icon keys and image urls asked for since `record` that were still downloading.
+    pub fn recorded(&mut self) -> Vec<String> {
+        self.asked.take().unwrap_or_default()
+    }
+
+    fn note(&mut self, key: &str) {
+        if let Some(asked) = self.asked.as_mut().filter(|_| self.loading.contains(key)) {
+            if !asked.iter().any(|k| k == key) {
+                asked.push(key.to_string());
+            }
+        }
+    }
+
+    /// Run `job` (a download that stores its result on disk, true on success) on a background thread
+    /// unless this key is already loading or failed, then tell the engine, which draws again.
+    /// Past `MAX_DOWNLOADS` running, it waits in the queue until one ends.
+    fn spawn(&mut self, key: String, job: impl FnOnce() -> bool + Send + 'static) {
+        if self.failed.contains(&key) || !self.loading.insert(key.clone()) {
+            return;
+        }
+        self.queue.push_back((key, Box::new(job)));
+        self.start_queued();
+    }
+
+    fn start_queued(&mut self) {
+        while self.running < MAX_DOWNLOADS {
+            let Some((key, job)) = self.queue.pop_front() else { return };
+            self.running += 1;
+            std::thread::spawn(move || {
+                let ok = job();
+                crate::engine::engine().asset_ready(&key, ok);
+            });
+        }
+    }
+
+    /// A download ended: a failed one is not retried this session. Always bumps `generation`
+    /// (a failed image draws as unavailable instead of blank).
+    pub fn downloaded(&mut self, key: &str, ok: bool) {
+        self.loading.remove(key);
+        self.running = self.running.saturating_sub(1);
+        if !ok {
+            self.failed.insert(key.to_string());
+        }
+        self.generation += 1;
+        self.start_queued();
     }
 
     /// Resolve an image fill url to a local file path usvg can load. A raster image over
@@ -153,16 +214,14 @@ impl Assets {
             let file = match cached {
                 Some(f) => f,
                 None => {
-                    let bytes = match std::fs::read(&stem) {
-                        Ok(b) => b,
-                        Err(_) if !self.online || self.failed.contains(url) => return None,
-                        Err(_) => match crate::net::get_bytes(url) {
-                            Some(b) => b,
-                            None => {
-                                self.failed.insert(url.to_string());
-                                return None;
-                            }
-                        },
+                    // Not on disk yet: download in the background (the fill draws nothing until it lands).
+                    let Ok(bytes) = std::fs::read(&stem) else {
+                        if self.online {
+                            let (u, stem) = (url.to_string(), stem.clone());
+                            self.spawn(url.to_string(), move || crate::net::get_bytes(&u).is_some_and(|b| store(&stem.with_extension(image_ext(&b)), &b)));
+                        }
+                        self.note(url);
+                        return None;
                     };
                     let file = stem.with_extension(image_ext(&bytes));
                     std::fs::write(&file, &bytes).ok()?;
@@ -177,6 +236,31 @@ impl Assets {
         let full = if p.is_absolute() { p.to_path_buf() } else { base?.join(rel) };
         full.exists().then(|| full.to_string_lossy().replace('\\', "/"))
     }
+}
+
+/// Download url and cache tag of an icon.
+fn icon_url(library: &str, name: &str, weight: f64) -> (String, String) {
+    let lib = library.to_ascii_lowercase();
+    match lib.as_str() {
+        "feather" => (format!("https://unpkg.com/feather-icons@4.29.2/dist/icons/{name}.svg"), "feather".to_string()),
+        "phosphor" => {
+            // Phosphor names carry the style: "house-fill", "gear-thin".
+            let style = ["thin", "light", "bold", "fill", "duotone"].into_iter().find(|s| name.ends_with(&format!("-{s}"))).unwrap_or("regular");
+            (format!("https://unpkg.com/@phosphor-icons/core@2.1.1/assets/{style}/{name}.svg"), "phosphor".to_string())
+        }
+        l if l.starts_with("material") => {
+            let variant = if l.contains("rounded") { "rounded" } else if l.contains("sharp") { "sharp" } else { "outlined" };
+            let w = ((weight / 100.0).round() * 100.0).clamp(100.0, 700.0) as u16;
+            (format!("https://unpkg.com/@material-symbols/svg-{w}@0.27.0/{variant}/{name}.svg"), format!("material_{variant}_{w}"))
+        }
+        _ => (format!("https://unpkg.com/lucide-static@0.563.0/icons/{name}.svg"), "lucide_0.563".to_string()),
+    }
+}
+
+/// Write a downloaded file under a temporary name first, so a render never reads it half written.
+fn store(file: &Path, bytes: &[u8]) -> bool {
+    let tmp = file.with_extension("part");
+    std::fs::write(&tmp, bytes).is_ok() && std::fs::rename(&tmp, file).is_ok()
 }
 
 /// Largest raster image decoded, in pixels (RGBA: 400 MB).
@@ -907,7 +991,7 @@ impl<'a> Svg<'a> {
         let base = self.base.clone();
         let unavailable = self::fills(n.p.get("fill")).iter().any(|f| {
             let u = f["url"].as_str().unwrap_or("");
-            f["type"] == "image" && !crate::render::is_pending_url(u) && self.assets.image(u, base.as_deref()).is_none()
+            f["type"] == "image" && !crate::render::is_pending_url(u) && self.assets.image(u, base.as_deref()).is_none() && !self.assets.loading(u)
         });
         if unavailable {
             // An unavailable image is outlined with a 2 px grey stroke clipped to the shape.
@@ -1299,8 +1383,8 @@ impl<'a> Svg<'a> {
                                     );
                                     (format!("url(#{id})"), opacity)
                                 }
-                                // Still generating: nothing is drawn (the canvas shows a shimmer).
-                                None if crate::render::is_pending_url(url) => continue,
+                                // Still generating or downloading: nothing is drawn (a generated image shows a shimmer).
+                                None if crate::render::is_pending_url(url) || self.assets.loading(url) => continue,
                                 // Unavailable image: an 8 px white/black checkerboard at
                                 // 10 % from the node's corner (`shape` adds the grey inner outline).
                                 None => {
@@ -1550,7 +1634,8 @@ impl<'a> Svg<'a> {
     fn icon_markup(&mut self, n: &RNode, paints: Option<&[Paint]>) -> String {
         let lib = n.s("library").unwrap_or("lucide").to_string();
         let name = n.s("icon").unwrap_or("").to_string();
-        let src = self.assets.icon_weight(&lib, &name, n.f("weight").unwrap_or(200.0));
+        let weight = n.f("weight").unwrap_or(200.0);
+        let src = self.assets.icon_weight(&lib, &name, weight);
         let parsed = src.as_deref().and_then(|src| {
             let start = src.find("<svg")?;
             let tag_end = start + src[start..].find('>')?;
@@ -1575,6 +1660,10 @@ impl<'a> Svg<'a> {
             Some((src[tag_end + 1..inner_end].to_string(), attrs, vb))
         });
         let Some((inner, attrs, [vx, vy, vw, vh])) = parsed else {
+            // Still downloading: draw nothing, like a remote image that has not arrived yet.
+            if src.is_none() && self.assets.icon_loading(&lib, &name, weight) {
+                return String::new();
+            }
             // Missing icon: dashed box in the first solid fill color.
             let c = self.paints(n.p.get("fill"), (n.x, n.y, n.w, n.h)).into_iter().find(|p| p.value.starts_with('#'));
             return c.map(|c| format!(r#"<rect x="{}" y="{}" width="{}" height="{}" rx="3" fill="none" stroke="{}" stroke-opacity="0.4" stroke-dasharray="2 2"/>"#, n.x, n.y, n.w, n.h, c.value)).unwrap_or_default();
@@ -2166,6 +2255,25 @@ mod tests {
         n
     }
 
+    /// An icon still downloading draws nothing, like a remote image that has not arrived; only an icon
+    /// that does not exist gets the dashed "missing" box.
+    #[test]
+    fn a_loading_icon_draws_no_missing_box() {
+        let dir = std::env::temp_dir().join("nalarupa-test-icon-loading");
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut e = crate::engine::Engine::new(dir.clone());
+        e.assets.online = false;
+        let id = e.doc.insert(crate::doc::ROOT, json!({"type": "icon", "icon": "zap", "library": "lucide", "x": 0, "y": 0, "width": 24, "height": 24, "fill": "#cc0000"}), None).unwrap();
+        let key = format!("{}/zap", icon_url("lucide", "zap", 200.0).1);
+        e.assets.loading.insert(key.clone());
+        let (svg, _) = e.ctx().node_svg(&id).unwrap();
+        assert!(!svg.contains("stroke-dasharray"), "a loading icon draws no missing box: {svg}");
+        e.assets.loading.remove(&key);
+        let (svg, _) = e.ctx().node_svg(&id).unwrap();
+        assert!(svg.contains("stroke-dasharray"), "a missing icon keeps its dashed box: {svg}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Web images are cached with an extension sniffed from their bytes (resvg decodes by
     /// extension; extension-less files rendered blank). Old extension-less files are migrated.
     #[test]
@@ -2181,6 +2289,76 @@ mod tests {
         assert!(!legacy.exists() && Path::new(&path).exists());
         assert_eq!(assets.image(url, None).unwrap(), path);
         assert_eq!(image_ext(&[0xFF, 0xD8, 0xFF]), "jpg");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A web image that is not cached downloads on a background thread: `image` answers at once (nothing
+    /// drawn, not "unavailable") instead of waiting for the server, and the file is used once it lands.
+    #[test]
+    fn web_images_download_in_the_background() {
+        use std::io::{Read, Write};
+        let dir = std::env::temp_dir().join(format!("nalarupa-bg-{:x}", crate::doc::random_u64()));
+        let mut assets = Assets::new(dir.clone());
+        let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/a.png", server.local_addr().unwrap());
+        let (release, wait) = std::sync::mpsc::channel::<()>();
+        std::thread::spawn(move || {
+            let (mut s, _) = server.accept().unwrap();
+            let _ = s.read(&mut [0; 1024]);
+            let _ = wait.recv();
+            let body = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x01\0\0\0\x01";
+            let _ = s.write_all(format!("HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n", body.len()).as_bytes());
+            let _ = s.write_all(body);
+        });
+        let started = std::time::Instant::now();
+        assert!(assets.image(&url, None).is_none() && assets.loading(&url));
+        assert!(started.elapsed() < std::time::Duration::from_secs(1), "the call does not wait for the download");
+        assert!(assets.image(&url, None).is_none() && assets.loading(&url), "asking again does not start another download");
+        release.send(()).unwrap();
+        let file = dir.join("images").join(format!("{:016x}.png", fxhash(&url)));
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !file.exists() && std::time::Instant::now() < until {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assets.downloaded(&url, true);
+        assert!(!assets.loading(&url) && assets.generation == 1);
+        assert!(assets.image(&url, None).is_some());
+        // A failed download is not retried this session.
+        let missing = "http://127.0.0.1:1/b.png";
+        assets.downloaded(missing, false);
+        assert!(assets.image(missing, None).is_none() && !assets.loading(missing));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A document with many missing assets does not start a thread for each: past MAX_DOWNLOADS the rest
+    /// wait in the queue and start as running ones end.
+    #[test]
+    fn downloads_run_at_most_max_at_once() {
+        let dir = std::env::temp_dir().join(format!("nalarupa-queue-{:x}", crate::doc::random_u64()));
+        let mut assets = Assets::new(dir.clone());
+        // Jobs block until the sender is dropped at the end, then count themselves as ended.
+        let (hold, parked) = std::sync::mpsc::channel::<()>();
+        let parked = std::sync::Arc::new(std::sync::Mutex::new(parked));
+        let ended = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        for i in 0..MAX_DOWNLOADS + 3 {
+            let (parked, ended) = (parked.clone(), ended.clone());
+            assets.spawn(format!("k{i}"), move || {
+                let ok = parked.lock().unwrap().recv().is_ok();
+                ended.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                ok
+            });
+        }
+        assert_eq!((assets.running, assets.queue.len()), (MAX_DOWNLOADS, 3));
+        assert!((0..MAX_DOWNLOADS + 3).all(|i| assets.loading(&format!("k{i}"))), "queued keys count as loading");
+        assets.downloaded("k0", true);
+        assert_eq!((assets.running, assets.queue.len()), (MAX_DOWNLOADS, 2), "an ended download frees a slot for the next");
+        // Release the parked jobs (MAX_DOWNLOADS + 1 started) and wait for them so no thread outlives the test.
+        drop(hold);
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while ended.load(std::sync::atomic::Ordering::SeqCst) < MAX_DOWNLOADS + 1 && std::time::Instant::now() < until {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(ended.load(std::sync::atomic::Ordering::SeqCst), MAX_DOWNLOADS + 1);
         let _ = std::fs::remove_dir_all(dir);
     }
 
