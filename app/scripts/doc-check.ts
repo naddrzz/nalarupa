@@ -311,8 +311,12 @@ if (process.platform !== 'win32') {
     assert(doc.error && /Stop the agent/.test(doc.text), 'open_document while the agent runs')
     assert(call('frames').length === 0 && call('state').path === null, 'a refused switch keeps the document')
     // The built-in agent flags one frame, an external agent (MCP) another: Stop clears only the former.
-    const agent = call('poll').events.find((ev: any) => ev.kind === 'start')?.agent.id
-    assert(agent, 'the running agent announces itself')
+    // `agentRunning` is set before the run's thread emits `start`, so wait for the event.
+    let agent: string | undefined
+    await until(() => {
+      agent ??= call('poll').events.find((ev: any) => ev.kind === 'start')?.agent.id
+      return Boolean(agent)
+    }, 'the running agent announces itself')
     const frame = (name: string, x: number) => `Insert(document, {type:"frame", name:"${name}", x:${x}, y:0, width:400, height:200, placeholder:true})`
     assert(!call('tool', { name: 'execute', args: { input: frame('Pricing', 0), __agent: agent } }).error, 'the agent flags a frame')
     assert(!call('tool', { name: 'execute', args: { input: frame('External job', 500), __agent: 'external' } }).error, 'an external agent flags a frame')
