@@ -1363,7 +1363,7 @@ mod tests {
         assert_eq!(e.doc.root["children"][0]["fill"]["url"], "./images/abc.png");
 
         let out = dir.join("out");
-        let files = crate::html::export(&mut e, &[id], "svg", out.to_str().unwrap(), &json!({})).unwrap();
+        let files = crate::html::plan(&mut e, &[id], "svg", out.to_str().unwrap(), &json!({})).unwrap().run().unwrap();
         let svg = std::fs::read_to_string(&files[0]).unwrap();
         assert!(svg.contains("xlink:href=\"data:image/png;base64,"), "{svg}");
         assert!(!svg.contains("images/abc.png"), "{svg}");
