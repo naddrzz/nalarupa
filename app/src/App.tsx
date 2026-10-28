@@ -11,7 +11,7 @@ import { AgentPanel } from './Agent'
 import { Home } from './Home'
 import { Present } from './Present'
 import { C, LEFT_W, REDUCED_MOTION, RIGHT_W, TOP_H } from './theme'
-import { hasKeyboardFocus, Icon, IconButton, Pressable, Segmented, ShortcutScope, T, type Toast } from './ui'
+import { FocusBack, hasKeyboardFocus, Icon, IconButton, Pressable, Segmented, ShortcutScope, T, type Toast } from './ui'
 import { centerOffset, inParent, type M } from './geometry'
 import type { IconName } from './icons'
 
@@ -362,6 +362,7 @@ export function App() {
 
   return (
     <ShortcutScope value={panelShortcut}>
+    <FocusBack value={sent}>
     <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', backgroundColor: C.bg }}>
       <div style={{ height: TOP_H, flexShrink: 0, display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 4, paddingLeft: 8, paddingRight: 10, backgroundColor: C.panel, borderBottomWidth: 1, borderColor: C.border }}>
         <IconButton icon="home" title="Home" testId="home" onClick={() => setScreen('home')} />
@@ -409,6 +410,7 @@ export function App() {
       </div>
       {toastEl}
     </div>
+    </FocusBack>
     </ShortcutScope>
   )
 }
