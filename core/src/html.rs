@@ -989,7 +989,10 @@ mod tests {
         let mut e = Engine::new(dir.join("data"));
         e.doc.path = Some(dir.join("doc.nala"));
         let mut ids = Vec::new();
-        for (i, f) in ["photo.png", "gone.png"].into_iter().enumerate() {
+        // An SVG nested past the depth limit: its depth is checked when the file is written, not while planning.
+        let deep = 6000;
+        std::fs::write(dir.join("deep.svg"), format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">{}<rect width="5" height="5"/>{}</svg>"#, "<g>".repeat(deep), "</g>".repeat(deep))).unwrap();
+        for (i, f) in ["photo.png", "gone.png", "deep.svg"].into_iter().enumerate() {
             ids.push(e.doc.insert(crate::doc::ROOT, json!({"type": "rectangle", "x": i * 60, "y": 0, "width": 50, "height": 50,
                 "fill": {"type": "image", "url": format!("./{f}"), "mode": "fill"}}), None).unwrap());
         }
@@ -1003,6 +1006,7 @@ mod tests {
         let read = |i: usize| std::fs::read_to_string(&files[i]).unwrap();
         assert!(read(0).contains("data:image/png;base64,") && !read(0).contains("nalarupa-embed-"), "the written SVG inlines the image");
         assert!(read(1).contains("gone.png") && !read(1).contains("data:image/png"), "a file gone before the write keeps its href");
+        assert!(!read(2).contains("deep.svg") && !read(2).contains("data:image/svg"), "an SVG nested too deep is left out, as when rendering");
         // Only this export's keyed tokens are replaced, not text that merely looks like one.
         let fake = crate::svg::Embedded { tag: "nalarupa-embed-0000000000000001:".into(), hrefs: vec![dir.join("photo.png").display().to_string()] };
         assert_eq!(crate::svg::inline_embedded("nalarupa-embed:0 and nalarupa-embed-0000000000000002:0", &fake), "nalarupa-embed:0 and nalarupa-embed-0000000000000002:0");

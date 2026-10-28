@@ -149,6 +149,24 @@ impl Assets {
     /// need gigabytes (a few KB of PNG can declare 30000 x 30000). An SVG nested deeper than
     /// `MAX_SVG_DEPTH` counts as unavailable too: usvg recurses per level and overflows the stack.
     pub fn image(&mut self, url: &str, base: Option<&Path>) -> Option<String> {
+        let href = self.image_unscanned(url, base)?;
+        let too_deep = match deep_key(&href) {
+            None => false,
+            Some((key, stamp)) => match self.deep.get(&key) {
+                Some(&(s, v)) if s == stamp => v,
+                _ => {
+                    let v = svg_too_deep(&href);
+                    self.deep.insert(key, (stamp, v));
+                    v
+                }
+            },
+        };
+        (!too_deep).then_some(href)
+    }
+
+    /// `image` without the depth scan of an SVG file, which reads the whole file: an SVG export, planned
+    /// under the engine lock, leaves that scan to `inline_embedded`.
+    pub fn image_unscanned(&mut self, url: &str, base: Option<&Path>) -> Option<String> {
         let href = self.resolve_image(url, base)?;
         if !self.within_pixel_limit(&href, url) {
             return None;
@@ -164,18 +182,7 @@ impl Assets {
         {
             return None;
         }
-        let too_deep = match deep_key(&href) {
-            None => false,
-            Some((key, stamp)) => match self.deep.get(&key) {
-                Some(&(s, v)) if s == stamp => v,
-                _ => {
-                    let v = svg_too_deep(&href);
-                    self.deep.insert(key, (stamp, v));
-                    v
-                }
-            },
-        };
-        (!too_deep).then_some(href)
+        Some(href)
     }
 
     /// Whether a raster image's declared size is within `MAX_IMAGE_PIXELS` (the verdict of a `data:` image is cached).
@@ -542,7 +549,7 @@ impl Embedded {
 
 /// `svg` with each token of `embedded` replaced by its file as a `data:` URI, in one pass. Slow (reads and
 /// encodes every file), so it runs without the engine lock. A file that cannot be inlined (unreadable, or a
-/// gzip bomb past the cap) keeps its file href.
+/// gzip bomb past the cap) keeps its file href; an SVG nested past `MAX_SVG_DEPTH` is left out.
 pub fn inline_embedded(svg: &str, embedded: &Embedded) -> String {
     if embedded.hrefs.is_empty() {
         return svg.to_string();
@@ -554,6 +561,8 @@ pub fn inline_embedded(svg: &str, embedded: &Embedded) -> String {
         let after = &rest[at + embedded.tag.len()..];
         let digits = after.bytes().take_while(u8::is_ascii_digit).count();
         match after[..digits].parse::<usize>().ok().and_then(|i| embedded.hrefs.get(i)) {
+            // An SVG nested too deep stays unavailable, as when rendering: the image is left out.
+            Some(href) if deep_key(href).is_some() && svg_too_deep(href) => rest = &after[digits..],
             Some(href) => {
                 out.push_str(&esc(&data_uri(href).unwrap_or_else(|| href.clone())));
                 rest = &after[digits..];
@@ -1415,12 +1424,12 @@ impl<'a> Svg<'a> {
                         },
                         "image" => {
                             let url = o.get("url").and_then(Value::as_str).unwrap_or("");
-                            let href = self.assets.image(url, self.base.as_deref()).map(|h| {
-                                if !self.embed || h.starts_with("data:") {
-                                    return h;
-                                }
-                                self.embedded.token(h)
-                            });
+                            // An export inlines (and depth-checks) image files later, without the engine lock.
+                            let found = if self.embed { self.assets.image_unscanned(url, self.base.as_deref()) } else { None };
+                            let href = match found {
+                                Some(h) if !h.starts_with("data:") => Some(self.embedded.token(h)),
+                                _ => self.assets.image(url, self.base.as_deref()),
+                            };
                             match href {
                                 Some(href) => {
                                     let aspect = match o.get("mode").and_then(Value::as_str) {
