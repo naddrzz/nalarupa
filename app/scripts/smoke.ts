@@ -109,6 +109,36 @@ for (const name of ['FlipSlide', 'TurnSlide']) {
 }
 call('undo')
 call('undo')
+// An insert into a centered card that grows moves the card and its children: the children glide with the card,
+// not with a doubled offset (they used to jump 34 px the wrong way, then fly back through the old spot).
+{
+  const run = (input: string) => {
+    const o = call('tool', { name: 'execute', args: { input } })
+    assert(!o.error, `execute works: ${o.text}`)
+  }
+  const redTop = (f: Uint8Array) => {
+    for (let i = 0; i < f.length; i += 4) if (f[i] > 200 && f[i + 1] < 40 && f[i + 2] < 40) return (i / 4 / 640) | 0
+    return -1
+  }
+  const grab = () => new Uint8Array(renderPixels(640, 400, 0, 3000, 1, 0x1c1c1f, undefined, true)!)
+  run(`Insert(document, {type:"frame", name:"GlideRoot", x:0, y:3000, width:400, height:340, layout:"vertical", justifyContent:"center", alignItems:"center", fill:"#000000"})
+card = Insert(Get(n => n.name === "GlideRoot" ? n.id : undefined)[0], {type:"frame", name:"Card", layout:"vertical", gap:8, padding:10, fill:"#222222"})
+Insert(card, {type:"rectangle", name:"R", width:100, height:40, fill:"#ff0000"})`)
+  grab()
+  await Bun.sleep(800)
+  grab()
+  await Bun.sleep(700)
+  call('poll')
+  const from = redTop(grab())
+  run(`Insert(Get(n => n.name === "Card" ? n.id : undefined)[0], {type:"rectangle", name:"N", width:100, height:60, fill:"#00ff00"})`)
+  const tops = [redTop(grab())]
+  for (const t0 = performance.now(); performance.now() - t0 < 700; await Bun.sleep(30)) tops.push(redTop(grab()))
+  const to = tops[tops.length - 1]
+  assert(from > 0 && to < from, `the card's child moves up when the card grows (${from} -> ${to})`)
+  assert(tops.every((t) => t >= to && t <= from), `the card's child glides between its old and new spot, not past them (${from} -> ${to}: ${tops})`)
+  assert(tops.every((t, i) => i === 0 || t <= tops[i - 1]), `the card's child moves one way (${tops})`)
+  run(`Delete(Get(n => n.name === "GlideRoot" ? n.id : undefined)[0])`)
+}
 // Reduced motion (an OS preference the app passes in): agent inserts appear in place.
 call('reduce_motion', { on: true })
 call('tool', { name: 'execute', args: { input: 'Insert("sld01", {type:"rectangle", name:"Still", width:100, height:100, fill:"#0000ff"})' } })
@@ -219,6 +249,23 @@ resetChat()
   const helper = { id: 'ag2', name: 'Chandra', color: '#ED8936' }
   applyEvents([ev('user', { text: 'go' }), ev('start'), plan, { type: 'agent', kind: 'start', agent: helper }, { type: 'agent', kind: 'error', text: 'boom', agent: helper }, { type: 'agent', kind: 'done', durationMs: 1, usage: {}, agent: helper }], 0)
   assert(store.todos.map((t) => t.status).join(',') === 'completed,in_progress,pending', "a helper's failure leaves the plan owner's steps alone")
+}
+// A chat saved mid-run (crash, kill) reopens with its unfinished plan steps cancelled, not live; a finished run's plan is left as it ended.
+{
+  const agent = { id: 'ag1', name: 'Surya', color: '#38B2AC' }
+  const ev = (kind: string, o: object = {}) => ({ type: 'agent', kind, agent, ...o })
+  const todos = [{ content: 'Build hero', status: 'in_progress', activeForm: 'Building hero' }, { content: 'Build footer', status: 'pending' }]
+  const saved = [ev('user', { text: 'Design a page' }), ev('start'), ev('todos', { todos: [{ content: 'Plan', status: 'completed' }, ...todos] }), ev('message_end')]
+  restoreChat(saved)
+  assert(store.todos.map((t) => t.status).join(',') === 'completed,cancelled,cancelled', 'a plan whose run never finished reopens cancelled')
+  restoreChat([...saved, ev('done', { durationMs: 1, usage: {} })])
+  assert(store.todos.map((t) => t.status).join(',') === 'completed,in_progress,pending', 'a plan whose run finished reopens as it ended')
+  restoreChat([...saved, ev('done', { stopped: true, durationMs: 1, usage: {} })])
+  assert(store.todos.map((t) => t.status).join(',') === 'completed,cancelled,cancelled', 'a stopped run reopens with a cancelled plan')
+  // A plan finished in an earlier turn is not reopened cancelled because the same agent was mid-run in a later turn that set no plan.
+  restoreChat([...saved, ev('done', { durationMs: 1, usage: {} }), ev('user', { text: 'Tweak it' }), ev('start'), ev('message_end')])
+  assert(store.todos.map((t) => t.status).join(',') === 'completed,in_progress,pending', "a later turn that set no plan leaves the earlier turn's plan alone")
+  resetChat()
 }
 // A long chat keeps every item, the first prompt included, live and when reopened from history.
 {
