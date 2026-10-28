@@ -28,53 +28,77 @@ pub struct ToolOut {
     /// Icons still downloading when the call ended (warning, library, name, weight): `finish` waits for
     /// them without the engine lock and reports the ones that turn out not to exist.
     pub icons: Vec<(String, String, String, u32)>,
-    /// Icons and images the screenshots show that were still downloading: `finish` waits for them too.
+    /// Icons and images the screenshots show that were still downloading: `finish` waits for them too
+    /// (and for each export's `waits`).
     pub downloads: Vec<String>,
-    /// The document and libraries the screenshots were taken of, kept only when icons or images were still
-    /// downloading: `finish` redraws the shots from them, since the live ones may have changed (or been switched) meanwhile.
-    pub shot_doc: Option<(Doc, Vec<(String, Value)>)>,
+    /// Script runs the screenshots drew as running (none run under the engine lock): `finish` runs them (and each
+    /// export's `runs`) and redraws.
+    pub runs: crate::script::Runs,
+    /// The document and libraries the screenshots and exports were made of, kept only when icons or images were still
+    /// downloading: `finish` redraws and replans them from it, since the live ones may have changed (or been switched) meanwhile.
+    pub call_doc: Option<(Doc, Vec<(String, Value)>)>,
     /// `Export(...)` calls from a script, planned under the lock; `finish` renders and writes them.
     pub exports: Vec<crate::html::ExportJob>,
 }
 
 impl ToolOut {
     pub fn ok(text: impl Into<String>) -> ToolOut {
-        ToolOut { text: text.into(), images: Vec::new(), error: false, shots: Vec::new(), icons: Vec::new(), downloads: Vec::new(), shot_doc: None, exports: Vec::new() }
+        ToolOut { text: text.into(), images: Vec::new(), error: false, shots: Vec::new(), icons: Vec::new(), downloads: Vec::new(), runs: Default::default(), call_doc: None, exports: Vec::new() }
     }
     pub fn err(text: impl Into<String>) -> ToolOut {
         ToolOut { error: true, ..ToolOut::ok(text) }
     }
-    /// Write pending exports, settle pending icons and rasterize pending screenshots. Call without holding `engine()`.
+    /// Settle pending icons, rasterize pending screenshots and write pending exports once the icons and images
+    /// they show have downloaded and their script nodes have run. Call without holding `engine()`.
     pub fn finish(mut self) -> ToolOut {
-        for job in std::mem::take(&mut self.exports) {
-            match job.run() {
-                Ok(files) => self.text += &format!("\nExported: {}\n", files.join(", ")),
-                Err(err) => self.text += &format!("\nExport failed: {err}\n"),
-            }
-        }
         let until = std::time::Instant::now() + std::time::Duration::from_secs(12);
-        self.settle_icons(until);
-        for key in std::mem::take(&mut self.downloads) {
-            while engine().assets.loading(&key) && std::time::Instant::now() < until {
-                std::thread::sleep(std::time::Duration::from_millis(20));
-            }
+        let redraw = !self.icons.is_empty() || !self.downloads.is_empty() || !self.runs.is_empty();
+        self.runs.run();
+        for job in &self.exports {
+            job.runs.run();
         }
-        let shot_doc = self.shot_doc.take();
+        self.settle_icons(until);
+        wait_downloads(self.downloads.iter().chain(self.exports.iter().flat_map(|job| &job.waits)), until);
+        self.downloads.clear();
+        let call_doc = self.call_doc.take();
         for (id, mut tree, scale) in std::mem::take(&mut self.shots) {
             // The tree was built while icons or images were still downloading, so it has none of them: redraw it
             // from the same document, not whatever the live one is now.
-            if let Some((doc, libs)) = &shot_doc {
+            if let Some((doc, libs)) = call_doc.as_ref().filter(|_| redraw) {
                 let target = crate::script::shot_target(doc, &id);
                 let mut e = engine();
                 let e = &mut *e;
                 let mut cx = Ctx { doc, libs, fonts: &mut e.fonts, assets: &mut e.assets };
-                if let Ok(fresh) = cx.node_tree_at(&target, scale) {
+                // A script node whose output is gone from the cache meanwhile draws as running, not under the lock.
+                crate::script::record_runs();
+                let fresh = cx.node_tree_at(&target, scale);
+                crate::script::recorded_runs();
+                if let Ok(fresh) = fresh {
                     tree = fresh;
                 }
             }
             match crate::render::encode_tree(&tree, "png", scale, 0) {
                 Ok(png) => self.images.push(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, png)),
                 Err(err) => self.text += &format!("Screenshot of {id} failed: {err}\n"),
+            }
+        }
+        for mut job in std::mem::take(&mut self.exports) {
+            // Planned without the icons or images still downloading then: plan it again from the same document.
+            if let Some((doc, libs)) = call_doc.as_ref().filter(|_| job.stale()) {
+                let mut e = engine();
+                let e = &mut *e;
+                let mut cx = Ctx { doc, libs, fonts: &mut e.fonts, assets: &mut e.assets };
+                match job.replan(&mut cx, &e.data_dir) {
+                    Ok(fresh) => job = fresh,
+                    Err(err) => {
+                        self.text += &format!("\nExport failed: {err}\n");
+                        continue;
+                    }
+                }
+            }
+            match job.run() {
+                Ok(files) => self.text += &format!("\nExported: {}\n", files.join(", ")),
+                Err(err) => self.text += &format!("\nExport failed: {err}\n"),
             }
         }
         self
@@ -111,6 +135,16 @@ impl ToolOut {
                 self.text.insert_str(end, &bullets);
             }
             None => self.text += &format!("\n{head}{bullets}"),
+        }
+    }
+}
+
+/// Wait until none of these downloads (icon keys, image urls) is running or `until` passes. The engine lock is
+/// free between polls, so the downloads can land: call without holding `engine()`.
+pub fn wait_downloads<'a>(keys: impl IntoIterator<Item = &'a String>, until: std::time::Instant) {
+    for key in keys {
+        while engine().assets.loading(key) && std::time::Instant::now() < until {
+            std::thread::sleep(std::time::Duration::from_millis(20));
         }
     }
 }
@@ -382,8 +416,9 @@ fn merge3(base: &Value, theirs: &Value, ours: &Value) -> Value {
 }
 
 const UNDO_LIMIT: usize = 100;
-/// The agent edits whatever document is open, so a document switch waits for it to stop.
-pub const SWITCH_BUSY: &str = "Stop the agent before opening another document.";
+/// The agent, and an AI Pen that outlives its run, edit whatever document is open, so a document switch
+/// waits for them to stop. Home shows any refusal starting "Stop the agent" as is.
+pub const SWITCH_BUSY: &str = "Stop the agent or the AI Pen before opening another document.";
 /// An external agent has no Save / Don't save prompt, so it must not replace unsaved work.
 pub const SWITCH_DIRTY: &str = "The open document has unsaved changes; ask the user to save it first.";
 
@@ -844,12 +879,18 @@ impl Engine {
         }
     }
 
+    /// An agent run, an `execute`, or an AI Pen that outlives its run still edits the open document, so it must
+    /// not be replaced (see `SWITCH_BUSY`).
+    pub fn switch_busy(&self) -> bool {
+        self.agent.running || self.executing || !self.agent.pens.is_empty()
+    }
+
     pub fn dirty(&self) -> bool {
         self.version != self.saved
     }
 
     pub fn title(&self) -> String {
-        self.doc.path.as_ref().and_then(|p| p.file_stem()).map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "Untitled".into())
+        self.doc.title()
     }
 
     pub fn emit(&mut self, ev: Value) {
@@ -913,6 +954,7 @@ impl Engine {
             let rel = rel.replace("%20", " ");
             if let Ok(mut lib) = Doc::load(&base.join(&rel)) {
                 crate::resolve::migrate(&mut lib.root);
+                lib.ensure_ids();
                 drop_pending(&mut lib.root, &self.inflight);
                 drop_placeholder(&mut lib.root, &[]);
                 self.libs.push((alias, lib.root));
@@ -1114,7 +1156,7 @@ impl Engine {
                 out
             }
             "open_document" => {
-                if self.agent.running || self.executing {
+                if self.switch_busy() {
                     return ToolOut::err(SWITCH_BUSY);
                 }
                 if self.dirty() {
@@ -1436,6 +1478,39 @@ mod tests {
         assert_eq!(e.libs[0].1["children"][0]["placeholder"], false);
         e.open(&other).unwrap();
         assert_eq!(e.doc.find("f").unwrap()["placeholder"], false);
+    }
+
+    /// A library with a child without an id and two children sharing one is repaired on open like the document:
+    /// otherwise an instance's children resolve to the paths `i/` and `i/t` twice, and cannot be told apart.
+    #[test]
+    fn open_repairs_library_ids() {
+        let dir = std::env::temp_dir().join(format!("nalarupa-test-lib-ids-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("lib.nala"), r#"{"version":"2.19","children":[{"id":"C","type":"frame","reusable":true,"children":[
+            {"type":"text","content":"no id"},{"id":"t","type":"text","content":"first"},{"id":"t","type":"text","content":"second"}]}]}"#).unwrap();
+        std::fs::write(dir.join("doc.nala"), r#"{"version":"2.19","imports":{"lib":"lib.nala"},"children":[{"id":"i","type":"ref","ref":"lib:C"}]}"#).unwrap();
+        let mut e = Engine::new(dir.join("data"));
+        e.open(&dir.join("doc.nala")).unwrap();
+        let vars = Map::new();
+        let r = crate::resolve::Resolver::new(&e.doc.root, &e.libs, &vars);
+        let inst = r.resolve(&e.doc.children()[0]).unwrap();
+        let paths: Vec<&str> = inst.kids.iter().map(|k| k.id.as_str()).collect();
+        assert_eq!(paths.len(), 3);
+        assert!(paths.iter().all(|p| p.len() > 2 && p.starts_with("i/")), "{paths:?}");
+        assert_eq!(paths.iter().collect::<std::collections::HashSet<_>>().len(), 3, "{paths:?}");
+        assert_eq!(paths[1], "i/t", "the first node keeps its id");
+        // The repair is the same on every open, and when the library itself is opened (and saved),
+        // so an override saved on a repaired child still reaches it.
+        let paths: Vec<String> = paths.iter().map(|p| p.to_string()).collect();
+        e.open(&dir.join("doc.nala")).unwrap();
+        let r = crate::resolve::Resolver::new(&e.doc.root, &e.libs, &vars);
+        let again: Vec<String> = r.resolve(&e.doc.children()[0]).unwrap().kids.iter().map(|k| k.id.clone()).collect();
+        assert_eq!(again, paths, "the same ids on the next open");
+        e.open(&dir.join("lib.nala")).unwrap();
+        let own: Vec<String> = e.doc.children()[0]["children"].as_array().unwrap().iter().map(|k| format!("i/{}", k["id"].as_str().unwrap())).collect();
+        assert_eq!(own, paths, "the library opened as a document gets the same ids");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

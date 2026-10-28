@@ -111,7 +111,7 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
         "state" => Ok(state(&engine())),
         "new" => {
             let mut e = engine();
-            if e.agent.running || e.executing {
+            if e.switch_busy() {
                 return Err(engine::SWITCH_BUSY.into());
             }
             e.load_template(req["template"].as_str().unwrap_or("blank"));
@@ -119,7 +119,7 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
         }
         "open" => {
             let mut e = engine();
-            if e.agent.running || e.executing {
+            if e.switch_busy() {
                 return Err(engine::SWITCH_BUSY.into());
             }
             e.open(std::path::Path::new(req["path"].as_str().ok_or("path required")?))?;
@@ -371,15 +371,8 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             let out = out.finish();
             Ok(json!({"text": out.text, "error": out.error, "images": out.images.len()}))
         }
-        "export" => {
-            let job = {
-                let mut e = engine();
-                let targets = ids(&req["ids"]);
-                html::plan(&mut e, &targets, req["format"].as_str().unwrap_or("png"), req["path"].as_str().unwrap_or(""), &req["opts"])?
-            };
-            // The guard is gone: rasterizing and writing must not block the canvas.
-            Ok(json!(job.run()?))
-        }
+        // Plans under the engine lock, then waits for downloads and writes without it, so the canvas keeps drawing.
+        "export" => Ok(json!(html::export(&ids(&req["ids"]), req["format"].as_str().unwrap_or("png"), req["path"].as_str().unwrap_or(""), &req["opts"])?)),
         "variables" => Ok(engine().doc.variables()),
         "set_variable" => {
             let mut e = engine();
@@ -454,7 +447,8 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
         "png" => {
             let id = req["id"].as_str().ok_or("id required")?;
             let scale = req["scale"].as_f64().unwrap_or(1.0).clamp(0.05, 8.0);
-            let tree = engine().ctx().node_tree_at(id, scale)?;
+            // A script node runs after the guard drops, not under it.
+            let tree = script::off_lock(|| engine().ctx().node_tree_at(id, scale))?;
             let png = render::encode_tree(&tree, "png", scale, 0)?;
             Ok(json!(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, png)))
         }

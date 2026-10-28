@@ -542,7 +542,7 @@ pub(crate) fn path_allowed(file: &Path, tool: &str, workspace: Option<&Path>, do
 /// resolved too: the deepest existing ancestor is canonicalized (the OS follows links and `..` there),
 /// the not-yet-existing rest is appended lexically. A dangling link (it cannot be canonicalized) is followed
 /// by hand; a link loop resolves to the empty path, which is inside nothing. Nothing resolvable is left lexical.
-fn normalize(p: &Path) -> PathBuf {
+pub(crate) fn normalize(p: &Path) -> PathBuf {
     resolve(p, 0)
 }
 
@@ -1590,6 +1590,33 @@ mod tests {
         e.agent.pens.retain(|(_, c)| !Arc::ptr_eq(c, &pen));
         e.agent.cancel = Arc::new(AtomicBool::new(false));
         assert_eq!(crate::state(&e)["penDrawing"], false);
+    }
+
+    /// A pen that outlives its run draws into a frame of the open document: New, Open and an MCP
+    /// `open_document` wait for it like for a run, so it never draws into a document that replaced it.
+    #[test]
+    fn a_drawing_pen_keeps_the_document_open() {
+        let _busy = agent_busy();
+        let pen = Arc::new(AtomicBool::new(false));
+        let before = {
+            let mut e = engine();
+            e.agent.pens.push(("penframe".into(), pen.clone()));
+            e.doc.root.clone()
+        };
+        // Never opened: a missing file is created by `open_document`, so it stays out of the repo.
+        let path = std::env::temp_dir().join(format!("nalarupa-test-pen-switch-{:x}.nala", crate::doc::random_u64()));
+        let new = crate::dispatch(&json!({"cmd": "new", "template": "empty"}));
+        let open = crate::dispatch(&json!({"cmd": "open", "path": path}));
+        let tool = engine().tool("open_document", &json!({"path": path}));
+        let mut e = engine();
+        e.agent.pens.retain(|(_, c)| !Arc::ptr_eq(c, &pen));
+        assert_eq!(new.err().as_deref(), Some(crate::engine::SWITCH_BUSY), "New waits for the pen");
+        assert_eq!(open.err().as_deref(), Some(crate::engine::SWITCH_BUSY), "Open waits for the pen");
+        assert!(tool.error && tool.text == crate::engine::SWITCH_BUSY, "open_document waits for the pen: {}", tool.text);
+        assert_eq!(e.doc.root, before, "the document stays");
+        let created = path.exists();
+        let _ = std::fs::remove_file(&path);
+        assert!(!created, "nothing was created on disk");
     }
 
     /// A pen whose `execute` saw a Stop while its script ran starts stopped, also from an MCP client's call

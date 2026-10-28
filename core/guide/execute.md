@@ -58,6 +58,7 @@ Export(ids, "png" | "jpeg" | "webp" | "svg" | "html-css", outputPath, {scale?, q
                                                 // outputPath stays in the document's folder (relative = inside it): a folder for images, a .html / .htm name for html-css
 Export(ids | [], "pdf", outputPath)             // one page per id; [] = every top-level frame (the deck)
                                                 // outputPath stays in the document's folder; a .pdf name; never the document file itself
+                                                // Export fails on an existing file no script Export wrote since the app started: pick a new name or ask the user
 Generate("stock" | "ai", nodeId, prompt)        // puts a placeholder photo fill on the node
 Generate("svg", frameId, prompt)                // the AI Pen draws vector artwork into the frame
 ```
