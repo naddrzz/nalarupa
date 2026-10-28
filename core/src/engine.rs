@@ -563,7 +563,9 @@ impl Engine {
         }
         let Some(step) = self.undo.pop() else { return false };
         self.coalesce = None;
+        let unflagged = self.unflagged();
         self.redo.push(step.apply(&mut self.doc.root));
+        self.settle_generating(unflagged);
         self.touch();
         self.clean_if_saved();
         true
@@ -575,10 +577,46 @@ impl Engine {
         }
         let Some(step) = self.redo.pop() else { return false };
         self.coalesce = None;
+        let unflagged = self.unflagged();
         self.undo.push(step.apply(&mut self.doc.root));
+        self.settle_generating(unflagged);
         self.touch();
         self.clean_if_saved();
         true
+    }
+
+    /// Before an undo or redo with no agent running: the nodes not flagged `placeholder` (see `settle_generating`).
+    fn unflagged(&self) -> Option<std::collections::HashSet<String>> {
+        if self.agent.running {
+            return None;
+        }
+        let mut ids = std::collections::HashSet::new();
+        crate::doc::walk(self.doc.children(), &mut |n| {
+            if let (false, Some(id)) = (n["placeholder"] == true, n["id"].as_str()) {
+                ids.insert(id.to_string());
+            }
+        });
+        Some(ids)
+    }
+
+    /// History holds the `placeholder: true` an agent set while it built a design; with no agent running,
+    /// an undo or redo must not bring "Generating" back onto a finished design. Only a flag the step itself
+    /// put back on an existing node is cleared (out of history too), so a frame an external agent is still
+    /// building, or an AI Pen draws into, keeps its flag. While an agent runs, history is left alone.
+    fn settle_generating(&mut self, unflagged: Option<std::collections::HashSet<String>>) {
+        let Some(unflagged) = unflagged else { return };
+        let mut back = Vec::new();
+        crate::doc::walk(self.doc.children(), &mut |n| {
+            if let (true, Some(id)) = (n["placeholder"] == true, n["id"].as_str()) {
+                if unflagged.contains(id) && !self.agent.pens.iter().any(|p| p == id) {
+                    back.push(id.to_string());
+                }
+            }
+        });
+        let off = json!({"placeholder": false}).as_object().cloned().unwrap_or_default();
+        for id in back {
+            self.apply_generated(&id, &off, true);
+        }
     }
 
     /// During a drag, mutations apply live and are committed once by `drag_end`.
@@ -1394,6 +1432,28 @@ mod tests {
         assert!(e.undo());
         assert_eq!(xs(&e), [("U".into(), 0)]);
         assert!(!e.undo());
+    }
+
+    /// Undo of the step that cleared `placeholder` must not show a finished design as "Generating"; while an
+    /// agent runs, history is left alone.
+    #[test]
+    fn undo_does_not_restore_generating_without_an_agent() {
+        let mut e = Engine::new(std::env::temp_dir().join(format!("nalarupa-test-undo-generating-{}", std::process::id())));
+        e.load_template("empty");
+        // `h` stands for a frame an external agent is still building: no undo step touches its flag.
+        e.doc.root["children"] = json!([{"id": "g", "type": "frame", "name": "G", "x": 0, "placeholder": true}, {"id": "h", "type": "frame", "name": "H", "placeholder": true}]);
+        e.edit(|d| { d.root["children"][0]["x"] = json!(10); Ok(()) }).unwrap();
+        e.edit(|d| { d.root["children"][0]["placeholder"] = json!(false); Ok(()) }).unwrap();
+        let flag = |e: &Engine| e.doc.root["children"][0]["placeholder"] == true;
+        let external = |e: &Engine| e.doc.root["children"][1]["placeholder"] == true;
+        e.agent.running = true;
+        assert!(e.undo() && flag(&e), "an agent still works: its flag stays");
+        e.agent.running = false;
+        assert!(e.redo() && !flag(&e));
+        assert!(e.undo() && !flag(&e), "no agent: undo does not bring the flag back");
+        assert!(e.undo() && !flag(&e), "nor does an older step");
+        assert!(e.redo() && e.redo() && !flag(&e));
+        assert!(external(&e), "a flag no undo or redo put back is left to its agent");
     }
 
     /// A font landing in the background redraws the canvas but is not an edit.
