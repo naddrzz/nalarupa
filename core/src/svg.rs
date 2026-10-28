@@ -431,7 +431,10 @@ fn data_uri(href: &str) -> Option<String> {
     if href.starts_with("data:") {
         return Some(href.to_string());
     }
-    let bytes = std::fs::read(href).ok()?;
+    let mut bytes = std::fs::read(href).ok()?;
+    if bytes.starts_with(&[0x1f, 0x8b]) {
+        bytes = resvg::usvg::decompress_svgz(&bytes).ok()?; // a browser reads no gzip inside a data: URI
+    }
     let mime = match image_ext(&bytes) {
         "jpg" => "jpeg",
         "svg" => "svg+xml",

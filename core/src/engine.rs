@@ -154,28 +154,50 @@ fn drop_pending(v: &mut Value, inflight: &std::collections::HashSet<String>) {
 }
 
 /// Copy every image fill whose url is a file directly in `from` into `<dir>/images` and point the url
-/// at the copy (`./images/<name>`, relative to the document). Missing files keep their url.
-fn localize_images(v: &mut Value, from: &Path, dir: &Path) -> Result<(), String> {
+/// at the copy (`./images/<name>`, relative to the document). Missing files keep their url. Every file
+/// and folder it creates goes into `created`, so a failed save can remove them again.
+fn localize_images(v: &mut Value, from: &Path, dir: &Path, created: &mut Vec<PathBuf>) -> Result<(), String> {
     match v {
-        Value::Array(a) => a.iter_mut().try_for_each(|x| localize_images(x, from, dir)),
+        Value::Array(a) => a.iter_mut().try_for_each(|x| localize_images(x, from, dir, created)),
         Value::Object(o) => {
             if o.get("type").and_then(Value::as_str) == Some("image") {
                 if let Some(Value::String(url)) = o.get_mut("url") {
-                    let src = Path::new(url.as_str());
-                    if let (Some(name), true) = (src.file_name(), src.parent() == Some(from) && src.is_file()) {
-                        let dst = dir.join("images").join(name);
-                        if !dst.exists() {
-                            std::fs::create_dir_all(dir.join("images")).map_err(|e| e.to_string())?;
-                            std::fs::copy(src, &dst).map_err(|e| format!("cannot copy {}: {e}", src.display()))?;
-                        }
-                        *url = format!("./images/{}", name.to_string_lossy());
+                    let src = PathBuf::from(url.as_str());
+                    if src.parent() == Some(from) && src.is_file() {
+                        let name = copy_image(&src, &dir.join("images"), created)?;
+                        *url = format!("./images/{name}");
                     }
                 }
             }
-            o.values_mut().try_for_each(|x| localize_images(x, from, dir))
+            o.values_mut().try_for_each(|x| localize_images(x, from, dir, created))
         }
         _ => Ok(()),
     }
+}
+
+/// The name of a copy of `src` in `images`: its own name, or `<stem>-2.<ext>`, … when that name holds a
+/// different file (an identical one is reused, never replaced).
+fn copy_image(src: &Path, images: &Path, created: &mut Vec<PathBuf>) -> Result<String, String> {
+    if !images.exists() {
+        std::fs::create_dir_all(images).map_err(|e| e.to_string())?;
+        created.push(images.to_path_buf());
+    }
+    let bytes = std::fs::read(src).map_err(|e| format!("cannot read {}: {e}", src.display()))?;
+    let stem = src.file_stem().unwrap_or_default().to_string_lossy();
+    let ext = src.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+    for i in 1.. {
+        let name = if i == 1 { format!("{stem}{ext}") } else { format!("{stem}-{i}{ext}") };
+        let dst = images.join(&name);
+        if !dst.exists() {
+            std::fs::write(&dst, &bytes).map_err(|e| format!("cannot copy {}: {e}", src.display()))?;
+            created.push(dst);
+            return Ok(name);
+        }
+        if std::fs::read(&dst).is_ok_and(|b| b == bytes) {
+            return Ok(name);
+        }
+    }
+    unreachable!()
 }
 
 /// Rewrite a history `stack` (its last step applies to the document `old`) as if `f` had been applied to every
@@ -692,7 +714,11 @@ impl Engine {
         }
         // Images generated while Untitled live in the data folder; the file refers to them next to itself.
         let mut saved = Doc { root: self.doc.root.clone(), path: None };
-        if let Err(err) = localize_images(&mut saved.root, &self.data_dir.join("images"), &to).and_then(|_| saved.save(&target)) {
+        let mut created = Vec::new();
+        if let Err(err) = localize_images(&mut saved.root, &self.data_dir.join("images"), &to, &mut created).and_then(|_| saved.save(&target)) {
+            for p in created.iter().rev() {
+                let _ = if p.is_dir() { std::fs::remove_dir(p) } else { std::fs::remove_file(p) };
+            }
             if let Some(root) = backup {
                 self.doc.root = root;
             }
@@ -1236,6 +1262,34 @@ mod tests {
         let svg = std::fs::read_to_string(&files[0]).unwrap();
         assert!(svg.contains("xlink:href=\"data:image/png;base64,"), "{svg}");
         assert!(!svg.contains("images/abc.png"), "{svg}");
+
+        // Save as into another folder keeps the localized image reachable.
+        let moved = dir.join("other/doc.pen");
+        e.save(Some(moved.to_str().unwrap())).unwrap();
+        assert_eq!(e.doc.root["children"][0]["fill"]["url"], "../proj/images/abc.png");
+
+        // A different file already under the name is not replaced; an identical one is reused.
+        let png = |w| resvg::tiny_skia::Pixmap::new(w, 2).unwrap().encode_png().unwrap();
+        let fresh = dir.join("data/images/new.png");
+        std::fs::write(&fresh, png(3)).unwrap();
+        std::fs::create_dir_all(dir.join("third/images")).unwrap();
+        std::fs::write(dir.join("third/images/new.png"), png(5)).unwrap();
+        let fresh_url = fresh.to_string_lossy().replace('\\', "/");
+        e.insert_root(json!({"type": "rectangle", "width": 4, "height": 4, "fill": {"type": "image", "url": fresh_url}})).unwrap();
+        e.insert_root(json!({"type": "rectangle", "width": 4, "height": 4, "fill": {"type": "image", "url": url}})).unwrap();
+        std::fs::write(dir.join("third/images/abc.png"), png(2)).unwrap();
+        e.save(Some(dir.join("third/doc.pen").to_str().unwrap())).unwrap();
+        let urls: Vec<_> = e.doc.root["children"].as_array().unwrap().iter().map(|n| n["fill"]["url"].as_str().unwrap().to_string()).collect();
+        assert_eq!(urls[1..], ["./images/new-2.png", "./images/abc.png"]);
+        assert_eq!(std::fs::read(dir.join("third/images/new.png")).unwrap(), png(5));
+        assert_eq!(std::fs::read(dir.join("third/images/new-2.png")).unwrap(), png(3));
+
+        // A failed save leaves no copies behind.
+        let blocked = dir.join("fourth/doc.pen");
+        std::fs::create_dir_all(&blocked).unwrap(); // a folder where the file should go
+        e.insert_root(json!({"type": "rectangle", "width": 4, "height": 4, "fill": {"type": "image", "url": fresh_url}})).unwrap();
+        assert!(e.save(Some(blocked.to_str().unwrap())).is_err());
+        assert!(!dir.join("fourth/images").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
