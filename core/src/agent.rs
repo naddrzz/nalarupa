@@ -68,6 +68,8 @@ pub struct AgentState {
     queue_opts: (usize, String, usize, String),
     /// Parallel agent setting of the current turn: (count, mode "split" | "side").
     pub parallel: (usize, String),
+    /// Children started in the current turn; `parallel.0 - 1` is all a turn may start.
+    spawned: usize,
     /// The conversation being saved to `<data_dir>/sessions/<id>.json`; None until the first prompt.
     pub chat: Option<Chat>,
     /// Permission requests waiting for the user's answer (request id → asking agent, the waiting MCP call).
@@ -268,6 +270,7 @@ fn start_turn(shown: &str, prompt: String, resume: bool) {
             }
         };
         e.agent.cancel = Arc::new(AtomicBool::new(false));
+        e.agent.spawned = 0;
         main
     };
     emit(&main, "user", json!({"text": shown}));
@@ -298,9 +301,15 @@ fn wrap_parallel(prompt: &str) -> String {
     )
 }
 
-fn start_thread(p: Profile, prompt: String, child: Option<String>) {
+/// False when a child was not started because Stop already ran: checked under the lock that registers it,
+/// so a Stop cannot land between the check and the child counting as active. Its profile is dropped again.
+fn start_thread(p: Profile, prompt: String, child: Option<String>) -> bool {
     {
         let mut e = engine();
+        if child.is_some() && e.agent.cancel.load(Ordering::SeqCst) {
+            e.agent.profiles.retain(|q| q.id != p.id);
+            return false;
+        }
         e.agent.active += 1;
         e.agent.running = true;
     }
@@ -376,6 +385,7 @@ fn start_thread(p: Profile, prompt: String, child: Option<String>) {
             None => {}
         }
     });
+    true
 }
 
 /// The run is over: frames still flagged `placeholder` (Stop, an error or a dead process came before the
@@ -780,25 +790,56 @@ pub fn spawn_children(parent: &str, config: &Value) -> crate::engine::ToolOut {
     if entries.len() > MAX_CHILDREN {
         return crate::engine::ToolOut::err(format!("at most {MAX_CHILDREN} agents can be spawned at once"));
     }
-    let mut started = Vec::new();
-    for entry in entries {
-        let ids: Vec<String> = entry["containerNodes"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).collect();
-        if ids.is_empty() {
-            return crate::engine::ToolOut::err("each spawn_agents entry needs at least one container node id");
+    // Checked, reserved and read under one lock: concurrent calls cannot both spend the same remaining slot.
+    let (plans, vars, total, side) = {
+        let mut e = engine();
+        if !e.agent.profile(parent).is_some_and(|p| p.parent.is_none()) {
+            return crate::engine::ToolOut::err("only the main agent can spawn agents; do the work yourself");
         }
-        let (child, context, total) = {
-            let mut e = engine();
+        let left = (e.agent.parallel.0.saturating_sub(1)).saturating_sub(e.agent.spawned);
+        if entries.len() > left {
+            return crate::engine::ToolOut::err(format!(
+                "{left} more designer{} can be started this turn, but {} were requested; spawn at most {left} and do the rest yourself",
+                if left == 1 { "" } else { "s" },
+                entries.len()
+            ));
+        }
+        let mut all_ids = Vec::new();
+        for entry in entries {
+            let ids: Vec<String> = entry["containerNodes"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).collect();
+            if ids.is_empty() {
+                return crate::engine::ToolOut::err("each spawn_agents entry needs at least one container node id");
+            }
             if let Some(missing) = ids.iter().find(|id| e.doc.find(id).is_none()) {
                 return crate::engine::ToolOut::err(format!("container node not found: {missing}"));
             }
-            let child = e.agent.new_profile(Some(parent.to_string()));
-            let nodes: Vec<Value> = ids.iter().filter_map(|id| e.doc.find(id).cloned()).collect();
+            all_ids.push(ids);
+        }
+        e.agent.spawned += entries.len();
+        // Only cloned here: serializing a large document would hold the engine mutex against render and poll.
+        let vars = e.doc.variables();
+        let plans: Vec<(Profile, Vec<String>, Vec<Value>)> = all_ids
+            .into_iter()
+            .map(|ids| {
+                let child = e.agent.new_profile(Some(parent.to_string()));
+                let nodes: Vec<Value> = ids.iter().filter_map(|id| e.doc.find(id).cloned()).collect();
+                (child, ids, nodes)
+            })
+            .collect();
+        (plans, vars, e.agent.parallel.0, e.agent.parallel.1 == "side")
+    };
+    let vars = truncate(&vars.to_string(), 4000);
+    let plans: Vec<_> = plans
+        .into_iter()
+        .map(|(child, ids, nodes)| {
             let context = truncate(&serde_json::to_string(&nodes).unwrap_or_default(), 12000);
-            let vars = truncate(&e.doc.variables().to_string(), 4000);
-            (child, format!("{context}\n\nDocument variables: {vars}"), e.agent.parallel.0)
-        };
+            (child, ids, format!("{context}\n\nDocument variables: {vars}"))
+        })
+        .collect();
+    let mut started = Vec::new();
+    for (entry, (child, ids, context)) in entries.iter().zip(plans) {
         let task = entry["prompt"].as_str().unwrap_or("").trim().to_string();
-        let prompt = if engine().agent.parallel.1 == "side" || task.is_empty() {
+        let prompt = if side || task.is_empty() {
             let k = started.len() + 2;
             format!(
                 "You are designer {k} of {total} working side by side on the same brief; each designer has their own frame.\n\
@@ -813,8 +854,13 @@ pub fn spawn_children(parent: &str, config: &Value) -> crate::engine::ToolOut {
                 ids.iter().map(|i| format!("`{i}`")).collect::<Vec<_>>().join(", ")
             )
         };
-        started.push(format!("{} → {}", child.name, ids.join(", ")));
-        start_thread(child, prompt, Some(parent.to_string()));
+        let label = format!("{} → {}", child.name, ids.join(", "));
+        if start_thread(child, prompt, Some(parent.to_string())) {
+            started.push(label);
+        }
+    }
+    if started.is_empty() {
+        return crate::engine::ToolOut::err("Stopped before the designers started; nothing was spawned.");
     }
     crate::engine::ToolOut::ok(format!(
         "Started {} designers: {}. They are working in their containers now. Continue with your own part; do not verify or edit their work.",
