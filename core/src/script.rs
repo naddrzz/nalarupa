@@ -1991,6 +1991,38 @@ Insert(card, {type:\"text\", name:\"Title\", content:\"Hi\", fill:\"#111111\"})
     }
 
     #[test]
+    fn keyless_execute_only_takes_its_own_agents_stream() {
+        let mut e = engine();
+        let common = "pos = {x: 0, y: 0}\n";
+        let frame = |name: &str| format!("{common}Insert(document, {{type:\"frame\", name:\"{name}\", width:10, height:10}})");
+        // Agent B streams a script that starts with the same statement as agent A's final call.
+        e.stream_update("toolu_b", "agB", &format!("{common}Insert("));
+        e.events.clear();
+        // Claude Code's MCP `execute` carries no `__stream`, only the caller's `__agent`.
+        let out = e.tool("execute", &json!({"input": frame("A frame"), "__agent": "agA"}));
+        assert!(!out.error, "{}", out.text);
+        assert_eq!(e.streams.len(), 1, "agent B's stream is untouched");
+        let writes: Vec<&Value> = e.events.iter().filter(|ev| ev["type"] == "agent_activity" && ev["op"] == "write" && ev["streaming"] == false).collect();
+        assert!(!writes.is_empty() && writes.iter().all(|ev| ev["agent"] == "agA"), "{writes:?}");
+        // The owner's own keyless call still retires its stream.
+        let out = e.tool("execute", &json!({"input": frame("B frame"), "__agent": "agB"}));
+        assert!(!out.error, "{}", out.text);
+        assert!(e.streams.is_empty() && e.preview.is_none());
+    }
+
+    #[test]
+    fn a_keyed_execute_takes_its_own_stream_before_an_earlier_prefix_match() {
+        let mut e = engine();
+        let common = "pos = {x: 0, y: 0}\n";
+        e.stream_update("toolu_1", "agA", &format!("{common}Insert("));
+        e.stream_update("toolu_2", "agA", &format!("{common}Insert("));
+        let out = e.tool("execute", &json!({"input": format!("{common}Insert(document, {{type:\"frame\", name:\"Two\", width:10, height:10}})"), "__stream": "toolu_2", "__agent": "agA"}));
+        assert!(!out.error, "{}", out.text);
+        assert_eq!(e.streams.iter().map(|s| s.key.as_str()).collect::<Vec<_>>(), ["toolu_1"], "the keyed stream is retired, the earlier one stays");
+        e.stream_end("toolu_1");
+    }
+
+    #[test]
     fn rolled_back_agent_edits_leave_a_clean_document_clean() {
         let mut e = engine();
         assert!(!e.dirty());
