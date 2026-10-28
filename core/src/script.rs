@@ -880,7 +880,7 @@ fn finish(e: &mut Engine, prep: Prepared, result: Result<Map<String, Value>, Str
         text += &ex.prints.join("\n");
         text.push('\n');
     }
-    let warnings = validate(e, &ex.touched);
+    let (warnings, icons) = validate(e, &ex.touched);
     if !warnings.is_empty() {
         text += "\n## Issues detected (fix them in the next call)\n";
         for w in warnings {
@@ -888,13 +888,13 @@ fn finish(e: &mut Engine, prep: Prepared, result: Result<Map<String, Value>, Str
         }
     }
     // Only the trees are built under the engine lock; `ToolOut::finish` rasterizes screenshots and writes exports.
-    let mut shots = Vec::new();
+    let (mut shots, mut downloads) = (Vec::new(), Vec::new());
     for id in &ex.shots {
-        let target = if id == "document" { e.doc.children().first().and_then(|n| n["id"].as_str()).unwrap_or("").to_string() } else { id.clone() };
-        e.sync();
-        let scale = e.renderer.find(&target).map(|f| (1400.0 / f.w.max(f.h).max(1.0)).min(2.0)).unwrap_or(1.0).clamp(0.05, 8.0);
-        match e.ctx().node_tree_at(&target, scale) {
-            Ok(tree) => shots.push((id.clone(), tree, scale)),
+        match shot_tree(e, id) {
+            Ok((tree, scale, waits)) => {
+                shots.push((id.clone(), tree, scale));
+                downloads.extend(waits);
+            }
             Err(err) => text += &format!("Screenshot of {id} failed: {err}\n"),
         }
     }
@@ -906,14 +906,35 @@ fn finish(e: &mut Engine, prep: Prepared, result: Result<Map<String, Value>, Str
             Err(err) => text += &format!("\nExport failed: {err}\n"),
         }
     }
-    ToolOut { text, images: Vec::new(), error: false, shots, exports }
+    // The shots are redrawn in `ToolOut::finish` once the icons and images they show have downloaded, from
+    // this document and these libraries (the live ones may change meanwhile).
+    let shot_doc = (!shots.is_empty() && (!icons.is_empty() || !downloads.is_empty())).then(|| (e.doc.clone(), e.libs.clone()));
+    ToolOut { text, images: Vec::new(), error: false, shots, icons, downloads, shot_doc, exports }
 }
 
-/// Layout and content checks on nodes touched by this call.
-fn validate(e: &mut Engine, touched: &[String]) -> Vec<String> {
+/// The render tree and scale of a screenshot target (`document` is the first top-level node), and the
+/// icons and images it shows that are still downloading.
+pub fn shot_tree(e: &mut Engine, id: &str) -> Result<(resvg::usvg::Tree, f64, Vec<String>), String> {
+    let target = shot_target(&e.doc, id);
+    e.sync();
+    let scale = e.renderer.find(&target).map(|f| (1400.0 / f.w.max(f.h).max(1.0)).min(2.0)).unwrap_or(1.0).clamp(0.05, 8.0);
+    e.assets.record();
+    let tree = e.ctx().node_tree_at(&target, scale);
+    let waits = e.assets.recorded();
+    tree.map(|tree| (tree, scale, waits))
+}
+
+/// The node a screenshot of `id` draws: `document` is the first top-level node.
+pub fn shot_target(doc: &crate::doc::Doc, id: &str) -> String {
+    if id == "document" { doc.children().first().and_then(|n| n["id"].as_str()).unwrap_or("").to_string() } else { id.to_string() }
+}
+
+/// Layout and content checks on nodes touched by this call, plus the icons still downloading (their
+/// "not found" warning, library, name, weight): whether they exist is only known once `ToolOut::finish` waits.
+fn validate(e: &mut Engine, touched: &[String]) -> (Vec<String>, Vec<(String, String, String, u32)>) {
     let touched: HashSet<&str> = touched.iter().map(String::as_str).collect();
     if touched.is_empty() {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     }
     let mut tops: Vec<usize> = touched.iter().filter_map(|id| crate::render::top_index(&e.doc, id)).collect();
     tops.sort_unstable();
@@ -934,6 +955,7 @@ fn validate(e: &mut Engine, touched: &[String]) -> Vec<String> {
         }
     });
     let mut out = Vec::new();
+    let mut icons = Vec::new();
     for t in tops {
         let Some(root) = e.ctx().laid_out(t) else { continue };
         let mut stack = vec![(&root, None::<&RNode>)];
@@ -964,8 +986,17 @@ fn validate(e: &mut Engine, touched: &[String]) -> Vec<String> {
             if n.ty == "frame" && n.w < 0.5 && n.h < 0.5 && !n.kids.is_empty() {
                 out.push(format!("{label} collapsed to 0×0 (fit_content parent with only fill_container children?)"));
             }
-            if n.ty == "icon" && e.assets.icon(n.s("library").unwrap_or("lucide"), n.s("icon").unwrap_or("")).is_none() {
-                out.push(format!("icon {label}: '{}' not found in library '{}'", n.s("icon").unwrap_or(""), n.s("library").unwrap_or("lucide")));
+            if n.ty == "icon" {
+                let (library, name) = (n.s("library").unwrap_or("lucide"), n.s("icon").unwrap_or(""));
+                let weight = n.f("weight").unwrap_or(200.0);
+                if e.assets.icon_weight(library, name, weight).is_none() {
+                    let warning = format!("icon {label}: '{name}' not found in library '{library}'");
+                    if e.assets.icon_loading(library, name, weight) {
+                        icons.push((warning, library.to_string(), name.to_string(), weight.max(0.0) as u32));
+                    } else {
+                        out.push(warning);
+                    }
+                }
             }
             if n.ty == "text" {
                 let st = crate::text::TextStyle::of(n);
@@ -978,7 +1009,9 @@ fn validate(e: &mut Engine, touched: &[String]) -> Vec<String> {
     }
     out.sort();
     out.dedup();
-    out
+    icons.sort();
+    icons.dedup();
+    (out, icons)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1645,6 +1678,12 @@ pub fn expand_scripts(n: &mut RNode, r: &crate::resolve::Resolver, fonts: &mut c
 mod tests {
     use super::*;
 
+    /// Tests that run `execute` or `ToolOut::finish` against the process-wide engine hold the crate-wide lock,
+    /// so one's script (`executing`) never makes another's call fail with "Another execute call is still running".
+    fn global_execute() -> std::sync::MutexGuard<'static, ()> {
+        crate::engine::engine_test_lock()
+    }
+
     fn engine() -> Engine {
         let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
         e.offline();
@@ -1978,6 +2017,7 @@ card = Insert(root, {type:\"frame\", name:\"Card\", width:100, height:100, layou
 
     #[test]
     fn a_running_script_leaves_the_engine_free_and_stops_with_the_agent() {
+        let _serial = global_execute();
         // The script ran under the engine lock: the window froze and Stop was dead until it ended.
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
@@ -2007,6 +2047,7 @@ card = Insert(root, {type:\"frame\", name:\"Card\", width:100, height:100, layou
 
     #[test]
     fn screenshots_rasterize_after_the_tool_call() {
+        let _serial = global_execute();
         // Rasterizing inside `tool` held the engine lock for up to ~0.5 s and froze the canvas.
         let mut e = engine();
         let out = e.tool("execute", &json!({"input": "c = Insert(document, {type:\"frame\", width:300, height:200, fill:\"#ff0000\"})\nTakeScreenshot(c)"}));
@@ -2018,8 +2059,50 @@ card = Insert(root, {type:\"frame\", name:\"Card\", width:100, height:100, layou
         assert!(png.starts_with(b"\x89PNG"));
     }
 
+    /// A screenshot of an image still downloading waits for it (without the engine lock) and shows it.
+    #[test]
+    fn screenshots_wait_for_images_still_downloading() {
+        let _serial = global_execute();
+        use std::io::{Read, Write};
+        let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/shot.png", server.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for mut s in server.incoming().flatten() {
+                let mut req = [0; 1024];
+                let _ = s.read(&mut req);
+                std::thread::sleep(Duration::from_millis(300));
+                let red = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, "iVBORw0KGgoAAAANSUhEUgAAAAUAAAAFCAYAAACNbyblAAAAHElEQVQI12P4//8/w38GIAXDIBKE0DHxgljNBAAO9TXL0Y4OHwAAAABJRU5ErkJggg==").unwrap();
+                let _ = s.write_all(format!("HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n", red.len()).as_bytes());
+                let _ = s.write_all(&red);
+            }
+        });
+        let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let other = format!("http://{}/elsewhere.png", silent.local_addr().unwrap());
+        let input = format!("c = Insert(document, {{type:\"frame\", width:100, height:100, layout:\"none\", fill:{{type:\"image\", url:\"{url}\", mode:\"fill\"}}}})\nTakeScreenshot(c)");
+        // The global engine: `finish` waits on it, and the download reports to it.
+        let out = {
+            let mut e = crate::engine::engine();
+            let was = std::mem::replace(&mut e.assets.online, true);
+            // A download the screenshot does not show (this server never answers) is not waited for.
+            assert!(e.assets.image(&other, None).is_none() && e.assets.loading(&other));
+            let out = e.tool("execute", &json!({ "input": input }));
+            e.assets.online = was;
+            out
+        };
+        assert!(!out.error, "{}", out.text);
+        assert!(out.downloads.contains(&url) && out.shot_doc.is_some(), "the shot is redrawn once the image is in");
+        assert!(!out.downloads.contains(&other), "only what the screenshot shows is waited for: {:?}", out.downloads);
+        let out = out.finish();
+        assert!(!crate::engine::engine().assets.loading(&url));
+        let png = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &out.images[0]).unwrap();
+        let px = resvg::tiny_skia::Pixmap::decode_png(&png).unwrap();
+        let c = px.pixel(px.width() / 2, px.height() / 2).unwrap();
+        assert!(c.red() > 200 && c.green() < 80, "the image is in the screenshot: {c:?}");
+    }
+
     #[test]
     fn script_exports_write_after_the_tool_call() {
+        let _serial = global_execute();
         // Rasterizing and encoding inside `tool` held the engine lock for the whole export.
         // A script may export only inside the document's folder (here the data folder `exports`).
         let mut e = engine();

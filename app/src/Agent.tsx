@@ -1,7 +1,7 @@
 // Agent chat panel: agent headers, typewriter text,
 // collapsible thinking, tool cards ("Designing…" → "Designed"), plan panel,
 // usage rows, queued prompts, parallel agents.
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { call, tryCall } from './core'
 import { barAgents, changing, imageSrc, lastContentId, profileOf, resetChat, restoreChat, rowTickMs, runVerb, spinning, store, type Author, type ChatItem } from './agents'
 import type { EventPayload } from '@gpuix/native'
@@ -150,6 +150,28 @@ export function AgentPanel({ tick, running, drawing, mcpUrl, toast, onSent }: { 
   const renderer = useGpuixRequired()
   const listEl = useRef<PublicInstance | null>(null)
   const pinNext = useRef<number | null>(null) // id of the last row at the last send, while the list still waits for its echo
+  // The list is built again on a Design → Agent round trip and starts at its end: its scroll anchor [row, px into it] is read as the panel goes away (a layout cleanup runs while the list is still there) and put back once the new list exists.
+  // The at-end sentinel (row == count) is not kept: `followTail` covers it.
+  useEffect(() => {
+    const at = kept.get('scroll') as [number, number] | null | undefined
+    revealAll(store.items) // replies that streamed in while the panel was away show whole: the typewriter only advances while it renders
+    let timer: ReturnType<typeof setInterval> | undefined
+    if (at && at[0] < store.items.length) {
+      let tries = 0
+      const go = () => {
+        const t = listEl.current && renderer.getListScrollTop?.(listEl.current.id)
+        if (t && t[0] === at[0] && Math.abs(t[1] - at[1]) < 1) return true
+        if (t) renderer.scrollToItem?.(listEl.current!.id, at[0], at[1])
+        return false
+      }
+      if (!go()) timer = setInterval(() => { if (go() || ++tries >= 20) clearInterval(timer) }, 50)
+    }
+    return () => clearInterval(timer)
+  }, [])
+  useLayoutEffect(() => () => {
+    const t = listEl.current && renderer.getListScrollTop?.(listEl.current.id)
+    kept.set('scroll', t && t[0] < store.items.length ? [t[0], t[1]] : null)
+  }, [])
 
   const spent = useRef<string | null>(null) // the text just sent, until the panel re-renders: a second submit in the same frame still holds it
   useEffect(() => { spent.current = null })

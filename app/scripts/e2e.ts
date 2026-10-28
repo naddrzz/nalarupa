@@ -1,6 +1,6 @@
 // End-to-end check against the real GPU window: `bun scripts/e2e.ts`
 // Screenshots land in app/screenshots/. The window opens in the background.
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { launch } from '@gpuix/react/automation'
@@ -42,8 +42,16 @@ const standIn = process.platform !== 'win32'
 delete process.env.ANTHROPIC_API_KEY
 const bin = join(data, 'bin')
 mkdirSync(bin)
+// The stand-in reads the whole prompt first, as the real CLI does: exiting before the core has written it
+// fails the run with a broken pipe. It is replaced by a rename, never rewritten in place: sh reads a script
+// as it runs, so a run still going would execute the new file's bytes mid-line.
+const writeStandIn = (script: string) => {
+  const tmp = join(bin, 'claude.tmp')
+  writeFileSync(tmp, script, { mode: 0o755 })
+  renameSync(tmp, join(bin, 'claude'))
+}
 const delta = (t: string) => JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: t } } })
-if (standIn) writeFileSync(join(bin, 'claude'), `#!/bin/sh\nfor i in 0 1 2 3 4 5 6 7; do\n  echo '${delta('chunk lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. ')}'\n  sleep 0.5\ndone\n`, { mode: 0o755 })
+if (standIn) writeStandIn(`#!/bin/sh\ncat >/dev/null\nfor i in 0 1 2 3 4 5 6 7; do\n  echo '${delta('chunk lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. ')}'\n  sleep 0.5\ndone\n`)
 let app: Awaited<ReturnType<typeof launch>> | undefined
 try {
   for (const dir of ['cache', 'fonts']) if (existsSync(join(own, dir))) cpSync(join(own, dir), join(data, dir), { recursive: true })
@@ -842,7 +850,7 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
     const script = `page = Insert(document, {type:"frame", name:"Hero", x:0, y:0, width:1200, height:600, fill:"#101820"}); Insert("does-not-exist-with-a-very-long-identifier-0123456789", {type:"frame", name:"Oops-${tail}"})`
     const block = (type: string, extra: object) => JSON.stringify({ type, message: { content: [extra] } })
     const err = `Error: parent not found: does-not-exist-with-a-very-long-identifier-0123456789 (${tail}) ${'x'.repeat(160)}`
-    writeFileSync(join(bin, 'claude'), `#!/bin/sh\necho '${block('assistant', { type: 'tool_use', id: 'tu1', name: 'mcp__nalarupa__execute', input: { input: script } })}'\necho '${block('user', { type: 'tool_result', tool_use_id: 'tu1', is_error: true, content: err })}'\n`, { mode: 0o755 })
+    writeStandIn(`#!/bin/sh\ncat >/dev/null\necho '${block('assistant', { type: 'tool_use', id: 'tu1', name: 'mcp__nalarupa__execute', input: { input: script } })}'\necho '${block('user', { type: 'tool_result', tool_use_id: 'tu1', is_error: true, content: err })}'\n`)
     await app.getByTestId('tab-agent').click()
     await app.getByTestId('agent-input').click()
     await app.getByTestId('agent-input').fill('Run a failing script')
@@ -864,7 +872,7 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
     // A result of many short lines (the core keeps up to 6000 characters) shows its last line, not just the first 40.
     // printf, not echo: sh's echo turns the JSON's \n escapes into real newlines.
     const rows = Array.from({ length: 120 }, (_, i) => `result row ${i}`).join('\n')
-    writeFileSync(join(bin, 'claude'), `#!/bin/sh\nprintf '%s\\n' '${block('assistant', { type: 'tool_use', id: 'tu2', name: 'mcp__nalarupa__get_editor_state', input: {} })}'\nprintf '%s\\n' '${block('user', { type: 'tool_result', tool_use_id: 'tu2', content: rows })}'\n`, { mode: 0o755 })
+    writeStandIn(`#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' '${block('assistant', { type: 'tool_use', id: 'tu2', name: 'mcp__nalarupa__get_editor_state', input: {} })}'\nprintf '%s\\n' '${block('user', { type: 'tool_result', tool_use_id: 'tu2', content: rows })}'\n`)
     await app.getByTestId('agent-input').click()
     await app.getByTestId('agent-input').fill('Show a long result')
     await sleep(200)
@@ -895,8 +903,17 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
       await sleep(200)
       return !(await onScreen('result row 119'))
     }, 'the chat to scroll up from its tail', 20000)
+    // The scroll position survives a Design → Agent round trip (the panel unmounts): the chat does not jump back to its tail.
+    await app.getByTestId('tab-design').click()
+    await until(async () => !(await app!.getByTestId('agent-input').count()), 'the agent panel to close with the chat scrolled up')
+    await app.getByTestId('tab-agent').click()
+    await until(async () => !!(await app!.getByTestId('agent-input').bounds()) && (await app!.getByType('markdown').count()) > 0, 'the chat to come back')
+    // The rebuilt list starts at its tail and scroll restoration retries for about a second on a slow renderer: poll until the tail row has left the screen, then check it stays away.
+    await until(async () => !(await onScreen('result row 119')), 'the chat to be scrolled back up after the Design tab round trip', 5000)
+    await sleep(300)
+    if (await onScreen('result row 119')) throw new Error('the Design tab round trip put the scrolled-up chat back at its tail')
     const oldReplies = new Set((await app.getByType('markdown').all()).map((n) => n.id))
-    writeFileSync(join(bin, 'claude'), `#!/bin/sh\necho '${delta('Echo: scrolled reply')}'\n`, { mode: 0o755 })
+    writeStandIn(`#!/bin/sh\ncat >/dev/null\necho '${delta('Echo: scrolled reply')}'\n`)
     await app.getByTestId('agent-input').click()
     await app.getByTestId('agent-input').fill('Sent while scrolled up')
     await sleep(200)
@@ -908,6 +925,23 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
       return !!b && b.height > 0 && b.y + b.height <= composer.y
     }, 'the reply on screen after sending from a scrolled-up chat')
 
+    // A reply that streams in and finishes while the panel is unmounted is there, whole and at the tail, on return.
+    writeStandIn(`#!/bin/sh\ncat >/dev/null\nsleep 1\necho '${delta('Echo: reply that streamed while the Design tab was open, long enough to wrap onto a second line of the chat so a half-typed reply would be shorter than a whole one.')}'\n`)
+    await app.getByTestId('agent-input').click()
+    await app.getByTestId('agent-input').fill('Sent before leaving')
+    await sleep(200)
+    await app.getByTestId('agent-send').click()
+    await app.getByTestId('tab-design').click()
+    await until(async () => !(await app!.getByTestId('agent-input').count()), 'the agent panel to close while the reply is pending')
+    await sleep(2500) // the stand-in replies after 1 s and exits
+    await app.getByTestId('tab-agent').click()
+    // The rebuilt list has new node ids, so the reply is the last markdown block that is mounted.
+    const lastReply = async () => (await app!.getByType('markdown').all()).map((n) => n.bounds).filter((b) => b && b.height > 0).pop()
+    await until(async () => { const b = await lastReply(); return !!b && b.height > 60 && b.y + b.height <= composer.y }, 'the reply that streamed while away, whole and on screen after the Design tab round trip')
+    const away = (await lastReply())!.height
+    await sleep(500)
+    const later = (await lastReply())!.height
+    if (later !== away) throw new Error(`the reply that streamed while away was not shown whole on return (${away} px, then ${later} px)`)
     // Enter hands the keys to the canvas, so the composer must not keep drawing its focus ring: typed keys would look like they go to it.
     await app.getByTestId('agent-input').click()
     await app.getByTestId('agent-input').fill('Sent with Enter')
@@ -932,7 +966,9 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
     if (sock) {
       const thought = JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'THOUGHT: pick a calm palette first, then the type scale. THOUGHT: keep the hero short.' } } })
       const stop = JSON.stringify({ type: 'stream_event', event: { type: 'message_stop' } })
-      writeFileSync(join(bin, 'claude'), `#!/bin/sh\necho '${thought}'\necho '${stop}'\necho '${delta('REPLY: here is the design, with the hero kept short and a calm palette.')}'\n`, { mode: 0o755 })
+      writeStandIn(`#!/bin/sh\ncat >/dev/null\necho '${thought}'\necho '${stop}'\necho '${delta('REPLY: here is the design, with the hero kept short and a calm palette.')}'\n`)
+      // The previous prompt's reply may still be on its way: only blocks after it count as this run's.
+      await until(async () => !(await app!.getByTestId('agent-stop').count()), 'the previous run to finish', 20000)
       const seen = new Set((await app.getByType('markdown').all()).map((n) => n.id))
       await app.getByTestId('agent-input').click()
       await app.getByTestId('agent-input').fill('Think first')

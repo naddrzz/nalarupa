@@ -1396,9 +1396,9 @@ mod tests {
 
     /// Held by the tests that make the shared engine's agent "running" and queue prompts: run in parallel,
     /// one finishing flips `running` back under the other, whose prompt then starts a turn instead of queueing.
+    /// The crate-wide lock, so they also never overlap a script test's `execute` on the same engine.
     fn agent_busy() -> std::sync::MutexGuard<'static, ()> {
-        static BUSY: Mutex<()> = Mutex::new(());
-        BUSY.lock().unwrap_or_else(|e| e.into_inner())
+        crate::engine::engine_test_lock()
     }
 
     #[test]
