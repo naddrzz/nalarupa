@@ -671,10 +671,10 @@ impl Effects {
 }
 
 /// Fill outline of a shape node in absolute coordinates.
-struct Geo {
-    d: String,
-    evenodd: bool,
-    closed: bool,
+pub(crate) struct Geo {
+    pub(crate) d: String,
+    pub(crate) evenodd: bool,
+    pub(crate) closed: bool,
 }
 
 impl Geo {
@@ -1769,13 +1769,22 @@ fn sample(stops: &[(f64, [f64; 4])], t: f64) -> [f64; 4] {
     }
 }
 
-fn has_backdrop_blur(n: &RNode) -> bool {
-    let own = match n.p.get("effect") {
+/// Whether an `effect` value holds an enabled background blur.
+fn blurs_backdrop(effect: Option<&Value>) -> bool {
+    match effect {
         Some(Value::Array(a)) => a.iter().any(|e| e["type"] == "background_blur" && e["enabled"] != false),
         Some(e) => e["type"] == "background_blur" && e["enabled"] != false,
         None => false,
-    };
-    own || n.kids.iter().any(has_backdrop_blur)
+    }
+}
+
+pub(crate) fn has_backdrop_blur(n: &RNode) -> bool {
+    blurs_backdrop(n.p.get("effect")) || n.kids.iter().any(has_backdrop_blur)
+}
+
+/// `has_backdrop_blur` on a document node.
+pub(crate) fn doc_has_backdrop_blur(n: &Value) -> bool {
+    blurs_backdrop(n.get("effect")) || n["children"].as_array().is_some_and(|k| k.iter().any(doc_has_backdrop_blur))
 }
 
 /// The clip shape of a node that clips its children, as a one-shape SVG (opaque white) under the
@@ -1989,7 +1998,7 @@ fn rect_stroke_d(n: &RNode, w: [f64; 4], trim: bool, round_join: bool) -> String
     d
 }
 
-fn geometry(n: &RNode) -> Geo {
+pub(crate) fn geometry(n: &RNode) -> Geo {
     let evenodd = n.s("fillRule") == Some("evenodd");
     match n.ty.as_str() {
         // Holes and arcs are drawn as nested contours, so the ellipse always needs evenodd.

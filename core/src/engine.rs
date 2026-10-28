@@ -25,17 +25,25 @@ pub struct ToolOut {
     /// The document the screenshots were taken of, kept only when icons or images were still downloading:
     /// `finish` redraws the shots from it, since the live document may have changed (or been switched) meanwhile.
     pub shot_doc: Option<Doc>,
+    /// `Export(...)` calls from a script, planned under the lock; `finish` renders and writes them.
+    pub exports: Vec<crate::html::ExportJob>,
 }
 
 impl ToolOut {
     pub fn ok(text: impl Into<String>) -> ToolOut {
-        ToolOut { text: text.into(), images: Vec::new(), error: false, shots: Vec::new(), icons: Vec::new(), downloads: Vec::new(), shot_doc: None }
+        ToolOut { text: text.into(), images: Vec::new(), error: false, shots: Vec::new(), icons: Vec::new(), downloads: Vec::new(), shot_doc: None, exports: Vec::new() }
     }
     pub fn err(text: impl Into<String>) -> ToolOut {
         ToolOut { error: true, ..ToolOut::ok(text) }
     }
-    /// Rasterize pending screenshots and settle pending icons. Call without holding `engine()`.
+    /// Write pending exports, settle pending icons and rasterize pending screenshots. Call without holding `engine()`.
     pub fn finish(mut self) -> ToolOut {
+        for job in std::mem::take(&mut self.exports) {
+            match job.run() {
+                Ok(files) => self.text += &format!("\nExported: {}\n", files.join(", ")),
+                Err(err) => self.text += &format!("\nExport failed: {err}\n"),
+            }
+        }
         let until = std::time::Instant::now() + std::time::Duration::from_secs(12);
         self.settle_icons(until);
         for key in std::mem::take(&mut self.downloads) {
@@ -107,7 +115,11 @@ pub struct Engine {
     pub renderer: Renderer,
     pub version: u64,
     synced: u64,
+    /// `script::finished()` at the last `expire_slides`.
+    scripts_seen: u64,
     pub saved: u64,
+    /// The document as last saved, created or opened: undoing or redoing back to it is clean again.
+    saved_root: Value,
     /// Each step turns the current document into the one before (undo) or after (redo) it.
     undo: Vec<Patch>,
     redo: Vec<Patch>,
@@ -320,7 +332,9 @@ impl Engine {
             renderer: Renderer::default(),
             version: 1,
             synced: 0,
+            scripts_seen: 0,
             saved: 1,
+            saved_root: Value::Null,
             undo: Vec::new(),
             redo: Vec::new(),
             selection: Vec::new(),
@@ -356,6 +370,7 @@ impl Engine {
         if self.synced == self.version {
             return;
         }
+        self.unslide_glass();
         let doc = match &self.preview {
             Some(p) if !self.executing => p,
             _ => &self.doc,
@@ -374,6 +389,13 @@ impl Engine {
         if self.reduce_motion {
             return;
         }
+        // A slide is snapshotted alone, so a background blur in it would blur nothing until it settles:
+        // such a node appears in place, and so does a sliding ancestor that now holds it.
+        if self.holds_glass(id) {
+            self.slid.insert(id.to_string());
+            self.renderer.unslide_with(&self.doc, id);
+            return;
+        }
         // Past the cap nothing more slides, so skip the parent lookup (a linear search per insert).
         if self.renderer.slides.len() >= crate::render::MAX_SLIDES {
             self.slid.insert(id.to_string());
@@ -385,9 +407,43 @@ impl Engine {
         }
     }
 
+    /// Whether node `id` shows a background blur, a component instance's content included.
+    pub fn holds_glass(&self, id: &str) -> bool {
+        self.holds_glass_with(&self.doc, id, &Map::new(), &mut None)
+    }
+
+    /// `holds_glass` that builds the document-wide `Resolver` at most once across calls sharing `res`.
+    fn holds_glass_with<'a>(&'a self, doc: &'a Doc, id: &str, empty: &'a Map<String, Value>, res: &mut Option<crate::resolve::Resolver<'a>>) -> bool {
+        let Some(n) = doc.find(id) else { return false };
+        if crate::svg::doc_has_backdrop_blur(n) {
+            return true;
+        }
+        let mut refs = false;
+        crate::doc::walk(std::slice::from_ref(n), &mut |k| refs |= k["type"] == "ref");
+        refs && res.get_or_insert_with(|| crate::resolve::Resolver::new(&doc.root, &self.libs, empty)).resolve(n).is_some_and(|r| crate::svg::has_backdrop_blur(&r))
+    }
+
+    /// Stop every slide whose node now holds a background blur (an update, copy, move, an instance
+    /// whose component gained one, an inspector change): its snapshot would show the backdrop sharp.
+    /// `sync` runs it, so every way of changing the document is covered.
+    pub fn unslide_glass(&mut self) {
+        if self.renderer.slides.is_empty() {
+            return;
+        }
+        let (empty, mut res) = (Map::new(), None);
+        let doc = match &self.preview {
+            Some(p) if !self.executing => p,
+            _ => &self.doc,
+        };
+        let glass: Vec<String> = self.renderer.slides.iter().filter(|s| self.holds_glass_with(doc, &s.id, &empty, &mut res)).map(|s| s.id.clone()).collect();
+        self.renderer.slides.retain(|s| !glass.contains(&s.id));
+    }
+
     /// Settled slides go back into the cached view at the next sync (the document is unchanged).
     pub fn expire_slides(&mut self) {
-        if self.renderer.expire_slides() {
+        // A finished background script run changes a script node's output, not the document.
+        let scripts = crate::script::finished();
+        if self.renderer.expire_slides() || std::mem::replace(&mut self.scripts_seen, scripts) != scripts {
             self.synced = 0;
         }
     }
@@ -451,9 +507,14 @@ impl Engine {
     }
 
     /// The final `execute` for a streamed call arrived: retire its preview and reuse its id seed.
-    fn take_stream(&mut self, key: Option<&str>, source: &str) -> Option<Stream> {
+    /// Without a stream key (Claude Code over MCP) only the calling agent's own streams can match
+    /// by prefix; another agent's script may start with the same statement.
+    fn take_stream(&mut self, key: Option<&str>, agent: Option<&str>, source: &str) -> Option<Stream> {
         let src = source.trim();
-        let i = self.streams.iter().position(|s| key == Some(s.key.as_str()) || (!s.source.trim().is_empty() && src.starts_with(s.source.trim())))?;
+        // The exact key wins over an earlier stream that merely shares a prefix.
+        let i = key
+            .and_then(|k| self.streams.iter().position(|s| s.key == k))
+            .or_else(|| self.streams.iter().position(|s| agent.is_none_or(|a| a == s.agent) && !s.source.trim().is_empty() && src.starts_with(s.source.trim())))?;
         let s = self.streams.remove(i);
         self.rebuild_preview();
         Some(s)
@@ -549,6 +610,7 @@ impl Engine {
         self.coalesce = None;
         self.redo.push(step.apply(&mut self.doc.root));
         self.touch();
+        self.clean_if_saved();
         true
     }
 
@@ -560,6 +622,7 @@ impl Engine {
         self.coalesce = None;
         self.undo.push(step.apply(&mut self.doc.root));
         self.touch();
+        self.clean_if_saved();
         true
     }
 
@@ -626,6 +689,20 @@ impl Engine {
         }
     }
 
+    /// Undo or redo that lands on the saved document leaves it clean, whatever the version says.
+    fn clean_if_saved(&mut self) {
+        let clean = same(&self.doc.root, &self.saved_root);
+        self.keep_clean(clean);
+    }
+
+    /// The document as it is now is the saved one. An open coalesced edit ends here, so the next
+    /// edit is its own undo step and undo can land on the saved document.
+    fn mark_saved(&mut self) {
+        self.saved = self.version;
+        self.coalesce = None;
+        self.saved_root = self.doc.root.clone();
+    }
+
     /// Apply a document mutation as one undoable step.
     pub fn edit<R>(&mut self, f: impl FnOnce(&mut Doc) -> Result<R, String>) -> Result<R, String> {
         let before = self.doc.root.clone();
@@ -670,12 +747,13 @@ impl Engine {
         self.slid.clear();
         self.script = Default::default();
         self.touch();
-        self.saved = self.version;
+        self.mark_saved();
     }
 
     pub fn open(&mut self, path: &Path) -> Result<(), String> {
         let mut doc = Doc::load(path)?;
         crate::resolve::migrate(&mut doc.root);
+        doc.ensure_ids();
         drop_pending(&mut doc.root, &self.inflight);
         self.doc = doc;
         self.load_libs();
@@ -748,7 +826,7 @@ impl Engine {
             relocate_history(&mut self.redo, &old, &new, relocate);
         }
         self.doc.path = Some(target.clone());
-        self.saved = self.version;
+        self.mark_saved();
         if moved_from.is_some() && !self.streams.is_empty() && !self.executing {
             self.rebuild_preview(); // the live preview is a copy of the old document: redo it from the new folder
         }
@@ -859,13 +937,13 @@ impl Engine {
 
     /// Retire the stream an `execute` call belongs to; the call runs with its id seed.
     fn begin_execute(&mut self, args: &Value) -> ExecuteCall {
-        let stream = self.take_stream(args["__stream"].as_str(), args["input"].as_str().unwrap_or(""));
+        let stream = self.take_stream(args["__stream"].as_str(), args["__agent"].as_str(), args["input"].as_str().unwrap_or(""));
         let mut args = args.clone();
         if let Some(s) = &stream {
             args["__seed"] = json!(s.seed);
         }
         let seen = stream.as_ref().map_or(0, |s| s.touched);
-        let agent = stream.map(|s| s.agent).or_else(|| args["__agent"].as_str().map(str::to_string)).unwrap_or_else(|| "agent".into());
+        let agent = args["__agent"].as_str().map(str::to_string).or_else(|| stream.map(|s| s.agent)).unwrap_or_else(|| "agent".into());
         self.script.edit = None;
         ExecuteCall { args, seen, agent }
     }
@@ -1097,6 +1175,33 @@ mod tests {
         assert!(e.dirty());
         e.end_drag(before, true);
         assert!(!e.dirty() && e.undo.is_empty());
+    }
+
+    #[test]
+    fn undo_back_to_the_saved_document_is_clean() {
+        let mut e = Engine::new(std::env::temp_dir().join(format!("nalarupa-test-undo-clean-{}", std::process::id())));
+        assert!(!e.dirty());
+        e.edit(|d| Ok(d.root["children"] = json!([{"id": "a", "type": "rectangle", "x": 10}]))).unwrap();
+        assert!(e.dirty());
+        e.undo();
+        assert!(!e.dirty(), "back at the created document");
+        e.redo();
+        assert!(e.dirty());
+        e.mark_saved();
+        e.edit(|d| Ok(d.root["children"][0]["x"] = json!(20))).unwrap();
+        e.undo();
+        assert!(!e.dirty(), "back at the saved document");
+        e.undo();
+        assert!(e.dirty(), "past the saved document");
+        e.redo();
+        assert!(!e.dirty(), "forward to the saved document");
+        // A save in the middle of a coalesced field edit: undo after it still stops at the saved document.
+        e.edit_coalesced("x", |d| Ok(d.root["children"][0]["x"] = json!(30))).unwrap();
+        e.mark_saved();
+        e.edit_coalesced("x", |d| Ok(d.root["children"][0]["x"] = json!(40))).unwrap();
+        e.undo();
+        assert_eq!(e.doc.root["children"][0]["x"], 30);
+        assert!(!e.dirty(), "a coalesced edit does not merge across a save");
     }
 
     #[test]
