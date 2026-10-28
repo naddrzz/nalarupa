@@ -128,17 +128,28 @@ fn generate(ask: &str, cancel: &AtomicBool, on: &mut dyn FnMut(&str) -> bool) ->
     }
 }
 
-/// The `claude` CLI without tools or session, its text deltas streamed.
-fn claude_code(ask: &str, cancel: &AtomicBool, on: &mut dyn FnMut(&str) -> bool) -> Result<(), String> {
-    let mut child = Command::new("claude")
-        .arg("-p")
+/// The `claude` CLI without tools or session, on the composer's model (unset = the CLI's default,
+/// as for the agent's own process).
+fn cli(ask: &str, model: Option<&str>) -> Command {
+    let mut cmd = Command::new("claude");
+    cmd.arg("-p")
         .arg(ask)
         .args(["--output-format", "stream-json", "--verbose", "--include-partial-messages", "--no-session-persistence", "--strict-mcp-config", "--tools", ""])
         .arg("--system-prompt")
         .arg(SYSTEM)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+    if let Some(m) = model {
+        cmd.args(["--model", m]);
+    }
+    cmd
+}
+
+/// Stream the `claude` CLI's text deltas into `on`.
+fn claude_code(ask: &str, cancel: &AtomicBool, on: &mut dyn FnMut(&str) -> bool) -> Result<(), String> {
+    let model = engine().setting("agent_model");
+    let mut child = cli(ask, model.as_deref())
         .spawn()
         .map_err(|e| format!("could not start the `claude` CLI ({e})"))?;
     let stdout = child.stdout.take().ok_or("no output from claude")?;
@@ -442,6 +453,17 @@ mod tests {
         assert_eq!(tri["geometry"], "M20 120L120 120L120 200Z");
         assert_eq!(d.nodes[2]["opacity"].as_f64(), Some(0.5));
         assert_eq!(d.nodes[2]["fill"], "#123456");
+    }
+
+    /// The Claude Code pen draws with the model picked in the composer, like the agent's own
+    /// process; with "Default" (unset) it passes no flag and the CLI's default applies.
+    #[test]
+    fn claude_code_pen_uses_the_picked_model() {
+        let args = |model| cli("a cat", model).get_args().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>();
+        let picked = args(Some("claude-haiku-5-5"));
+        let at = picked.iter().position(|a| a == "--model").expect("--model passed");
+        assert_eq!(picked[at + 1], "claude-haiku-5-5");
+        assert!(!args(None).iter().any(|a| a == "--model"));
     }
 
     /// Unfinished markup never breaks the parse: an open attribute elsewhere, comments, and an
