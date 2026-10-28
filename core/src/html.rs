@@ -63,6 +63,8 @@ pub struct ExportJob {
 
 enum Output {
     Bytes(Vec<u8>),
+    /// SVG markup and the image files it inlines once written (see `Svg::embedded`).
+    Svg(String, Vec<String>),
     Image(usvg::Tree, String, f64, u8),
     Pdf(Vec<usvg::Tree>),
 }
@@ -80,6 +82,7 @@ impl ExportJob {
             }
             let bytes = match output {
                 Output::Bytes(b) => b,
+                Output::Svg(svg, hrefs) => crate::svg::inline_embedded(&svg, &hrefs).into_bytes(),
                 Output::Image(tree, format, scale, quality) => crate::render::encode_tree(&tree, &format, scale, quality)?,
                 Output::Pdf(trees) => crate::render::encode_pdf(&trees)?,
             };
@@ -103,7 +106,8 @@ pub fn plan(e: &mut Engine, ids: &[String], format: &str, out: &str, opts: &Valu
                 let file = dir.join(format!("{}.{format}", file_stem(id)));
                 let output = if format == "svg" {
                     let mut cx = e.ctx();
-                    Output::Bytes(cx.export_svg(id).ok_or_else(|| cx.missing(id))?.into_bytes())
+                    let (svg, hrefs) = cx.export_svg(id).ok_or_else(|| cx.missing(id))?;
+                    Output::Svg(svg, hrefs)
                 } else {
                     let scale = scale.clamp(0.05, 8.0);
                     Output::Image(e.ctx().node_tree_at(id, scale)?, format.to_string(), scale, quality)
@@ -967,6 +971,34 @@ mod tests {
 
     fn export(e: &mut Engine, ids: &[String], format: &str, out: &str, opts: &serde_json::Value) -> Result<Vec<String>, String> {
         super::plan(e, ids, format, out, opts)?.run()
+    }
+
+    /// An SVG export inlines its image files after the engine lock is released: planning (under the lock)
+    /// leaves them unread, and the written file carries them as data URIs.
+    #[test]
+    fn svg_export_reads_images_after_planning() {
+        use base64::Engine as _;
+        let dir = std::env::temp_dir().join("nalarupa-test-svg-embed-later");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let png = base64::engine::general_purpose::STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAAUAAAAFCAYAAACNbyblAAAAHElEQVQI12P4//8/w38GIAXDIBKE0DHxgljNBAAO9TXL0Y4OHwAAAABJRU5ErkJggg==").unwrap();
+        std::fs::write(dir.join("photo.png"), &png).unwrap();
+        let mut e = Engine::new(dir.join("data"));
+        e.doc.path = Some(dir.join("doc.nala"));
+        let id = e.doc.insert(crate::doc::ROOT, json!({"type": "rectangle", "x": 0, "y": 0, "width": 50, "height": 50,
+            "fill": {"type": "image", "url": "./photo.png", "mode": "fill"}}), None).unwrap();
+        let job = super::plan(&mut e, std::slice::from_ref(&id), "svg", "out", &json!({})).unwrap();
+        let planned = match &job.files[0].1 {
+            super::Output::Svg(svg, hrefs) => (svg.clone(), hrefs.clone()),
+            _ => panic!("an SVG export plans an SVG"),
+        };
+        assert!(!planned.0.contains("data:image/png"), "planning reads no image file");
+        assert_eq!(planned.1.len(), 1, "the image is listed to inline later");
+        let files = job.run().unwrap();
+        let svg = std::fs::read_to_string(&files[0]).unwrap();
+        assert!(svg.contains("data:image/png;base64,"), "the written SVG inlines the image");
+        assert!(!svg.contains(crate::svg::EMBED_TOKEN), "no placeholder is left behind");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The `style` of a rectangle exported as an HTML fragment, plus the whole fragment.
