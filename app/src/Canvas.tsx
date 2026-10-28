@@ -239,8 +239,9 @@ export function Canvas(props: {
   // a sharp frame replaces it.
   const pending = useRef<ReturnType<typeof setTimeout> | null>(null)
   const settle = useRef<ReturnType<typeof setTimeout> | null>(null)
-  // What the bitmap shows: a pan paints right away, so the commit's scheduled frame can skip it.
-  const drawn = useRef(live.current)
+  // What the bitmap shows (null until the first frame): a pan paints right away, so the commit's
+  // scheduled frame can skip it, but a fresh mount has nothing to skip.
+  const drawn = useRef<typeof live.current | null>(null)
   const draw = (sharp: boolean) => {
     drawn.current = live.current
     const { cam: c, w: vw, h: vh } = live.current
@@ -258,11 +259,13 @@ export function Canvas(props: {
     setCam(next)
   }
   const schedule = () => {
+    // The first frame draws in the commit itself: GPUI may present the new <img> before a timer runs.
+    if (!drawn.current) draw(false)
     if (!pending.current) {
       pending.current = setTimeout(() => {
         pending.current = null
         const [a, b] = [drawn.current, live.current]
-        if (a.cam !== b.cam || a.w !== b.w || a.h !== b.h || a.version !== b.version) draw(false)
+        if (!a || a.cam !== b.cam || a.w !== b.w || a.h !== b.h || a.version !== b.version) draw(false)
       }, 0)
     }
     if (settle.current) clearTimeout(settle.current)
