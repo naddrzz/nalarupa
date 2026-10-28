@@ -455,10 +455,10 @@ mod tests {
         assert_eq!(d.nodes[2]["fill"], "#123456");
     }
 
-    /// The Claude Code pen draws with the model picked in the composer, like the agent's own
-    /// process; with "Default" (unset) it passes no flag and the CLI's default applies.
+    /// The Claude Code pen's command carries the picked model, like the agent's own process; with
+    /// "Default" (unset) it passes no flag and the CLI's default applies.
     #[test]
-    fn claude_code_pen_uses_the_picked_model() {
+    fn cli_passes_the_picked_model_only_when_set() {
         let args = |model| cli("a cat", model).get_args().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>();
         let picked = args(Some("claude-haiku-5-5"));
         let at = picked.iter().position(|a| a == "--model").expect("--model passed");
