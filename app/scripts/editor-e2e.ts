@@ -614,6 +614,8 @@ try {
   // Tab through the Inspector scrolls the focused control into view: the last Export button (HTML) ends up on screen
   // with its ring; Shift+Tab walks back to the name field.
   const nameY0 = (await app.getByTestId('inspector-name').bounds())!.y
+  // Start the walk from the name field: focus left elsewhere by the steps above can sit outside the Inspector.
+  await app.getByTestId('inspector-name').click()
   let tabs = 0
   while (!(await count('export-html-focus')) && tabs < 60) {
     await app.call('keystrokes', { keys: 'tab' })
