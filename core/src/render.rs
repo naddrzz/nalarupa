@@ -96,7 +96,7 @@ pub struct Flat {
     /// Local bounds' offset from the origin (non-zero for groups) and the node's own effective rotation and flips.
     pub local: ([f64; 2], f64, bool, bool),
     /// Clips its children to its box (a `clip` frame), so they cannot be hit outside it.
-    clip: bool,
+    pub clip: bool,
     /// Own props, box, parent and sibling index: a change means this node must repaint.
     sig: u64,
     /// How far shadows, blurs and strokes paint outside the box; infinite when the node or an
