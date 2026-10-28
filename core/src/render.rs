@@ -212,10 +212,15 @@ impl Ctx<'_> {
     pub fn laid_out(&mut self, index: usize) -> Option<RNode> {
         let empty = Map::new();
         let r = Resolver::new(&self.doc.root, self.libs, &empty);
+        self.laid_out_in(&r, index)
+    }
+
+    /// `laid_out` with a resolver built by the caller, so a pass over many layers indexes the document once.
+    fn laid_out_in(&mut self, r: &Resolver, index: usize) -> Option<RNode> {
         let mut n = r.resolve(self.doc.children().get(index)?)?;
         crate::layout::layout(&mut n, self.fonts);
         // Script nodes need their laid-out size before they can run.
-        crate::script::expand_scripts(&mut n, &r, self.fonts, self.doc.dir().as_deref());
+        crate::script::expand_scripts(&mut n, r, self.fonts, self.doc.dir().as_deref());
         Some(n)
     }
 
@@ -348,6 +353,9 @@ impl Renderer {
         let mut order = Vec::new();
         let mut keep = HashMap::new();
         let mut built = Vec::new();
+        let (doc, libs) = (cx.doc, cx.libs);
+        let empty = Map::new();
+        let resolver = Resolver::new(&doc.root, libs, &empty);
         for (i, node) in cx.doc.children().iter().enumerate() {
             let id = node["id"].as_str().unwrap_or_default().to_string();
             let mut hash = fxhash(&node.to_string()) ^ shared.rotate_left(17);
@@ -359,21 +367,24 @@ impl Renderer {
                 Some(l) if l.hash == hash => {
                     keep.insert(id.clone(), l);
                 }
-                old => built.push((id.clone(), prepare_layer(cx, i, hash, &hidden), old)),
+                old => built.push((id.clone(), prepare_layer(cx, &resolver, i, hash, &hidden), old)),
             }
             order.push(id);
         }
         let rebuilt: Vec<String> = built.iter().map(|(id, _, _)| id.clone()).collect();
-        // Parsing (text shaping included) dominates; do it on all cores.
+        // Parsing (text shaping included) dominates; do it on all cores, a chunk of layers per thread.
         let opts = cx.tree_options();
         let parse = &|svg: &String| {
             let tree = usvg::Tree::from_str(svg, &opts).ok()?;
             let scene = raster::Scene::new(&tree);
             Some((tree, scene))
         };
+        let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(1, 16);
         let parsed: Vec<Option<(usvg::Tree, raster::Scene)>> = std::thread::scope(|s| {
-            let jobs: Vec<_> = built.iter().map(|(_, (_, svg), _)| s.spawn(move || svg.as_ref().and_then(parse))).collect();
-            jobs.into_iter().map(|j| j.join().ok().flatten()).collect()
+            let jobs: Vec<_> = built.chunks(built.len().div_ceil(threads).max(1)).map(|chunk| {
+                (chunk.len(), s.spawn(move || chunk.iter().map(|(_, (_, svg), _)| svg.as_ref().and_then(parse)).collect::<Vec<_>>()))
+            }).collect();
+            jobs.into_iter().flat_map(|(n, j)| j.join().unwrap_or_else(|_| (0..n).map(|_| None).collect())).collect()
         });
         for ((id, (mut layer, _), old), parsed) in built.into_iter().zip(parsed) {
             if let Some((t, scene)) = parsed {
@@ -983,8 +994,8 @@ fn has_hairline(g: &usvg::Group) -> bool {
 }
 
 /// Lay out a top-level node and emit its SVG; the tree is parsed later (in parallel).
-fn prepare_layer(cx: &mut Ctx, index: usize, hash: u64, hidden: &HashSet<String>) -> (Layer, Option<String>) {
-    let Some(root) = cx.laid_out(index) else {
+fn prepare_layer(cx: &mut Ctx, resolver: &Resolver, index: usize, hash: u64, hidden: &HashSet<String>) -> (Layer, Option<String>) {
+    let Some(root) = cx.laid_out_in(resolver, index) else {
         return (Layer { hash, tree: None, scene: None, bbox: (0.0, 0.0, 0.0, 0.0), paint: (0.0, 0.0, 0.0, 0.0), flat: Vec::new() }, None);
     };
     let mut flat = Vec::new();
@@ -1166,6 +1177,26 @@ pub(crate) mod tests {
     pub fn sync(r: &mut Renderer, doc: &Doc) {
         let (mut fonts, mut assets) = offline();
         r.sync(&mut Ctx { doc, libs: &[], fonts: &mut fonts, assets: &mut assets });
+    }
+
+    /// The first layout resolves each top-level layer against one shared index, so it grows
+    /// linearly with the layer count (4x the layers took 16x as long when each built its own).
+    #[test]
+    fn first_layout_is_linear_in_top_level_layers() {
+        let time = |n: usize| {
+            let kids: Vec<Value> = (0..n)
+                .map(|i| serde_json::json!({"type": "rectangle", "id": format!("r{i}"), "x": i % 100 * 5, "y": i / 100 * 5, "width": 4, "height": 4, "fill": "#f00"}))
+                .collect();
+            let doc = Doc::from_json(&serde_json::json!({"version": "2.19", "children": kids}).to_string()).unwrap();
+            let mut r = Renderer::default();
+            let t = Instant::now();
+            sync(&mut r, &doc);
+            assert_eq!(r.order.len(), n);
+            t.elapsed().as_secs_f64()
+        };
+        time(200);
+        let (small, large) = (time(1000), time(4000));
+        assert!(large < small * 8.0 + 0.2, "1000 top-level layers took {small:.3} s, 4000 took {large:.3} s");
     }
 
     /// Rotating a node repaints everything it painted before and after (no trails): the
