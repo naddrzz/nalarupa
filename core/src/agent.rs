@@ -467,12 +467,15 @@ pub fn ask_permission(agent: &str, args: &Value) -> crate::engine::ToolOut {
 /// `agent_permission`: the user's answer to a permission card: "allow", "deny", or "auto"
 /// (allow, and from the next turn on let Claude Code's auto mode decide; kept as a setting).
 pub fn answer_permission(id: &str, answer: &str) -> Result<(), String> {
+    if !matches!(answer, "allow" | "deny" | "auto") {
+        return Err(format!("Unknown permission answer \"{answer}\"; use allow, deny or auto."));
+    }
     let mut e = engine();
+    let (_, waiting) = e.agent.permissions.remove(id).ok_or("This permission request is no longer waiting.")?;
     if answer == "auto" {
         e.settings.insert("agent_auto_permissions".into(), json!(true));
         let _ = e.save_settings(); // still auto for this run when it did not save; never block the answer
     }
-    let (_, waiting) = e.agent.permissions.remove(id).ok_or("This permission request is no longer waiting.")?;
     let _ = waiting.send(answer != "deny");
     Ok(())
 }

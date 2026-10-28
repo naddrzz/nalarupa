@@ -145,6 +145,18 @@ const text = (r: any) => r.content.map((c: any) => c.text ?? '').join('')
   const spawned = await rpc({ id: 'sp', method: 'tools/call', params: { name: 'spawn_agents', arguments: { config: [{ prompt: 'x', containerNodes: [box] }] } } }, '/mcp/agD')
   assert(!spawned.result?.isError && text(spawned.result).includes('Started 1 designers'), `spawn_agents survives a container cut inside a multi-byte char: ${JSON.stringify(spawned).slice(0, 200)}`)
 
+  // A stale permission card (the run ended, the request is gone) must fail without saving "Switch to Auto";
+  // an unknown answer is rejected instead of counting as allow.
+  for (const answer of ['auto', 'allow', 'deny', 'dney', '']) {
+    let error = ''
+    try { call('agent_permission', { id: 'no-such-request', answer }) } catch (e) { error = (e as Error).message }
+    assert(error.length > 0, `agent_permission with a stale id fails for answer "${answer}"`)
+    assert(call('settings_get').agent_auto_permissions === undefined, `a failed agent_permission "${answer}" saves nothing`)
+  }
+  let rejected = ''
+  try { call('agent_permission', { id: 'no-such-request', answer: 'dney' }) } catch (e) { rejected = (e as Error).message }
+  assert(rejected.includes('Unknown permission answer'), `an unknown answer is rejected as such (got ${rejected})`)
+
   // A script that runs for seconds must not freeze the window: `call` is synchronous on this one thread,
   // so a core call that waits for the script (it ran under the engine lock) blocks for its whole run.
   const slow = tool('execute', { input: 'const until = Date.now() + 2000; while (Date.now() < until) {} Print("done")' })
