@@ -533,10 +533,17 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
   await app.getByTestId('agent-new').click()
   await until(async () => !!(await app.getByText('Ask me to design anything').count()), 'the empty state after + (New agent)')
   if (await app.getByType('markdown').count()) throw new Error('+ (New agent) left the old conversation on screen')
+  // Picking a chat with the keyboard (Tab to its row, Enter) hands focus back to the history button, as Escape does.
   await app.getByTestId('agent-history').click()
   await app.getByTestId(`chat-${chatId}`).waitFor()
-  await app.getByTestId(`chat-${chatId}`).click()
+  for (let i = 0; i < 10 && !(await app.getByTestId(`chat-${chatId}-focus`).count()); i++) {
+    await app.call('keystrokes', { keys: 'tab' })
+    await sleep(200)
+  }
+  if (!(await app.getByTestId(`chat-${chatId}-focus`).count())) throw new Error('Tab never reached the saved chat row in the history popover')
+  await app.call('keystrokes', { keys: 'enter' })
   await until(async () => (await app.getByType('markdown').count()) === 1, 'the saved chat to reopen')
+  await until(async () => !!(await app.getByTestId('agent-history-focus').count()), 'the history button to regain keyboard focus after a keyboard pick')
   await app.getByTestId('agent-history').click()
   await app.getByTestId(`chat-${chatId}`).hover()
   // Removal cannot be undone, so the first press only arms it.

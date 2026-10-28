@@ -483,6 +483,8 @@ function ChatHistory({ running, toast, changed }: { running: boolean; toast: Toa
     restoreChat(r.events ?? [])
     revealAll(store.items) // a saved reply shows whole, the typewriter is for live ones
     close()
+    // Picked from the keyboard: hand focus back to the history button, as Escape does, so Tab goes on from it.
+    if (kbChat !== null) trigger.restore()
     changed()
   }
   const remove = (id: string) => {
@@ -548,6 +550,7 @@ function ChatHistory({ running, toast, changed }: { running: boolean; toast: Toa
                             <Pressable
                               ref={keep(`row:${c.id}`)}
                               testId={`chat-${c.id}`}
+                              focusTestId={`chat-${c.id}-focus`}
                               label={`Open chat: ${c.title || 'Untitled chat'}`}
                               onClick={() => open(c.id)}
                               style={{ flexGrow: 1, minWidth: 0, height: 30, display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, paddingLeft: 8, borderRadius: 6 }}
