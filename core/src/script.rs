@@ -1649,6 +1649,18 @@ Insert(card, {type:\"text\", name:\"Title\", content:\"Hi\", fill:\"#111111\"})
     }
 
     #[test]
+    fn a_keyed_execute_takes_its_own_stream_before_an_earlier_prefix_match() {
+        let mut e = engine();
+        let common = "pos = {x: 0, y: 0}\n";
+        e.stream_update("toolu_1", "agA", &format!("{common}Insert("));
+        e.stream_update("toolu_2", "agA", &format!("{common}Insert("));
+        let out = e.tool("execute", &json!({"input": format!("{common}Insert(document, {{type:\"frame\", name:\"Two\", width:10, height:10}})"), "__stream": "toolu_2", "__agent": "agA"}));
+        assert!(!out.error, "{}", out.text);
+        assert_eq!(e.streams.iter().map(|s| s.key.as_str()).collect::<Vec<_>>(), ["toolu_1"], "the keyed stream is retired, the earlier one stays");
+        e.stream_end("toolu_1");
+    }
+
+    #[test]
     fn rolled_back_agent_edits_leave_a_clean_document_clean() {
         let mut e = engine();
         assert!(!e.dirty());

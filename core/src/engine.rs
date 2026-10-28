@@ -376,7 +376,10 @@ impl Engine {
     /// by prefix; another agent's script may start with the same statement.
     fn take_stream(&mut self, key: Option<&str>, agent: Option<&str>, source: &str) -> Option<Stream> {
         let src = source.trim();
-        let i = self.streams.iter().position(|s| key == Some(s.key.as_str()) || (agent.is_none_or(|a| a == s.agent) && !s.source.trim().is_empty() && src.starts_with(s.source.trim())))?;
+        // The exact key wins over an earlier stream that merely shares a prefix.
+        let i = key
+            .and_then(|k| self.streams.iter().position(|s| s.key == k))
+            .or_else(|| self.streams.iter().position(|s| agent.is_none_or(|a| a == s.agent) && !s.source.trim().is_empty() && src.starts_with(s.source.trim())))?;
         let s = self.streams.remove(i);
         self.rebuild_preview();
         Some(s)
