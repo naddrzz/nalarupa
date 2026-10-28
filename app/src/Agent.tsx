@@ -8,7 +8,7 @@ import type { EventPayload } from '@gpuix/native'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import * as SelectPrimitive from '@gpuix/react/select'
 import { C, FONT, INDICATOR_TICK_MS, MONO, REDUCED_MOTION, ellipsisAt, ellipsisPadAt, pulseAt } from './theme'
-import { Button, Field, FocusRing, Icon, IconButton, Pressable, Row, Segmented, setKeyboardFocus, T, Toggle, useFieldRing, useKeyboardFocusId, useRing, useScrollToFocus, useTrigger, type Toast } from './ui'
+import { Button, Field, FocusRing, Icon, IconButton, Pressable, Row, ScrollToFocus, Segmented, setKeyboardFocus, T, Toggle, useFieldRing, useKeyboardFocusId, useRing, useTrigger, type Toast } from './ui'
 
 // Suggestion set; the empty chat shows 6 random picks of these 12.
 const SUGGESTIONS = [
@@ -968,7 +968,6 @@ function PermissionCard({ m }: { m: Extract<ChatItem, { kind: 'permission' }> })
 /** The gear's panel. It shrinks and scrolls when the agent panel is short (minimum window height, a plan showing),
  *  so the composer below never leaves the window. */
 function AgentSettings({ mcpUrl, toast, onBackend }: { mcpUrl: string; toast: Toast; onBackend: () => void }) {
-  const scroller = useScrollToFocus()
   const s = useMemo(() => tryCall<Record<string, string>>('settings_get') ?? {}, [])
   const [backend, setBackend] = useState(s.backend ?? 'claude-code')
   const [hasKey, setHasKey] = useState(!!s.anthropic_api_key)
@@ -981,7 +980,7 @@ function AgentSettings({ mcpUrl, toast, onBackend }: { mcpUrl: string; toast: To
     else toast(`Unable to configure ${client}. Check that it is installed and on your PATH, then try again.`, true)
   }
   return (
-    <div ref={scroller} testId="agent-settings-panel" style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 12, flexShrink: 1, minHeight: 0, overflowY: 'scroll', borderBottomWidth: 1, borderColor: C.border, backgroundColor: C.panel2 }}>
+    <ScrollToFocus testId="agent-settings-panel" style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 12, flexShrink: 1, minHeight: 0, overflowY: 'scroll', borderBottomWidth: 1, borderColor: C.border, backgroundColor: C.panel2 }}>
       <T size={11} color={C.muted} weight="600">Backend</T>
       <Segmented
         label="Agent backend"
@@ -1028,6 +1027,6 @@ function AgentSettings({ mcpUrl, toast, onBackend }: { mcpUrl: string; toast: To
         <Button onClick={() => install('cursor')}>Cursor</Button>
         <Button testId="mcp-codex" focusTestId="mcp-codex-focus" onClick={() => install('codex')}>Codex</Button>
       </Row>
-    </div>
+    </ScrollToFocus>
   )
 }
