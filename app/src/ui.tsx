@@ -114,32 +114,46 @@ export const Pressable = forwardRef<PublicInstance, PressableProps>(function Pre
 export function useRing<T extends PublicInstance>(forwarded?: Ref<T>) {
   const el = useRef<T | null>(null)
   const id = useKeyboardFocusId()
+  const scope = useContext(FocusScope)
   const ref = useCallback((v: T | null) => {
+    if (el.current) scope?.delete(el.current.id)
     el.current = v
+    if (v) scope?.add(v.id)
     if (typeof forwarded === 'function') forwarded(v)
     else if (forwarded) (forwarded as { current: T | null }).current = v
-  }, [forwarded])
+  }, [forwarded, scope])
   const on = id !== null && el.current?.id === id
   return { ref, el, on, clear: () => setKeyboardFocus(null) }
 }
 
-/** Scroll the container that gets `ref` (an `overflowY: 'scroll'` panel) to show the control Tab just focused, ring
- *  included. GPUI does not scroll on focus, and `scrollIntoView` only brings the container's direct child into view. */
-export function useScrollToFocus() {
+/** Host ids of the controls (`useRing`) inside a `ScrollToFocus` panel. Once the panel is scrolled, a control hidden above its
+ *  top and one in the panel above it (the Design/Agent tabs) share the same screen rows, so only membership tells them apart. */
+const FocusScope = createContext<Set<number> | null>(null)
+
+/** A scrolling panel (`overflowY: 'scroll'` in `style`) that scrolls to show the control Tab just focused, ring included.
+ *  GPUI does not scroll on focus, and `scrollIntoView` only brings the container's direct child into view. */
+export function ScrollToFocus({ style, children }: { style: Record<string, unknown>; children: ReactNode }) {
   const renderer = useGpuixRequired()
   const ref = useRef<PublicInstance>(null)
+  const [scope] = useState(() => new Set<number>())
   const focus = useKeyboardFocusId()
   useEffect(() => {
-    const [box, at, off] = ref.current && focus !== null
-      ? [renderer.getElementBounds?.(ref.current.id), renderer.getElementBounds?.(focus), renderer.getScrollOffset?.(ref.current.id)]
-      : []
     // Focus in another panel is none of this container's business.
-    if (!box || !at || !off || at.x < box.x || at.x + at.width > box.x + box.width) return
+    if (!ref.current || focus === null || !scope.has(focus)) return
+    const [box, at, off] = [renderer.getElementBounds?.(ref.current.id), renderer.getElementBounds?.(focus), renderer.getScrollOffset?.(ref.current.id)]
+    if (!box || !at || !off) return
+    // The container's own bounds move with its scroll offset (scrolled 300 px down, its top reads 300 px above the panel),
+    // so the viewport's top is its bounds' top less that offset (`off[1]` is negative when scrolled down).
+    const top = box.y - off[1]
     const ring = 3
-    const dy = at.y - ring < box.y ? box.y - (at.y - ring) : Math.min(0, box.y + box.height - (at.y + at.height + ring))
-    if (dy) renderer.scrollTo?.(ref.current!.id, off[0], Math.min(0, off[1] + dy))
+    const dy = at.y - ring < top ? top - (at.y - ring) : Math.min(0, top + box.height - (at.y + at.height + ring))
+    if (dy) renderer.scrollTo?.(ref.current.id, off[0], Math.min(0, off[1] + dy))
   }, [focus])
-  return ref
+  return (
+    <FocusScope.Provider value={scope}>
+      <div ref={ref} style={style}>{children}</div>
+    </FocusScope.Provider>
+  )
 }
 
 // GPUIX tracks a text field's focus handle on two nested divs, so GPUI's tab-stop list holds the field
@@ -275,7 +289,7 @@ function TextInput({ value, mono, onFocus, onBlur, ...rest }: {
           style={{ flexGrow: 1, minWidth: 0, fontSize: 12, color: shown ? '#00000000' : C.text, fontFamily }}
         />
       </div>
-      {field.ring ? <FocusRing /> : null}
+      {field.ring ? <FocusRing testId={rest.testId ? `${rest.testId}-ring` : undefined} /> : null}
     </div>
   )
 }

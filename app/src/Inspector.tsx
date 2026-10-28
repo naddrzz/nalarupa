@@ -3,7 +3,7 @@ import { tryCall } from './core'
 import { nodeIcon, type IconName } from './icons'
 import { turnAroundCenter } from './geometry'
 import { C } from './theme'
-import { Button, Field, FocusRing, Icon, IconButton, NumField, Row, Section, Segmented, Swatch, T, Toggle, useFieldRing, useScrollToFocus, type Toast } from './ui'
+import { Button, Field, FocusRing, Icon, IconButton, NumField, Row, ScrollToFocus, Section, Segmented, Swatch, T, Toggle, useFieldRing, type Toast } from './ui'
 
 type Props = { version: number; selection: string[]; select: (ids: string[]) => void; toast: Toast }
 type Info = { id: string; node: any; box: { w: number; h: number } | null; local: { bx: number; by: number } | null; parentLayout: string; variables: Record<string, any> }
@@ -140,7 +140,6 @@ function TextContent({ value, onSubmit }: { value: string; onSubmit: (v: string)
 }
 
 export function Inspector({ version, selection, select, toast }: Props) {
-  const scroller = useScrollToFocus()
   const remove = () => {
     if (tryCall('delete', { ids: selection }) !== null) select([])
     else toast('Unable to delete the selection. Select the layers again and try again.', true)
@@ -277,7 +276,7 @@ export function Inspector({ version, selection, select, toast }: Props) {
   const fillH = all((i) => isMode(i.node.height, 'fill_container'))
 
   return (
-    <div ref={scroller} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, overflowY: 'scroll' }}>
+    <ScrollToFocus style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, overflowY: 'scroll' }}>
       <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8, padding: 14, borderBottomWidth: 1, borderColor: C.border }}>
         <Icon name={multi ? 'layers' : nodeIcon(n.type, n.reusable)} color={!multi && (n.reusable || n.type === 'ref') ? C.component : C.muted} />
         {multi
@@ -446,6 +445,6 @@ export function Inspector({ version, selection, select, toast }: Props) {
           <Button testId="export-html" focusTestId="export-html-focus" onClick={() => exportAs('html-css')}>HTML</Button>
         </Row>
       </Section>
-    </div>
+    </ScrollToFocus>
   )
 }
