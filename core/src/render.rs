@@ -1290,11 +1290,12 @@ pub(crate) mod tests {
     #[test]
     fn subtree_and_ancestor_effects_leave_no_stale_pixels() {
         let docs = [
-            // A frame that does not clip, its child sticking out; then its opacity, blur, blend mode.
+            // A frame that does not clip, its child sticking out; then its opacity, blur, fill and fill blend mode.
             (r##"{"version":"2.19","children":[{"type":"frame","id":"f","x":0,"y":0,"width":400,"height":300,"layout":"none","fill":"#ffffff","children":[
                 {"type":"frame","id":"o","x":20,"y":20,"width":100,"height":100,"layout":"none","fill":"#ff000080","children":[
                     {"type":"rectangle","id":"r","x":60,"y":30,"width":80,"height":40,"fill":"#000000"}]}]}]}"##,
-             vec![("o", json!({"opacity": 0.5})), ("o", json!({"opacity": 0})), ("o", json!({"effect": {"type": "blur", "radius": 6}})), ("o", json!({"fill": "#00ff0080"}))]),
+             vec![("o", json!({"opacity": 0.5})), ("o", json!({"opacity": 0})), ("o", json!({"effect": {"type": "blur", "radius": 6}})), ("o", json!({"fill": "#00ff0080"})),
+                  ("o", json!({"fill": {"type": "color", "color": "#00ff0080", "blendMode": "multiply"}}))]),
             // A child of a shadowed group; then the child's opacity and position.
             (r##"{"version":"2.19","children":[{"type":"frame","id":"f","x":0,"y":0,"width":400,"height":300,"layout":"none","fill":"#ffffff","children":[
                 {"type":"group","id":"g","x":40,"y":30,"effect":{"type":"shadow","offset":{"x":12,"y":12},"blur":0,"color":"#000000"},"children":[
