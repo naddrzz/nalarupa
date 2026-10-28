@@ -272,6 +272,7 @@ fn commit(n: &mut RNode, ax: usize, v: f64, fonts: &mut Fonts) {
 fn text_bounds(n: &mut RNode, fonts: &mut Fonts) {
     let st = TextStyle::of(n);
     let line_h = fonts.metrics(&st).line_h;
+    n.line_h = line_h;
     let content = match n.p.get("content") {
         Some(Value::String(s)) => s.clone(),
         Some(Value::Number(v)) => v.to_string(),

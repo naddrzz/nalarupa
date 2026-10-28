@@ -79,6 +79,33 @@ try {
   await sleep(250)
   if ((await rows()) !== rows0 || (await app.getByTestId('layer-rename').count())) throw new Error('a quick second chevron click did not collapse (or opened rename)')
 
+  // Rows nested 17 levels deep stay inside the 247 px panel with a readable name: the indent narrows the row
+  // instead of pushing a full-width row off the right edge, where the deepest layers could not be reached.
+  const made = await mcp('execute', { input: `let p = Insert(document, {type:"frame", name:"Deep0", x:0, y:0, width:800, height:800})
+for (let i = 1; i <= 16; i++) p = Insert(p, {type: i % 2 ? "group" : "frame", name: "Level " + i + " with a descriptive name", width: 700 - i * 20, height: 700 - i * 20})
+Insert(p, {type:"text", name:"Deepest text layer", content:"deep", fontSize:20})` })
+  const chain = [...made.matchAll(/^"(?:Deep0|Level \d+ [^"]*|Deepest text layer)": "(\w+)"/gm)].map((m) => m[1])
+  if (chain.length !== 18) throw new Error(`expected 18 nested layers, created ${chain.length}`)
+  const panel = (await app.getByTestId('layers').bounds())!
+  for (const id of chain.slice(0, 17)) {
+    const t = app.getByTestId(`layer-toggle-${id}`)
+    await until(async () => (await t.count()) > 0, `the chevron of layer ${id}`)
+    await t.click()
+    await sleep(100)
+  }
+  const deepest = app.getByTestId('layers').getByText('Deepest text layer')
+  await until(async () => (await deepest.count()) > 0, 'the deepest layer row')
+  for (const [depth, id] of chain.entries()) {
+    const b = (await app.getByTestId(`layer-${id}`).bounds())!
+    if (b.x + b.width > panel.x + panel.width + 0.5 || b.width < 100) throw new Error(`layer row at depth ${depth} is ${JSON.stringify(b)}: it runs off the ${panel.width}px panel or is too narrow`)
+  }
+  const name = (await deepest.bounds())!
+  if (name.width < 40 || name.x + name.width > panel.x + panel.width) throw new Error(`the deepest layer name is ${JSON.stringify(name)}: it is clipped or off the panel`)
+  await mcp('execute', { input: `Delete("${chain[0]}")` })
+  await until(async () => (await rows()) === rows0, 'the deep layers to go away')
+  // The agent's edit opened the Agent tab; the steps below read the Inspector.
+  await app.getByTestId('tab-design').click()
+
   // The eye icon hides and shows its layer (the row's press capture used to swallow the click). A hidden
   // layer keeps its eye while the pointer is away; the click does not select the row.
   const eyeShown = async (want: boolean) => {
@@ -522,10 +549,17 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
   await app.getByTestId('agent-new').click()
   await until(async () => !!(await app.getByText('Ask me to design anything').count()), 'the empty state after + (New agent)')
   if (await app.getByType('markdown').count()) throw new Error('+ (New agent) left the old conversation on screen')
+  // Picking a chat with the keyboard (Tab to its row, Enter) hands focus back to the history button, as Escape does.
   await app.getByTestId('agent-history').click()
   await app.getByTestId(`chat-${chatId}`).waitFor()
-  await app.getByTestId(`chat-${chatId}`).click()
+  for (let i = 0; i < 10 && !(await app.getByTestId(`chat-${chatId}-focus`).count()); i++) {
+    await app.call('keystrokes', { keys: 'tab' })
+    await sleep(200)
+  }
+  if (!(await app.getByTestId(`chat-${chatId}-focus`).count())) throw new Error('Tab never reached the saved chat row in the history popover')
+  await app.call('keystrokes', { keys: 'enter' })
   await until(async () => (await app.getByType('markdown').count()) === 1, 'the saved chat to reopen')
+  await until(async () => !!(await app.getByTestId('agent-history-focus').count()), 'the history button to regain keyboard focus after a keyboard pick')
   await app.getByTestId('agent-history').click()
   await app.getByTestId(`chat-${chatId}`).hover()
   // Removal cannot be undone, so the first press only arms it.
@@ -627,7 +661,12 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
   // A textarea's value cannot be read, so send it: the prompt bubble shows what the composer held (the stand-in
   // replies; on Windows a send would start the real CLI).
   if (standIn) {
+    const tabs = async () => { const d = await app!.getByTestId('tab-design').bounds(); const a = await app!.getByTestId('tab-agent').bounds(); return `${d.x},${d.width},${a.x},${a.width}` }
+    const idleTabs = await tabs()
     await app.getByTestId('agent-send').click()
+    // The running dot widens the Agent label: the two tab buttons must keep their size and position.
+    await until(async () => !!(await app!.getByText('Agent •').count()), 'the Agent tab to show the running dot')
+    if ((await tabs()) !== idleTabs) throw new Error(`the Design/Agent tabs moved while the agent ran: ${idleTabs} -> ${await tabs()}`)
     await until(async () => (await app!.getByText('make the title bigger').count()) > 0, 'the composer draft to survive the Design tab and be sent')
     await until(async () => !(await app!.getByTestId('agent-stop').count()), 'the stand-in agent to finish', 20000)
   }
@@ -635,6 +674,21 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
   const one = (await app.getByText('1×').all()).map((n) => n.bounds!).sort((a, b) => a.width - b.width)[0]
   await app.mouse.click({ x: one.x + one.width / 2, y: one.y + one.height / 2 })
   await app.getByTestId('agent-input').fill('')
+
+  // Two submits before the panel re-renders (Enter+Enter, Enter+Send) send the draft once.
+  if (standIn) {
+    for (const [name, second] of [['enter', () => app!.getByTestId('agent-input').press('enter')], ['send', () => app!.getByTestId('agent-send').click()]] as const) {
+      const text = `dup ${name} twice`
+      await app.getByTestId('agent-input').click()
+      await app.getByTestId('agent-input').fill(text)
+      await Promise.all([app.getByTestId('agent-input').press('enter'), second()])
+      await until(async () => (await app!.getByText(text).count()) > 0, `the "${text}" bubble`)
+      await sleep(1000)
+      const n = await app.getByText(text).count()
+      if (n !== 1) throw new Error(`two submits in one frame (${name}) sent "${text}" ${n} times, expected once`)
+      await until(async () => !(await app!.getByTestId('agent-stop').count()), 'the stand-in agent to finish', 30000)
+    }
+  }
 
   // The agent message pill: a reply long enough to fill the pill must not squash its status dot.
   if (standIn) {
@@ -686,7 +740,16 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
     await sleep(200)
     await app.getByTestId('agent-send').click()
     await app.getByText('Got editor state').waitFor({ timeoutMs: 15000 })
-    await app.getByText('Got editor state').click()
+    // The list is still scrolling to the new reply when the row first appears, and a slow renderer can move the row between measuring and clicking: click again until the second detail card (the "Designed" one is still open) is up.
+    for (let tries = 0; tries < 4; tries++) {
+      await app.getByText('Got editor state').click()
+      try {
+        await until(async () => (await app!.getByTestId('tool-detail').count()) > 1, 'the long result to expand', 3000)
+        break
+      } catch (e) {
+        if (tries === 3) throw e
+      }
+    }
     await until(async () => (await app!.getByText('result row 119').count()) > 0, 'the last line of a long tool result')
 
     // Sending while scrolled up in the chat returns the list to the bottom: the echo and the reply are on screen, not off it.
@@ -714,6 +777,14 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
       const b = (await app!.getByType('markdown').all()).find((n) => !oldReplies.has(n.id))?.bounds
       return !!b && b.height > 0 && b.y + b.height <= composer.y
     }, 'the reply on screen after sending from a scrolled-up chat')
+
+    // Enter hands the keys to the canvas, so the composer must not keep drawing its focus ring: typed keys would look like they go to it.
+    await app.getByTestId('agent-input').click()
+    await app.getByTestId('agent-input').fill('Sent with Enter')
+    await until(async () => !!(await app!.getByTestId('agent-input-ring').count()), 'the focus ring on the focused composer')
+    await app.call('keystrokes', { keys: 'enter' })
+    await until(() => onScreen('Sent with Enter'), 'the message sent with Enter on screen')
+    await until(async () => !(await app!.getByTestId('agent-input-ring').count()), 'the composer to drop its focus ring after Enter sent the prompt')
 
     // An expanded thought is secondary to the reply: dimmer text (a markdown block takes its colour from its theme,
     // not from style) and indented. Linux only: grim, and sway for the window's origin.
