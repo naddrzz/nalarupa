@@ -392,6 +392,27 @@ assert(nodeIcon('path') === nodeIcon('polygon') && nodeIcon('frame', true) === '
   for (const [i, what] of ['group', 'update', 'delete'].entries())
     assert(long[i] < Math.max(short[i], 20) * 9 && long[i] < 3000, `${what} of selected layers is linear (1000 layers ${short[i].toFixed(0)} ms, 4000 ${long[i].toFixed(0)} ms)`)
 }
+// Fit all frames the union of what the top-level layers paint: a flipped frame (x -600..0) or a
+// turned one (y -300..300) is inside it, and there is no margin on the unflipped side.
+call('new', { template: 'empty' })
+call('insert', { parent: 'document', node: { type: 'frame', name: 'A', x: 0, y: 0, width: 400, height: 300, fill: '#eee' } })
+const FB = call('insert', { parent: 'document', node: { type: 'frame', name: 'B', x: 0, y: 500, width: 600, height: 300, fill: '#fcc', flipX: true } }).id
+const fa = call<B>('bounds', {})
+assert(same({ ...fa, id: '' }, { id: '', x: -600, y: 0, w: 1000, h: 800 }), `fit-all bounds with a flipped frame ${JSON.stringify(fa)}`)
+call('update', { ids: [FB], props: { flipX: false, x: 0, y: 300, rotation: 90 } })
+const ft = call<B>('bounds', {})
+assert(same({ ...ft, id: '' }, { id: '', x: 0, y: -300, w: 400, h: 600 }), `fit-all bounds with a turned frame ${JSON.stringify(ft)}`)
+
+// A child overflowing an unclipped frame is part of Fit all; a clipping frame cuts it off.
+call('new', { template: 'empty' })
+const FO = call('insert', { parent: 'document', node: { type: 'frame', name: 'O', x: 0, y: 0, width: 400, height: 300, layout: 'none', fill: '#eee' } }).id
+call('insert', { parent: FO, node: { type: 'rectangle', x: 300, y: 200, width: 500, height: 400, fill: '#f00' } })
+const fo = call<B>('bounds', {})
+assert(same({ ...fo, id: '' }, { id: '', x: 0, y: 0, w: 800, h: 600 }), `fit-all bounds with an overflowing child ${JSON.stringify(fo)}`)
+call('update', { ids: [FO], props: { clip: true } })
+const fc = call<B>('bounds', {})
+assert(same({ ...fc, id: '' }, { id: '', x: 0, y: 0, w: 400, h: 300 }), `fit-all bounds with a clipping frame ${JSON.stringify(fc)}`)
+
 assert(ICONS.saveAs !== ICONS.open, 'Save as… has its own icon, not the Open folder')
 
 console.log('editor-check ok')

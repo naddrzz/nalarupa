@@ -230,6 +230,29 @@ pub fn painted_bounds(e: &Engine, ids: &[String]) -> Option<Rect> {
     union(ids.iter().filter_map(|id| v.painted(id, None)))
 }
 
+/// What the top-level layers paint, for Fit all: each layer's painted box plus its descendants'
+/// (an unclipped frame shows children that overflow it; a clipping frame cuts them off).
+pub fn fit_bounds(e: &Engine) -> Option<Rect> {
+    fn rec(v: &View, n: &Value, out: &mut Vec<Rect>) {
+        let Some(id) = n["id"].as_str() else { return };
+        out.extend(v.painted(id, None));
+        if v.flat(id).is_some_and(|f| f.clip) {
+            return;
+        }
+        for c in n["children"].as_array().map(Vec::as_slice).unwrap_or(&[]) {
+            rec(v, c, out);
+        }
+    }
+    let v = View::new(e);
+    let mut boxes = Vec::new();
+    for id in &e.renderer.order {
+        if let Some(n) = e.doc.find(id) {
+            rec(&v, n, &mut boxes);
+        }
+    }
+    union(boxes.into_iter())
+}
+
 /// Marquee hits (touching counts). Containers fully inside the rectangle are picked whole;
 /// top-level frames are entered (artboards); `deep` (Ctrl) picks leaves everywhere.
 pub fn nodes_in_rect(e: &Engine, r: Rect, deep: bool) -> Vec<String> {

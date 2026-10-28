@@ -4,7 +4,7 @@
 use serde_json::{json, Map, Value};
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 pub const FORMAT_VERSION: &str = "2.19";
 pub const ROOT: &str = "document";
@@ -51,19 +51,55 @@ impl Doc {
         Ok(d)
     }
 
-    /// Atomic save: write a temp file next to the target, then rename over it.
+    /// Atomic save: write a temp file next to the target, then rename over it. A symlink is followed
+    /// (the rename would replace the link, leaving the real file stale); a failed save leaves no temp file.
     pub fn save(&self, path: &Path) -> Result<(), String> {
         let text = serde_json::to_string_pretty(&self.root).map_err(|e| e.to_string())?;
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
-        let tmp = path.with_extension("tmp-nalarupa");
-        std::fs::write(&tmp, text).map_err(|e| format!("cannot write {}: {e}", tmp.display()))?;
-        std::fs::rename(&tmp, path).map_err(|e| format!("cannot save {}: {e}", path.display()))
+        let target = match std::fs::canonicalize(path) {
+            Ok(target) => target,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && !path.is_symlink() => path.to_path_buf(),
+            Err(e) => return Err(format!("cannot resolve {}: {e}", path.display())),
+        };
+        let mut tmp_name = target.file_name().unwrap_or_default().to_os_string();
+        tmp_name.push(".tmp-nalarupa");
+        let tmp = target.with_file_name(tmp_name);
+        std::fs::write(&tmp, text).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            format!("cannot write {}: {e}", tmp.display())
+        })?;
+        std::fs::rename(&tmp, &target).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            format!("cannot save {}: {e}", path.display())
+        })
     }
 
     pub fn dir(&self) -> Option<PathBuf> {
         self.path.as_ref().and_then(|p| p.parent().map(Path::to_path_buf))
+    }
+
+    /// Save as: the relative references of `root` (image and shader `url`, `scriptUri`, `imports`)
+    /// resolve against the folder of the document, so a document moving from `from` to `to`
+    /// gets them rewritten to reach the same files. Absolute paths, urls and `pencil:` ids stay.
+    pub fn relocate(root: &mut Value, from: &Path, to: &Path) {
+        let (from, to) = (lexical(from), lexical(to));
+        if let Some(imports) = root.get_mut("imports").and_then(Value::as_object_mut) {
+            for v in imports.values_mut() {
+                if let Some(n) = v.as_str().and_then(|s| relocated(&s.replace("%20", " "), &from, &to)) {
+                    *v = json!(n.replace(' ', "%20"));
+                }
+            }
+        }
+        if let Some(children) = root.get_mut("children") {
+            relocate_in(children, &from, &to);
+        }
+    }
+
+    /// Whether two folders are the same one (by their paths, without touching the disk).
+    pub fn same_dir(a: &Path, b: &Path) -> bool {
+        lexical(a) == lexical(b)
     }
 
     pub fn children(&self) -> &[Value] {
@@ -688,6 +724,62 @@ fn random_id() -> String {
     }).collect()
 }
 
+/// `p` made absolute with `.` and `..` folded away, without touching the disk (the folder may not exist yet).
+fn lexical(p: &Path) -> PathBuf {
+    let p = if p.as_os_str().is_empty() { Path::new(".") } else { p };
+    let mut out = PathBuf::new();
+    for c in std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf()).components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// The relative reference `url` (resolved against `from`) as written for a document in `to`; None when it is
+/// not a relative path (empty, absolute, a `scheme:` url or a `pencil:` id). Another drive gets an absolute path.
+fn relocated(url: &str, from: &Path, to: &Path) -> Option<String> {
+    let (prefix, url) = url.strip_prefix("file://").map_or(("", url), |rest| ("file://", rest)); // loaders read `file://x` as relative too
+    let scheme = url.split_once(':').is_some_and(|(s, _)| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c)));
+    if url.is_empty() || scheme || url.starts_with(['/', '\\']) || Path::new(url).is_absolute() {
+        return None;
+    }
+    let full = lexical(&from.join(url));
+    let target: Vec<_> = full.components().collect();
+    let base: Vec<_> = to.components().collect();
+    let common = target.iter().zip(&base).take_while(|(a, b)| a == b).count();
+    let names = |cs: &[Component]| cs.iter().map(|c| c.as_os_str().to_string_lossy().to_string()).collect::<Vec<_>>();
+    if common == 0 {
+        return Some(format!("{prefix}{}", full.to_string_lossy().replace('\\', "/")));
+    }
+    let rel = vec!["..".to_string(); base.len() - common].into_iter().chain(names(&target[common..])).collect::<Vec<_>>().join("/");
+    Some(if rel.starts_with("..") { format!("{prefix}{rel}") } else { format!("{prefix}./{rel}") })
+}
+
+fn relocate_in(v: &mut Value, from: &Path, to: &Path) {
+    match v {
+        Value::Array(a) => a.iter_mut().for_each(|x| relocate_in(x, from, to)),
+        Value::Object(o) => {
+            let fill = matches!(o.get("type").and_then(Value::as_str), Some("image" | "shader"));
+            for (k, x) in o.iter_mut() {
+                match x {
+                    Value::String(s) if (k == "url" && fill) || k == "scriptUri" => {
+                        if let Some(n) = relocated(s, from, to) {
+                            *s = n;
+                        }
+                    }
+                    _ => relocate_in(x, from, to),
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -877,5 +969,42 @@ mod tests {
         let err = e.copy(&json!({"type":"frame","children":["str"]}), ROOT, None).unwrap_err();
         assert!(err.contains("source") && err.contains("children[0]"), "{err}");
         assert_eq!(e.children().len(), 0);
+    }
+
+    #[test]
+    fn relocate_rewrites_relative_references() {
+        let (from, to) = (Path::new("/p/a"), Path::new("/p/b/c"));
+        let mut root = json!({"imports": {"lib": "my%20lib.pen", "abs": "/x/l.pen"}, "children": [{"id": "f", "type": "frame", "children": [
+            {"fill": {"type": "image", "url": "img/r.png"}},
+            {"fill": [{"type": "shader", "url": "./s.glsl"}, {"type": "image", "url": "../up/u.png"}]},
+            {"type": "script", "scriptUri": "dots.js"},
+            {"type": "browser", "url": "example.com"},
+            {"fill": {"type": "image", "url": "https://h/i.png"}},
+            {"fill": {"type": "image", "url": "data:image/png;base64,AA=="}},
+            {"fill": {"type": "image", "url": "nalarupa:pending-x"}},
+            {"fill": {"type": "image", "url": "/abs/i.png"}},
+            {"fill": {"type": "image", "url": ""}},
+            {"fill": {"type": "image", "url": "file://img/f.png"}},
+            {"type": "script", "scriptUri": "file:///abs/s.js"}]}]});
+        Doc::relocate(&mut root, from, to);
+        assert_eq!(root["imports"], json!({"lib": "../../a/my%20lib.pen", "abs": "/x/l.pen"}));
+        let k = &root["children"][0]["children"];
+        assert_eq!(k[0]["fill"]["url"], "../../a/img/r.png");
+        assert_eq!(k[1]["fill"][0]["url"], "../../a/s.glsl");
+        assert_eq!(k[1]["fill"][1]["url"], "../../up/u.png");
+        assert_eq!(k[2]["scriptUri"], "../../a/dots.js");
+        assert_eq!(k[3]["url"], "example.com");
+        for (i, url) in [(4, "https://h/i.png"), (5, "data:image/png;base64,AA=="), (6, "nalarupa:pending-x"), (7, "/abs/i.png"), (8, "")] {
+            assert_eq!(k[i]["fill"]["url"], url);
+        }
+        assert_eq!(k[9]["fill"]["url"], "file://../../a/img/f.png");
+        assert_eq!(k[10]["scriptUri"], "file:///abs/s.js");
+        // Into a folder below the old one the path points down.
+        let mut root = json!({"children": [{"fill": {"type": "image", "url": "./images/x.jpg"}}]});
+        Doc::relocate(&mut root, Path::new("/p"), Path::new("/p/sub"));
+        assert_eq!(root["children"][0]["fill"]["url"], "../images/x.jpg");
+        Doc::relocate(&mut root, Path::new("/p/sub"), Path::new("/p"));
+        assert_eq!(root["children"][0]["fill"]["url"], "./images/x.jpg");
+        assert!(Doc::same_dir(Path::new("/p/a/../a/"), Path::new("/p/a")));
     }
 }
