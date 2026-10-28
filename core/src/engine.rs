@@ -19,24 +19,32 @@ pub struct ToolOut {
     /// Icons still downloading when the call ended (warning, library, name, weight): `finish` waits for
     /// them without the engine lock and reports the ones that turn out not to exist.
     pub icons: Vec<(String, String, String, u32)>,
-    /// The document the screenshots were taken of, kept only when icons were still downloading: `finish`
-    /// redraws the shots from it, since the live document may have changed (or been switched) meanwhile.
+    /// Icons and images still downloading when the screenshots were taken: `finish` waits for them too.
+    pub downloads: Vec<String>,
+    /// The document the screenshots were taken of, kept only when icons or images were still downloading:
+    /// `finish` redraws the shots from it, since the live document may have changed (or been switched) meanwhile.
     pub shot_doc: Option<Doc>,
 }
 
 impl ToolOut {
     pub fn ok(text: impl Into<String>) -> ToolOut {
-        ToolOut { text: text.into(), images: Vec::new(), error: false, shots: Vec::new(), icons: Vec::new(), shot_doc: None }
+        ToolOut { text: text.into(), images: Vec::new(), error: false, shots: Vec::new(), icons: Vec::new(), downloads: Vec::new(), shot_doc: None }
     }
     pub fn err(text: impl Into<String>) -> ToolOut {
         ToolOut { error: true, ..ToolOut::ok(text) }
     }
     /// Rasterize pending screenshots and settle pending icons. Call without holding `engine()`.
     pub fn finish(mut self) -> ToolOut {
-        self.settle_icons();
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(12);
+        self.settle_icons(until);
+        for key in std::mem::take(&mut self.downloads) {
+            while engine().assets.loading(&key) && std::time::Instant::now() < until {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        }
         let shot_doc = self.shot_doc.take();
         for (id, mut tree, scale) in std::mem::take(&mut self.shots) {
-            // The tree was built while the icons were still downloading, so it has none of them: redraw it
+            // The tree was built while icons or images were still downloading, so it has none of them: redraw it
             // from the same document, not whatever the live one is now.
             if let Some(doc) = &shot_doc {
                 let target = crate::script::shot_target(doc, &id);
@@ -57,8 +65,7 @@ impl ToolOut {
 
     /// Wait (the lock is free between polls, so the downloads can land) for icons the call used, and add
     /// "not found" to the issues list for those that are not in their library.
-    fn settle_icons(&mut self) {
-        let until = std::time::Instant::now() + std::time::Duration::from_secs(12);
+    fn settle_icons(&mut self, until: std::time::Instant) {
         let mut missing = Vec::new();
         for (warning, library, name, weight) in std::mem::take(&mut self.icons) {
             let weight = weight as f64;

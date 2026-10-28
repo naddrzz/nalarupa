@@ -78,6 +78,11 @@ impl Assets {
         self.loading.contains(key)
     }
 
+    /// The icon keys and image urls downloading now (running or queued).
+    pub fn in_flight(&self) -> Vec<String> {
+        self.loading.iter().cloned().collect()
+    }
+
     /// Run `job` (a download that stores its result on disk, true on success) on a background thread
     /// unless this key is already loading or failed, then tell the engine, which draws again.
     /// Past `MAX_DOWNLOADS` running, it waits in the queue until one ends.

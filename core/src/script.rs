@@ -894,8 +894,10 @@ fn finish(e: &mut Engine, prep: Prepared, result: Result<Map<String, Value>, Str
             Err(err) => text += &format!("\nExport failed: {err}\n"),
         }
     }
-    let shot_doc = (!shots.is_empty() && !icons.is_empty()).then(|| e.doc.clone());
-    ToolOut { text, images: Vec::new(), error: false, shots, icons, shot_doc }
+    // Building a shot starts the downloads of the icons and images it shows; `ToolOut::finish` waits for them.
+    let downloads = if shots.is_empty() { Vec::new() } else { e.assets.in_flight() };
+    let shot_doc = (!shots.is_empty() && (!icons.is_empty() || !downloads.is_empty())).then(|| e.doc.clone());
+    ToolOut { text, images: Vec::new(), error: false, shots, icons, downloads, shot_doc }
 }
 
 /// The render tree and scale of a screenshot target (`document` is the first top-level node).
@@ -1628,6 +1630,41 @@ mod tests {
         assert_eq!(out.images.len(), 1, "{}", out.text);
         let png = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &out.images[0]).unwrap();
         assert!(png.starts_with(b"\x89PNG"));
+    }
+
+    /// A screenshot of an image still downloading waits for it (without the engine lock) and shows it.
+    #[test]
+    fn screenshots_wait_for_images_still_downloading() {
+        use std::io::{Read, Write};
+        let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/shot.png", server.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for mut s in server.incoming().flatten() {
+                let mut req = [0; 1024];
+                let _ = s.read(&mut req);
+                std::thread::sleep(Duration::from_millis(300));
+                let red = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, "iVBORw0KGgoAAAANSUhEUgAAAAUAAAAFCAYAAACNbyblAAAAHElEQVQI12P4//8/w38GIAXDIBKE0DHxgljNBAAO9TXL0Y4OHwAAAABJRU5ErkJggg==").unwrap();
+                let _ = s.write_all(format!("HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n", red.len()).as_bytes());
+                let _ = s.write_all(&red);
+            }
+        });
+        let input = format!("c = Insert(document, {{type:\"frame\", width:100, height:100, layout:\"none\", fill:{{type:\"image\", url:\"{url}\", mode:\"fill\"}}}})\nTakeScreenshot(c)");
+        // The global engine: `finish` waits on it, and the download reports to it.
+        let out = {
+            let mut e = crate::engine::engine();
+            let was = std::mem::replace(&mut e.assets.online, true);
+            let out = e.tool("execute", &json!({ "input": input }));
+            e.assets.online = was;
+            out
+        };
+        assert!(!out.error, "{}", out.text);
+        assert!(out.downloads.contains(&url) && out.shot_doc.is_some(), "the shot is redrawn once the image is in");
+        let out = out.finish();
+        assert!(!crate::engine::engine().assets.loading(&url));
+        let png = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &out.images[0]).unwrap();
+        let px = resvg::tiny_skia::Pixmap::decode_png(&png).unwrap();
+        let c = px.pixel(px.width() / 2, px.height() / 2).unwrap();
+        assert!(c.red() > 200 && c.green() < 80, "the image is in the screenshot: {c:?}");
     }
 
     #[test]
