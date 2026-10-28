@@ -913,6 +913,7 @@ impl Engine {
             let rel = rel.replace("%20", " ");
             if let Ok(mut lib) = Doc::load(&base.join(&rel)) {
                 crate::resolve::migrate(&mut lib.root);
+                lib.ensure_ids();
                 drop_pending(&mut lib.root, &self.inflight);
                 drop_placeholder(&mut lib.root, &[]);
                 self.libs.push((alias, lib.root));
@@ -1436,6 +1437,29 @@ mod tests {
         assert_eq!(e.libs[0].1["children"][0]["placeholder"], false);
         e.open(&other).unwrap();
         assert_eq!(e.doc.find("f").unwrap()["placeholder"], false);
+    }
+
+    /// A library with a child without an id and two children sharing one is repaired on open like the document:
+    /// otherwise an instance's children resolve to the paths `i/` and `i/t` twice, and cannot be told apart.
+    #[test]
+    fn open_repairs_library_ids() {
+        let dir = std::env::temp_dir().join(format!("nalarupa-test-lib-ids-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("lib.nala"), r#"{"version":"2.19","children":[{"id":"C","type":"frame","reusable":true,"children":[
+            {"type":"text","content":"no id"},{"id":"t","type":"text","content":"first"},{"id":"t","type":"text","content":"second"}]}]}"#).unwrap();
+        std::fs::write(dir.join("doc.nala"), r#"{"version":"2.19","imports":{"lib":"lib.nala"},"children":[{"id":"i","type":"ref","ref":"lib:C"}]}"#).unwrap();
+        let mut e = Engine::new(dir.join("data"));
+        e.open(&dir.join("doc.nala")).unwrap();
+        let vars = Map::new();
+        let r = crate::resolve::Resolver::new(&e.doc.root, &e.libs, &vars);
+        let inst = r.resolve(&e.doc.children()[0]).unwrap();
+        let paths: Vec<&str> = inst.kids.iter().map(|k| k.id.as_str()).collect();
+        assert_eq!(paths.len(), 3);
+        assert!(paths.iter().all(|p| p.len() > 2 && p.starts_with("i/")), "{paths:?}");
+        assert_eq!(paths.iter().collect::<std::collections::HashSet<_>>().len(), 3, "{paths:?}");
+        assert_eq!(paths[1], "i/t", "the first node keeps its id");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
