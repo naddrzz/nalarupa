@@ -513,7 +513,14 @@ impl Html<'_> {
                 let svg = match fill {
                     Some(fill) => {
                         let svg = self.assets.icon_weight(n.s("library").unwrap_or("lucide"), n.s("icon").unwrap_or(""), n.f("weight").unwrap_or(200.0)).unwrap_or_default();
-                        svg.find("<svg").map(|i| svg[i..].replacen("<svg", &format!("<svg style=\"width:100%;height:100%;color:{fill}\""), 1)).unwrap_or_default()
+                        // A bare-path icon (Material Symbols) sets no fill and would paint black; the canvas fills it with the colour.
+                        svg.find("<svg")
+                            .map(|i| {
+                                let svg = &svg[i..];
+                                let paint = if svg.split('>').next().is_some_and(|tag| tag.contains(" fill=\"")) { "" } else { " fill=\"currentColor\"" };
+                                svg.replacen("<svg", &format!("<svg style=\"width:100%;height:100%;color:{fill}\"{paint}"), 1)
+                            })
+                            .unwrap_or_default()
                     }
                     None => String::new(),
                 };
@@ -1342,6 +1349,22 @@ mod tests {
         // Ids are unique across the page, or the second icon would take the first one's gradient.
         let ids: Vec<&str> = h.split(" id=\"").skip(1).map(|s| s.split('"').next().unwrap()).collect();
         assert!(ids.len() >= 2 && ids.iter().all(|i| ids.iter().filter(|j| j == &i).count() == 1), "{ids:?}\n{h}");
+    }
+
+    #[test]
+    fn html_icon_without_its_own_fill_is_drawn_in_the_fill_colour() {
+        let dir = std::env::temp_dir().join("nalarupa-test-icon-html-bare");
+        let _ = std::fs::create_dir_all(dir.join("cache/icons"));
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" height="48" viewBox="0 -960 960 960" width="48"><path d="M230-190h161v-250h178v250h161v-380L480-750 230-570Z"/></svg>"#;
+        let _ = std::fs::write(dir.join("cache/icons/material_outlined_200-home.svg"), svg);
+        let mut e = Engine::new(dir);
+        e.offline();
+        e.load_template("empty");
+        let icon = json!({"type": "icon", "icon": "home", "library": "Material Symbols Outlined", "x": 0, "y": 0, "width": 80, "height": 80, "fill": "#cc0000"});
+        let id = e.insert_root(icon).unwrap();
+        let h = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
+        // A bare `<path>` paints black unless the svg itself hands it `currentColor`.
+        assert!(h.contains("color:#cc0000\" fill=\"currentColor\""), "{h}");
     }
 
     #[test]
