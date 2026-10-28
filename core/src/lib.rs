@@ -77,7 +77,7 @@ fn rect(f: &render::Flat) -> Value {
 
 fn state(e: &Engine) -> Value {
     json!({"version": e.version, "title": e.title(), "path": e.doc.path, "dirty": e.dirty(), "selection": e.selection,
-           "agentRunning": e.agent.running, "mcpPort": e.mcp_port, "animating": !e.renderer.slides.is_empty() || script::busy()})
+           "agentRunning": e.agent.running, "executing": e.executing, "mcpPort": e.mcp_port, "animating": !e.renderer.slides.is_empty() || script::busy()})
 }
 
 /// Execute one UI command.
@@ -178,7 +178,10 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
                 json!({"bx": bx, "by": by, "rotation": rotation, "flipX": flip_x, "flipY": flip_y})
             });
             let flat = e.renderer.find(id).map(rect);
-            Ok(json!({"node": raw, "box": flat, "local": local, "parent": parent, "parentLayout": parent_layout,
+            // A component instance holds only its overrides: what it inherits, for the Inspector to show where it has none.
+            let empty = serde_json::Map::new();
+            let inherited = raw.as_ref().filter(|n| n["type"] == "ref").and_then(|n| resolve::Resolver::new(&e.doc.root, &e.libs, &empty).inherited(n));
+            Ok(json!({"node": raw, "inherited": inherited, "box": flat, "local": local, "parent": parent, "parentLayout": parent_layout,
                       "variables": e.doc.root.get("variables").cloned().unwrap_or(json!({}))}))
         }
         "select" => {
