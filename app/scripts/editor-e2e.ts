@@ -606,6 +606,20 @@ try {
     await sleep(1200)
   }
   assert((await app.getByTestId('inspector-name').bounds())!.y >= c.y + 3, 'Shift+Tab back to the name field keeps it, ring included, below the panel top')
+  // Tab entering the Inspector from another panel while it is scrolled to its end scrolls back up to the name field.
+  const nameTop = (await app.getByTestId('inspector-name').bounds())!.y
+  assert(await until(async () => {
+    await app.getByTestId('inspector-w').wheel(0, -2000)
+    return (await app.getByTestId('inspector-name').bounds())!.y < nameTop - 10
+  }), 'the wheel scrolls the Inspector down')
+  await app.getByTestId('tab-design').click()
+  for (let i = 0; i < 4 && !(await count('inspector-name-ring')); i++) {
+    await app.call('keystrokes', { keys: 'tab' })
+    await sleep(300)
+  }
+  assert(await until(async () => !!(await count('inspector-name-ring'))), 'Tab from the Design/Agent tabs reaches the name field')
+  assert(await until(async () => (await app.getByTestId('inspector-name').bounds())!.y >= nameTop - 1),
+    'Tab into the scrolled Inspector scrolls the name field, ring included, back into view')
 
   // Handle centers (canvas px), tl, tr, br, bl. Each sits 12 px in at radius 0 and slides toward the middle
   // (80 px for a 180×160 box) as the radius grows: inset = 12 + radius·68/80.
