@@ -1931,6 +1931,7 @@ card = Insert(root, {type:\"frame\", name:\"Card\", width:100, height:100, layou
         let blocked = crate::engine::engine().tool("open_document", &json!({"path": "never-opened.pen"}));
         assert!(blocked.error && blocked.text == crate::engine::SWITCH_BUSY, "a document switch waits for the running script: {}", blocked.text);
         assert!(crate::engine::engine().tool("execute", &json!({"input": "Print(1)"})).error, "a direct execute does not interleave with the running one");
+        assert_eq!(crate::dispatch(&json!({"cmd": "state"})).unwrap()["executing"], true, "the UI state reports the running script, so Home skips its save prompt");
         stop.store(true, Ordering::SeqCst);
         let out = run.join().unwrap();
         assert!(out.error && out.text.contains("stopped"), "{}", out.text);
