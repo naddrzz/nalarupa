@@ -273,6 +273,21 @@ const frame = call('insert', { parent: 'document', node: { type: 'frame', width:
 const kid = call('insert', { parent: frame, node: rect({ name: 'kid', flipX: true, x: 150, y: 20 }) }).id
 const kidSvg = readFileSync(call('export', { ids: [kid], format: 'svg', path: out })[0], 'utf8')
 assert(kidSvg.includes('width="100" height="60" viewBox="500 500 100 60"'), `a flipped child of a frame exports its painted box: ${kidSvg.slice(0, 160)}`)
+// Text lines past a fixed-width-height box are painted, so the export covers them (not just the layer box).
+{
+  const over = (name: string, extra: object = {}) => call('insert', { parent: 'document', node: { type: 'text', name, content: 'a\nb\nc\nd\ne', textGrowth: 'fixed-width-height', width: 120, height: 40, fontSize: 24, fill: '#000000', x: 900, y: 900, ...extra } }).id
+  const top = over('overflow')
+  const p = png(top)
+  assert(p.w === 120 && p.h > 100, `an overflowing text exports its lines, not the 120x40 box (got ${p.w}x${p.h})`)
+  const svg = readFileSync(call('export', { ids: [top], format: 'svg', path: out })[0], 'utf8')
+  assert(svg.includes(`height="${p.h}" viewBox="900 900 120 ${p.h}`), `svg of an overflowing text is as tall as the png: ${svg.slice(0, 160)}`)
+  assert(readFileSync(call('export', { ids: [top], format: 'pdf', path: join(out, 'overflow.pdf') })[0], 'latin1').includes(`/MediaBox[0 0 120 ${p.h}]`), 'pdf page of an overflowing text covers its lines')
+  const lowId = over('overflow-bottom', { textAlignVertical: 'bottom', y: 1200 })
+  const low = png(lowId)
+  assert(low.w === 120 && low.h === p.h, `a bottom-aligned overflowing text exports the same height (got ${low.w}x${low.h})`)
+  const lowSvg = readFileSync(call('export', { ids: [lowId], format: 'svg', path: out })[0], 'utf8')
+  assert(lowSvg.includes(`viewBox="900 ${1240 - low.h} 120 ${low.h}"`), `a bottom-aligned overflow reaches above its box: ${lowSvg.slice(0, 160)}`)
+}
 
 // HTML export reserves the rotated bounding box of a child in an auto layout, like the canvas does.
 {
