@@ -849,8 +849,11 @@ fn finish(e: &mut Engine, prep: Prepared, result: Result<Map<String, Value>, Str
         e.sync();
         for (frame, prompt) in &ex.pens {
             let size = e.renderer.find(frame).map_or((400.0, 400.0), |f| (f.w.max(1.0), f.h.max(1.0)));
-            e.agent.pens.push(frame.clone());
-            crate::pen::start(frame.clone(), prompt.clone(), size, e.agent.cancel.clone());
+            // Its own flag, set by Stop even after a later turn replaced the run's. A run being stopped starts it stopped;
+            // the flag of a run that has ended does not (an MCP client's pen after a Stop draws).
+            let cancel = Arc::new(AtomicBool::new(e.agent.running && e.agent.cancel.load(Ordering::SeqCst)));
+            e.agent.pens.push((frame.clone(), cancel.clone()));
+            crate::pen::start(frame.clone(), prompt.clone(), size, cancel);
         }
     }
 

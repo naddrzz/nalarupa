@@ -87,7 +87,7 @@ export function App() {
     const t = setInterval(() => {
       const r = tryCall<{ state: State; events: any[] }>('poll')
       if (!r) return
-      setState((s) => (s.version === r.state.version && s.agentRunning === r.state.agentRunning && s.dirty === r.state.dirty && s.title === r.state.title && s.animating === r.state.animating ? s : r.state))
+      setState((s) => (s.version === r.state.version && s.agentRunning === r.state.agentRunning && s.penDrawing === r.state.penDrawing && s.dirty === r.state.dirty && s.title === r.state.title && s.animating === r.state.animating ? s : r.state))
       if (applyEvents(r.events, performance.now())) setChatTick((n) => n + 1)
       const toastEv = r.events.find((e) => e.type === 'toast')
       if (toastEv) toast(toastEv.text)
@@ -402,7 +402,7 @@ export function App() {
             <Design version={state.version} selection={selection} select={select} toast={toast} />
           ) : (
             <ShortcutScope value={null}>
-              <Chat tick={chatTick} running={state.agentRunning} mcpUrl={init.mcpUrl} toast={toast} onSent={sent} />
+              <Chat tick={chatTick} running={state.agentRunning} drawing={!!state.penDrawing} mcpUrl={init.mcpUrl} toast={toast} onSent={sent} />
             </ShortcutScope>
           )}
         </div>

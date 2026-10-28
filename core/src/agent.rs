@@ -77,7 +77,8 @@ pub struct AgentState {
     /// "Let it cook": designs left in this run (counting the current one) and "layout" | "style".
     pub cook: (usize, String),
     /// Frames an AI Pen is still drawing into, one entry per running pen: its `placeholder` flag is the pen's to clear.
-    pub pens: Vec<String>,
+    /// Each pen has its own cancel flag: it can outlive its run, whose flag the next turn replaces, and Stop still ends it.
+    pub pens: Vec<(String, Arc<AtomicBool>)>,
 }
 
 pub struct Chat {
@@ -393,7 +394,7 @@ fn start_thread(p: Profile, prompt: String, child: Option<String>) -> bool {
 fn clear_generating(e: &mut Engine) {
     let mut stale = Vec::new();
     crate::doc::walk(e.doc.children(), &mut |n| {
-        if n["placeholder"] == true && n["id"].as_str().is_some_and(|id| !e.agent.pens.iter().any(|p| p == id)) {
+        if n["placeholder"] == true && n["id"].as_str().is_some_and(|id| !e.agent.pens.iter().any(|(p, _)| p == id)) {
             stale.push(n["id"].as_str().unwrap_or_default().to_string());
         }
     });
@@ -419,6 +420,9 @@ fn drop_queue(e: &mut Engine) {
 pub fn stop() {
     let mut e = engine();
     e.agent.cancel.store(true, Ordering::SeqCst);
+    for (_, pen) in &e.agent.pens {
+        pen.store(true, Ordering::SeqCst);
+    }
     drop_queue(&mut e);
     e.agent.cook.0 = 1;
     for (_, (_, waiting)) in e.agent.permissions.drain() {
@@ -1506,6 +1510,27 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Stop reaches an AI Pen that outlives its run: a later turn's fresh cancel flag does not orphan
+    /// the pen, and the state reports it drawing so the composer offers Stop.
+    #[test]
+    fn stop_cancels_a_pen_from_an_earlier_turn() {
+        let _busy = agent_busy();
+        let pen = Arc::new(AtomicBool::new(false));
+        {
+            let mut e = engine();
+            e.agent.pens.push(("penframe".into(), pen.clone()));
+            assert_eq!(crate::state(&e)["penDrawing"], true);
+            // A later turn swaps the run's flag, as `start_turn` does.
+            e.agent.cancel = Arc::new(AtomicBool::new(false));
+        }
+        stop();
+        assert!(pen.load(Ordering::SeqCst), "Stop cancels the pen");
+        let mut e = engine();
+        e.agent.pens.retain(|(_, c)| !Arc::ptr_eq(c, &pen));
+        e.agent.cancel = Arc::new(AtomicBool::new(false));
+        assert_eq!(crate::state(&e)["penDrawing"], false);
+    }
+
     /// Stop drops the queued prompts and says so, so the chat does not keep promising to send them.
     #[test]
     fn stop_announces_dropped_queue() {
@@ -1566,7 +1591,7 @@ mod tests {
         let frame = |name: &str| json!({"type": "frame", "name": name, "x": 0, "y": 0, "width": 100, "height": 100, "placeholder": true});
         let (a, drawing) = (e.doc.insert("document", frame("A"), None).unwrap(), e.doc.insert("document", frame("B"), None).unwrap());
         let nested = e.doc.insert(&a, frame("Nested"), None).unwrap();
-        e.agent.pens.push(drawing.clone());
+        e.agent.pens.push((drawing.clone(), Arc::default()));
         clear_generating(&mut e);
         let flag = |e: &Engine, id: &str| e.doc.find(id).unwrap()["placeholder"] == true;
         assert!(!flag(&e, &a) && !flag(&e, &nested), "stale flags are cleared, nested frames too");

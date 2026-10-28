@@ -29,7 +29,7 @@ const PREVIEW: &str = "#607DFF";
 const APPLY_EVERY: Duration = Duration::from_millis(50);
 
 /// Draw `prompt` into `frame` (`size` = its width and height) in the background. Stops early when
-/// `cancel` is set (the agent was stopped) or the frame disappears.
+/// `cancel` (the pen's entry in `agent.pens`) is set by Stop, or the frame disappears.
 pub fn start(frame: String, prompt: String, size: (f64, f64), cancel: Arc<AtomicBool>) {
     std::thread::spawn(move || {
         let mut pen = Pen { frame, size, text: String::new(), ids: Vec::new(), applied: None, seen: 0, point: None };
@@ -39,9 +39,9 @@ pub fn start(frame: String, prompt: String, size: (f64, f64), cancel: Arc<Atomic
             engine().emit(json!({"type": "toast", "text": format!("AI Pen: {err}")}));
         }
         pen.feed("", true);
-        // One entry per pen: another pen drawing into the same frame keeps its own.
+        // Its own entry: another pen drawing into the same frame keeps its own.
         let mut e = engine();
-        if let Some(i) = e.agent.pens.iter().position(|f| *f == pen.frame) {
+        if let Some(i) = e.agent.pens.iter().position(|(_, c)| Arc::ptr_eq(c, &cancel)) {
             e.agent.pens.remove(i);
         }
     });

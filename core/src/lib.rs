@@ -76,7 +76,7 @@ fn rect(f: &render::Flat) -> Value {
 
 fn state(e: &Engine) -> Value {
     json!({"version": e.version, "title": e.title(), "path": e.doc.path, "dirty": e.dirty(), "selection": e.selection,
-           "agentRunning": e.agent.running, "mcpPort": e.mcp_port, "animating": !e.renderer.slides.is_empty()})
+           "agentRunning": e.agent.running, "penDrawing": !e.agent.pens.is_empty(), "mcpPort": e.mcp_port, "animating": !e.renderer.slides.is_empty()})
 }
 
 /// Execute one UI command.
