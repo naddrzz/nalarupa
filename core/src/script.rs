@@ -1565,6 +1565,149 @@ mod tests {
         assert_eq!(e.renderer.slides.len(), 1, "the card carries its children along");
     }
 
+    /// A slide is snapshotted alone, so a glass node would show the backdrop sharp until it settled:
+    /// it appears in place, and so does a sliding card that gets a glass child.
+    #[test]
+    fn glass_nodes_do_not_slide() {
+        let mut e = engine();
+        let out = execute(&mut e, &json!({"input": r##"
+            root = Insert(document, {type:"frame", name:"Root", width:300, height:300, layout:"none"});
+            Insert(root, {type:"rectangle", name:"Glass", width:100, height:100, effect:{type:"background_blur", radius:20}});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        assert!(e.renderer.slides.is_empty());
+
+        let mut e = engine();
+        let out = execute(&mut e, &json!({"input": r##"
+            root = Insert(document, {type:"frame", name:"Root", width:300, height:300, layout:"none"});
+            card = Insert(root, {type:"frame", name:"Card", width:100, height:100, layout:"none"});
+            Insert(card, {type:"rectangle", name:"Plain", width:10, height:10});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        assert_eq!(e.renderer.slides.len(), 1, "a plain card slides");
+        let out = execute(&mut e, &json!({"input": r##"
+            card = Get(n => n.name === "Card" ? n.id : undefined)[0];
+            Insert(card, {type:"rectangle", name:"Glass", width:50, height:50, effect:[{type:"background_blur", radius:20}]});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        assert!(e.renderer.slides.is_empty(), "the card holds a glass node now");
+    }
+
+    /// Glass inside a component instance, glass added by an update, and glass inserted at the slide
+    /// cap all leave no slide behind either.
+    #[test]
+    fn glass_found_through_instances_updates_and_the_cap() {
+        let mut e = engine();
+        let out = execute(&mut e, &json!({"input": r##"
+            comp = Insert(document, {type:"frame", name:"Comp", reusable:true, x:900, width:50, height:50, layout:"none", children:[{type:"rectangle", name:"Pane", width:50, height:50, effect:{type:"background_blur", radius:20}}]});
+            root = Insert(document, {type:"frame", name:"Root", width:300, height:300, layout:"none"});
+            Insert(root, {type:"ref", ref:comp, width:50, height:50});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        assert!(e.renderer.slides.is_empty(), "an instance of a glass component appears in place");
+
+        let mut e = engine();
+        let out = execute(&mut e, &json!({"input": r##"
+            root = Insert(document, {type:"frame", name:"Root", width:300, height:300, layout:"none"});
+            card = Insert(root, {type:"frame", name:"Card", width:100, height:100, layout:"none"});
+            r = Insert(card, {type:"rectangle", name:"Plain", width:10, height:10});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        assert_eq!(e.renderer.slides.len(), 1);
+        let out = execute(&mut e, &json!({"input": r##"
+            Update(Get(n => n.name === "Plain" ? n.id : undefined)[0], {effect:{type:"background_blur", radius:20}});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        e.sync();
+        assert!(e.renderer.slides.is_empty(), "the sliding card holds a glass node after the update");
+
+        let mut e = engine();
+        let out = execute(&mut e, &json!({"input": r##"
+            root = Insert(document, {type:"frame", name:"Root", width:300, height:300, layout:"none"});
+            card = Insert(root, {type:"frame", name:"Card", width:100, height:100, layout:"none"});
+            for (let i = 0; i < 40; i++) Insert(root, {type:"rectangle", name:"r"+i, x:i, y:200, width:10, height:10});
+            Insert(card, {type:"rectangle", name:"Glass", width:50, height:50, effect:{type:"background_blur", radius:20}});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        assert!(e.renderer.slides.iter().all(|s| e.doc.find(&s.id).is_some_and(|n| n["name"] != "Card")), "the card does not slide once it holds glass, even at the cap");
+    }
+
+    /// Copy, Move, Replace and an edit of a component definition also stop a card that holds glass afterwards.
+    #[test]
+    fn glass_added_by_copy_move_replace_or_a_component_edit_unslides() {
+        let setup = r##"
+            glass = Insert(document, {type:"rectangle", name:"Glass", x:900, width:50, height:50, effect:{type:"background_blur", radius:20}});
+            comp = Insert(document, {type:"frame", name:"Comp", reusable:true, x:700, width:50, height:50, layout:"none", children:[{type:"rectangle", name:"Pane", width:50, height:50}]});
+            root = Insert(document, {type:"frame", name:"Root", width:300, height:300, layout:"none"});
+            card = Insert(root, {type:"frame", name:"Card", width:100, height:100, layout:"none"});
+            plain = Insert(card, {type:"rectangle", name:"Plain", width:10, height:10});
+        "##;
+        for edit in [
+            r#"Copy(glass, card);"#,
+            r#"Move(glass, card);"#,
+            r#"Replace(plain, {type:"rectangle", name:"G2", width:10, height:10, effect:{type:"background_blur", radius:20}});"#,
+        ] {
+            let mut e = engine();
+            let out = execute(&mut e, &json!({"input": setup}));
+            assert!(!out.error, "{}", out.text);
+            assert_eq!(e.renderer.slides.len(), 1, "{edit}: the card slides first");
+            let out = execute(&mut e, &json!({"input": format!("glass = Get(n => n.name === 'Glass' ? n.id : undefined)[0]; card = Get(n => n.name === 'Card' ? n.id : undefined)[0]; plain = Get(n => n.name === 'Plain' ? n.id : undefined)[0]; {edit}")}));
+            assert!(!out.error, "{edit}: {}", out.text);
+            e.sync();
+            assert!(e.renderer.slides.is_empty(), "{edit}: the card holds glass now");
+        }
+
+        let mut e = engine();
+        let out = execute(&mut e, &json!({"input": r##"
+            comp = Insert(document, {type:"frame", name:"Comp", reusable:true, x:700, width:50, height:50, layout:"none", children:[{type:"rectangle", name:"Pane", width:50, height:50}]});
+            root = Insert(document, {type:"frame", name:"Root", width:300, height:300, layout:"none"});
+            Insert(root, {type:"ref", ref:comp, width:50, height:50});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        assert_eq!(e.renderer.slides.len(), 1, "the instance slides first");
+        let out = execute(&mut e, &json!({"input": r##"
+            Update(Get(n => n.name === "Pane" ? n.id : undefined)[0], {effect:{type:"background_blur", radius:20}});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        e.sync();
+        assert!(e.renderer.slides.is_empty(), "the instance's component gained glass");
+    }
+
+    /// An edit that does not come from a script (the inspector) stops a sliding card that gains glass too.
+    #[test]
+    fn glass_added_outside_a_script_unslides() {
+        let mut e = engine();
+        let out = execute(&mut e, &json!({"input": r##"
+            root = Insert(document, {type:"frame", name:"Root", width:300, height:300, layout:"none"});
+            card = Insert(root, {type:"frame", name:"Card", width:100, height:100, layout:"none"});
+            Insert(card, {type:"rectangle", name:"Plain", width:10, height:10});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        assert_eq!(e.renderer.slides.len(), 1);
+        let id = e.doc.root["children"][0]["children"][0]["children"][0]["id"].as_str().unwrap().to_string();
+        e.edit(|d| d.update(&id, &json!({"effect": {"type": "background_blur", "radius": 20}}))).unwrap();
+        e.sync();
+        assert!(e.renderer.slides.is_empty(), "the card holds glass after an inspector edit");
+    }
+
+    /// A streamed step that gives a sliding card glass stops the slide: the card lives in the preview
+    /// document, which is the one `sync` renders.
+    #[test]
+    fn glass_added_by_a_streamed_update_unslides() {
+        let mut e = engine();
+        let head = "root = Insert(document, {type:\"frame\", name:\"Root\", width:300, height:300, layout:\"none\"})
+card = Insert(root, {type:\"frame\", name:\"Card\", width:100, height:100, layout:\"none\"})
+";
+        let full = format!("{head}Update(card, {{effect:{{type:\"background_blur\", radius:20}}}})\nx = 1\n");
+        e.stream_update("toolu_1", "ag0", &format!("{head}Update(card"));
+        e.sync();
+        assert!(e.doc.children().is_empty(), "the card exists only in the preview");
+        assert_eq!(e.renderer.slides.len(), 1, "a plain streamed card slides");
+        e.stream_update("toolu_1", "ag0", &full);
+        e.sync();
+        assert!(e.renderer.slides.is_empty(), "the streamed update gave the card glass");
+    }
+
     /// A slide is an isolated snapshot, so a blended paint would show its plain colour until the
     /// slide ends: a node with a blend mode (itself or in its subtree) appears in place instead.
     #[test]
