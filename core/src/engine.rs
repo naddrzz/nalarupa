@@ -405,8 +405,9 @@ fn merge3(base: &Value, theirs: &Value, ours: &Value) -> Value {
 }
 
 const UNDO_LIMIT: usize = 100;
-/// The agent edits whatever document is open, so a document switch waits for it to stop.
-pub const SWITCH_BUSY: &str = "Stop the agent before opening another document.";
+/// The agent, and an AI Pen that outlives its run, edit whatever document is open, so a document switch
+/// waits for them to stop. Home shows any refusal starting "Stop the agent" as is.
+pub const SWITCH_BUSY: &str = "Stop the agent or the AI Pen before opening another document.";
 /// An external agent has no Save / Don't save prompt, so it must not replace unsaved work.
 pub const SWITCH_DIRTY: &str = "The open document has unsaved changes; ask the user to save it first.";
 
@@ -867,6 +868,12 @@ impl Engine {
         }
     }
 
+    /// An agent run, an `execute`, or an AI Pen that outlives its run still edits the open document, so it must
+    /// not be replaced (see `SWITCH_BUSY`).
+    pub fn switch_busy(&self) -> bool {
+        self.agent.running || self.executing || !self.agent.pens.is_empty()
+    }
+
     pub fn dirty(&self) -> bool {
         self.version != self.saved
     }
@@ -936,6 +943,7 @@ impl Engine {
             let rel = rel.replace("%20", " ");
             if let Ok(mut lib) = Doc::load(&base.join(&rel)) {
                 crate::resolve::migrate(&mut lib.root);
+                lib.ensure_ids();
                 drop_pending(&mut lib.root, &self.inflight);
                 drop_placeholder(&mut lib.root, &[]);
                 self.libs.push((alias, lib.root));
@@ -1137,7 +1145,7 @@ impl Engine {
                 out
             }
             "open_document" => {
-                if self.agent.running || self.executing {
+                if self.switch_busy() {
                     return ToolOut::err(SWITCH_BUSY);
                 }
                 if self.dirty() {
@@ -1459,6 +1467,39 @@ mod tests {
         assert_eq!(e.libs[0].1["children"][0]["placeholder"], false);
         e.open(&other).unwrap();
         assert_eq!(e.doc.find("f").unwrap()["placeholder"], false);
+    }
+
+    /// A library with a child without an id and two children sharing one is repaired on open like the document:
+    /// otherwise an instance's children resolve to the paths `i/` and `i/t` twice, and cannot be told apart.
+    #[test]
+    fn open_repairs_library_ids() {
+        let dir = std::env::temp_dir().join(format!("nalarupa-test-lib-ids-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("lib.nala"), r#"{"version":"2.19","children":[{"id":"C","type":"frame","reusable":true,"children":[
+            {"type":"text","content":"no id"},{"id":"t","type":"text","content":"first"},{"id":"t","type":"text","content":"second"}]}]}"#).unwrap();
+        std::fs::write(dir.join("doc.nala"), r#"{"version":"2.19","imports":{"lib":"lib.nala"},"children":[{"id":"i","type":"ref","ref":"lib:C"}]}"#).unwrap();
+        let mut e = Engine::new(dir.join("data"));
+        e.open(&dir.join("doc.nala")).unwrap();
+        let vars = Map::new();
+        let r = crate::resolve::Resolver::new(&e.doc.root, &e.libs, &vars);
+        let inst = r.resolve(&e.doc.children()[0]).unwrap();
+        let paths: Vec<&str> = inst.kids.iter().map(|k| k.id.as_str()).collect();
+        assert_eq!(paths.len(), 3);
+        assert!(paths.iter().all(|p| p.len() > 2 && p.starts_with("i/")), "{paths:?}");
+        assert_eq!(paths.iter().collect::<std::collections::HashSet<_>>().len(), 3, "{paths:?}");
+        assert_eq!(paths[1], "i/t", "the first node keeps its id");
+        // The repair is the same on every open, and when the library itself is opened (and saved),
+        // so an override saved on a repaired child still reaches it.
+        let paths: Vec<String> = paths.iter().map(|p| p.to_string()).collect();
+        e.open(&dir.join("doc.nala")).unwrap();
+        let r = crate::resolve::Resolver::new(&e.doc.root, &e.libs, &vars);
+        let again: Vec<String> = r.resolve(&e.doc.children()[0]).unwrap().kids.iter().map(|k| k.id.clone()).collect();
+        assert_eq!(again, paths, "the same ids on the next open");
+        e.open(&dir.join("lib.nala")).unwrap();
+        let own: Vec<String> = e.doc.children()[0]["children"].as_array().unwrap().iter().map(|k| format!("i/{}", k["id"].as_str().unwrap())).collect();
+        assert_eq!(own, paths, "the library opened as a document gets the same ids");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

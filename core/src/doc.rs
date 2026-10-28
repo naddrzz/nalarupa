@@ -78,12 +78,14 @@ impl Doc {
 
     /// Give every node without a usable id a fresh one and make repeated ids unique
     /// (the first node keeps its id). Hand-written files and copy-pasted JSON have both.
+    /// A new id follows from the node's place in the tree, so an imported library (repaired on every
+    /// open, never saved) gets the same ids each time, and the same ones as when it is opened itself.
     pub fn ensure_ids(&mut self) {
         let mut taken = std::collections::HashSet::new();
         collect_ids(self.children(), &mut taken);
         let mut seen = std::collections::HashSet::new();
         if let Some(kids) = self.root["children"].as_array_mut() {
-            fix_ids(kids, &mut seen, &mut taken);
+            fix_ids(kids, &mut Vec::new(), &mut seen, &mut taken);
         }
     }
 
@@ -593,22 +595,35 @@ fn collect_ids(nodes: &[Value], out: &mut std::collections::HashSet<String>) {
     }
 }
 
-fn fix_ids(nodes: &mut [Value], seen: &mut std::collections::HashSet<String>, taken: &mut std::collections::HashSet<String>) {
-    for n in nodes {
+fn fix_ids(nodes: &mut [Value], at: &mut Vec<usize>, seen: &mut std::collections::HashSet<String>, taken: &mut std::collections::HashSet<String>) {
+    for (i, n) in nodes.iter_mut().enumerate() {
         let Some(obj) = n.as_object_mut() else { continue };
+        at.push(i);
         let keep = obj.get("id").and_then(Value::as_str).filter(|id| !id.is_empty() && !id.contains('/') && !seen.contains(*id)).map(str::to_string);
-        let id = keep.unwrap_or_else(|| loop {
-            let id = random_id();
-            if taken.insert(id.clone()) {
-                break id;
-            }
-        });
+        let id = keep.unwrap_or_else(|| (0u64..).map(|n| place_id(at, n)).find(|id| taken.insert(id.clone())).unwrap_or_default());
         obj.insert("id".into(), json!(id));
         seen.insert(id);
         if let Some(kids) = obj.get_mut("children").and_then(Value::as_array_mut) {
-            fix_ids(kids, seen, taken);
+            fix_ids(kids, at, seen, taken);
+        }
+        at.pop();
+    }
+}
+
+/// A five-character id (like `random_id`) hashed from a node's child indices from the root and an attempt number.
+fn place_id(at: &[usize], attempt: u64) -> String {
+    const ABC: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    let mut h: u64 = 0xcbf29ce484222325;
+    for v in at.iter().map(|&i| i as u64).chain([u64::MAX, attempt]) {
+        for b in v.to_le_bytes() {
+            h = (h ^ b as u64).wrapping_mul(0x100000001b3);
         }
     }
+    (0..5).map(|_| {
+        let c = ABC[(h % ABC.len() as u64) as usize] as char;
+        h /= ABC.len() as u64;
+        c
+    }).collect()
 }
 
 pub fn find_in<'a>(nodes: &'a [Value], id: &str) -> Option<&'a Value> {

@@ -111,7 +111,7 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
         "state" => Ok(state(&engine())),
         "new" => {
             let mut e = engine();
-            if e.agent.running || e.executing {
+            if e.switch_busy() {
                 return Err(engine::SWITCH_BUSY.into());
             }
             e.load_template(req["template"].as_str().unwrap_or("blank"));
@@ -119,7 +119,7 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
         }
         "open" => {
             let mut e = engine();
-            if e.agent.running || e.executing {
+            if e.switch_busy() {
                 return Err(engine::SWITCH_BUSY.into());
             }
             e.open(std::path::Path::new(req["path"].as_str().ok_or("path required")?))?;
