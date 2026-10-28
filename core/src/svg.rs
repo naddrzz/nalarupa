@@ -1535,7 +1535,8 @@ impl<'a> Svg<'a> {
     fn icon_markup(&mut self, n: &RNode, paints: Option<&[Paint]>) -> String {
         let lib = n.s("library").unwrap_or("lucide").to_string();
         let name = n.s("icon").unwrap_or("").to_string();
-        let src = self.assets.icon_weight(&lib, &name, n.f("weight").unwrap_or(200.0));
+        let weight = n.f("weight").unwrap_or(200.0);
+        let src = self.assets.icon_weight(&lib, &name, weight);
         let parsed = src.as_deref().and_then(|src| {
             let start = src.find("<svg")?;
             let tag_end = start + src[start..].find('>')?;
@@ -1560,6 +1561,10 @@ impl<'a> Svg<'a> {
             Some((src[tag_end + 1..inner_end].to_string(), attrs, vb))
         });
         let Some((inner, attrs, [vx, vy, vw, vh])) = parsed else {
+            // Still downloading: draw nothing, like a remote image that has not arrived yet.
+            if src.is_none() && self.assets.icon_loading(&lib, &name, weight) {
+                return String::new();
+            }
             // Missing icon: dashed box in the first solid fill color.
             let c = self.paints(n.p.get("fill"), (n.x, n.y, n.w, n.h)).into_iter().find(|p| p.value.starts_with('#'));
             return c.map(|c| format!(r#"<rect x="{}" y="{}" width="{}" height="{}" rx="3" fill="none" stroke="{}" stroke-opacity="0.4" stroke-dasharray="2 2"/>"#, n.x, n.y, n.w, n.h, c.value)).unwrap_or_default();
@@ -2117,6 +2122,25 @@ mod tests {
         let mut n = RNode::leaf("n".into(), ty, p.as_object().cloned().unwrap_or_default(), None);
         (n.x, n.y, n.w, n.h) = (x, y, w, h);
         n
+    }
+
+    /// An icon still downloading draws nothing, like a remote image that has not arrived; only an icon
+    /// that does not exist gets the dashed "missing" box.
+    #[test]
+    fn a_loading_icon_draws_no_missing_box() {
+        let dir = std::env::temp_dir().join("nalarupa-test-icon-loading");
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut e = crate::engine::Engine::new(dir.clone());
+        e.assets.online = false;
+        let id = e.doc.insert(crate::doc::ROOT, json!({"type": "icon", "icon": "zap", "library": "lucide", "x": 0, "y": 0, "width": 24, "height": 24, "fill": "#cc0000"}), None).unwrap();
+        let key = format!("{}/zap", icon_url("lucide", "zap", 200.0).1);
+        e.assets.loading.insert(key.clone());
+        let (svg, _) = e.ctx().node_svg(&id).unwrap();
+        assert!(!svg.contains("stroke-dasharray"), "a loading icon draws no missing box: {svg}");
+        e.assets.loading.remove(&key);
+        let (svg, _) = e.ctx().node_svg(&id).unwrap();
+        assert!(svg.contains("stroke-dasharray"), "a missing icon keeps its dashed box: {svg}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Web images are cached with an extension sniffed from their bytes (resvg decodes by
