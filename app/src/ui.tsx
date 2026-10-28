@@ -169,13 +169,16 @@ export function useFieldRing(onFocus?: Handler, onBlur?: Handler) {
     backStops.set(field, stop.current.id)
     return () => void backStops.delete(field)
   })
+  // Leave the id alone when it already names another element: Tab sets it before the blur arrives.
+  const release = () => { setFocus(false); if (el.current?.id === keyboardFocusId) setKeyboardFocus(null) }
   return {
     ref,
     back: <div ref={stop} onKeyDown={noKey} style={{ position: 'absolute', width: 0, height: 0 }} />,
     ring: focus || on,
     onFocus: (e: EventPayload) => { setFocus(true); onFocus?.(e) },
-    // Leave the id alone when it already names another element: Tab sets it before the blur arrives.
-    onBlur: (e: EventPayload) => { setFocus(false); if (el.current?.id === keyboardFocusId) setKeyboardFocus(null); onBlur?.(e) },
+    onBlur: (e: EventPayload) => { release(); onBlur?.(e) },
+    /** Drop the ring after focus was moved away from code (`focusElement`): the field gets no blur event then. */
+    release,
     onMouseDown: () => void setTimeout(() => setKeyboardFocus(renderer.getFocusedElementId?.() ?? null), 30),
   }
 }

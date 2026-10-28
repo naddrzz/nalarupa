@@ -755,6 +755,14 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
       return !!b && b.height > 0 && b.y + b.height <= composer.y
     }, 'the reply on screen after sending from a scrolled-up chat')
 
+    // Enter hands the keys to the canvas, so the composer must not keep drawing its focus ring: typed keys would look like they go to it.
+    await app.getByTestId('agent-input').click()
+    await app.getByTestId('agent-input').fill('Sent with Enter')
+    await until(async () => !!(await app!.getByTestId('agent-input-ring').count()), 'the focus ring on the focused composer')
+    await app.call('keystrokes', { keys: 'enter' })
+    await until(() => onScreen('Sent with Enter'), 'the message sent with Enter on screen')
+    await until(async () => !(await app!.getByTestId('agent-input-ring').count()), 'the composer to drop its focus ring after Enter sent the prompt')
+
     // An expanded thought is secondary to the reply: dimmer text (a markdown block takes its colour from its theme,
     // not from style) and indented. Linux only: grim, and sway for the window's origin.
     if (sock) {
