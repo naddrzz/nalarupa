@@ -103,7 +103,7 @@ pub fn plan(e: &mut Engine, ids: &[String], format: &str, out: &str, opts: &Valu
                 let file = dir.join(format!("{}.{format}", file_stem(id)));
                 let output = if format == "svg" {
                     let mut cx = e.ctx();
-                    Output::Bytes(cx.node_svg(id).ok_or_else(|| cx.missing(id))?.0.into_bytes())
+                    Output::Bytes(cx.export_svg(id).ok_or_else(|| cx.missing(id))?.into_bytes())
                 } else {
                     let scale = scale.clamp(0.05, 8.0);
                     Output::Image(e.ctx().node_tree_at(id, scale)?, format.to_string(), scale, quality)

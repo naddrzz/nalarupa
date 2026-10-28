@@ -255,13 +255,18 @@ impl Ctx<'_> {
 
     /// SVG for a single (possibly nested) node, cropped to its box.
     pub fn node_svg(&mut self, id: &str) -> Option<(String, (f64, f64, f64, f64))> {
-        self.node_svg_at(id, 1.0)
+        self.node_svg_at(id, 1.0, false)
+    }
+
+    /// The SVG file export: image fills are inlined, so it renders outside this machine.
+    pub fn export_svg(&mut self, id: &str) -> Option<String> {
+        self.node_svg_at(id, 1.0, true).map(|(svg, _)| svg)
     }
 
     /// Raster export: the node's visual bounds (shadows, blur and outer stroke
     /// included) from their unrounded corner, `ceil((max − min) · scale)` pixels in each axis. The
     /// float arithmetic matches JS, so e.g. y = 3266.9999999999995 + 933 exports 934 rows.
-    fn node_svg_at(&mut self, id: &str, scale: f64) -> Option<(String, (f64, f64, f64, f64))> {
+    fn node_svg_at(&mut self, id: &str, scale: f64, embed: bool) -> Option<(String, (f64, f64, f64, f64))> {
         let top = top_index(self.doc, id)?;
         let root = self.laid_out(top)?;
         let node = find_rnode(&root, id)?;
@@ -270,6 +275,7 @@ impl Ctx<'_> {
         let ph = (((y + h) - y) * scale).ceil().max(1.0);
         let view = (x, y, pw / scale, ph / scale);
         let mut svg = Svg::new(self.fonts, self.assets, self.doc.dir());
+        svg.embed = embed;
         svg.node(node);
         Some((svg.finish(Some(view)), view))
     }
@@ -291,7 +297,7 @@ impl Ctx<'_> {
     }
 
     pub fn node_tree_at(&mut self, id: &str, scale: f64) -> Result<usvg::Tree, String> {
-        let (svg, _) = self.node_svg_at(id, scale).ok_or_else(|| self.missing(id))?;
+        let (svg, _) = self.node_svg_at(id, scale, false).ok_or_else(|| self.missing(id))?;
         usvg::Tree::from_str(&svg, &self.tree_options()).map_err(|e| e.to_string())
     }
 
