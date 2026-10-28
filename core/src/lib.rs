@@ -9,6 +9,7 @@ pub mod engine;
 pub mod figma;
 pub mod guide;
 pub mod hit;
+pub mod history;
 pub mod html;
 pub mod layout;
 pub mod mcp;
@@ -140,7 +141,8 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             let mut e = engine();
             e.sync();
             let sel = ids(&req["ids"]);
-            let b = if sel.is_empty() { e.renderer.bounds() } else { editor::painted_bounds(&e, &sel) };
+            // No ids: every top-level layer, as painted.
+            let b = if sel.is_empty() { editor::fit_bounds(&e) } else { editor::painted_bounds(&e, &sel) };
             Ok(b.map_or(Value::Null, |(x, y, w, h)| json!({"x": x, "y": y, "w": w, "h": h})))
         }
         "hit" => {
