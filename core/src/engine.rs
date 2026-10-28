@@ -153,12 +153,12 @@ fn drop_pending(v: &mut Value, inflight: &std::collections::HashSet<String>) {
 
 /// A file saved while an agent was still building a frame keeps its `placeholder` flag, and no run will ever
 /// clear it: the frame would show "Generating" forever. Frames in `pens` are being drawn by an AI Pen of this
-/// process, which still clears them.
+/// process, which still clears them (only passed when the same file is reopened: pen frames are ids of that file).
 fn drop_placeholder(v: &mut Value, pens: &[String]) {
     match v {
         Value::Array(a) => a.iter_mut().for_each(|x| drop_placeholder(x, pens)),
         Value::Object(o) => {
-            if o.get("placeholder") == Some(&Value::Bool(true)) && !o.get("id").and_then(Value::as_str).is_some_and(|id| pens.iter().any(|p| p == id)) {
+            if o.get("type").and_then(Value::as_str) == Some("frame") && o.get("placeholder") == Some(&Value::Bool(true)) && !o.get("id").and_then(Value::as_str).is_some_and(|id| pens.iter().any(|p| p == id)) {
                 o.insert("placeholder".into(), json!(false));
             }
             o.values_mut().for_each(|x| drop_placeholder(x, pens));
@@ -613,7 +613,8 @@ impl Engine {
         let mut doc = Doc::load(path)?;
         crate::resolve::migrate(&mut doc.root);
         drop_pending(&mut doc.root, &self.inflight);
-        drop_placeholder(&mut doc.root, &self.agent.pens);
+        let reopen = self.doc.path.as_deref() == Some(path);
+        drop_placeholder(&mut doc.root, if reopen { &self.agent.pens } else { &[] });
         self.doc = doc;
         self.load_libs();
         self.reset_history();
@@ -644,6 +645,7 @@ impl Engine {
             if let Ok(mut lib) = Doc::load(&base.join(&rel)) {
                 crate::resolve::migrate(&mut lib.root);
                 drop_pending(&mut lib.root, &self.inflight);
+                drop_placeholder(&mut lib.root, &[]);
                 self.libs.push((alias, lib.root));
             }
         }
@@ -1045,8 +1047,10 @@ mod tests {
         let mut v = json!({"children": [
             {"id": "a", "type": "frame", "placeholder": true, "children": [{"id": "b", "type": "frame", "placeholder": true}]},
             {"id": "c", "type": "frame", "placeholder": true},
-            {"id": "d", "type": "frame"}]});
+            {"id": "d", "type": "frame"},
+            {"id": "e", "type": "rectangle", "metadata": {"placeholder": true}}]});
         drop_placeholder(&mut v, &["c".to_string()]);
+        assert_eq!(v["children"][3]["metadata"]["placeholder"], true, "only a frame's own flag is cleared");
         assert_eq!(v["children"][0]["placeholder"], false);
         assert_eq!(v["children"][0]["children"][0]["placeholder"], false);
         assert_eq!(v["children"][1]["placeholder"], true);
@@ -1063,6 +1067,21 @@ mod tests {
         let path = dir.join("mid.nala");
         e.save(Some(path.to_str().unwrap())).unwrap();
         e.open(&path).unwrap();
+        assert_eq!(e.doc.find("f").unwrap()["placeholder"], false);
+        // A pen drawing frame "f" of this file keeps it Generating on a reopen, not in another file with the same id.
+        e.doc.update("f", &json!({"placeholder": true})).unwrap();
+        e.save(None).unwrap();
+        let other = dir.join("other.nala");
+        std::fs::copy(&path, &other).unwrap();
+        // An imported library saved mid-run is cleared too.
+        std::fs::write(dir.join("lib.nala"), r#"{"version":"2.19","children":[{"id":"L","type":"frame","reusable":true,"placeholder":true}]}"#).unwrap();
+        e.doc.root["imports"] = json!({"lib": "lib.nala"});
+        e.save(None).unwrap();
+        e.agent.pens.push("f".into());
+        e.open(&path).unwrap();
+        assert_eq!(e.doc.find("f").unwrap()["placeholder"], true);
+        assert_eq!(e.libs[0].1["children"][0]["placeholder"], false);
+        e.open(&other).unwrap();
         assert_eq!(e.doc.find("f").unwrap()["placeholder"], false);
     }
 
