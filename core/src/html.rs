@@ -49,6 +49,29 @@ pub fn check_script_export(e: &Engine, format: &str, out: &str) -> Result<(), St
     Ok(())
 }
 
+/// Files a script's export wrote since the app started (resolved paths): the only existing files it may write again,
+/// so the agent can export the same file after a fix.
+static SCRIPT_WRITTEN: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+fn script_wrote(file: &Path) -> bool {
+    SCRIPT_WRITTEN.lock().unwrap_or_else(|p| p.into_inner()).contains(&crate::agent::normalize(file))
+}
+
+fn taken(file: &Path) -> String {
+    format!("{} already exists and Export did not write it; export under a new name, or ask the user before replacing it", file.display())
+}
+
+/// A script's export never replaces a file it did not write: each file of the job must be new, or one an earlier
+/// script export wrote. Checked here so a refused export renders nothing, and again as `run` creates each file.
+pub fn claim_script_files(job: &mut ExportJob) -> Result<(), String> {
+    // `symlink_metadata` of the path itself: a link counts as an existing file even when it dangles.
+    if let Some((f, _)) = job.files.iter().find(|(f, _)| f.symlink_metadata().is_ok() && !script_wrote(f)) {
+        return Err(taken(f));
+    }
+    job.script = true;
+    Ok(())
+}
+
 /// A node id as a file name: anything but letters, digits, `-` and `_` (a separator, `..`) becomes `_`.
 fn file_stem(id: &str) -> String {
     id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect()
@@ -59,6 +82,8 @@ fn file_stem(id: &str) -> String {
 /// call it after the guard drops or the canvas freezes for the length of the export.
 pub struct ExportJob {
     files: Vec<(PathBuf, Output)>,
+    /// A script's export (`claim_script_files`): it creates new files and replaces only its own.
+    script: bool,
 }
 
 enum Output {
@@ -86,7 +111,17 @@ impl ExportJob {
                 Output::Image(tree, format, scale, quality) => crate::render::encode_tree(&tree, &format, scale, quality)?,
                 Output::Pdf(trees) => crate::render::encode_pdf(&trees)?,
             };
-            std::fs::write(&file, bytes).map_err(|err| err.to_string())?;
+            if self.script && !script_wrote(&file) {
+                // Created exclusively: a file (or link) that appeared since the check is never replaced.
+                use std::io::Write as _;
+                let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&file).map_err(|err| {
+                    if err.kind() == std::io::ErrorKind::AlreadyExists { taken(&file) } else { err.to_string() }
+                })?;
+                SCRIPT_WRITTEN.lock().unwrap_or_else(|p| p.into_inner()).push(crate::agent::normalize(&file));
+                f.write_all(&bytes).map_err(|err| err.to_string())?;
+            } else {
+                std::fs::write(&file, bytes).map_err(|err| err.to_string())?;
+            }
             written.push(file.display().to_string());
         }
         Ok(written)
@@ -135,7 +170,7 @@ pub fn plan(e: &mut Engine, ids: &[String], format: &str, out: &str, opts: &Valu
         }
         other => return Err(format!("unknown export format '{other}' (use png, jpeg, webp, svg, pdf or html-css)")),
     }
-    Ok(ExportJob { files })
+    Ok(ExportJob { files, script: false })
 }
 
 pub fn html_document(e: &mut Engine, ids: &[String], opts: &Value) -> Result<String, String> {
