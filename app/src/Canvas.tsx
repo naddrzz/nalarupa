@@ -1506,7 +1506,7 @@ export function Canvas(props: {
         return <div testId="pen-dot" style={{ position: 'absolute', left: x - 4, top: y - 4, width: 8, height: 8, borderRadius: 4, borderWidth: 1, borderColor: PEN_BLUE, backgroundColor: '#FFFFFF', pointerEvents: 'none' }} />
       })() : null}
       <AgentLayer cam={cam} w={w} h={h} version={version} chatOpen={!!props.chatOpen} />
-      {ghost ? <div style={{ position: 'absolute', left: ghost.x, top: ghost.y, width: ghost.w, height: ghost.h, borderWidth: 1, borderColor: C.select, backgroundColor: '#3B82F622', pointerEvents: 'none' }} /> : null}
+      {ghost ? <div testId="draw-ghost" style={{ position: 'absolute', left: ghost.x, top: ghost.y, width: ghost.w, height: ghost.h, borderWidth: 1, borderColor: C.select, backgroundColor: '#3B82F622', pointerEvents: 'none' }} /> : null}
       {editing ? (() => {
         // The field stays upright but is centered on where the (rotated/flipped) text is painted.
         const p = painted(editing.box)

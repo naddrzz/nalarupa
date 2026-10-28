@@ -898,10 +898,13 @@ try {
   for (const [key, drawn] of [['escape', 0], ['v', 1]] as const) {
     await app.getByTestId('tool-rectangle').click()
     await sleep(300)
-    const drag = app.mouse.drag(at(700, 560), at(800, 640), { steps: 40 })
-    await sleep(400)
+    // Hold the button explicitly and press the key only once the ghost box shows the draw is live.
+    await app.mouse.down(at(700, 560))
+    for (let i = 1; i <= 5; i++) await app.mouse.move(at(700 + i * 20, 560 + i * 16), { pressedButton: 0 })
+    assert(await until(async () => (await count('draw-ghost')) === 1, 4000), `the rectangle draw is in progress before ${key}`)
     await app.call('keystrokes', { keys: key })
-    await drag
+    await sleep(200)
+    await app.mouse.up(at(800, 640))
     assert(await until(async () => (await rectRows()) === drawRects0 + drawn, 4000), `${key} mid-draw ${drawn ? 'finishes the rectangle' : 'creates nothing'} (${drawRects0} → ${await rectRows()} rectangle rows)`)
     assert((await drawTextRows()) === drawTexts0, `${key} mid-draw leaves no stray Text layer`)
     await canvas.press('escape')
