@@ -205,9 +205,15 @@ impl Doc {
     /// Merge properties into a node; `null` removes a property. Paths with `/`
     /// address descendants of component instances and become overrides.
     pub fn update(&mut self, path: &str, data: &Value) -> Result<(), String> {
+        let id = path.split('/').next().unwrap_or_default();
+        let ip = self.index_path(id).ok_or_else(|| format!("node not found: {id}"))?;
+        self.update_at(ip, path, data)
+    }
+
+    /// `update` once the index path of `path`'s node (or of its instance, for a `/` path) is known.
+    fn update_at(&mut self, ip: Vec<usize>, path: &str, data: &Value) -> Result<(), String> {
         let props = data.as_object().ok_or("update data must be an object")?;
         if let Some((inst, rest)) = path.split_once('/') {
-            let ip = self.index_path(inst).ok_or_else(|| format!("node not found: {inst}"))?;
             let node = self.node_at_mut(&ip);
             if node["type"] != "ref" {
                 return Err(format!("'{inst}' is not a component instance; '/' paths only address instance descendants"));
@@ -218,24 +224,18 @@ impl Doc {
             merge_props(entry, props, true);
             return Ok(());
         }
-        let ip = self.index_path(path).ok_or_else(|| format!("node not found: {path}"))?;
         check_depth(ip.len() - 1, data)?;
         merge_props(self.node_at_mut(&ip), props, false);
         Ok(())
     }
 
-    /// `update` for many nodes: finds them all in one walk instead of one walk each.
+    /// `update` for many nodes: finds them all (and the instances of `/` paths) in one walk instead of one walk each.
     pub fn update_all(&mut self, items: &[(&str, &Value)]) -> Result<(), String> {
-        let paths = self.index_paths(items.iter().map(|(id, _)| *id).filter(|id| !id.contains('/')));
+        let paths = self.index_paths(items.iter().map(|(id, _)| id.split('/').next().unwrap_or_default()));
         for (id, data) in items {
-            if id.contains('/') {
-                self.update(id, data)?;
-                continue;
-            }
-            let props = data.as_object().ok_or("update data must be an object")?;
-            let ip = paths.get(*id).ok_or_else(|| format!("node not found: {id}"))?;
-            check_depth(ip.len() - 1, data)?;
-            merge_props(self.node_at_mut(ip), props, false);
+            let base = id.split('/').next().unwrap_or_default();
+            let ip = paths.get(base).ok_or_else(|| format!("node not found: {base}"))?;
+            self.update_at(ip.clone(), id, data)?;
         }
         Ok(())
     }
@@ -727,6 +727,15 @@ mod tests {
         assert_eq!(one.root, all.root);
         assert_eq!(all.update_all(&[("a", &props), ("nope", &props)]).unwrap_err(), "node not found: nope");
         assert!(all.update_all(&[("a", &json!(5))]).is_err());
+        // Instance descendants ("inst/child") become overrides, like `update`; a non-instance is refused.
+        let with_ref = json!({"children":[{"type":"ref","id":"r","ref":"c"},{"type":"rectangle","id":"a"}]}).to_string();
+        let (mut one_i, mut all_i) = (Doc::from_json(&with_ref).unwrap(), Doc::from_json(&with_ref).unwrap());
+        let over = json!({"opacity": 0.5});
+        one_i.update("r/x", &over).unwrap();
+        one_i.update("a", &over).unwrap();
+        all_i.update_all(&[("r/x", &over), ("a", &over)]).unwrap();
+        assert_eq!(one_i.root, all_i.root);
+        assert!(all_i.update_all(&[("a/x", &over)]).is_err());
 
         for id in ["i", "c", "g", "a"] {
             one.delete(id).unwrap();
