@@ -488,11 +488,31 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
     const bottom = async (id: string) => { const b = await app!.getByTestId(id).bounds(); return b.y + b.height }
     const windowBottom = async () => bottom('canvas')
     await until(async () => (await bottom('agent-send')) <= (await windowBottom()), 'Send to stay in the 680 px window with Agent settings and the plan open')
-    if ((await bottom('plan-toggle')) > (await bottom('agent-input'))) throw new Error('the Plan toggle left its place above the composer')
-    // The panel scrolls to its last row, the MCP install buttons: they come into view above the Plan toggle,
-    // which does not scroll.
+    const top = async (id: string) => (await app!.getByTestId(id).bounds()).y
+    if ((await bottom('plan-toggle')) > (await top('agent-composer'))) throw new Error('the Plan toggle left its place above the composer')
+    // A control is in view when it lies inside the settings panel's viewport (the panel's bounds move with its
+    // scroll offset, so add the offset back); a control scrolled out of sight has no bounds at all.
     const panel = app.getByTestId('agent-settings-panel')
-    await until(async () => { await panel.wheel(0, -400); const c = await app!.getByText('Codex').bounds(); return c.y + c.height <= (await app!.getByTestId('plan-toggle').bounds()).y }, 'scrolling Agent settings reaches the MCP install buttons')
+    const panelId = (await panel.element()).id
+    const inView = async (id: string) => {
+      const p = await panel.bounds()
+      const off = ((await app!.call('getScrollOffset', { elementId: panelId })) as { offset: [number, number] | null }).offset?.[1] ?? 0
+      const c = await app!.getByTestId(id).bounds().catch(() => undefined)
+      return !!c && c.y >= p.y - off && c.y + c.height <= p.y - off + p.height
+    }
+    if (await inView('mcp-codex')) throw new Error('the MCP install buttons fit in the short settings panel (the check needs them out of view)')
+    // Tab to the last row, the Codex install button, scrolls the panel to show it.
+    await app.getByTestId('backend-claude-code').click()
+    for (let i = 0; i < 30 && !(await app.getByTestId('mcp-codex-focus').count()); i++) {
+      await app.call('keystrokes', { keys: 'tab' })
+      await sleep(150)
+    }
+    await until(async () => !!(await app!.getByTestId('mcp-codex-focus').count()), 'Tab to reach the Codex install button')
+    await until(() => inView('mcp-codex'), 'Tab to scroll Agent settings to the focused Codex install button')
+    // The wheel scrolls the panel there too.
+    await app.call('scrollTo', { elementId: panelId, x: 0, y: 0 })
+    await until(async () => !(await inView('mcp-codex')), 'Agent settings to scroll back to its top')
+    await until(async () => { await panel.wheel(0, -400); return inView('mcp-codex') }, 'the wheel to scroll Agent settings to the MCP install buttons')
     await shot('08b-settings-min-height')
     await app.getByTestId('agent-settings').click()
     await until(async () => !(await app!.getByTestId('agent-settings-panel').count()), 'Agent settings to close')
