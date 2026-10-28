@@ -1459,6 +1459,16 @@ mod tests {
         assert!(paths.iter().all(|p| p.len() > 2 && p.starts_with("i/")), "{paths:?}");
         assert_eq!(paths.iter().collect::<std::collections::HashSet<_>>().len(), 3, "{paths:?}");
         assert_eq!(paths[1], "i/t", "the first node keeps its id");
+        // The repair is the same on every open, and when the library itself is opened (and saved),
+        // so an override saved on a repaired child still reaches it.
+        let paths: Vec<String> = paths.iter().map(|p| p.to_string()).collect();
+        e.open(&dir.join("doc.nala")).unwrap();
+        let r = crate::resolve::Resolver::new(&e.doc.root, &e.libs, &vars);
+        let again: Vec<String> = r.resolve(&e.doc.children()[0]).unwrap().kids.iter().map(|k| k.id.clone()).collect();
+        assert_eq!(again, paths, "the same ids on the next open");
+        e.open(&dir.join("lib.nala")).unwrap();
+        let own: Vec<String> = e.doc.children()[0]["children"].as_array().unwrap().iter().map(|k| format!("i/{}", k["id"].as_str().unwrap())).collect();
+        assert_eq!(own, paths, "the library opened as a document gets the same ids");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
