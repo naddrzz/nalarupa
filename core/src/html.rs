@@ -97,13 +97,38 @@ pub fn html_document(e: &mut Engine, ids: &[String], opts: &Value) -> Result<Str
         let fam = fonts[i].0.clone();
         let weights: Vec<String> = fonts.iter().filter(|f| f.0 == fam).map(|f| f.1.to_string()).collect();
         i += weights.len();
-        link += &format!("<link rel=\"stylesheet\" href=\"https://fonts.googleapis.com/css2?family={}:wght@{}&display=swap\">
-", fam.replace(' ', "+"), weights.join(";"));
+        if let Some(q) = font_query(&fam) {
+            link += &format!("<link rel=\"stylesheet\" href=\"https://fonts.googleapis.com/css2?family={q}:wght@{}&display=swap\">
+", weights.join(";"));
+        }
     }
     Ok(format!(
         "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{}</title>\n{link}\n<style>*{{box-sizing:border-box;margin:0;padding:0}}body{{display:flex;flex-direction:column;align-items:center;gap:40px;padding:40px 0;background:#f4f4f5}}</style>\n</head>\n<body>\n{body}</body>\n</html>\n",
         esc(&e.title())
     ))
+}
+
+/// A family name as the `family=` query value of a Google Fonts URL; `None` when it holds characters
+/// a font name cannot have (it would only break out of the attribute or the query).
+fn font_query(fam: &str) -> Option<String> {
+    if fam.is_empty() || !fam.chars().all(|c| c.is_alphanumeric() || matches!(c, ' ' | '-' | '_' | '.')) {
+        return None;
+    }
+    let mut q = String::new();
+    for c in fam.chars() {
+        match c {
+            ' ' => q.push('+'),
+            c if c.is_ascii() => q.push(c),
+            c => c.encode_utf8(&mut [0; 4]).bytes().for_each(|b| q += &format!("%{b:02X}")),
+        }
+    }
+    Some(q)
+}
+
+/// `s` as the inside of a single-quoted CSS string (before HTML-escaping it for the `style` attribute).
+/// A raw line break ends a CSS string (the declaration is dropped), so those become hex escapes.
+fn css_str(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('\'', "\\'").replace('\n', "\\a ").replace('\r', "\\d ").replace('\x0c', "\\c ")
 }
 
 struct Html<'a> {
@@ -132,6 +157,19 @@ fn css_color_alpha(v: &str, k: f64) -> Option<String> {
     let h = c.strip_prefix('#')?;
     let p = |i: usize| u8::from_str_radix(&h[i..i + 2], 16).unwrap_or(0);
     Some(format!("rgba({}, {}, {}, {:.3})", p(0), p(2), p(4), a))
+}
+
+/// Whether a fill paints anything in HTML: a paint with alpha above zero, of a type `fill_layers` draws (mesh gradients and shaders are not).
+fn visible_fill(n: &RNode) -> bool {
+    fills(n.p.get("fill")).iter().any(|f| match f {
+        Value::String(s) => color(s).is_some_and(|c| c.1 > 0.0),
+        Value::Object(o) => match o.get("type").and_then(Value::as_str).unwrap_or("color") {
+            "color" => o.get("color").and_then(Value::as_str).and_then(color).is_some_and(|c| c.1 > 0.0),
+            "gradient" | "image" => o.get("opacity").and_then(num).unwrap_or(1.0) > 0.0,
+            _ => false,
+        },
+        _ => false,
+    })
 }
 
 /// CSS gradient of a gradient paint. Backgrounds have no per-layer opacity, so `opacity` goes into the stop alphas.
@@ -255,7 +293,7 @@ fn image_layer(o: &serde_json::Map<String, Value>) -> Option<(String, f64)> {
         Some("fill") => "cover",
         _ => "100% 100%",
     };
-    Some((format!("url('{}') center/{size} no-repeat", esc(url)), o.get("opacity").and_then(num).unwrap_or(1.0).clamp(0.0, 1.0)))
+    Some((format!("url('{}') center/{size} no-repeat", esc(&css_str(url))), o.get("opacity").and_then(num).unwrap_or(1.0).clamp(0.0, 1.0)))
 }
 
 /// A mesh gradient or shader paint of the `n.w`×`n.h` box as a PNG background layer: CSS has no such paint, so it is
@@ -341,6 +379,9 @@ fn size_css(v: Option<&Value>, prop: &str, parent_dir: Option<&str>, horiz_axis:
         Some(Value::String(s)) if s.starts_with("fill_container") => {
             if parent_dir.is_some() && parent_dir != Some("none") {
                 if main_axis { "flex:1 1 0;min-width:0;min-height:0;".into() } else { "align-self:stretch;".into() }
+            } else if let Some(n) = s.find('(').and_then(|i| s[i + 1..].trim_end_matches(')').trim().parse::<f64>().ok()) {
+                // No layout to fill: the canvas uses the fallback in the parentheses.
+                format!("{prop}:{}px;", n.max(0.0))
             } else {
                 format!("{prop}:100%;")
             }
@@ -360,15 +401,25 @@ fn px(v: f64) -> f64 {
     (v * 1e6).round() / 1e6 + 0.0
 }
 
+/// `justify-content` placing the text of a fixed-size box in the middle or at the bottom; none keeps it at the top.
+fn text_justify(n: &RNode) -> Option<&'static str> {
+    match (n.s("textGrowth"), n.s("textAlignVertical")) {
+        (Some("fixed-width-height"), Some("middle")) => Some("center"),
+        (Some("fixed-width-height"), Some("bottom")) => Some("flex-end"),
+        _ => None,
+    }
+}
+
 impl Html<'_> {
     fn node(&mut self, n: &RNode, parent: Option<&RNode>) {
         let in_flow = parent.is_some_and(|p| p.ty == "frame" && p.s("layout") != Some("none")) && n.s("layoutPosition") != Some("absolute");
         let tilted = n.f("rotation").is_some_and(|r| r != 0.0) || n.b("flipX") || n.b("flipY");
-        if !(in_flow && tilted) {
+        if !((in_flow || parent.is_none()) && tilted) {
             return self.element(n, parent, None);
         }
         // The canvas places a rotated or flipped child by its bounding box, so it takes that much room in the
         // flow: the box is a wrapper of that size and the element sits in it with its origin where the layout put it.
+        // A top-level layer is the same: its paint reaches up and left of its origin, where the page cannot scroll.
         let l = crate::layout::local_aabb(n);
         let _ = writeln!(self.out, "<div style=\"position:relative;flex-shrink:0;width:{}px;height:{}px;\">", px(l[2] - l[0]), px(l[3] - l[1]));
         self.element(n, parent, Some((n.bx - l[0], n.by - l[1])));
@@ -381,10 +432,10 @@ impl Html<'_> {
         let parent_dir = parent.filter(|_| slot.is_none()).map(|p| if p.ty == "frame" { p.s("layout").unwrap_or("horizontal") } else { "none" });
         let absolute = slot.is_some() || parent_dir == Some("none") || n.s("layoutPosition") == Some("absolute");
         let mut css = String::new();
-        if parent.is_none() {
-            css += "position:relative;";
-        } else if let Some((x, y)) = slot {
+        if let Some((x, y)) = slot {
             let _ = write!(css, "position:absolute;left:{}px;top:{}px;", px(x), px(y));
+        } else if parent.is_none() {
+            css += "position:relative;";
         } else if absolute {
             let p = parent.unwrap();
             let _ = write!(css, "position:absolute;left:{}px;top:{}px;", n.x - p.x, n.y - p.y);
@@ -408,6 +459,10 @@ impl Html<'_> {
             // Fixed-width text without a width wraps at width 0 on the canvas: one word per line.
             if n.ty == "text" && wv.is_none() {
                 css += &size_css(Some(&Value::from(px(n.w))), "width", parent_dir, true, n.w);
+            }
+            // Likewise a fixed-size box without a height is as high as the layout made it (0 unless set), which middle and bottom text spills out of.
+            if n.ty == "text" && hv.is_none() && text_justify(n).is_some() {
+                css += &size_css(Some(&Value::from(px(n.h))), "height", parent_dir, false, n.h);
             }
             if matches!(n.ty.as_str(), "rectangle" | "ellipse" | "icon" | "polygon" | "line" | "path") {
                 if wv.is_none() {
@@ -442,8 +497,16 @@ impl Html<'_> {
         match n.ty.as_str() {
             "text" => {
                 self.text_css(n, &mut css);
-                let content = n.s("content").unwrap_or("");
-                let _ = writeln!(self.out, "<p{attrs} style=\"{css}\">{}</p>", content.split('\n').map(esc).collect::<Vec<_>>().join("<br>"));
+                // `esc` drops control characters, newlines too, so the lines are escaped one by one.
+                let lines = n.s("content").unwrap_or("").split('\n').map(esc).collect::<Vec<_>>();
+                // Like the canvas, only a fixed-size box places its text in the middle or at the bottom; overflow spills
+                // evenly (middle) or upward (bottom). The text stays direct content, as a gradient or image fill clips to
+                // it: a flex container wraps it in an anonymous item, and its newlines are kept by `pre-wrap`.
+                if let Some(j) = text_justify(n) {
+                    let _ = writeln!(self.out, "<p{attrs} style=\"{css}display:flex;flex-direction:column;justify-content:{j};\">{}</p>", lines.join("\n"));
+                } else {
+                    let _ = writeln!(self.out, "<p{attrs} style=\"{css}\">{}</p>", lines.join("<br>"));
+                }
             }
             "icon" if !as_svg => {
                 // No fill = invisible icon.
@@ -451,7 +514,14 @@ impl Html<'_> {
                 let svg = match fill {
                     Some(fill) => {
                         let svg = self.assets.icon_weight(n.s("library").unwrap_or("lucide"), n.s("icon").unwrap_or(""), n.f("weight").unwrap_or(200.0)).unwrap_or_default();
-                        svg.find("<svg").map(|i| svg[i..].replacen("<svg", &format!("<svg style=\"width:100%;height:100%;color:{fill}\""), 1)).unwrap_or_default()
+                        // A bare-path icon (Material Symbols) sets no fill and would paint black; the canvas fills it with the colour.
+                        svg.find("<svg")
+                            .map(|i| {
+                                let svg = &svg[i..];
+                                let paint = if svg.split('>').next().is_some_and(|tag| tag.contains(" fill=\"")) { "" } else { " fill=\"currentColor\"" };
+                                svg.replacen("<svg", &format!("<svg style=\"width:100%;height:100%;color:{fill}\"{paint}"), 1)
+                            })
+                            .unwrap_or_default()
                     }
                     None => String::new(),
                 };
@@ -611,8 +681,19 @@ impl Html<'_> {
                     }
                     (Some(c), _, Some(v)) => {
                         if let Some(w) = num(v).filter(|w| *w > 0.0) {
+                            let align = n.s("strokeAlignment");
+                            // A centered stroke as an inner and an outer shadow leaves a hairline of the fill where their anti-aliased
+                            // edges meet on the outline; one ring half outside the box has a single edge per side. A clipping frame
+                            // would cut the outer half off, and a stack of strokes needs the shadows to keep its order.
+                            if strokes.len() == 1 && !matches!(align, Some("inner" | "inside" | "outer" | "outside")) && !(n.ty == "frame" && n.b("clip")) {
+                                let half = w / 2.0;
+                                // The outline's offset curve: each rounded corner grows by half the width.
+                                let radius = if n.ty == "ellipse" { "50%".to_string() } else { crate::svg::radii(n).map(|r| format!("{}px", if r > 0.0 { r + half } else { 0.0 })).join(" ") };
+                                let _ = writeln!(under, "<div style=\"position:absolute;z-index:-1;pointer-events:none;inset:{}px;border-radius:{radius};box-shadow:inset 0 0 0 {w}px {c};\"></div>", -half);
+                                continue;
+                            }
                             // The first box-shadow is the topmost, so each stroke goes in front of the ones below it.
-                            let own = match n.s("strokeAlignment") {
+                            let own = match align {
                                 Some("inner" | "inside") => vec![format!("inset 0 0 0 {w}px {c}")],
                                 Some("outer" | "outside") => vec![format!("0 0 0 {w}px {c}")],
                                 _ => vec![format!("inset 0 0 0 {}px {c}", w / 2.0), format!("0 0 0 {}px {c}", w / 2.0)],
@@ -645,7 +726,7 @@ impl Html<'_> {
         if matches!(n.ty.as_str(), "text" | "group" | "icon") {
             let outer = list.iter().filter(|s| !s.0);
             if n.ty == "text" && !gradient_text {
-                let t: Vec<String> = outer.map(|(_, x, y, b, c)| format!("{x}px {y}px {b}px {c}")).collect();
+                let t: Vec<String> = outer.rev().map(|(_, x, y, b, c)| format!("{x}px {y}px {b}px {c}")).collect();
                 if !t.is_empty() {
                     let _ = write!(css, "text-shadow:{};", t.join(","));
                 }
@@ -660,10 +741,13 @@ impl Html<'_> {
                     filters.push(shadow_filter(&outer));
                 }
             }
-        } else {
-            // Like the canvas, a drop shadow is cast by the outline with the stroke's outer part: it spreads by that reach.
+        } else if n.ty == "frame" || visible_fill(n) {
+            // Like the canvas, a shape without a visible fill casts nothing (a box-shadow of a transparent box would
+            // still paint its outer band); a frame always casts its outer shadow, which is only drawn outside it.
+            // A drop shadow is cast by the outline with the stroke's outer part: it spreads by that reach. The canvas paints
+            // the later effect on top and the first CSS shadow is the topmost, so the list goes in reverse.
             let reach = stroke_reach(n);
-            shadows.extend(list.iter().map(|(inner, x, y, b, c)| match (inner, reach > 0.0) {
+            shadows.extend(list.iter().rev().map(|(inner, x, y, b, c)| match (inner, reach > 0.0) {
                 (false, true) => format!("{x}px {y}px {b}px {reach}px {c}"),
                 _ => format!("{}{x}px {y}px {b}px {c}", if *inner { "inset " } else { "" }),
             }));
@@ -715,7 +799,7 @@ impl Html<'_> {
     fn text_css(&mut self, n: &RNode, css: &mut String) {
         let st = crate::text::TextStyle::of(n);
         self.families.push((st.family.clone(), st.weight));
-        let _ = write!(css, "font-family:'{}',sans-serif;font-size:{}px;font-weight:{};", esc(&st.family), st.size, st.weight);
+        let _ = write!(css, "font-family:'{}',sans-serif;font-size:{}px;font-weight:{};", esc(&css_str(&st.family)), st.size, st.weight);
         if st.italic {
             css.push_str("font-style:italic;");
         }
@@ -798,7 +882,7 @@ fn shadow_filter(shadows: &[&(bool, f64, f64, f64, String)]) -> String {
     for (i, (_, x, y, b, c)) in shadows.iter().enumerate() {
         let _ = write!(f, "<feGaussianBlur in=\"SourceAlpha\" stdDeviation=\"{}\"/><feOffset dx=\"{x}\" dy=\"{y}\" result=\"o{i}\"/><feFlood flood-color=\"{c}\"/><feComposite in2=\"o{i}\" operator=\"in\" result=\"s{i}\"/>", b / 2.0);
     }
-    let merge: String = (0..shadows.len()).rev().map(|i| format!("<feMergeNode in=\"s{i}\"/>")).collect();
+    let merge: String = (0..shadows.len()).map(|i| format!("<feMergeNode in=\"s{i}\"/>")).collect();
     // The region must hold every offset, blurred shadow: a percentage of the element would clip big ones. The element's
     // size is not known here, so it starts a margin before the origin and runs far past any element.
     let m = shadows.iter().map(|(_, x, y, b, _)| x.abs().max(y.abs()) + b * 1.5).fold(0.0, f64::max).ceil() + 1.0;
@@ -956,6 +1040,30 @@ mod tests {
 
     /// The canvas casts a drop shadow from the outline with the stroke's outer part, so the shadow spreads by that reach
     /// (an offset smaller than the stroke would hide under the stroke ring otherwise); inner shadows and inner strokes do not.
+    /// A centered stroke is one ring half outside the box: an inner and an outer shadow meeting on the outline
+    /// leave a hairline of the fill (and the page) through its middle wherever the outline is anti-aliased.
+    #[test]
+    fn centered_stroke_is_a_single_ring() {
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        e.load_template("empty");
+        let mut html = |extra: serde_json::Value| {
+            let mut n = json!({"type": "rectangle", "width": 120, "height": 80, "fill": "#f0c000", "stroke": "#000000", "strokeWidth": 6});
+            n.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            let id = e.insert_root(n).unwrap();
+            super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap()
+        };
+        let ring = "box-shadow:inset 0 0 0 6px #000000;";
+        let h = html(json!({"type": "ellipse"}));
+        assert!(h.contains(&format!("inset:-3px;border-radius:50%;{ring}")) && !h.contains("box-shadow:inset 0 0 0 3px"), "{h}");
+        let h = html(json!({"cornerRadius": 30}));
+        assert!(h.contains(&format!("border-radius:33px 33px 33px 33px;{ring}")), "{h}");
+        let h = html(json!({"rotation": -30}));
+        assert!(h.contains(&format!("border-radius:0px 0px 0px 0px;{ring}")) && !h.contains("0 0 0 3px"), "{h}");
+        // Inner and outer strokes are one edge already.
+        assert!(html(json!({"strokeAlignment": "outer"})).contains("box-shadow:0 0 0 6px #000000;"));
+    }
+
     #[test]
     fn drop_shadow_is_cast_from_the_stroked_outline() {
         let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
@@ -970,7 +1078,7 @@ mod tests {
         let h = html("outer", json!(20), drop.clone());
         assert!(h.contains("box-shadow:0 0 0 20px #000000,12px 12px 0px 20px #ff0000;"), "{h}");
         let h = html("center", json!(20), drop.clone());
-        assert!(h.contains("box-shadow:inset 0 0 0 10px #000000,0 0 0 10px #000000,12px 12px 0px 10px #ff0000;"), "{h}");
+        assert!(h.contains("box-shadow:12px 12px 0px 10px #ff0000;") && h.contains("inset:-10px;border-radius:0px 0px 0px 0px;box-shadow:inset 0 0 0 20px #000000;"), "{h}");
         // The widest side reaches furthest.
         let h = html("outer", json!({"top": 2, "right": 8, "bottom": 4, "left": 6}), drop.clone());
         assert!(h.contains("12px 12px 0px 8px #ff0000"), "{h}");
@@ -1034,6 +1142,63 @@ mod tests {
         assert!(grp.contains("filter:drop-shadow(6px 6px 2px #ff0000) blur(2px);") && !grp.contains("box-shadow"), "{grp}");
     }
 
+    /// Like the canvas, a shape without a visible fill casts no shadow (a CSS box-shadow would paint its outer band); its stroke stays,
+    /// and a frame keeps its shadow, which only shows outside it.
+    #[test]
+    fn shapes_without_a_visible_fill_cast_no_shadow() {
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        e.load_template("empty");
+        let sh = json!({"type": "shadow", "offset": {"x": 20, "y": 20}, "blur": 0, "color": "#0000ff"});
+        let node = |name: &str, ty: &str, extra: serde_json::Value| {
+            let mut n = json!({"type": ty, "name": name, "width": 100, "height": 100, "effect": sh});
+            n.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            n
+        };
+        let id = e.insert_root(json!({"type": "frame", "layout": "none", "width": 300, "height": 200, "children": [
+            node("none", "rectangle", json!({})),
+            node("stroke", "rectangle", json!({"stroke": "#ff0000", "strokeWidth": 4})),
+            node("clear", "ellipse", json!({"fill": "#ff000000"})),
+            node("mesh", "rectangle", json!({"fill": {"type": "mesh_gradient"}})),
+            node("inner", "rectangle", json!({"effect": {"type": "shadow", "shadowType": "inner", "offset": {"x": 5, "y": 5}, "color": "#0000ff"}})),
+            node("filled", "rectangle", json!({"fill": "#00ff00"})),
+            node("box", "frame", json!({"layout": "none"}))
+        ]})).unwrap();
+        let h = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
+        let style = |name: &str| h.split(&format!("data-name=\"{name}\" style=\"")).nth(1).unwrap().split('"').next().unwrap().to_string();
+        for name in ["none", "clear", "mesh", "inner"] {
+            assert!(!style(name).contains("box-shadow"), "{name}: {}", style(name));
+        }
+        let s = style("stroke");
+        assert!(!s.contains("box-shadow") && !s.contains("#0000ff"), "{s}");
+        assert!(h.contains("inset:-2px;border-radius:0px 0px 0px 0px;box-shadow:inset 0 0 0 4px #ff0000;"), "{h}");
+        assert!(style("filled").contains("box-shadow:20px 20px 0px #0000ff;"), "{}", style("filled"));
+        assert!(style("box").contains("box-shadow:20px 20px 0px #0000ff;"), "{}", style("box"));
+    }
+
+    /// The canvas paints the later effect over the earlier one, while the first CSS shadow is the topmost: the lists are reversed.
+    #[test]
+    fn shadows_stack_like_the_canvas() {
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        e.load_template("empty");
+        let red = json!({"type": "shadow", "offset": {"x": 10, "y": 10}, "blur": 0, "color": "#ff0000"});
+        let blue = json!({"type": "shadow", "offset": {"x": 20, "y": 20}, "blur": 0, "color": "#0000ff"});
+        let grad = json!({"type": "gradient", "gradientType": "linear", "colors": [{"color": "#ff0000", "position": 0}, {"color": "#0000ff", "position": 1}]});
+        let id = e.insert_root(json!({"type": "frame", "layout": "none", "width": 300, "height": 200, "children": [
+            {"type": "rectangle", "name": "r", "width": 100, "height": 80, "fill": "#ffffff", "effect": [red, blue]},
+            {"type": "text", "name": "t", "content": "Hi", "fontSize": 40, "fill": "#000000", "effect": [red, blue]},
+            {"type": "text", "name": "g", "content": "Hi", "fontSize": 40, "fill": grad, "effect": [red, blue]}
+        ]})).unwrap();
+        let h = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
+        let style = |name: &str| h.split(&format!("data-name=\"{name}\" style=\"")).nth(1).unwrap().split('"').next().unwrap().to_string();
+        assert!(style("r").contains("box-shadow:20px 20px 0px #0000ff,10px 10px 0px #ff0000;"), "{}", style("r"));
+        assert!(style("t").contains("text-shadow:20px 20px 0px #0000ff,10px 10px 0px #ff0000;"), "{}", style("t"));
+        // In an feMerge the first node is the bottom one: the earlier effect goes first.
+        let g = style("g");
+        assert!(g.find("in=%22s0%22").unwrap() < g.find("in=%22s1%22").unwrap(), "{g}");
+    }
+
     /// Fixed-size children keep their main-axis size in an overflowing auto layout, as on the canvas.
     #[test]
     fn fixed_size_children_do_not_shrink() {
@@ -1060,6 +1225,23 @@ mod tests {
         let id = e.insert_root(json!({"type": "frame", "width": 100, "height": 60, "layout": "horizontal", "children": [{"type": "group", "children": [{"type": "rectangle", "width": 80, "height": 20, "fill": "#ff0000"}]}]})).unwrap();
         let g = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
         assert!(g.contains("width:80px;flex-shrink:0;"), "{g}");
+    }
+
+    /// `fill_container(N)` in a parent without a layout is N px, like the canvas; plain `fill_container` stays 100%.
+    #[test]
+    fn fill_container_fallback_in_unlaid_parent() {
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        e.load_template("empty");
+        let id = e.insert_root(json!({"type": "frame", "width": 300, "height": 200, "layout": "none", "children": [
+            {"type": "rectangle", "name": "A", "width": "fill_container(60)", "height": "fill_container(40)", "fill": "#ff0000"},
+            {"type": "rectangle", "name": "B", "width": "fill_container", "height": "fill_container", "fill": "#00ff00"}]})).unwrap();
+        let h = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false, "includeLayerNames": true})).unwrap();
+        let style = |name: &str| h.split(&format!("data-name=\"{name}\" style=\"")).nth(1).unwrap().split('"').next().unwrap().to_string();
+        let a = style("A");
+        assert!(a.contains("width:60px;") && a.contains("height:40px;") && !a.contains("100%"), "{a}");
+        let b = style("B");
+        assert!(b.contains("width:100%;") && b.contains("height:100%;"), "{b}");
     }
 
     /// `fit_content(N)` on a node with nothing to hug is N, like the canvas; only a layout frame with children hugs.
@@ -1125,6 +1307,32 @@ mod tests {
         assert!(h.contains("width:84.852814px;height:84.852814px;"), "{h}");
     }
 
+    /// A rotated or flipped top-level layer sits in a bounding-box wrapper, so none of its paint lands above the page (y < 0).
+    #[test]
+    fn tilted_top_level_layers_are_wrapped_in_their_bounding_box() {
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        e.load_template("empty");
+        let rect = |e: &mut Engine, extra: serde_json::Value| {
+            let mut r = json!({"type": "rectangle", "name": "r", "x": 100, "y": 100, "width": 160, "height": 120, "fill": "#3366cc"});
+            r.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            e.insert_root(r).unwrap()
+        };
+        // flipY about the origin spans (0..160, -120..0): the origin is the wrapper's bottom-left.
+        let id = rect(&mut e, json!({"flipY": true}));
+        let h = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
+        assert!(h.starts_with("<div style=\"position:relative;flex-shrink:0;width:160px;height:120px;\">\n<div data-name=\"r\" style=\"position:absolute;left:0px;top:120px;"), "{h}");
+        assert!(h.contains("transform:scale(1,-1);"), "{h}");
+        // 90deg CCW: the box spans (0..120, -160..0).
+        let id = rect(&mut e, json!({"rotation": 90}));
+        let h = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
+        assert!(h.starts_with("<div style=\"position:relative;flex-shrink:0;width:120px;height:160px;\">\n<div data-name=\"r\" style=\"position:absolute;left:0px;top:160px;"), "{h}");
+        // An untilted layer stays unwrapped.
+        let id = rect(&mut e, json!({}));
+        let h = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
+        assert!(h.starts_with("<div data-name=\"r\" style=\"position:relative;"), "{h}");
+    }
+
     #[test]
     fn html_opacity_is_applied_once() {
         let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
@@ -1171,6 +1379,22 @@ mod tests {
     }
 
     #[test]
+    fn html_icon_without_its_own_fill_is_drawn_in_the_fill_colour() {
+        let dir = std::env::temp_dir().join("nalarupa-test-icon-html-bare");
+        let _ = std::fs::create_dir_all(dir.join("cache/icons"));
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" height="48" viewBox="0 -960 960 960" width="48"><path d="M230-190h161v-250h178v250h161v-380L480-750 230-570Z"/></svg>"#;
+        let _ = std::fs::write(dir.join("cache/icons/material_outlined_200-home.svg"), svg);
+        let mut e = Engine::new(dir);
+        e.offline();
+        e.load_template("empty");
+        let icon = json!({"type": "icon", "icon": "home", "library": "Material Symbols Outlined", "x": 0, "y": 0, "width": 80, "height": 80, "fill": "#cc0000"});
+        let id = e.insert_root(icon).unwrap();
+        let h = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
+        // A bare `<path>` paints black unless the svg itself hands it `currentColor`.
+        assert!(h.contains("color:#cc0000\" fill=\"currentColor\""), "{h}");
+    }
+
+    #[test]
     fn exports_slides_deck_and_rasters() {
         let out = std::env::temp_dir().join("nalarupa-test-export");
         let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
@@ -1197,6 +1421,40 @@ mod tests {
         let webp = std::fs::read(&webp[0]).unwrap();
         assert!(webp.starts_with(b"RIFF") && &webp[8..12] == b"WEBP");
         assert!(super::export(&mut e, &ids, "tiff", "", &json!({})).is_err());
+    }
+
+    /// A truncated or CRC-damaged image fill is left out of the PDF like in every other export, instead of failing the document.
+    #[test]
+    fn pdf_export_skips_damaged_images() {
+        let dir = std::env::temp_dir().join(format!("nalarupa-pdf-damaged-{:x}", crate::doc::random_u64()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut pm = resvg::tiny_skia::Pixmap::new(64, 32).unwrap();
+        for (i, b) in pm.data_mut().iter_mut().enumerate() {
+            *b = (i * 7) as u8;
+        }
+        let png = pm.encode_png().unwrap();
+        let mut crc = png.clone();
+        let n = crc.len();
+        // The IDAT CRC (4 bytes) sits right before the IEND chunk (12 bytes).
+        crc[n - 13] ^= 0xFF;
+        let mut webp = Vec::new();
+        image_webp::WebPEncoder::new(&mut webp).encode(pm.data(), 64, 32, image_webp::ColorType::Rgba8).unwrap();
+        let files = [("ok.png", png.clone()), ("cut.png", png[..png.len() / 2].to_vec()), ("crc.png", crc), ("ok.webp", webp.clone()), ("cut.webp", webp[..webp.len() / 2].to_vec())];
+        for (name, bytes) in &files {
+            std::fs::write(dir.join(name), bytes).unwrap();
+        }
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        for (name, _) in &files {
+            let url = dir.join(name).to_string_lossy().replace('\\', "/");
+            let rect = json!({"type":"rectangle","x":0,"y":0,"width":100,"height":50,"fill":{"type":"image","url":url,"mode":"fill"}});
+            let id = e.insert_root(json!({"type":"frame","width":120,"height":80,"layout":"none","children":[rect]})).unwrap();
+            for format in ["png", "svg", "html-css", "pdf"] {
+                let out = dir.join(format!("{name}-{format}"));
+                super::export(&mut e, &[id.clone()], format, out.to_str().unwrap(), &json!({})).unwrap_or_else(|err| panic!("{name} {format}: {err}"));
+            }
+        }
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// A hidden layer (or one inside a hidden parent) says so instead of "node not found".
@@ -1271,6 +1529,28 @@ mod tests {
         assert!(h.contains("opacity:0.5;") && h.contains("color:transparent;opacity:0.25;"), "{h}");
     }
 
+    /// A font family or image url cannot break out of the `<link href>` or a quoted CSS string.
+    #[test]
+    fn html_font_and_url_are_escaped() {
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        e.load_template("empty");
+        let evil = "X\"><script>alert(1)</script><x y=\"";
+        let id = e.insert_root(json!({"type": "frame", "width": 300, "height": 200, "layout": "none", "children": [
+            {"type": "text", "content": "hi", "fontSize": 12, "fontFamily": evil},
+            {"type": "text", "content": "hi", "fontSize": 12, "fontFamily": "A'B\\C"},
+            {"type": "text", "content": "hi", "fontSize": 12, "fontFamily": "Noto Sans"},
+            {"type": "text", "content": "hi", "fontSize": 12, "fontFamily": "L\nM\rN"},
+            {"type": "rectangle", "y": 50, "width": 50, "height": 50, "fill": {"type": "image", "url": "a.png');position:fixed;/*\\", "mode": "fill"}},
+        ]})).unwrap();
+        let h = super::html_document(&mut e, &[id], &json!({})).unwrap();
+        assert!(!h.contains("<script"), "{h}");
+        assert!(h.contains("family=Noto+Sans:wght@") && !h.contains("family=X") && !h.contains("family=A"), "{h}");
+        assert!(h.contains("font-family:'A\\&apos;B\\\\C',sans-serif;"), "{h}");
+        assert!(h.contains("font-family:'L\\a M\\d N',sans-serif;"), "{h}");
+        assert!(h.contains("url('a.png\\&apos;);position:fixed;/*\\\\')"), "{h}");
+    }
+
     /// A text stroke reaches the SVG and HTML exports (it was dropped before).
     #[test]
     fn text_stroke_is_exported() {
@@ -1316,6 +1596,30 @@ mod tests {
         assert!(html.contains("width:0px;") && html.contains("white-space:pre-wrap;") && !html.contains("overflow-wrap"), "{html}");
         let auto = style_of(&mut e, "auto");
         assert!(auto.contains("white-space:pre;") && !auto.contains("overflow-wrap"), "{auto}");
+    }
+
+    /// Middle and bottom text in a fixed-size box is placed like the canvas; other boxes keep the top.
+    #[test]
+    fn vertical_text_alignment_is_exported() {
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        e.load_template("empty");
+        // Without a height the box is 0 high on the canvas; the flex container needs that height to spill the text.
+        let id = e.insert_root(json!({"type": "text", "content": "a\nb", "fontSize": 16, "textGrowth": "fixed-width-height", "width": 100, "textAlignVertical": "middle", "fill": {"type": "gradient", "gradientType": "linear", "rotation": 0, "colors": [{"color": "#ff0000", "position": 0}, {"color": "#0000ff", "position": 1}]}})).unwrap();
+        let nh = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
+        assert!(nh.contains("height:0px;") && nh.contains("justify-content:center;\">a\nb</p>") && nh.contains("background-clip:text"), "{nh}");
+        let mut html = |growth: &str, valign: &str| {
+            let id = e.insert_root(json!({"type": "text", "content": "ab", "fontSize": 16, "textGrowth": growth, "width": 100, "height": 60, "textAlignVertical": valign})).unwrap();
+            super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap()
+        };
+        let mid = html("fixed-width-height", "middle");
+        assert!(mid.contains("display:flex;flex-direction:column;justify-content:center;\">ab</p>"), "{mid}");
+        let bottom = html("fixed-width-height", "bottom");
+        assert!(bottom.contains("justify-content:flex-end;"), "{bottom}");
+        for (growth, valign) in [("fixed-width-height", "top"), ("fixed-width", "middle"), ("auto", "bottom")] {
+            let h = html(growth, valign);
+            assert!(!h.contains("justify-content"), "{growth}/{valign}: {h}");
+        }
     }
 
     /// Newlines in text become `<br>`: `esc` drops control characters, so each line is escaped on its own.

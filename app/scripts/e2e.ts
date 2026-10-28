@@ -79,6 +79,33 @@ try {
   await sleep(250)
   if ((await rows()) !== rows0 || (await app.getByTestId('layer-rename').count())) throw new Error('a quick second chevron click did not collapse (or opened rename)')
 
+  // Rows nested 17 levels deep stay inside the 247 px panel with a readable name: the indent narrows the row
+  // instead of pushing a full-width row off the right edge, where the deepest layers could not be reached.
+  const made = await mcp('execute', { input: `let p = Insert(document, {type:"frame", name:"Deep0", x:0, y:0, width:800, height:800})
+for (let i = 1; i <= 16; i++) p = Insert(p, {type: i % 2 ? "group" : "frame", name: "Level " + i + " with a descriptive name", width: 700 - i * 20, height: 700 - i * 20})
+Insert(p, {type:"text", name:"Deepest text layer", content:"deep", fontSize:20})` })
+  const chain = [...made.matchAll(/^"(?:Deep0|Level \d+ [^"]*|Deepest text layer)": "(\w+)"/gm)].map((m) => m[1])
+  if (chain.length !== 18) throw new Error(`expected 18 nested layers, created ${chain.length}`)
+  const panel = (await app.getByTestId('layers').bounds())!
+  for (const id of chain.slice(0, 17)) {
+    const t = app.getByTestId(`layer-toggle-${id}`)
+    await until(async () => (await t.count()) > 0, `the chevron of layer ${id}`)
+    await t.click()
+    await sleep(100)
+  }
+  const deepest = app.getByTestId('layers').getByText('Deepest text layer')
+  await until(async () => (await deepest.count()) > 0, 'the deepest layer row')
+  for (const [depth, id] of chain.entries()) {
+    const b = (await app.getByTestId(`layer-${id}`).bounds())!
+    if (b.x + b.width > panel.x + panel.width + 0.5 || b.width < 100) throw new Error(`layer row at depth ${depth} is ${JSON.stringify(b)}: it runs off the ${panel.width}px panel or is too narrow`)
+  }
+  const name = (await deepest.bounds())!
+  if (name.width < 40 || name.x + name.width > panel.x + panel.width) throw new Error(`the deepest layer name is ${JSON.stringify(name)}: it is clipped or off the panel`)
+  await mcp('execute', { input: `Delete("${chain[0]}")` })
+  await until(async () => (await rows()) === rows0, 'the deep layers to go away')
+  // The agent's edit opened the Agent tab; the steps below read the Inspector.
+  await app.getByTestId('tab-design').click()
+
   // The eye icon hides and shows its layer (the row's press capture used to swallow the click). A hidden
   // layer keeps its eye while the pointer is away; the click does not select the row.
   const eyeShown = async (want: boolean) => {
@@ -588,7 +615,12 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
   if (!(await settled(() => savedKey() === 'sk-ant-second'))) throw new Error(`a new key did not replace the saved one: ${savedKey()}`)
   await app.getByTestId('api-key-remove').click()
   if (!(await settled(() => savedKey() === undefined))) throw new Error(`Remove left the key saved: ${savedKey()}`)
-  await app.getByText('Claude Code CLI').click()
+  // The model picker follows the backend switch while the panel is still open: the API has no "Default"
+  // model, the CLI has no saved one, so it must not keep showing the other backend's pick (or its Fast toggle).
+  await until(async () => !!(await app!.getByText('Opus 5.5').count()) && !(await app!.getByText('Default').count()), 'the model picker to read Opus 5.5 on the API backend')
+  await app.getByTestId('backend-claude-code').click()
+  await until(async () => !!(await app!.getByText('Default').count()) && !(await app!.getByText('Opus 5.5').count()), 'the model picker to read Default after switching to the CLI with the panel open')
+  if (await app.getByTestId('agent-fast').count()) throw new Error('the Fast toggle stayed after switching to the CLI backend with no saved model')
   await app.getByTestId('agent-settings').click()
   await sleep(300)
 
@@ -606,7 +638,12 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
   // A textarea's value cannot be read, so send it: the prompt bubble shows what the composer held (the stand-in
   // replies; on Windows a send would start the real CLI).
   if (standIn) {
+    const tabs = async () => { const d = await app!.getByTestId('tab-design').bounds(); const a = await app!.getByTestId('tab-agent').bounds(); return `${d.x},${d.width},${a.x},${a.width}` }
+    const idleTabs = await tabs()
     await app.getByTestId('agent-send').click()
+    // The running dot widens the Agent label: the two tab buttons must keep their size and position.
+    await until(async () => !!(await app!.getByText('Agent •').count()), 'the Agent tab to show the running dot')
+    if ((await tabs()) !== idleTabs) throw new Error(`the Design/Agent tabs moved while the agent ran: ${idleTabs} -> ${await tabs()}`)
     await until(async () => (await app!.getByText('make the title bigger').count()) > 0, 'the composer draft to survive the Design tab and be sent')
     await until(async () => !(await app!.getByTestId('agent-stop').count()), 'the stand-in agent to finish', 20000)
   }
@@ -614,6 +651,21 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
   const one = (await app.getByText('1×').all()).map((n) => n.bounds!).sort((a, b) => a.width - b.width)[0]
   await app.mouse.click({ x: one.x + one.width / 2, y: one.y + one.height / 2 })
   await app.getByTestId('agent-input').fill('')
+
+  // Two submits before the panel re-renders (Enter+Enter, Enter+Send) send the draft once.
+  if (standIn) {
+    for (const [name, second] of [['enter', () => app!.getByTestId('agent-input').press('enter')], ['send', () => app!.getByTestId('agent-send').click()]] as const) {
+      const text = `dup ${name} twice`
+      await app.getByTestId('agent-input').click()
+      await app.getByTestId('agent-input').fill(text)
+      await Promise.all([app.getByTestId('agent-input').press('enter'), second()])
+      await until(async () => (await app!.getByText(text).count()) > 0, `the "${text}" bubble`)
+      await sleep(1000)
+      const n = await app.getByText(text).count()
+      if (n !== 1) throw new Error(`two submits in one frame (${name}) sent "${text}" ${n} times, expected once`)
+      await until(async () => !(await app!.getByTestId('agent-stop').count()), 'the stand-in agent to finish', 30000)
+    }
+  }
 
   // The agent message pill: a reply long enough to fill the pill must not squash its status dot.
   if (standIn) {
@@ -665,7 +717,16 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
     await sleep(200)
     await app.getByTestId('agent-send').click()
     await app.getByText('Got editor state').waitFor({ timeoutMs: 15000 })
-    await app.getByText('Got editor state').click()
+    // The list is still scrolling to the new reply when the row first appears, and a slow renderer can move the row between measuring and clicking: click again until the second detail card (the "Designed" one is still open) is up.
+    for (let tries = 0; tries < 4; tries++) {
+      await app.getByText('Got editor state').click()
+      try {
+        await until(async () => (await app!.getByTestId('tool-detail').count()) > 1, 'the long result to expand', 3000)
+        break
+      } catch (e) {
+        if (tries === 3) throw e
+      }
+    }
     await until(async () => (await app!.getByText('result row 119').count()) > 0, 'the last line of a long tool result')
 
     // Sending while scrolled up in the chat returns the list to the bottom: the echo and the reply are on screen, not off it.
@@ -693,6 +754,63 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
       const b = (await app!.getByType('markdown').all()).find((n) => !oldReplies.has(n.id))?.bounds
       return !!b && b.height > 0 && b.y + b.height <= composer.y
     }, 'the reply on screen after sending from a scrolled-up chat')
+
+    // Enter hands the keys to the canvas, so the composer must not keep drawing its focus ring: typed keys would look like they go to it.
+    await app.getByTestId('agent-input').click()
+    await app.getByTestId('agent-input').fill('Sent with Enter')
+    await until(async () => !!(await app!.getByTestId('agent-input-ring').count()), 'the focus ring on the focused composer')
+    await app.call('keystrokes', { keys: 'enter' })
+    await until(() => onScreen('Sent with Enter'), 'the message sent with Enter on screen')
+    await until(async () => !(await app!.getByTestId('agent-input-ring').count()), 'the composer to drop its focus ring after Enter sent the prompt')
+
+    // An expanded thought is secondary to the reply: dimmer text (a markdown block takes its colour from its theme,
+    // not from style) and indented. Linux only: grim, and sway for the window's origin.
+    if (sock) {
+      const thought = JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'THOUGHT: pick a calm palette first, then the type scale. THOUGHT: keep the hero short.' } } })
+      const stop = JSON.stringify({ type: 'stream_event', event: { type: 'message_stop' } })
+      writeFileSync(join(bin, 'claude'), `#!/bin/sh\necho '${thought}'\necho '${stop}'\necho '${delta('REPLY: here is the design, with the hero kept short and a calm palette.')}'\n`, { mode: 0o755 })
+      const seen = new Set((await app.getByType('markdown').all()).map((n) => n.id))
+      await app.getByTestId('agent-input').click()
+      await app.getByTestId('agent-input').fill('Think first')
+      await sleep(200)
+      await app.getByTestId('agent-send').click()
+      await app.getByText('Thought for').waitFor({ timeoutMs: 15000 })
+      const blocks = async () => (await app!.getByType('markdown').all()).filter((n) => !seen.has(n.id) && (n.bounds?.height ?? 0) > 0).map((n) => n.bounds!).sort((a, b) => a.y - b.y)
+      // The row moves while the reply streams in, so a click can land beside it: click again until the thought is open.
+      await until(async () => {
+        if ((await blocks()).length < 2) {
+          await app!.getByText('Thought for').click().catch(() => {})
+          await sleep(700)
+        }
+        return (await blocks()).length === 2
+      }, 'the expanded thought and the reply', 20000)
+      await sleep(500)
+      type Node = { type: string; rect: { x: number; y: number }; nodes?: Node[]; floating_nodes?: Node[] }
+      const windowOf = (n: Node): Node | undefined => n.type === 'floating_con' ? n : [...(n.nodes ?? []), ...(n.floating_nodes ?? [])].map(windowOf).find(Boolean)
+      const origin = windowOf(JSON.parse(await Bun.$`swaymsg -s ${join(dir!, sock)} -t get_tree`.text()))!.rect
+      const [think, answer] = await blocks()
+      const g = await grab()
+      // The brightest channel in a block: muted text peaks near 0xA1, the reply's near 0xEC.
+      const peak = (b: { x: number; y: number; width: number; height: number }) => {
+        let max = 0
+        for (let y = Math.floor(origin.y + b.y); y < Math.ceil(origin.y + b.y + b.height); y++)
+          for (let x = Math.floor(origin.x + b.x); x < Math.ceil(origin.x + b.x + b.width); x++) {
+            const i = (y * g.w + x) * 3
+            max = Math.max(max, g.px[i], g.px[i + 1], g.px[i + 2])
+          }
+        return max
+      }
+      const [dim, bright] = [peak(think), peak(answer)]
+      await shot('14-thought')
+      // The rule is 2 px of the border colour, 10 px of padding left of the text: sample its two columns and the one on each side.
+      const at = (x: number) => { const i = (Math.floor(origin.y + think.y + think.height / 2) * g.w + Math.floor(origin.x + x)) * 3; return [g.px[i], g.px[i + 1], g.px[i + 2]].join() }
+      const rule = [-13, -12, -11, -10].map((d) => at(think.x + d))
+      if (rule[1] !== '43,43,49' || rule[2] !== '43,43,49' || rule[0] === rule[1] || rule[3] === rule[2]) throw new Error(`expected a 2 px rule (43,43,49) 11-12 px left of the thought, got ${rule.join(' | ')}`)
+      // 12 px text on an 18 px line: the block is a whole number of 18 px lines.
+      if (Math.abs(think.height / 18 - Math.round(think.height / 18)) > 0.05) throw new Error(`the thought is ${think.height} px tall: not a whole number of 18 px lines`)
+      if (bright < 200 || dim > 185) throw new Error(`the expanded thought peaks at ${dim} and the reply at ${bright}: the thought should be muted and the reply bright`)
+      if (think.x < answer.x + 8) throw new Error(`the thought starts at x=${think.x}, the reply at x=${answer.x}: the thought should be indented`)
+    }
   }
 
   // A layer selected on the canvas scrolls the (virtual) Layers list to its row: here the last of 150 rows (the first inserted).

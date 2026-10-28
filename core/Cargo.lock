@@ -677,16 +677,6 @@ dependencies = [
 
 [[package]]
 name = "image-webp"
-version = "0.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f79afb8cbee2ef20f59ccd477a218c12a93943d075b492015ecb1bb81f8ee904"
-dependencies = [
- "byteorder-lite",
- "quick-error",
-]
-
-[[package]]
-name = "image-webp"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "525e9ff3e1a4be2fbea1fdf0e98686a6d98b4d8f937e1bf7402245af1909e8c3"
@@ -755,7 +745,7 @@ dependencies = [
  "flate2",
  "float-cmp",
  "gif",
- "image-webp 0.2.4",
+ "image-webp",
  "imagesize",
  "indexmap",
  "pdf-writer",
@@ -956,7 +946,8 @@ dependencies = [
  "base64 0.22.1",
  "data-url",
  "dirs",
- "image-webp 0.1.3",
+ "gif",
+ "image-webp",
  "jpeg-encoder",
  "krilla",
  "krilla-svg",
@@ -1366,7 +1357,7 @@ name = "resvg"
 version = "0.47.0"
 dependencies = [
  "gif",
- "image-webp 0.2.4",
+ "image-webp",
  "log",
  "pico-args",
  "rgb",
