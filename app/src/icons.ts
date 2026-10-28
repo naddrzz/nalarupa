@@ -47,10 +47,11 @@ const alignBottom = glyph('<path d="M3 20h18"/><rect x="6" y="4" width="4" heigh
 const note = glyph('<path d="M15 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h8l6-6V5a2 2 0 0 0-2-2z"/><path d="M14 21v-5a2 2 0 0 1 2-2h5"/>')
 const globe = glyph('<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18z"/>')
 const paperclip = glyph('<path d="m21 11-8.5 8.5a5 5 0 0 1-7-7L14 4a3.5 3.5 0 0 1 5 5l-8.5 8.5a2 2 0 0 1-3-3L15 6.5"/>')
+const saveAs = glyph('<path d="M13 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h10.2a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V13"/><path d="M7 3v4a1 1 0 0 0 1 1h7"/><path d="M7 21v-7a1 1 0 0 1 1-1h5"/><path d="M18 16v6"/><path d="M15 19h6"/>')
 const eye = glyph('<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>')
 
 export const ICONS = {
-  cursor, frame, square, circle, type, hand, play, save, open, filePlus, undo, redo, download, sparkles, layers,
+  cursor, frame, square, circle, type, hand, play, save, saveAs, open, filePlus, undo, redo, download, sparkles, layers,
   presentation, settings, trash, copy, x, alert, send, stop, plus, minus, maximize, chevronRight, chevronDown, image, plug,
   home, component, hidden, pen, smile, history, eye, note, globe, paperclip, alignLeft, alignHCenter, alignRight, alignTop, alignVCenter, alignBottom,
 }

@@ -3,8 +3,8 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { call, renderPixels } from '../src/core'
-import { applyEvents, barAgents, changing, cursorFaded, imageSrc, lastContentId, needsFrame, poke, resetChat, restoreChat, spinning, store } from '../src/agents'
-import { shimmerHalves } from '../src/geometry'
+import { applyEvents, barAgents, changing, clearPresence, cursorFaded, cursorOpacity, FADE_IN, imageSrc, lastContentId, needsFrame, poke, resetChat, restoreChat, runVerb, spinning, store, takeActivity } from '../src/agents'
+import { own, painted, pointIn, shimmerHalves } from '../src/geometry'
 import { FRAME_LABEL_TEXT, INDICATOR_TICK_MS, ellipsisAt, ellipsisPadAt, pulseAt } from '../src/theme'
 
 const assert = (ok: unknown, msg: string) => {
@@ -16,6 +16,18 @@ for (const [pos, band] of [[10.4, 100.3], [-33.5, 77], [0.5, 1], [120.49, 55.51]
   const [l, r] = shimmerHalves(pos, band)
   assert([...l, ...r].every(Number.isInteger) && l[0] + l[1] === r[0], `shimmer halves meet on a whole pixel (pos ${pos}, band ${band}: ${l} | ${r})`)
 }
+
+// The agent cursor's target lies on the node as painted: a 900x30 bar turned 90° is a thin vertical bar, and
+// a point picked in its unturned box would land far to the side. Flipped and turned-and-flipped nodes too.
+for (const [deg, fx, fy] of [[90, false, false], [0, true, false], [0, false, true], [30, true, false], [-120, true, true]] as const) {
+  const bar = { x: 300, y: 420, w: 900, h: 30, m: own(deg, fx, fy) }
+  const p = painted(bar)
+  for (const [u, v] of [[0, 0], [1, 1], [0.5, 0.5], [0.2, 0.9], [0.9, 0.1]]) {
+    const [x, y] = pointIn(bar, u, v)
+    assert(x >= p.x - 1e-6 && x <= p.x + p.w + 1e-6 && y >= p.y - 1e-6 && y <= p.y + p.h + 1e-6, `cursor target (${u}, ${v}) is on the painted bar (${deg}°, flipX ${fx}, flipY ${fy}): ${x},${y} vs ${JSON.stringify(p)}`)
+  }
+}
+  assert(pointIn({ x: 5, y: 7, w: 10, h: 20 }, 0.5, 0.5).join() === '10,17', 'an unturned node keeps its box centre')
 
 const init = call('init')
 assert(init.mcpPort > 0, 'MCP server started')
@@ -83,6 +95,36 @@ assert(!call('state').animating, 'presented slide settled after ~0.6 s')
 assert(lit() >= before, 'presented slide keeps its existing content')
 assert(greens() > greenBefore, 'presented slide shows its inserted content')
 call('undo')
+// An insert into a centered card that grows moves the card and its children: the children glide with the card,
+// not with a doubled offset (they used to jump 34 px the wrong way, then fly back through the old spot).
+{
+  const run = (input: string) => {
+    const o = call('tool', { name: 'execute', args: { input } })
+    assert(!o.error, `execute works: ${o.text}`)
+  }
+  const redTop = (f: Uint8Array) => {
+    for (let i = 0; i < f.length; i += 4) if (f[i] > 200 && f[i + 1] < 40 && f[i + 2] < 40) return (i / 4 / 640) | 0
+    return -1
+  }
+  const grab = () => new Uint8Array(renderPixels(640, 400, 0, 3000, 1, 0x1c1c1f, undefined, true)!)
+  run(`Insert(document, {type:"frame", name:"GlideRoot", x:0, y:3000, width:400, height:340, layout:"vertical", justifyContent:"center", alignItems:"center", fill:"#000000"})
+card = Insert(Get(n => n.name === "GlideRoot" ? n.id : undefined)[0], {type:"frame", name:"Card", layout:"vertical", gap:8, padding:10, fill:"#222222"})
+Insert(card, {type:"rectangle", name:"R", width:100, height:40, fill:"#ff0000"})`)
+  grab()
+  await Bun.sleep(800)
+  grab()
+  await Bun.sleep(700)
+  call('poll')
+  const from = redTop(grab())
+  run(`Insert(Get(n => n.name === "Card" ? n.id : undefined)[0], {type:"rectangle", name:"N", width:100, height:60, fill:"#00ff00"})`)
+  const tops = [redTop(grab())]
+  for (const t0 = performance.now(); performance.now() - t0 < 700; await Bun.sleep(30)) tops.push(redTop(grab()))
+  const to = tops[tops.length - 1]
+  assert(from > 0 && to < from, `the card's child moves up when the card grows (${from} -> ${to})`)
+  assert(tops.every((t) => t >= to && t <= from), `the card's child glides between its old and new spot, not past them (${from} -> ${to}: ${tops})`)
+  assert(tops.every((t, i) => i === 0 || t <= tops[i - 1]), `the card's child moves one way (${tops})`)
+  run(`Delete(Get(n => n.name === "GlideRoot" ? n.id : undefined)[0])`)
+}
 // Reduced motion (an OS preference the app passes in): agent inserts appear in place.
 call('reduce_motion', { on: true })
 call('tool', { name: 'execute', args: { input: 'Insert("sld01", {type:"rectangle", name:"Still", width:100, height:100, fill:"#0000ff"})' } })
@@ -145,6 +187,20 @@ resetChat()
   applyEvents([{ type: 'agent', kind: 'done', agent: ag }, { type: 'agent', kind: 'done', agent: { id: 'a1', name: 'Agent 1', color: '#ffffff' } }, { type: 'agent', kind: 'done', agent: { id: 'a2', name: 'Agent 2', color: '#ffffff' } }], 0)
   assert(!store.items.some(changing), 'a finished chat has no live row')
 }
+// Each reply opens with the agent header on its first item, whether that is text, thinking or a tool call; later items of the reply have none.
+{
+  const agent = { id: 'ag1', name: 'Surya', color: '#38B2AC' }
+  const ev = (kind: string, o: object = {}) => ({ type: 'agent', kind, agent, ...o })
+  const end = ev('done', { durationMs: 1, usage: {}, stopped: false })
+  resetChat()
+  applyEvents([ev('user', { text: 'one' }), ev('start'), ev('text_delta', { text: 'Text first' }), ev('message_end'), end], 0)
+  applyEvents([ev('user', { text: 'two' }), ev('start'), ev('thinking_delta', { text: 'hmm' }), ev('message_end'), ev('text_delta', { text: 'Thinking first' }), ev('message_end'), end], 0)
+  applyEvents([ev('user', { text: 'three' }), ev('start'), ev('tool_start', { id: 't1', name: 'execute' }), ev('tool_done', { id: 't1', name: 'execute', input: {}, output: 'ok' }), ev('text_delta', { text: 'Tool first' }), ev('message_end'), end], 0)
+  applyEvents([ev('start'), ev('text_delta', { text: 'No prompt' }), ev('message_end'), end], 0)
+  applyEvents([ev('user', { text: 'four' }), ev('start'), ev('text_delta', { text: 'Cut off' }), ev('message_end'), ev('note', { text: 'The reply hit the output limit' }), ev('text_delta', { text: 'Continued' }), ev('message_end'), end], 0)
+  const marks = store.items.flatMap((i) => (i.kind === 'assistant' || i.kind === 'thinking' || i.kind === 'tool' ? [`${i.kind}${i.header ? '+' : ''}`] : []))
+  assert(marks.join() === 'assistant+,thinking+,assistant,tool+,assistant,assistant+,assistant+,assistant', `reply headers ${marks}`)
+}
 // A stopped or failed run settles its plan: unfinished steps become cancelled, none stays in progress.
 {
   const agent = { id: 'ag1', name: 'Surya', color: '#38B2AC' }
@@ -159,6 +215,17 @@ resetChat()
   assert(settled([end(true)]) === 'completed,cancelled,cancelled', 'a stopped run cancels its unfinished steps')
   assert(settled([ev('error', { text: 'Claude API error 529: Overloaded' }), end(false)]) === 'completed,cancelled,cancelled', 'a failed run cancels its unfinished steps')
   assert(settled([end(false)]) === 'completed,in_progress,pending', 'a run that ended cleanly leaves its plan alone')
+  // The closing row words how the run ended: only a clean run "designed" something.
+  const verb = (end: object[]) => {
+    resetChat()
+    applyEvents([ev('user', { text: 'go' }), ev('start'), ...end], 0)
+    const u = store.items.find((i) => i.kind === 'usage')
+    return u?.kind === 'usage' ? runVerb(u) : ''
+  }
+  assert(verb([end(false)]) === 'designed for', 'a clean run closes with "designed for"')
+  assert(verb([end(true)]) === 'stopped after', 'a stopped run closes with "stopped after"')
+  assert(verb([ev('error', { text: 'could not start the claude CLI' }), end(false)]) === 'failed after', 'a failed run closes with "failed after"')
+  assert(verb([ev('error', { text: 'boom' }), end(true)]) === 'stopped after', 'a stopped run reads as stopped even after an error')
   // An earlier failed run does not cancel the plan of the next run.
   settled([ev('error', { text: 'boom' }), end(false)])
   applyEvents([ev('start'), plan, end(false)], 0)
@@ -168,6 +235,23 @@ resetChat()
   const helper = { id: 'ag2', name: 'Chandra', color: '#ED8936' }
   applyEvents([ev('user', { text: 'go' }), ev('start'), plan, { type: 'agent', kind: 'start', agent: helper }, { type: 'agent', kind: 'error', text: 'boom', agent: helper }, { type: 'agent', kind: 'done', durationMs: 1, usage: {}, agent: helper }], 0)
   assert(store.todos.map((t) => t.status).join(',') === 'completed,in_progress,pending', "a helper's failure leaves the plan owner's steps alone")
+}
+// A chat saved mid-run (crash, kill) reopens with its unfinished plan steps cancelled, not live; a finished run's plan is left as it ended.
+{
+  const agent = { id: 'ag1', name: 'Surya', color: '#38B2AC' }
+  const ev = (kind: string, o: object = {}) => ({ type: 'agent', kind, agent, ...o })
+  const todos = [{ content: 'Build hero', status: 'in_progress', activeForm: 'Building hero' }, { content: 'Build footer', status: 'pending' }]
+  const saved = [ev('user', { text: 'Design a page' }), ev('start'), ev('todos', { todos: [{ content: 'Plan', status: 'completed' }, ...todos] }), ev('message_end')]
+  restoreChat(saved)
+  assert(store.todos.map((t) => t.status).join(',') === 'completed,cancelled,cancelled', 'a plan whose run never finished reopens cancelled')
+  restoreChat([...saved, ev('done', { durationMs: 1, usage: {} })])
+  assert(store.todos.map((t) => t.status).join(',') === 'completed,in_progress,pending', 'a plan whose run finished reopens as it ended')
+  restoreChat([...saved, ev('done', { stopped: true, durationMs: 1, usage: {} })])
+  assert(store.todos.map((t) => t.status).join(',') === 'completed,cancelled,cancelled', 'a stopped run reopens with a cancelled plan')
+  // A plan finished in an earlier turn is not reopened cancelled because the same agent was mid-run in a later turn that set no plan.
+  restoreChat([...saved, ev('done', { durationMs: 1, usage: {} }), ev('user', { text: 'Tweak it' }), ev('start'), ev('message_end')])
+  assert(store.todos.map((t) => t.status).join(',') === 'completed,in_progress,pending', "a later turn that set no plan leaves the earlier turn's plan alone")
+  resetChat()
 }
 // A long chat keeps every item, the first prompt included, live and when reopened from history.
 {
@@ -194,6 +278,24 @@ resetChat()
 assert(store.profiles.size === 0 && store.running.size === 0 && barAgents().shown.length === 0, 'a new conversation clears the agent bar')
 assert(store.cursors.size === 0, "a new conversation drops the old agents' canvas cursors")
 resetChat()
+// A new or opened document drops the old one's canvas presence: cursors, flashes and pending flash requests.
+{
+  applyEvents([{ type: 'agent_activity', agent: 'external', ids: ['n1'], op: 'write' }, { type: 'pen', id: 'p1', x: 5, y: 5 }], 0)
+  store.cursors.set('external', { profile: { id: 'external', name: 'External agent', color: '#607dff' }, x: 0, y: 0, tx: 0, ty: 0, appearAt: 0, lastActivity: 0, wobble: 0, phase: 0 })
+  store.flashes.push({ nodeId: 'n1', start: 0, color: '#607dff', longHold: false })
+  clearPresence()
+  assert(store.cursors.size === 0 && store.flashes.length === 0 && store.activity.length === 0 && store.pens.size === 0, "a new or opened document drops the old document's cursors, pens and flashes")
+  assert(!needsFrame(100, false, 0), 'no repaint is due once the presence is cleared')
+}
+// Activity queued while the canvas layer is not mounted (Present) is stale once the editor is back: no cursor or flash for it.
+{
+  applyEvents([{ type: 'agent_activity', agent: 'external', ids: ['n1'], op: 'write' }], 1000)
+  applyEvents([{ type: 'agent_activity', agent: 'external', ids: ['n2'], op: 'write' }], 60000)
+  assert(store.activity.length === 1 && store.activity[0].ids[0] === 'n2', 'an unread flash request is pruned once it is stale')
+  assert(takeActivity(60100).length === 1 && store.activity.length === 0, 'a fresh flash request is taken and the queue emptied')
+  applyEvents([{ type: 'agent_activity', agent: 'external', ids: ['n3'], op: 'write' }], 70000)
+  assert(takeActivity(90000).length === 0 && store.activity.length === 0, 'a flash request that waited too long is dropped when drained')
+}
 // Reduced motion: a running agent repaints the canvas layer only for fades, not every frame of the run.
 {
   const cursor = { profile: { id: 'a', name: 'A', color: '#f00' }, x: 0, y: 0, tx: 0, ty: 0, appearAt: 0, lastActivity: 0, wobble: 0, phase: 0 }
@@ -233,6 +335,19 @@ resetChat()
   applyEvents([{ type: 'agent', agent: profile, kind: 'start' }], 20000)
   assert(store.running.has('a') && cursor.appearAt === 20000, 'starting an agent with a faded cursor restarts the fade-in')
   store.running.clear()
+  store.cursors.clear()
+}
+// A cursor that wakes while fading out continues from the opacity it reached: no one-frame jump back to full.
+{
+  const profile = { id: 'a', name: 'A', color: '#f00' }
+  const cursor = { profile, x: 0, y: 0, tx: 0, ty: 0, appearAt: 0, lastActivity: 0, wobble: 0, phase: 0 }
+  store.cursors.set('a', cursor)
+  const before = cursorOpacity(cursor, 6400, false)
+  assert(before > 0 && before < 0.1, 'the cursor is nearly faded out before it wakes')
+  poke(profile, 6400)
+  const after = cursorOpacity(cursor, 6400, true)
+  assert(Math.abs(after - before) < 1e-6, 'waking a fading cursor keeps its opacity for that frame')
+  assert(cursorOpacity(cursor, 6500, true) > after && cursorOpacity(cursor, 6400 + FADE_IN, true) === 1, 'a woken cursor fades back in to full within the fade-in time')
   store.cursors.clear()
 }
 // A reply keeps the model that wrote it: a later turn on another model does not re-label it, and a chat
@@ -328,6 +443,47 @@ assert(!redAt(300, 70), 'turning clip on repaints the cut overflow')
 clipped()
 call('reparent', { ids: [midId], parent: rootId })
 assert(redAt(300, 70), 'moving a container out of a clipping frame repaints its overflow')
+// An image fill over the pixel budget is refused from its header, not decoded: a 12000 x 12000 grey PNG
+// (about 140 KB) took 3 s and 1.2 GB to render, a 30000 x 30000 one 19 s and 7 GB.
+{
+  const W = 12000
+  const be = (n: number) => Buffer.from([n >>> 24, (n >>> 16) & 255, (n >>> 8) & 255, n & 255])
+  const chunk = (type: string, data: Uint8Array) => {
+    const body = Buffer.concat([Buffer.from(type), data])
+    return Buffer.concat([be(data.length), body, be(Bun.hash.crc32(body))])
+  }
+  const bombDir = mkdtempSync(join(tmpdir(), 'nalarupa-bomb-'))
+  try {
+    const ihdr = Buffer.concat([be(W), be(W), Buffer.from([8, 0, 0, 0, 0])])
+    const idat = Bun.deflateSync(Buffer.alloc(W * (W + 1)))
+    const png = Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', idat), chunk('IEND', Buffer.alloc(0))])
+    await Bun.write(join(bombDir, 'bomb.png'), png)
+    call('new', { template: 'empty' })
+    call('insert', { parent: 'document', node: { type: 'rectangle', name: 'bomb', x: 0, y: 0, width: 200, height: 200, fill: { type: 'image', url: join(bombDir, 'bomb.png'), mode: 'fill' } } })
+    const t0 = performance.now()
+    renderPixels(320, 180, 0, 0, 1, 0xffffff)
+    const ms = performance.now() - t0
+    assert(ms < 1500, `an oversized image fill is refused without decoding (${ms.toFixed(0)} ms)`)
+  } finally {
+    rmSync(bombDir, { recursive: true, force: true })
+  }
+}
+// A shadow that moves up (a rotated, flipped node's does) must not fade along the edges the repaint is cut
+// into bands at: after an edit the canvas equals a full render (solo) of the same document.
+{
+  call('new', { template: 'empty' })
+  const root = ins('document', { type: 'frame', name: 'root', x: 0, y: 0, width: 400, height: 400, layout: 'none', fill: '#eeeeee' })
+  const e = ins(root, { type: 'ellipse', name: 'E', x: 100, y: 200, width: 120, height: 80, fill: '#ff00ff80', flipY: true, rotation: 45, effect: { type: 'shadow', offset: { x: 10, y: 10 }, blur: 4, color: '#00000080' } })
+  const frame = (solo?: string) => new Uint8Array(renderPixels(400, 400, 0, 0, 1, 0xffffff, solo)!) // copy: the core reuses its buffer
+  frame()
+  call('move_by', { ids: [e], dx: 1, dy: 0 })
+  call('move_by', { ids: [e], dx: -1, dy: 0 })
+  const live = frame()
+  const full = frame(root)
+  let worst = 0
+  for (let i = 0; i < live.length; i++) worst = Math.max(worst, Math.abs(live[i] - full[i]))
+  assert(worst <= 1, `an edited canvas matches a full render around a rotated, flipped shadow (largest difference ${worst})`)
+}
 // One very long line (pasted minified JSON, a base64 blob) lays out in linear time: quadruple the text,
 // about quadruple the time (it was ~14x, 160k characters took 9 s).
 const layoutMs = (chars: number) => {
