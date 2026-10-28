@@ -8,8 +8,8 @@
 use crate::doc::Doc;
 use crate::raster;
 use crate::resolve::{RNode, Resolver};
-use crate::svg::{clip_svg, fxhash, is_turned, own_matrix, Assets, Svg};
-use crate::text::Fonts;
+use crate::svg::{blends, clip_svg, fxhash, is_turned, own_matrix, Assets, Svg};
+use crate::text::{Fonts, TextStyle};
 use resvg::{tiny_skia, usvg};
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
@@ -90,13 +90,15 @@ pub struct Flat {
     pub placeholder: bool,
     /// Has an image fill that is still being generated.
     pub pending: bool,
+    /// This node or an ancestor has opacity 0: nothing of it is painted.
+    pub faded: bool,
     /// Painted transform `[a, b, c, d, e, f]` (x' = a·x + c·y + e, y' = b·x + d·y + f) from this box's
     /// coordinates to the canvas: own and ancestors' rotations/flips. `None` = identity.
     pub m: Option<[f64; 6]>,
     /// Local bounds' offset from the origin (non-zero for groups) and the node's own effective rotation and flips.
     pub local: ([f64; 2], f64, bool, bool),
     /// Clips its children to its box (a `clip` frame), so they cannot be hit outside it.
-    clip: bool,
+    pub clip: bool,
     /// Own props, box, parent and sibling index: a change means this node must repaint.
     sig: u64,
     /// How far shadows, blurs and strokes paint outside the box; infinite when the node or an
@@ -212,15 +214,20 @@ impl Ctx<'_> {
     pub fn laid_out(&mut self, index: usize) -> Option<RNode> {
         let empty = Map::new();
         let r = Resolver::new(&self.doc.root, self.libs, &empty);
+        self.laid_out_in(&r, index)
+    }
+
+    /// `laid_out` with a resolver built by the caller, so a pass over many layers indexes the document once.
+    fn laid_out_in(&mut self, r: &Resolver, index: usize) -> Option<RNode> {
         let mut n = r.resolve(self.doc.children().get(index)?)?;
         crate::layout::layout(&mut n, self.fonts);
         // Script nodes need their laid-out size before they can run.
-        crate::script::expand_scripts(&mut n, &r, self.fonts, self.doc.dir().as_deref());
+        crate::script::expand_scripts(&mut n, r, self.fonts, self.doc.dir().as_deref());
         Some(n)
     }
 
     pub fn tree_options(&self) -> usvg::Options<'static> {
-        let mut opt = usvg::Options { fontdb: Arc::clone(&self.fonts.db), font_resolver: self.fonts.resolver(), ..usvg::Options::default() };
+        let mut opt = usvg::Options { fontdb: Arc::clone(&self.fonts.db), font_resolver: self.fonts.resolver(), image_href_resolver: crate::svg::image_href_resolver(), ..usvg::Options::default() };
         opt.resources_dir = self.doc.dir();
         opt
     }
@@ -285,20 +292,27 @@ impl Ctx<'_> {
 
     /// One PDF page per node (1 px = 1 pt), in the given order; text stays selectable.
     pub fn nodes_pdf(&mut self, ids: &[String]) -> Result<Vec<u8>, String> {
-        use krilla_svg::SurfaceExt;
         let mut pdf = krilla::Document::new();
-        for id in ids {
-            let tree = self.node_tree(id)?;
-            let size = tree.size();
-            let settings = krilla::page::PageSettings::from_wh(size.width(), size.height()).ok_or("empty page")?;
-            let mut page = pdf.start_page_with(settings);
-            let mut surface = page.surface();
-            let pt = krilla::geom::Size::from_wh(size.width(), size.height()).ok_or("empty page")?;
-            surface.draw_svg(&tree, pt, krilla_svg::SvgSettings::default());
-            surface.finish();
-            page.finish();
-        }
+        // krilla decodes late and fails the whole document on one damaged image: leave those out.
+        self.assets.verify(true);
+        let pages = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ids.iter().try_for_each(|id| self.pdf_page(&mut pdf, id))));
+        self.assets.verify(false);
+        pages.unwrap_or_else(|p| std::panic::resume_unwind(p))?;
         pdf.finish().map_err(|e| format!("PDF export failed: {e:?}"))
+    }
+
+    fn pdf_page(&mut self, pdf: &mut krilla::Document, id: &str) -> Result<(), String> {
+        use krilla_svg::SurfaceExt;
+        let tree = self.node_tree(id)?;
+        let size = tree.size();
+        let settings = krilla::page::PageSettings::from_wh(size.width(), size.height()).ok_or("empty page")?;
+        let mut page = pdf.start_page_with(settings);
+        let mut surface = page.surface();
+        let pt = krilla::geom::Size::from_wh(size.width(), size.height()).ok_or("empty page")?;
+        surface.draw_svg(&tree, pt, krilla_svg::SvgSettings::default());
+        surface.finish();
+        page.finish();
+        Ok(())
     }
 }
 
@@ -354,6 +368,9 @@ impl Renderer {
         let mut order = Vec::new();
         let mut keep = HashMap::new();
         let mut built = Vec::new();
+        let (doc, libs) = (cx.doc, cx.libs);
+        let empty = Map::new();
+        let resolver = Resolver::new(&doc.root, libs, &empty);
         for (i, node) in cx.doc.children().iter().enumerate() {
             let id = node["id"].as_str().unwrap_or_default().to_string();
             let mut hash = fxhash(&node.to_string()) ^ shared.rotate_left(17);
@@ -365,21 +382,24 @@ impl Renderer {
                 Some(l) if l.hash == hash => {
                     keep.insert(id.clone(), l);
                 }
-                old => built.push((id.clone(), prepare_layer(cx, i, hash, &hidden), old)),
+                old => built.push((id.clone(), prepare_layer(cx, &resolver, i, hash, &hidden), old)),
             }
             order.push(id);
         }
         let rebuilt: Vec<String> = built.iter().map(|(id, _, _)| id.clone()).collect();
-        // Parsing (text shaping included) dominates; do it on all cores.
+        // Parsing (text shaping included) dominates; do it on all cores, a chunk of layers per thread.
         let opts = cx.tree_options();
         let parse = &|svg: &String| {
             let tree = usvg::Tree::from_str(svg, &opts).ok()?;
             let scene = raster::Scene::new(&tree);
             Some((tree, scene))
         };
+        let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(1, 16);
         let parsed: Vec<Option<(usvg::Tree, raster::Scene)>> = std::thread::scope(|s| {
-            let jobs: Vec<_> = built.iter().map(|(_, (_, svg), _)| s.spawn(move || svg.as_ref().and_then(parse))).collect();
-            jobs.into_iter().map(|j| j.join().ok().flatten()).collect()
+            let jobs: Vec<_> = built.chunks(built.len().div_ceil(threads).max(1)).map(|chunk| {
+                (chunk.len(), s.spawn(move || chunk.iter().map(|(_, (_, svg), _)| svg.as_ref().and_then(parse)).collect::<Vec<_>>()))
+            }).collect();
+            jobs.into_iter().flat_map(|(n, j)| j.join().unwrap_or_else(|_| (0..n).map(|_| None).collect())).collect()
         });
         for ((id, (mut layer, _), old), parsed) in built.into_iter().zip(parsed) {
             if let Some((t, scene)) = parsed {
@@ -425,9 +445,19 @@ impl Renderer {
             if !ancestors_of(root, id, &mut chain) {
                 continue;
             }
-            for k in chain.iter().flat_map(|a| a.kids.iter()) {
+            // What each node glides with after the carry below (a gliding ancestor's own slide is already corrected).
+            let mut glides: HashMap<&str, (f64, f64)> = HashMap::new();
+            for (j, k) in chain.iter().enumerate().flat_map(|(j, a)| a.kids.iter().map(move |k| (j, k))) {
                 let Some(&(ox, oy)) = old.get(k.id.as_str()) else { continue };
-                let (dx, dy) = (ox - k.x, oy - k.y);
+                let (mut dx, mut dy) = (ox - k.x, oy - k.y);
+                // `composite_slides` adds a gliding ancestor's offset to its children: the child glides
+                // only the part of its move the ancestor does not carry (the ancestors come first).
+                for a in &chain[1..=j] {
+                    if let Some(&(gx, gy)) = glides.get(a.id.as_str()).filter(|_| self.slides.iter().any(|s| s.id == a.id && !s.fade)) {
+                        (dx, dy) = (dx - gx, dy - gy);
+                    }
+                }
+                glides.insert(k.id.as_str(), (dx, dy));
                 if dx.abs() < 0.5 && dy.abs() < 0.5 {
                     continue;
                 }
@@ -456,7 +486,10 @@ impl Renderer {
 
     /// Snapshot sliding nodes that are new or whose layer was just rebuilt (so a node edited
     /// mid-slide shows its edit). Each snapshot leaves out descendants that slide themselves.
-    pub fn refresh_slides(&mut self, cx: &mut Ctx, rebuilt: &[String], mut roots: HashMap<usize, Option<RNode>>) {
+    /// A node that blends (itself or in its resolved subtree) needs the content beneath, which its
+    /// isolated snapshot lacks: it appears in place instead, and true is returned when any did.
+    pub fn refresh_slides(&mut self, cx: &mut Ctx, rebuilt: &[String], mut roots: HashMap<usize, Option<RNode>>) -> bool {
+        let mut blended = Vec::new();
         let ids: Vec<String> = self.slides.iter().map(|s| s.id.clone()).collect();
         for s in &mut self.slides {
             let Some(top) = top_index(cx.doc, &s.id) else {
@@ -472,6 +505,10 @@ impl Renderer {
                 s.tree = None;
                 continue;
             };
+            if blends(node) {
+                blended.push(s.id.clone());
+                continue;
+            }
             // The settled layer paints the node inside its ancestors' groups: carry their
             // rotation, flips and opacity (as `prepare_layer` and `Svg::node` do).
             let mut chain = Vec::new();
@@ -504,6 +541,8 @@ impl Renderer {
             s.ancestors = ids.iter().filter(|a| **a != s.id && find_rnode(root, a).is_some_and(|an| find_rnode(an, &s.id).is_some())).cloned().collect();
             s.cache = None;
         }
+        self.slides.retain(|s| !blended.contains(&s.id));
+        !blended.is_empty()
     }
 
     /// Drop slides that have settled (or were never shown); true if any ended.
@@ -622,7 +661,8 @@ impl Renderer {
     }
 
     /// Nodes that need animated overlays (placeholder frames, pending images), each with the canvas box its
-    /// clipping ancestors leave visible (`None` when nothing clips it). A node clipped away entirely is left out.
+    /// clipping ancestors leave visible (`None` when nothing clips it). A node clipped away entirely, or with
+    /// opacity 0 itself or in an ancestor, is left out.
     pub fn live(&self) -> Vec<(&Flat, Option<Rect>)> {
         let canvas = |f: &Flat| {
             let m = f.m.unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
@@ -636,7 +676,7 @@ impl Renderer {
             let mut path: Vec<usize> = Vec::new();
             for (i, f) in layer.flat.iter().enumerate() {
                 path.truncate(f.depth);
-                if f.placeholder || f.pending {
+                if (f.placeholder || f.pending) && !f.faded {
                     // A rotated clipping frame is cut by its canvas bounding box (its corners may still show).
                     let clip = path.iter().map(|&p| &layer.flat[p]).filter(|p| p.clip).map(canvas).reduce(|a, b| {
                         let (x0, y0, x1, y1) = (a.0.max(b.0), a.1.max(b.1), (a.0 + a.2).min(b.0 + b.2), (a.1 + a.3).min(b.1 + b.3));
@@ -868,8 +908,9 @@ fn changed_nodes(old: &Layer, new: &Layer, out: &mut Vec<Rect>) {
     out.extend(changed.into_iter().map(|f| (f.x - f.reach, f.y - f.reach, f.w + 2.0 * f.reach, f.h + 2.0 * f.reach)));
 }
 
-/// Generous paint reach outside a node's box from its effects and stroke.
-fn reach(p: &Map<String, Value>) -> f64 {
+/// Generous paint reach outside a node's box from its effects, stroke and text overflow.
+fn reach(n: &RNode) -> f64 {
+    let p = &n.p;
     let num = |v: &Value| v.as_f64().unwrap_or(0.0).abs();
     let effects = match p.get("effect") {
         Some(Value::Array(a)) => a.iter().collect(),
@@ -882,7 +923,18 @@ fn reach(p: &Map<String, Value>) -> f64 {
         Some(v) => num(v),
         None => 0.0,
     };
-    4.0 + fx + stroke
+    // Glyphs spill out of a line box shorter than the font's ascent plus descent (tight line heights,
+    // overhangs): one em each way. A fixed-size box also lets its lines run past it: lines below the
+    // box and words wider than it.
+    let glyphs = if n.ty == "text" {
+        let st = TextStyle::of(n);
+        let lines = n.lines.len() as f64 * st.size * st.line_height.unwrap_or(0.0).max(2.0);
+        let wide = n.lines.iter().map(|l| l.width).fold(0.0, f64::max);
+        st.size + (lines - n.h).max(wide - n.w).max(0.0)
+    } else {
+        0.0
+    };
+    4.0 + fx + stroke + glyphs
 }
 
 /// Copy a w×h window of `pix` into `out`, reusing its allocation.
@@ -977,8 +1029,8 @@ fn has_hairline(g: &usvg::Group) -> bool {
 }
 
 /// Lay out a top-level node and emit its SVG; the tree is parsed later (in parallel).
-fn prepare_layer(cx: &mut Ctx, index: usize, hash: u64, hidden: &HashSet<String>) -> (Layer, Option<String>) {
-    let Some(root) = cx.laid_out(index) else {
+fn prepare_layer(cx: &mut Ctx, resolver: &Resolver, index: usize, hash: u64, hidden: &HashSet<String>) -> (Layer, Option<String>) {
+    let Some(root) = cx.laid_out_in(resolver, index) else {
         return (Layer { hash, tree: None, scene: None, bbox: (0.0, 0.0, 0.0, 0.0), paint: (0.0, 0.0, 0.0, 0.0), flat: Vec::new() }, None);
     };
     let mut flat = Vec::new();
@@ -989,12 +1041,16 @@ fn prepare_layer(cx: &mut Ctx, index: usize, hash: u64, hidden: &HashSet<String>
     let mut mats: Vec<Option<[f64; 6]>> = Vec::new();
     // Per depth: this node or an ancestor is hidden while it slides.
     let mut sliding: Vec<bool> = Vec::new();
+    // Per depth: this node or an ancestor has opacity 0.
+    let mut faded: Vec<bool> = Vec::new();
     root.visit(&mut |n, depth| {
         stack.truncate(depth);
         index.truncate(depth + 1);
         turned.truncate(depth);
         mats.truncate(depth);
         sliding.truncate(depth);
+        faded.truncate(depth);
+        faded.push(n.f("opacity").unwrap_or(1.0) <= 0.0 || faded.last() == Some(&true));
         let rotated = is_turned(n);
         turned.push(rotated || turned.last() == Some(&true));
         let parent_m = mats.last().copied().flatten();
@@ -1027,11 +1083,12 @@ fn prepare_layer(cx: &mut Ctx, index: usize, hash: u64, hidden: &HashSet<String>
             problem: n.problem,
             placeholder: n.ty == "frame" && n.b("placeholder"),
             pending: crate::svg::fills(n.p.get("fill")).iter().any(|f| f["url"].as_str().is_some_and(is_pending_url)),
+            faded: faded[depth],
             m: mats[depth],
             local: ([n.bx, n.by], n.f("rotation").unwrap_or(0.0), n.b("flipX"), n.b("flipY")),
             clip: n.ty == "frame" && n.b("clip"),
             sig: fxhash(&sig),
-            reach: if turned[depth] { f64::INFINITY } else { reach(&n.p) },
+            reach: if turned[depth] { f64::INFINITY } else { reach(n) },
         });
         stack.push(n.id.clone());
     }, 0);
@@ -1162,6 +1219,26 @@ pub(crate) mod tests {
         r.sync(&mut Ctx { doc, libs: &[], fonts: &mut fonts, assets: &mut assets });
     }
 
+    /// The first layout resolves each top-level layer against one shared index, so it grows
+    /// linearly with the layer count (4x the layers took 16x as long when each built its own).
+    #[test]
+    fn first_layout_is_linear_in_top_level_layers() {
+        let time = |n: usize| {
+            let kids: Vec<Value> = (0..n)
+                .map(|i| serde_json::json!({"type": "rectangle", "id": format!("r{i}"), "x": i % 100 * 5, "y": i / 100 * 5, "width": 4, "height": 4, "fill": "#f00"}))
+                .collect();
+            let doc = Doc::from_json(&serde_json::json!({"version": "2.19", "children": kids}).to_string()).unwrap();
+            let mut r = Renderer::default();
+            let t = Instant::now();
+            sync(&mut r, &doc);
+            assert_eq!(r.order.len(), n);
+            t.elapsed().as_secs_f64()
+        };
+        time(200);
+        let (small, large) = (time(1000), time(4000));
+        assert!(large < small * 8.0 + 0.2, "1000 top-level layers took {small:.3} s, 4000 took {large:.3} s");
+    }
+
     /// Rotating a node repaints everything it painted before and after (no trails): the
     /// incremental frame equals a cold render.
     #[test]
@@ -1180,6 +1257,46 @@ pub(crate) mod tests {
             let mut cold = Renderer::default();
             sync(&mut cold, &doc);
             assert!(incremental == frame(&mut cold), "stale pixels after rotating to {deg} degrees");
+        }
+    }
+
+    /// Glyphs of a tight-line-height text stick out of its layout box: editing or deleting it
+    /// repaints them too, so the incremental frame equals a cold render (no descender tails left).
+    #[test]
+    fn text_overflow_leaves_no_ghosts() {
+        let json = |lh: f64, box_: &str, size: &str| {
+            format!(
+                r##"{{"version":"2.19","children":[{{"type":"frame","id":"f","x":0,"y":0,"width":1920,"height":1080,"layout":"none","fill":"#0f1115","children":[
+                {{"type":"text","id":"t","x":160,"y":587,"width":1600,{box_},"content":"Say one thing,\nbeautifully.","fontSize":{size},"fontWeight":"700","lineHeight":{lh},"fill":"#f4f1ea"}}]}}]}}"##
+            )
+        };
+        let frame = |r: &mut Renderer| r.render(640, 400, 160.0, 700.0, 1.0, [28, 28, 31], None, true).to_vec();
+        let edits: [(&str, fn(&mut Value)); 4] = [
+            ("delete", |t| *t = Value::Null),
+            ("recolor", |t| t["fill"] = json!("#ff0000")),
+            ("move", |t| t["y"] = json!(287)),
+            ("hide", |t| t["enabled"] = json!(false)),
+        ];
+        // Tight line heights, a string font size, and a fixed-height box its lines run out of.
+        let cases = [(1.05, r#""textGrowth":"fixed-width""#, "120"), (0.8, r#""textGrowth":"fixed-width""#, "120"), (1.05, r#""textGrowth":"fixed-width""#, r#""120""#), (1.05, r#""textGrowth":"fixed-width-height","height":40"#, "120")];
+        for (lh, box_, size) in cases {
+            for (name, edit) in edits {
+                let mut doc = Doc::from_json(&json(lh, box_, size)).unwrap();
+                let mut live = Renderer::default();
+                sync(&mut live, &doc);
+                frame(&mut live);
+                edit(&mut doc.root["children"][0]["children"][0]);
+                if doc.root["children"][0]["children"][0].is_null() {
+                    doc.root["children"][0]["children"] = json!([]);
+                }
+                sync(&mut live, &doc);
+                let incremental = frame(&mut live);
+                let mut cold = Renderer::default();
+                sync(&mut cold, &doc);
+                // Banded rasterising may round a channel by one; a ghost is far off.
+                let stale = incremental.iter().zip(frame(&mut cold)).filter(|(a, b)| a.abs_diff(*b) > 10).count();
+                assert!(stale == 0, "{stale} stale glyph channels after {name} at lineHeight {lh}, {box_}, fontSize {size}");
+            }
         }
     }
 
@@ -1301,6 +1418,25 @@ pub(crate) mod tests {
         let live: Vec<_> = r.live().into_iter().map(|(f, c)| (f.id.as_str(), c)).collect();
         // `img` sits at doc (250, 150) and sticks out of the frame (x 100..400, y 100..300).
         assert_eq!(live, [("img", Some((100.0, 100.0, 300.0, 200.0))), ("free", None)]);
+    }
+
+    /// A node painted fully transparent (own or ancestor opacity 0) shows no overlay.
+    #[test]
+    fn live_skips_invisible_nodes() {
+        let pending = r##"{"type":"image","url":"nalarupa:pending-x"}"##;
+        let json = format!(r##"{{"version":"2.19","children":[
+            {{"type":"frame","id":"f","x":0,"y":0,"width":800,"height":600,"layout":"none","children":[
+                {{"type":"rectangle","id":"visible","x":10,"y":10,"width":100,"height":100,"fill":{pending}}},
+                {{"type":"rectangle","id":"op0","x":300,"y":10,"width":100,"height":100,"opacity":0,"fill":{pending}}},
+                {{"type":"frame","id":"g","x":300,"y":200,"width":200,"height":200,"opacity":0,"layout":"none","children":[
+                    {{"type":"rectangle","id":"inner","x":10,"y":10,"width":50,"height":50,"fill":{pending}}}]}},
+                {{"type":"frame","id":"ph","x":550,"y":200,"width":100,"height":100,"opacity":0,"placeholder":true}},
+                {{"type":"frame","id":"half","x":550,"y":350,"width":100,"height":100,"opacity":0.5,"placeholder":true}}]}}]}}"##);
+        let doc = Doc::from_json(&json).unwrap();
+        let mut r = Renderer::default();
+        sync(&mut r, &doc);
+        let live: Vec<_> = r.live().into_iter().map(|(f, _)| f.id.as_str()).collect();
+        assert_eq!(live, ["visible", "half"]);
     }
 
     /// A group paints nothing of its own: a point in its box but on none of its children hits the layer below.
@@ -1445,6 +1581,25 @@ pub(crate) mod tests {
             let (group, own) = (row(118), row(418));
             assert_eq!((group.first(), group.last()), (Some(&47), Some(&126)), "{raster:?}: group shadow spans the stroke on every side");
             assert_eq!(group, own, "{raster:?}: group shadow matches the stroked rectangle's own");
+        }
+    }
+
+    /// An inner shadow is measured from the fill edge whatever the stroke alignment: the band stays
+    /// on the fill (x 50..61) and nothing is painted outside the shape, in both rasters.
+    #[test]
+    fn inner_shadow_ignores_stroke_alignment() {
+        for align in ["inner", "center", "outer"] {
+            let json = format!(
+                r##"{{"version":"2.19","children":[{{"type":"frame","id":"f","x":0,"y":0,"width":200,"height":200,"layout":"none","fill":"#ffffff","children":[{{"type":"rectangle","id":"r","x":50,"y":40,"width":100,"height":100,"fill":"#0000ff","stroke":"#00000000","strokeWidth":8,"strokeAlignment":"{align}","effect":{{"type":"shadow","shadowType":"inner","offset":{{"x":12,"y":0}},"blur":0,"color":"#ff0000"}}}}]}}]}}"##
+            );
+            let doc = Doc::from_json(&json).unwrap();
+            for raster in [Raster::Resvg, Raster::Vello] {
+                let mut r = Renderer { raster, ..Renderer::default() };
+                sync(&mut r, &doc);
+                let px = r.render(200, 200, 0.0, 0.0, 1.0, [255, 255, 255], None, true).to_vec();
+                let red: Vec<usize> = (0..200).filter(|&x| { let p = &px[(90 * 200 + x) * 4..]; p[0] > 200 && p[1] < 60 && p[2] < 60 }).collect();
+                assert_eq!((red.first(), red.last()), (Some(&50), Some(&61)), "{align} {raster:?}: inner shadow band");
+            }
         }
     }
 
