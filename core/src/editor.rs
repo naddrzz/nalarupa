@@ -7,6 +7,7 @@ use crate::engine::Engine;
 use crate::render::{unapply, Flat};
 use base64::Engine as _;
 use serde_json::{json, Map, Value};
+use std::cell::OnceCell;
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
@@ -41,41 +42,34 @@ fn kids<'a>(doc: &'a Doc, id: &str) -> &'a [Value] {
     doc.find(id).and_then(|n| n["children"].as_array()).map(Vec::as_slice).unwrap_or(&[])
 }
 
-/// Drop ids whose ancestor is also listed (moving a parent moves its subtree).
-pub fn top_only(doc: &Doc, ids: &[String]) -> Vec<String> {
-    let set: HashSet<&str> = ids.iter().map(String::as_str).collect();
-    let mut out: Vec<String> = Vec::new();
-    for id in ids {
-        // A component instance's rendered descendants ("inst/child") are not in the tree: walk up from the instance.
-        let (base, inst) = id.split_once('/').map_or((id.as_str(), false), |(b, _)| (b, true));
-        let mut nested = inst && id.match_indices('/').any(|(i, _)| set.contains(&id[..i]));
-        let mut p = if nested { None } else { doc.parent_of(base).map(|p| p.0) };
-        while let Some(pid) = p.filter(|p| p != ROOT) {
-            if set.contains(pid.as_str()) {
-                nested = true;
-                break;
-            }
-            p = doc.parent_of(&pid).map(|p| p.0);
-        }
-        if !nested && !out.contains(id) {
-            out.push(id.clone());
-        }
-    }
-    out
-}
-
 /// Read-only view of the document and its laid-out boxes (the engine must be synced).
 struct View<'a> {
     doc: &'a Doc,
     flats: Vec<&'a Flat>,
     by_id: HashMap<&'a str, (usize, &'a Flat)>,
+    /// The document's nodes by id, built on first use (a lookup in the tree walks it).
+    nodes: OnceCell<HashMap<&'a str, &'a Value>>,
 }
 
 impl<'a> View<'a> {
     fn new(e: &'a Engine) -> View<'a> {
         let flats: Vec<&Flat> = e.renderer.flat().collect();
         let by_id = flats.iter().enumerate().map(|(i, &f)| (f.id.as_str(), (i, f))).collect();
-        View { doc: &e.doc, flats, by_id }
+        View { doc: &e.doc, flats, by_id, nodes: OnceCell::new() }
+    }
+
+    /// Like `Doc::find`, without a walk of the tree per call.
+    fn node(&self, id: &str) -> Option<&'a Value> {
+        let doc = self.doc;
+        self.nodes.get_or_init(|| {
+            let mut m = HashMap::new();
+            walk(doc.children(), &mut |n| {
+                if let Some(id) = n["id"].as_str() {
+                    m.entry(id).or_insert(n);
+                }
+            });
+            m
+        }).get(id).copied()
     }
 
     fn flat(&self, id: &str) -> Option<&'a Flat> {
@@ -121,12 +115,12 @@ impl<'a> View<'a> {
     }
 
     fn ty(&self, id: &str) -> &'a str {
-        self.doc.find(id).and_then(|n| n["type"].as_str()).unwrap_or("")
+        self.node(id).and_then(|n| n["type"].as_str()).unwrap_or("")
     }
 
     /// Main axis of a frame with auto layout (0 = horizontal, 1 = vertical), like layout.rs.
     fn layout(&self, id: &str) -> Option<usize> {
-        let n = self.doc.find(id)?;
+        let n = self.node(id)?;
         if n["type"] != "frame" {
             return None;
         }
@@ -139,7 +133,7 @@ impl<'a> View<'a> {
 
     /// Placed by its parent's auto layout (x/y are ignored).
     fn in_flow(&self, id: &str) -> bool {
-        let absolute = self.doc.find(id).is_some_and(|n| n["layoutPosition"] == "absolute");
+        let absolute = self.node(id).is_some_and(|n| n["layoutPosition"] == "absolute");
         !absolute && self.doc.parent_of(id).is_some_and(|(p, _)| self.layout(&p).is_some())
     }
 
@@ -153,7 +147,7 @@ impl<'a> View<'a> {
         if id == ROOT {
             return Some((0.0, 0.0));
         }
-        self.doc.find(id)?;
+        self.node(id)?;
         let f = self.flat(id)?;
         Some((f.x - f.local.0[0], f.y - f.local.0[1]))
     }
@@ -189,7 +183,7 @@ impl<'a> View<'a> {
     /// `fill_container` collapses outside auto layout: freeze it at the current size.
     fn freeze_fill(&self, id: &str) -> Map<String, Value> {
         let mut m = Map::new();
-        if let (Some(n), Some(f)) = (self.doc.find(id), self.flat(id)) {
+        if let (Some(n), Some(f)) = (self.node(id), self.flat(id)) {
             for (k, v) in [("width", f.w), ("height", f.h)] {
                 if n[k].as_str().is_some_and(|s| s.starts_with("fill_container")) {
                     m.insert(k.into(), num(v));
@@ -378,7 +372,7 @@ pub fn reparent(e: &mut Engine, ids: &[String], parent: &str, index: Option<usiz
             return Err(format!("'{parent}' cannot contain other layers"));
         }
         let flow = v.layout(parent).is_some();
-        v.paint_order(&top_only(&e.doc, ids))
+        v.paint_order(&e.doc.outermost(ids))
             .into_iter()
             .filter(|id| !id.contains('/') && id != parent && e.doc.find(id).is_some())
             .filter(|id| index.is_some() || e.doc.parent_of(id).is_none_or(|p| p.0 != parent))
@@ -416,7 +410,7 @@ pub fn wrap(e: &mut Engine, ids: &[String], kind: &str) -> Result<String, String
     e.sync();
     let (parent, at, node, moves) = {
         let v = View::new(e);
-        let ids: Vec<String> = v.paint_order(&top_only(&e.doc, ids)).into_iter().filter(|id| !id.contains('/') && v.rect(id).is_some()).collect();
+        let ids: Vec<String> = v.paint_order(&e.doc.outermost(ids)).into_iter().filter(|id| !id.contains('/') && v.rect(id).is_some()).collect();
         let last = ids.last().ok_or("select layers to wrap")?;
         let (parent, at) = e.doc.parent_of(last).ok_or("node not found")?;
         let po = v.origin(&parent).unwrap_or((0.0, 0.0));
@@ -446,10 +440,9 @@ pub fn wrap(e: &mut Engine, ids: &[String], kind: &str) -> Result<String, String
     };
     e.edit_or_drag(|d| {
         let id = d.insert(&parent, node, Some(at + 1))?;
-        for (k, props) in &moves {
-            d.move_node(k, Some(&id), None)?;
-            d.update(k, &Value::Object(props.clone()))?;
-        }
+        let props: Vec<_> = moves.iter().map(|(k, props)| (k.as_str(), Value::Object(props.clone()))).collect();
+        d.update_all(&props.iter().map(|(k, p)| (*k, p)).collect::<Vec<_>>())?;
+        d.move_all(&moves.iter().map(|(k, _)| k.clone()).collect::<Vec<_>>(), &id)?;
         Ok(id)
     })
 }
@@ -461,7 +454,7 @@ pub fn unwrap(e: &mut Engine, ids: &[String]) -> Result<Vec<String>, String> {
     let (plan, rest): (Plan, Vec<String>) = {
         let v = View::new(e);
         let mut rest = Vec::new();
-        let plan = top_only(&e.doc, ids).into_iter().filter_map(|id| {
+        let plan = e.doc.outermost(ids).into_iter().filter_map(|id| {
             let container = !id.contains('/') && matches!(v.ty(&id), "frame" | "group");
             let Some((parent, _)) = e.doc.parent_of(&id).filter(|_| container) else {
                 rest.push(id);
@@ -708,7 +701,7 @@ pub fn align(e: &mut Engine, ids: &[String], dir: &str) -> Result<(), String> {
     e.sync();
     let moves: Vec<(String, f64, f64)> = {
         let v = View::new(e);
-        let free: Vec<String> = top_only(&e.doc, ids).into_iter().filter(|id| !id.contains('/') && !v.in_flow(id) && v.rect(id).is_some()).collect();
+        let free: Vec<String> = e.doc.outermost(ids).into_iter().filter(|id| !id.contains('/') && !v.in_flow(id) && v.rect(id).is_some()).collect();
         // `frame`: the container whose own coordinates the alignment happens in (none = canvas).
         let (targets, to, frame): (Vec<String>, Option<Rect>, Option<[f64; 6]>) = match free.as_slice() {
             [one] => match e.doc.parent_of(one) {
@@ -752,7 +745,7 @@ pub fn align(e: &mut Engine, ids: &[String], dir: &str) -> Result<(), String> {
 /// goes into free space on its right instead, unless `in_place` (Alt-drag duplicate).
 pub fn duplicate(e: &mut Engine, ids: &[String], in_place: bool) -> Result<Vec<String>, String> {
     e.sync();
-    let ids = View::new(e).paint_order(&top_only(&e.doc, ids));
+    let ids = View::new(e).paint_order(&e.doc.outermost(ids));
     let right = match ids.as_slice() {
         [one] if !in_place && e.doc.parent_of(one).is_some_and(|p| p.0 == ROOT) && e.doc.find(one).is_some_and(|n| n["type"] == "frame") => {
             e.renderer.find(one).map(|f| crate::render::find_empty_space(&e.renderer, f.w, f.h, "right", 40.0, Some(f)))
@@ -791,7 +784,7 @@ const PEN_MARK: &str = "data-pen-node-clipboard";
 pub fn copy(e: &mut Engine, ids: &[String]) -> Value {
     e.sync();
     let v = View::new(e);
-    let ids: Vec<String> = v.paint_order(&top_only(&e.doc, ids)).into_iter().filter(|id| !id.contains('/') && e.doc.find(id).is_some()).collect();
+    let ids: Vec<String> = v.paint_order(&e.doc.outermost(ids)).into_iter().filter(|id| !id.contains('/') && e.doc.find(id).is_some()).collect();
     let (mut nodes, mut boxes) = (Vec::new(), Vec::new());
     for id in &ids {
         let mut n = e.doc.find(id).cloned().unwrap_or_default();

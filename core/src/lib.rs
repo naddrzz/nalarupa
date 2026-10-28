@@ -189,7 +189,7 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             let mut e = engine();
             let targets = ids(&req["ids"]);
             let props = req["props"].clone();
-            let apply = |d: &mut doc::Doc| targets.iter().try_for_each(|id| d.update(id, &props));
+            let apply = |d: &mut doc::Doc| d.update_all(&targets.iter().map(|id| (id.as_str(), &props)).collect::<Vec<_>>());
             match req["coalesce"].as_str() {
                 Some(key) => e.edit_coalesced(key, apply)?,
                 None => e.edit_or_drag(apply)?,
@@ -226,8 +226,8 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
         "delete" => {
             let mut e = engine();
             // A selected descendant of a selected layer goes with it; deleting it separately would fail.
-            let targets = editor::top_only(&e.doc, &ids(&req["ids"]));
-            e.edit_or_drag(|d| targets.iter().try_for_each(|id| d.delete(id)))?;
+            let targets = e.doc.outermost(&ids(&req["ids"]));
+            e.edit_or_drag(|d| d.delete_all(&targets))?;
             Ok(state(&e))
         }
         "duplicate" => {
