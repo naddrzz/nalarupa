@@ -880,7 +880,7 @@ fn finish(e: &mut Engine, prep: Prepared, result: Result<Map<String, Value>, Str
             text += &format!("- {w}\n");
         }
     }
-    // Only the tree is built under the engine lock; `ToolOut::finish` rasterizes it.
+    // Only the trees are built under the engine lock; `ToolOut::finish` rasterizes screenshots and writes exports.
     let mut shots = Vec::new();
     for id in &ex.shots {
         let target = if id == "document" { e.doc.children().first().and_then(|n| n["id"].as_str()).unwrap_or("").to_string() } else { id.clone() };
@@ -891,13 +891,14 @@ fn finish(e: &mut Engine, prep: Prepared, result: Result<Map<String, Value>, Str
             Err(err) => text += &format!("Screenshot of {id} failed: {err}\n"),
         }
     }
+    let mut exports = Vec::new();
     for (ids, format, out, opts) in ex.exports {
-        match crate::html::export(e, &ids, &format, &out, &opts) {
-            Ok(files) => text += &format!("\nExported: {}\n", files.join(", ")),
+        match crate::html::plan(e, &ids, &format, &out, &opts) {
+            Ok(job) => exports.push(job),
             Err(err) => text += &format!("\nExport failed: {err}\n"),
         }
     }
-    ToolOut { text, images: Vec::new(), error: false, shots }
+    ToolOut { text, images: Vec::new(), error: false, shots, exports }
 }
 
 /// Layout and content checks on nodes touched by this call.
@@ -1949,6 +1950,22 @@ card = Insert(root, {type:\"frame\", name:\"Card\", width:100, height:100, layou
         assert_eq!(out.images.len(), 1, "{}", out.text);
         let png = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &out.images[0]).unwrap();
         assert!(png.starts_with(b"\x89PNG"));
+    }
+
+    #[test]
+    fn script_exports_write_after_the_tool_call() {
+        // Rasterizing and encoding inside `tool` held the engine lock for the whole export.
+        let dir = std::env::temp_dir().join("nalarupa-test-script-export");
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut e = engine();
+        let src = format!("c = Insert(document, {{type:\"frame\", width:300, height:200, fill:\"#ff0000\"}})\nExport(c, \"png\", {:?}, {{scale: 1}})", dir.to_str().unwrap());
+        let out = e.tool("execute", &json!({"input": src}));
+        assert!(!out.error, "{}", out.text);
+        assert!(out.exports.len() == 1 && !dir.exists(), "only the tree is built during the call");
+        let out = out.finish();
+        assert!(out.text.contains("Exported:"), "{}", out.text);
+        let file = std::fs::read_dir(&dir).unwrap().next().unwrap().unwrap().path();
+        assert!(std::fs::read(file).unwrap().starts_with(b"\x89PNG"));
     }
 
     #[test]

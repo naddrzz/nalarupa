@@ -297,30 +297,31 @@ impl Ctx<'_> {
         encode_tree(&self.node_tree_at(id, scale)?, format, scale, quality)
     }
 
-    /// One PDF page per node (1 px = 1 pt), in the given order; text stays selectable.
-    pub fn nodes_pdf(&mut self, ids: &[String]) -> Result<Vec<u8>, String> {
-        let mut pdf = krilla::Document::new();
-        // krilla decodes late and fails the whole document on one damaged image: leave those out.
+    /// The trees of one PDF page per node, in the given order. The PDF library decodes images late and fails the
+    /// whole document on one damaged image: these trees leave those out (encode with `encode_pdf`).
+    pub fn pdf_trees(&mut self, ids: &[String]) -> Result<Vec<usvg::Tree>, String> {
         self.assets.verify(true);
-        let pages = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ids.iter().try_for_each(|id| self.pdf_page(&mut pdf, id))));
+        let trees = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ids.iter().map(|id| self.node_tree(id)).collect()));
         self.assets.verify(false);
-        pages.unwrap_or_else(|p| std::panic::resume_unwind(p))?;
-        pdf.finish().map_err(|e| format!("PDF export failed: {e:?}"))
+        trees.unwrap_or_else(|p| std::panic::resume_unwind(p))
     }
+}
 
-    fn pdf_page(&mut self, pdf: &mut krilla::Document, id: &str) -> Result<(), String> {
-        use krilla_svg::SurfaceExt;
-        let tree = self.node_tree(id)?;
+/// One PDF page per tree (1 px = 1 pt); text stays selectable. Needs no engine state, like `encode_tree`.
+pub fn encode_pdf(trees: &[usvg::Tree]) -> Result<Vec<u8>, String> {
+    use krilla_svg::SurfaceExt;
+    let mut pdf = krilla::Document::new();
+    for tree in trees {
         let size = tree.size();
         let settings = krilla::page::PageSettings::from_wh(size.width(), size.height()).ok_or("empty page")?;
         let mut page = pdf.start_page_with(settings);
         let mut surface = page.surface();
         let pt = krilla::geom::Size::from_wh(size.width(), size.height()).ok_or("empty page")?;
-        surface.draw_svg(&tree, pt, krilla_svg::SvgSettings::default());
+        surface.draw_svg(tree, pt, krilla_svg::SvgSettings::default());
         surface.finish();
         page.finish();
-        Ok(())
     }
+    pdf.finish().map_err(|e| format!("PDF export failed: {e:?}"))
 }
 
 pub fn top_index(doc: &Doc, id: &str) -> Option<usize> {

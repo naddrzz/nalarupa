@@ -366,10 +366,13 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             Ok(json!({"text": out.text, "error": out.error, "images": out.images.len()}))
         }
         "export" => {
-            let mut e = engine();
-            let targets = ids(&req["ids"]);
-            let files = html::export(&mut e, &targets, req["format"].as_str().unwrap_or("png"), req["path"].as_str().unwrap_or(""), &req["opts"])?;
-            Ok(json!(files))
+            let job = {
+                let mut e = engine();
+                let targets = ids(&req["ids"]);
+                html::plan(&mut e, &targets, req["format"].as_str().unwrap_or("png"), req["path"].as_str().unwrap_or(""), &req["opts"])?
+            };
+            // The guard is gone: rasterizing and writing must not block the canvas.
+            Ok(json!(job.run()?))
         }
         "variables" => Ok(engine().doc.variables()),
         "set_variable" => {
@@ -439,9 +442,10 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             mcp::install(req["client"].as_str().unwrap_or(""), port).map(Value::String)
         }
         "png" => {
-            let mut e = engine();
             let id = req["id"].as_str().ok_or("id required")?;
-            let png = e.ctx().node_png(id, req["scale"].as_f64().unwrap_or(1.0))?;
+            let scale = req["scale"].as_f64().unwrap_or(1.0).clamp(0.05, 8.0);
+            let tree = engine().ctx().node_tree_at(id, scale)?;
+            let png = render::encode_tree(&tree, "png", scale, 0)?;
             Ok(json!(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, png)))
         }
         _ => Err(format!("unknown command '{cmd}'")),
