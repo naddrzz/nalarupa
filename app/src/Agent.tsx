@@ -4,6 +4,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { call, tryCall } from './core'
 import { barAgents, changing, imageSrc, lastContentId, profileOf, resetChat, restoreChat, runVerb, spinning, store, type Author, type ChatItem } from './agents'
+import type { EventPayload } from '@gpuix/native'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import * as SelectPrimitive from '@gpuix/react/select'
 import { C, FONT, INDICATOR_TICK_MS, MONO, REDUCED_MOTION, ellipsisAt, ellipsisPadAt, pulseAt } from './theme'
@@ -24,6 +25,8 @@ const SUGGESTIONS = [
   'a travel itinerary app for island hopping',
   'a newsletter signup page for a design magazine',
 ]
+
+const LINE = 40 // one Up/Down step in the transcript, px
 
 const LABELS: Record<string, [string, string]> = {
   execute: ['Designing', 'Designed'],
@@ -195,12 +198,58 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
     // One past the last row is the list's at-end anchor: unlike the last row's top, it stays at the end when that row grows (an expanded tool result).
     renderer.scrollToItem?.(listEl.current.id, rows)
   }, [rows, renderer, items])
+  // The transcript is a Tab stop that scrolls with the keys (GPUI scrolls a list only by the wheel): a line, a page, or to either end.
+  const transcript = useRing()
+  const rowEls = useRef(new Map<number, PublicInstance>())
+  const keepRow = (id: number) => (el: PublicInstance | null) => void (el ? rowEls.current.set(id, el) : rowEls.current.delete(id))
+  /** The list's scroll anchor `[row, offset in it, viewport height]`. At the tail gpui reports its at-end sentinel, which takes
+   *  no relative offset, so the anchor is read off the first row on screen. */
+  const anchor = (list: PublicInstance) => {
+    const top = renderer.getListScrollTop?.(list.id)
+    const box = transcript.el.current && renderer.getElementBounds?.(transcript.el.current.id)
+    if (!top || top[0] < rows || !box) return top
+    for (const [i, m] of items.entries()) {
+      const el = rowEls.current.get(m.id)
+      const b = el && renderer.getElementBounds?.(el.id)
+      if (b && b.y + b.height > box.y) return [i, box.y - b.y, top[2]]
+    }
+    return top
+  }
+  const scrollKey = (e: EventPayload) => {
+    const list = listEl.current
+    const top = list && anchor(list)
+    if (!list || !top) return
+    const [index, offset, height] = top
+    const page = Math.max(LINE, height - 2 * LINE)
+    const by: Record<string, number> = { up: -LINE, down: LINE, pageup: -page, pagedown: page }
+    const k = (e.key ?? '').toLowerCase()
+    if (k === 'home') renderer.scrollToItem?.(list.id, 0)
+    else if (k === 'end') renderer.scrollToItem?.(list.id, rows)
+    else if (by[k]) renderer.scrollToItem?.(list.id, index, offset + by[k])
+  }
+  // A card Tab focuses is scrolled into view with room around it: the list builds only the rows on screen, so Shift+Tab can
+  // reach the card above only once that card is drawn. Keeping a third of the viewport above the focused card draws it.
+  const focus = useKeyboardFocusId()
+  useEffect(() => {
+    const list = listEl.current
+    const wrap = transcript.el.current
+    if (!list || !wrap || focus === null || !cards.has(focus)) return
+    const [box, at, top] = [renderer.getElementBounds?.(wrap.id), renderer.getElementBounds?.(focus), anchor(list)]
+    if (!box || !at || !top) return
+    const room = Math.min(box.height / 3, Math.max(0, (box.height - at.height) / 2))
+    const dy = at.y - room < box.y ? at.y - room - box.y : Math.max(0, at.y + at.height + room - (box.y + box.height))
+    if (!dy) return
+    const [index, offset] = top
+    // Not above the first row: an offset before it would leave a blank band at the top.
+    if (index === 0 && offset + dy < 0) renderer.scrollToItem?.(list.id, 0)
+    else renderer.scrollToItem?.(list.id, index, offset + dy)
+  }, [focus])
   const todos = store.todos
   const doneTodos = todos.filter((t) => t.status === 'completed').length
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}>
-      <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 4, paddingLeft: 14, paddingRight: 8, height: 40, borderBottomWidth: 1, borderColor: C.border }}>
+      <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 4, paddingLeft: 14, paddingRight: 8, height: 40, flexShrink: 0, borderBottomWidth: 1, borderColor: C.border }}>
         <Icon name="sparkles" size={14} color={C.accent} />
         <T weight="600" grow>Design agent</T>
         <ChatHistory running={running} toast={toast} changed={() => setChatVersion((n) => n + 1)} />
@@ -237,19 +286,31 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
           <T size={11} color={C.ghost}>Each agent gets a cursor on the canvas; what it writes appears while it writes it. Set Agents above 1× to split the work across several agents.</T>
         </div>
       ) : (
-        <virtual-list ref={listEl} estimatedItemHeight={44} followTail alignment="bottom" style={{ flexGrow: 1, minHeight: 0, paddingTop: 8, paddingBottom: 8 }}>
-          {items.map((m) => (
-            <div key={m.id} style={{ paddingLeft: 12, paddingRight: 12 }}>
-              {/* Items are mutated in place, so `tick` (the store version) is what re-renders one; only the live ones take it (a finished row never changes; `isLast` and the row's own ticks cover the rest). */}
-              <Item m={m} isLast={m.id === lastId} expanded={open.has(m.id)} toggle={toggle} tick={changing(m) ? tick : 0} />
-            </div>
-          ))}
-          {planning ? (
-            <div key="planning" style={{ paddingTop: 6, paddingBottom: 6, paddingLeft: 12, paddingRight: 12 }}>
-              <Planning />
-            </div>
-          ) : null}
-        </virtual-list>
+        <div
+          ref={transcript.ref}
+          testId="agent-transcript"
+          role="log"
+          aria-label="Conversation"
+          tabIndex={0}
+          onMouseDown={transcript.clear}
+          onKeyDown={scrollKey}
+          style={{ flexGrow: 1, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative' }}
+        >
+          <virtual-list ref={listEl} estimatedItemHeight={44} followTail alignment="bottom" style={{ flexGrow: 1, minHeight: 0, paddingTop: 8, paddingBottom: 8 }}>
+            {items.map((m) => (
+              <div key={m.id} ref={keepRow(m.id)} style={{ paddingLeft: 12, paddingRight: 12 }}>
+                {/* Items are mutated in place, so `tick` (the store version) is what re-renders one; only the live ones take it (a finished row never changes; `isLast` and the row's own ticks cover the rest). */}
+                <Item m={m} isLast={m.id === lastId} expanded={open.has(m.id)} toggle={toggle} tick={changing(m) ? tick : 0} />
+              </div>
+            ))}
+            {planning ? (
+              <div key="planning" style={{ paddingTop: 6, paddingBottom: 6, paddingLeft: 12, paddingRight: 12 }}>
+                <Planning />
+              </div>
+            ) : null}
+          </virtual-list>
+          {transcript.on ? <FocusRing inset radius={0} testId="agent-transcript-focus" /> : null}
+        </div>
       )}
 
       {todos.length ? (
@@ -483,6 +544,8 @@ function ChatHistory({ running, toast, changed }: { running: boolean; toast: Toa
     restoreChat(r.events ?? [])
     revealAll(store.items) // a saved reply shows whole, the typewriter is for live ones
     close()
+    // Picked from the keyboard: hand focus back to the history button, as Escape does, so Tab goes on from it.
+    if (kbChat !== null) trigger.restore()
     changed()
   }
   const remove = (id: string) => {
@@ -548,6 +611,7 @@ function ChatHistory({ running, toast, changed }: { running: boolean; toast: Toa
                             <Pressable
                               ref={keep(`row:${c.id}`)}
                               testId={`chat-${c.id}`}
+                              focusTestId={`chat-${c.id}-focus`}
                               label={`Open chat: ${c.title || 'Untitled chat'}`}
                               onClick={() => open(c.id)}
                               style={{ flexGrow: 1, minWidth: 0, height: 30, display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, paddingLeft: 8, borderRadius: 6 }}
@@ -727,7 +791,19 @@ const TABLE_METRICS = { mdTableCellPadding: 6, mdTableMinColumnWidth: 0, mdTable
 const REPLY_THEME = { metrics: TABLE_METRICS }
 const THOUGHT_THEME = { text: C.muted, metrics: { mdTextSize: 12, mdLineHeight: 18, ...TABLE_METRICS } }
 
+// Host ids of the transcript's Tab stops (the tool, thought and usage toggles), so a focus change can tell it landed in the list.
+const cards = new Set<number>()
+function useCard() {
+  const id = useRef<number | null>(null)
+  return useCallback((el: PublicInstance | null) => {
+    if (id.current !== null) cards.delete(id.current)
+    id.current = el?.id ?? null
+    if (el) cards.add(el.id)
+  }, [])
+}
+
 const Item = memo(function Item({ m, isLast, expanded, toggle }: { m: ChatItem; isLast: boolean; expanded: boolean; toggle: (id: number) => void; tick: number }) {
+  const card = useCard()
   const typing = m.kind === 'assistant' && isLast && (revealed.get(m.id) ?? 0) < m.text.split(/(\s+)/).length
   useTick(typing ? 16 : REDUCED_MOTION ? 400 : INDICATOR_TICK_MS, typing || spinning(m))
   switch (m.kind) {
@@ -757,7 +833,7 @@ const Item = memo(function Item({ m, isLast, expanded, toggle }: { m: ChatItem; 
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingTop: 4, paddingBottom: 4 }}>
           {m.header ? <AgentHeader agentId={m.agent.id} by={m.by} /> : null}
-          <Pressable label={label} expanded={expanded} onClick={() => toggle(m.id)} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 24, borderRadius: 4 }}>
+          <Pressable ref={card} label={label} expanded={expanded} onClick={() => toggle(m.id)} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 24, borderRadius: 4 }}>
             <Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={11} color={C.ghost} />
             <T size={12} color={C.ghost}>{label}</T>
           </Pressable>
@@ -777,7 +853,7 @@ const Item = memo(function Item({ m, isLast, expanded, toggle }: { m: ChatItem; 
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 3, paddingBottom: 3 }}>
           {m.header ? <AgentHeader agentId={m.agent.id} by={m.by} /> : null}
-          <Pressable label={m.running ? `${label}, running` : `${label}, ${m.error ? 'failed' : 'done'}`} expanded={expanded} onClick={() => toggle(m.id)} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 24, borderRadius: 4 }}>
+          <Pressable ref={card} label={m.running ? `${label}, running` : `${label}, ${m.error ? 'failed' : 'done'}`} expanded={expanded} onClick={() => toggle(m.id)} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 24, borderRadius: 4 }}>
             <div style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: m.agent.color, opacity: m.running && !REDUCED_MOTION ? pulseAt(now) : 1 }} />
             {m.running ? (
               <div style={{ display: 'flex', flexDirection: 'row' }}>
@@ -817,7 +893,7 @@ const Item = memo(function Item({ m, isLast, expanded, toggle }: { m: ChatItem; 
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingTop: 6, paddingBottom: 8 }}>
           {m.stopped ? <T size={11} color={C.ghost} style={{ fontStyle: 'italic' }}>Agent stopped by user.</T> : null}
-          <Pressable label={`${m.agent.name} ${runVerb(m)} ${duration(m.durationMs)}. Show usage`} expanded={expanded} onClick={() => toggle(m.id)} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 24, borderRadius: 4 }}>
+          <Pressable ref={card} label={`${m.agent.name} ${runVerb(m)} ${duration(m.durationMs)}. Show usage`} expanded={expanded} onClick={() => toggle(m.id)} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 24, borderRadius: 4 }}>
             <div style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: m.agent.color }} />
             <T size={11} color={C.ghost}>{`${m.agent.name} ${runVerb(m)} ${duration(m.durationMs)}`}</T>
           </Pressable>

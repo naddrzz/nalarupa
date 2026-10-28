@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { call, renderPixels } from '../src/core'
 import { applyEvents, barAgents, changing, clearPresence, cursorFaded, cursorOpacity, FADE_IN, imageSrc, lastContentId, needsFrame, poke, resetChat, restoreChat, runVerb, spinning, store, takeActivity } from '../src/agents'
+import { slideCam } from '../src/Present'
 import { own, painted, pointIn, shimmerHalves } from '../src/geometry'
 import { FRAME_LABEL_TEXT, INDICATOR_TICK_MS, ellipsisAt, ellipsisPadAt, pulseAt } from '../src/theme'
 
@@ -45,6 +46,14 @@ await Bun.sleep(700) // the inserted child slides in first
 renderPixels(320, 180, 5000, 5000, 1, 0x1c1c1f)
 const overflow = call('hit', { x: 5150, y: 5150 }).map((i: string) => call('layers').find((l: any) => l.id === i)?.name)
 assert(overflow.join() === 'Host,Overflow', `hit finds a child outside its unclipped parent (got ${overflow})`)
+call('undo')
+// A click lands on what a shape paints, not on the empty part of its box.
+call('tool', { name: 'execute', args: { input: 'f = Insert(document, {type:"frame", name:"Shapes", layout:"none", x:9000, y:9000, width:400, height:300, fill:"#ffffff"}); Insert(f, {type:"rectangle", name:"Card", x:20, y:20, width:360, height:260, fill:"#3b82f6"}); Insert(f, {type:"ellipse", name:"Avatar", x:100, y:100, width:100, height:100, fill:"#ef4444"}); Insert(f, {type:"path", name:"Diagonal", x:220, y:40, width:150, height:150, geometry:"M0 0 L150 150", stroke:"#000000", strokeWidth:2})' } })
+const topmost = (x: number, y: number) => call('layers').find((l: any) => l.id === call('hit', { x: 9000 + x, y: 9000 + y }).at(-1))?.name
+assert(topmost(150, 150) === 'Avatar', `hit finds the ellipse on its area (got ${topmost(150, 150)})`)
+assert(topmost(103, 103) === 'Card', `hit falls through the empty corner of an ellipse's box (got ${topmost(103, 103)})`)
+assert(topmost(295, 115) === 'Diagonal', `hit finds a path on its stroke (got ${topmost(295, 115)})`)
+assert(topmost(360, 50) === 'Card', `hit falls through the empty part of a path's box (got ${topmost(360, 50)})`)
 call('undo')
 const out = call('tool', { name: 'execute', args: { input: 'x = Insert(document, {type:"frame", name:"Smoke", width:100, height:100, fill:"#ff0000", x:0, y:2000})' } })
 assert(!out.error && out.text.includes('"Smoke"'), `execute works: ${out.text}`)
@@ -95,6 +104,19 @@ assert(!call('state').animating, 'presented slide settled after ~0.6 s')
 assert(lit() >= before, 'presented slide keeps its existing content')
 assert(greens() > greenBefore, 'presented slide shows its inserted content')
 call('undo')
+// Present fits a turned or flipped slide where the core paints it, not its unturned box: the slide fills the window.
+call('tool', { name: 'execute', args: { input: 'Insert(document, {type:"frame", name:"FlipSlide", x:5000, y:0, width:960, height:540, fill:"#00ff00", flipX:true, layout:"none"}); Insert(document, {type:"frame", name:"TurnSlide", x:5000, y:1000, width:960, height:540, fill:"#00ff00", rotation:90, layout:"none"})' } })
+for (const name of ['FlipSlide', 'TurnSlide']) {
+  const slide = call('frames').find((f: any) => f.name === name)
+  const cam = slideCam(slide, 480, 270)
+  const p = renderPixels(480, 270, cam.x, cam.y, cam.zoom, 0x000000, slide.id, true)!
+  let n = 0
+  for (let i = 0; i < p.length; i += 4) if (p[i + 1] > 180 && p[i] < 100) n++
+  const want = (painted(slide).w * cam.zoom * painted(slide).h * cam.zoom) * 0.9
+  assert(n > want, `${name} is presented fitted to the window (${n} green px, want > ${Math.round(want)})`)
+}
+call('undo')
+call('undo')
 // An insert into a centered card that grows moves the card and its children: the children glide with the card,
 // not with a doubled offset (they used to jump 34 px the wrong way, then fly back through the old spot).
 {
@@ -131,6 +153,24 @@ call('tool', { name: 'execute', args: { input: 'Insert("sld01", {type:"rectangle
 assert(!call('state').animating, 'no slide-in under reduced motion')
 call('undo')
 call('reduce_motion', { on: false })
+// A finished agent design never comes back as "Generating": undo/redo of the step that cleared `placeholder` keeps it off.
+{
+  const ex = (input: string) => {
+    const out = call('tool', { name: 'execute', args: { input, __agent: 'ag1' } })
+    assert(!out.error, `execute failed: ${out.text}`)
+    return out
+  }
+  const live = () => call('live').filter((l: any) => l.name === 'PhHero').length
+  ex('f = Insert(document, {type:"frame", name:"PhHero", x:5000, y:0, width:600, height:400, fill:"#ffffff", placeholder:true})')
+  ex('Insert(f, {type:"text", name:"PhT", content:"Hi", fontSize:40, fill:"#111111"})')
+  ex('Update(f, {placeholder:false})')
+  assert(live() === 0, 'a finished design is not generating')
+  call('undo')
+  assert(live() === 0, 'undo does not bring "Generating" back onto a finished design')
+  call('redo')
+  assert(live() === 0, 'redo does not either')
+  call('undo'); call('undo'); call('undo')
+}
 // Constants check only (style is unreadable under automation): the frame label style Canvas.tsx applies ellipsizes instead of slicing.
 assert(FRAME_LABEL_TEXT.textOverflow === 'ellipsis' && FRAME_LABEL_TEXT.overflow === 'hidden' && FRAME_LABEL_TEXT.whiteSpace === 'nowrap', 'canvas frame labels must ellipsize')
 
@@ -311,8 +351,10 @@ resetChat()
   cursor.lastActivity = 0
   assert(!needsFrame(3000, true, 0) && needsFrame(6000, true, 0) && !needsFrame(7000, true, 0), 'reduced motion: a finished cursor repaints only while it fades out')
   store.pills.set('a', { text: 'hi', at: 5000 })
-  assert(needsFrame(6000, true, 0) && !needsFrame(8500, true, 0), 'reduced motion: a pill repaints until it expires')
+  assert(needsFrame(7000, false, 0) && !needsFrame(8500, false, 0), 'a pill repaints every frame until it expires')
+  assert(!needsFrame(7000, true, 0) && !needsFrame(7000, true, 0, 5500), 'reduced motion: a pill that is showing and unchanged does not repaint')
   assert(needsFrame(8001, true, 0, 7990) && !needsFrame(8001, true, 0, 8001), 'reduced motion: a pill still on screen at its expiry gets one more repaint')
+  assert(!needsFrame(7000, false, 0, 7000, true) && !needsFrame(8001, true, 0, 7990, true), 'a pill hidden behind the open chat tab needs no frames')
   store.pills.clear()
   store.cursors.clear()
 }
@@ -496,5 +538,33 @@ const layoutMs = (chars: number) => {
 layoutMs(10000) // warm the font and shaping caches
 const [short, long] = [layoutMs(40000), layoutMs(160000)]
 assert(long < short * 9 && long < 4000, `a long single line lays out in linear time (40k chars ${short.toFixed(0)} ms, 160k ${long.toFixed(0)} ms)`)
+// Exporting rasterizes, encodes and writes after the engine lock is released: a 2x PNG and a PDF of a page of
+// blurred, shadowed cards (seconds of work) never stall another thread's core calls (they did for the whole export).
+{
+  call('new', { template: 'empty' })
+  const out = mkdtempSync(join(tmpdir(), 'smoke-export-'))
+  const page = call('insert', { parent: 'document', node: { type: 'frame', name: 'Page', layout: 'none', x: 0, y: 0, width: 1440, height: 900, fill: { type: 'gradient', gradientType: 'linear', rotation: 45, colors: [{ color: '#667eea', position: 0 }, { color: '#764ba2', position: 1 }] } } }).id
+  for (let i = 0; i < 12; i++) call('insert', { parent: page, node: { type: 'frame', name: 'Card' + i, layout: 'none', x: 40 + (i % 4) * 340, y: 40 + Math.floor(i / 4) * 240, width: 300, height: 200, cornerRadius: 16, fill: '#ffffffcc', effect: [{ type: 'shadow', offset: { x: 0, y: 12 }, blur: 40, color: '#00000055' }, { type: 'background_blur', radius: 20 }] } })
+  const worker = new Worker(new URL('./export-lock-worker.ts', import.meta.url))
+  const done = new Promise<{ max: number }>((resolve, reject) => {
+    worker.onmessage = (e) => resolve(e.data)
+    worker.onerror = (e) => reject(new Error('export lock worker failed: ' + e.message))
+  })
+  done.catch(() => {}) // a failure while the exports run is rethrown at the await below
+  try {
+    await Bun.sleep(300)
+    const t0 = performance.now()
+    const png = call('export', { ids: [page], format: 'png', path: out, opts: { scale: 2 } })
+    const pdf = call('export', { ids: [page], format: 'pdf', path: join(out, 'page.pdf'), opts: {} })
+    const took = performance.now() - t0
+    worker.postMessage('stop')
+    const { max } = await done
+    assert(png.length === 1 && pdf.length === 1, 'the exports report their files')
+    assert(took > 1000 && max < took / 4 && max < 1000, `another thread's core calls keep answering during an export (slowest ${max} ms of ${took.toFixed(0)} ms)`)
+  } finally {
+    worker.terminate()
+    rmSync(out, { recursive: true, force: true })
+  }
+}
 console.log('smoke ok — MCP at', init.mcpUrl)
 process.exit(0)
