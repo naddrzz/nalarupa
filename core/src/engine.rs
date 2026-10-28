@@ -226,6 +226,22 @@ fn drop_pending(v: &mut Value, inflight: &std::collections::HashSet<String>) {
     }
 }
 
+/// A file saved while an agent was still building a frame keeps its `placeholder` flag, and no run will ever
+/// clear it: the frame would show "Generating" forever. Frames in `pens` are being drawn by an AI Pen of this
+/// process, which still clears them (only passed when the same file is reopened: pen frames are ids of that file).
+fn drop_placeholder(v: &mut Value, pens: &[String]) {
+    match v {
+        Value::Array(a) => a.iter_mut().for_each(|x| drop_placeholder(x, pens)),
+        Value::Object(o) => {
+            if o.get("type").and_then(Value::as_str) == Some("frame") && o.get("placeholder") == Some(&Value::Bool(true)) && !o.get("id").and_then(Value::as_str).is_some_and(|id| pens.iter().any(|p| p == id)) {
+                o.insert("placeholder".into(), json!(false));
+            }
+            o.values_mut().for_each(|x| drop_placeholder(x, pens));
+        }
+        _ => {}
+    }
+}
+
 /// Rewrite a history `stack` (its last step applies to the document `old`) as if `f` had been applied to every
 /// state, where `new` is `f(old)`: replay the steps back from `old`, apply `f` to each state they reach, and diff
 /// the rewritten neighbours. A step is a patch, not a document, so `f` cannot be applied to it directly.
@@ -405,6 +421,15 @@ impl Engine {
         if self.slid.insert(id.to_string()) && room {
             self.renderer.slides.push(crate::render::Slide::new(id));
         }
+    }
+
+    /// A rolled-back script took its inserted nodes with it: their slides have nothing to paint and
+    /// no clock, so they would only end after `SLIDE_WAIT` while `animating` stays true.
+    pub fn forget_gone_slides(&mut self) {
+        // One walk of each tree: `slid` only grows, and `find` per id would scan the document every time.
+        let live: std::collections::HashSet<String> = self.doc.all_ids().into_iter().chain(self.preview.iter().flat_map(|p| p.all_ids())).collect();
+        self.renderer.slides.retain(|s| live.contains(&s.id));
+        self.slid.retain(|id| live.contains(id));
     }
 
     /// Whether node `id` shows a background blur, a component instance's content included.
@@ -608,7 +633,9 @@ impl Engine {
         }
         let Some(step) = self.undo.pop() else { return false };
         self.coalesce = None;
+        let unflagged = self.unflagged();
         self.redo.push(step.apply(&mut self.doc.root));
+        self.settle_generating(unflagged);
         self.touch();
         self.clean_if_saved();
         true
@@ -620,10 +647,46 @@ impl Engine {
         }
         let Some(step) = self.redo.pop() else { return false };
         self.coalesce = None;
+        let unflagged = self.unflagged();
         self.undo.push(step.apply(&mut self.doc.root));
+        self.settle_generating(unflagged);
         self.touch();
         self.clean_if_saved();
         true
+    }
+
+    /// Before an undo or redo with no agent running: the nodes not flagged `placeholder` (see `settle_generating`).
+    fn unflagged(&self) -> Option<std::collections::HashSet<String>> {
+        if self.agent.running {
+            return None;
+        }
+        let mut ids = std::collections::HashSet::new();
+        crate::doc::walk(self.doc.children(), &mut |n| {
+            if let (false, Some(id)) = (n["placeholder"] == true, n["id"].as_str()) {
+                ids.insert(id.to_string());
+            }
+        });
+        Some(ids)
+    }
+
+    /// History holds the `placeholder: true` an agent set while it built a design; with no agent running,
+    /// an undo or redo must not bring "Generating" back onto a finished design. Only a flag the step itself
+    /// put back on an existing node is cleared (out of history too), so a frame an external agent is still
+    /// building, or an AI Pen draws into, keeps its flag. While an agent runs, history is left alone.
+    fn settle_generating(&mut self, unflagged: Option<std::collections::HashSet<String>>) {
+        let Some(unflagged) = unflagged else { return };
+        let mut back = Vec::new();
+        crate::doc::walk(self.doc.children(), &mut |n| {
+            if let (true, Some(id)) = (n["placeholder"] == true, n["id"].as_str()) {
+                if unflagged.contains(id) && !self.agent.pens.iter().any(|p| p == id) {
+                    back.push(id.to_string());
+                }
+            }
+        });
+        let off = json!({"placeholder": false}).as_object().cloned().unwrap_or_default();
+        for id in back {
+            self.apply_generated(&id, &off, true);
+        }
     }
 
     /// During a drag, mutations apply live and are committed once by `drag_end`.
@@ -755,6 +818,8 @@ impl Engine {
         crate::resolve::migrate(&mut doc.root);
         doc.ensure_ids();
         drop_pending(&mut doc.root, &self.inflight);
+        let reopen = self.doc.path.as_deref() == Some(path);
+        drop_placeholder(&mut doc.root, if reopen { &self.agent.pens } else { &[] });
         self.doc = doc;
         self.load_libs();
         self.reset_history();
@@ -785,6 +850,7 @@ impl Engine {
             if let Ok(mut lib) = Doc::load(&base.join(&rel)) {
                 crate::resolve::migrate(&mut lib.root);
                 drop_pending(&mut lib.root, &self.inflight);
+                drop_placeholder(&mut lib.root, &[]);
                 self.libs.push((alias, lib.root));
             }
         }
@@ -1259,6 +1325,49 @@ mod tests {
     }
 
     #[test]
+    fn open_clears_placeholder_flags_nobody_will_clear() {
+        let mut v = json!({"children": [
+            {"id": "a", "type": "frame", "placeholder": true, "children": [{"id": "b", "type": "frame", "placeholder": true}]},
+            {"id": "c", "type": "frame", "placeholder": true},
+            {"id": "d", "type": "frame"},
+            {"id": "e", "type": "rectangle", "metadata": {"placeholder": true}}]});
+        drop_placeholder(&mut v, &["c".to_string()]);
+        assert_eq!(v["children"][3]["metadata"]["placeholder"], true, "only a frame's own flag is cleared");
+        assert_eq!(v["children"][0]["placeholder"], false);
+        assert_eq!(v["children"][0]["children"][0]["placeholder"], false);
+        assert_eq!(v["children"][1]["placeholder"], true);
+        assert!(v["children"][2].get("placeholder").is_none());
+    }
+
+    #[test]
+    fn a_file_saved_mid_run_reopens_without_generating_frames() {
+        let dir = std::env::temp_dir().join("nalarupa-test-open-placeholder");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut e = Engine::new(dir.clone());
+        e.doc = Doc::from_json(r#"{"version":"2.19","children":[{"id":"f","type":"frame","name":"Fake","x":0,"y":0,"width":800,"height":500,"placeholder":true}]}"#).unwrap();
+        let path = dir.join("mid.nala");
+        e.save(Some(path.to_str().unwrap())).unwrap();
+        e.open(&path).unwrap();
+        assert_eq!(e.doc.find("f").unwrap()["placeholder"], false);
+        // A pen drawing frame "f" of this file keeps it Generating on a reopen, not in another file with the same id.
+        e.doc.update("f", &json!({"placeholder": true})).unwrap();
+        e.save(None).unwrap();
+        let other = dir.join("other.nala");
+        std::fs::copy(&path, &other).unwrap();
+        // An imported library saved mid-run is cleared too.
+        std::fs::write(dir.join("lib.nala"), r#"{"version":"2.19","children":[{"id":"L","type":"frame","reusable":true,"placeholder":true}]}"#).unwrap();
+        e.doc.root["imports"] = json!({"lib": "lib.nala"});
+        e.save(None).unwrap();
+        e.agent.pens.push("f".into());
+        e.open(&path).unwrap();
+        assert_eq!(e.doc.find("f").unwrap()["placeholder"], true);
+        assert_eq!(e.libs[0].1["children"][0]["placeholder"], false);
+        e.open(&other).unwrap();
+        assert_eq!(e.doc.find("f").unwrap()["placeholder"], false);
+    }
+
+    #[test]
     fn resolve_pending_reaches_libraries() {
         let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test-resolve-libs"));
         e.libs.push(("lib".into(), json!({"children": [{"fill": {"type": "image", "url": "nalarupa:pending-image-1-a"}}]})));
@@ -1401,6 +1510,28 @@ mod tests {
         assert!(e.undo());
         assert_eq!(xs(&e), [("U".into(), 0)]);
         assert!(!e.undo());
+    }
+
+    /// Undo of the step that cleared `placeholder` must not show a finished design as "Generating"; while an
+    /// agent runs, history is left alone.
+    #[test]
+    fn undo_does_not_restore_generating_without_an_agent() {
+        let mut e = Engine::new(std::env::temp_dir().join(format!("nalarupa-test-undo-generating-{}", std::process::id())));
+        e.load_template("empty");
+        // `h` stands for a frame an external agent is still building: no undo step touches its flag.
+        e.doc.root["children"] = json!([{"id": "g", "type": "frame", "name": "G", "x": 0, "placeholder": true}, {"id": "h", "type": "frame", "name": "H", "placeholder": true}]);
+        e.edit(|d| { d.root["children"][0]["x"] = json!(10); Ok(()) }).unwrap();
+        e.edit(|d| { d.root["children"][0]["placeholder"] = json!(false); Ok(()) }).unwrap();
+        let flag = |e: &Engine| e.doc.root["children"][0]["placeholder"] == true;
+        let external = |e: &Engine| e.doc.root["children"][1]["placeholder"] == true;
+        e.agent.running = true;
+        assert!(e.undo() && flag(&e), "an agent still works: its flag stays");
+        e.agent.running = false;
+        assert!(e.redo() && !flag(&e));
+        assert!(e.undo() && !flag(&e), "no agent: undo does not bring the flag back");
+        assert!(e.undo() && !flag(&e), "nor does an older step");
+        assert!(e.redo() && e.redo() && !flag(&e));
+        assert!(external(&e), "a flag no undo or redo put back is left to its agent");
     }
 
     /// A font landing in the background redraws the canvas but is not an edit.

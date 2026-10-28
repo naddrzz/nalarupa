@@ -828,6 +828,7 @@ fn finish(e: &mut Engine, prep: Prepared, result: Result<Map<String, Value>, Str
         Ok(g) => g,
         Err(err) => {
             e.doc.root = before;
+            e.forget_gone_slides();
             e.touch();
             e.keep_clean(was_clean);
             let id = edit_id.unwrap_or_else(|| format!("e{:x}", crate::doc::random_u64() & 0xffffff));
@@ -1736,6 +1737,26 @@ mod tests {
         assert_eq!(e.renderer.slides.len(), 1, "the card carries its children along");
     }
 
+    /// A rolled-back script's slides had no node to paint and no clock: `animating` stayed true
+    /// until `SLIDE_WAIT`. Slides of nodes that survive (an earlier call's) are kept.
+    #[test]
+    fn a_rolled_back_script_leaves_no_slides_behind() {
+        let mut e = engine();
+        let out = execute(&mut e, &json!({"input": r##"
+            root = Insert(document, {type:"frame", name:"Root", width:300, height:300, layout:"none"});
+            kept = Insert(root, {type:"rectangle", name:"Kept", width:10, height:10});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        assert_eq!(e.renderer.slides.len(), 1);
+        let out = execute(&mut e, &json!({"input": "Insert(root, {type:'rectangle', name:'R', width:10, height:10})\nthrow new Error('boom')"}));
+        assert!(out.error && out.text.contains("rolled back"), "{}", out.text);
+        assert_eq!(e.renderer.slides.len(), 1, "only the surviving node still slides");
+        assert!(e.renderer.slides.iter().all(|s| e.doc.find(&s.id).is_some()));
+        let out = execute(&mut e, &json!({"input": "Insert(root, {type:'rectangle', name:'R', width:10, height:10})"}));
+        assert!(!out.error, "{}", out.text);
+        assert_eq!(e.renderer.slides.len(), 2, "the retry slides its own node");
+    }
+
     /// A slide is snapshotted alone, so a glass node would show the backdrop sharp until it settled:
     /// it appears in place, and so does a sliding card that gets a glass child.
     #[test]
@@ -1957,6 +1978,7 @@ card = Insert(root, {type:\"frame\", name:\"Card\", width:100, height:100, layou
         let blocked = crate::engine::engine().tool("open_document", &json!({"path": "never-opened.pen"}));
         assert!(blocked.error && blocked.text == crate::engine::SWITCH_BUSY, "a document switch waits for the running script: {}", blocked.text);
         assert!(crate::engine::engine().tool("execute", &json!({"input": "Print(1)"})).error, "a direct execute does not interleave with the running one");
+        assert_eq!(crate::dispatch(&json!({"cmd": "state"})).unwrap()["executing"], true, "the UI state reports the running script, so Home skips its save prompt");
         stop.store(true, Ordering::SeqCst);
         let out = run.join().unwrap();
         assert!(out.error && out.text.contains("stopped"), "{}", out.text);
