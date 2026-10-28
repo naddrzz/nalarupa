@@ -347,6 +347,24 @@ fn ancestors_of<'r>(n: &'r RNode, id: &str, chain: &mut Vec<&'r RNode>) -> bool 
     false
 }
 
+/// Whether `id` or one of its ancestors has an opacity below 1, with variables resolved for the
+/// theme active there; one that does not resolve to a number counts as dimmed.
+fn dimmed(doc: &Doc, id: &str) -> bool {
+    fn path<'v>(nodes: &'v [Value], id: &str, chain: &mut Vec<&'v Value>) -> bool {
+        nodes.iter().any(|n| {
+            chain.push(n);
+            let found = n["id"] == id || n["children"].as_array().is_some_and(|k| path(k, id, chain));
+            if !found {
+                chain.pop();
+            }
+            found
+        })
+    }
+    let mut chain = Vec::new();
+    path(doc.children(), id, &mut chain);
+    crate::resolve::along(&doc.root, &chain, "opacity").iter().any(|o| !o.is_null() && crate::resolve::num(o).is_none_or(|o| o < 1.0))
+}
+
 pub fn find_rnode<'r>(n: &'r RNode, id: &str) -> Option<&'r RNode> {
     if n.id == id {
         return Some(n);
@@ -497,10 +515,14 @@ impl Renderer {
         roots
     }
 
-    /// Whether an insert into `parent` may start its own slide: there is room, and no inserted
-    /// node already sliding holds `parent` (its snapshot carries the new node along).
+    /// Whether an insert into `parent` may start its own slide: there is room, `parent` and its
+    /// ancestors are opaque (the settled layer composites a semi-transparent one with its children
+    /// as a single group, which a snapshot painted over the parent's own paint cannot match, so
+    /// those inserts appear in place), and no inserted node already sliding holds `parent` (its
+    /// snapshot carries the new node along).
     pub fn can_slide_into(&self, doc: &Doc, parent: &str) -> bool {
         self.slides.len() < MAX_SLIDES
+            && !dimmed(doc, parent)
             && !self.slides.iter().any(|s| s.fade && (s.id == parent || doc.find(&s.id).and_then(|n| n["children"].as_array()).is_some_and(|k| crate::doc::find_in(k, parent).is_some())))
     }
 

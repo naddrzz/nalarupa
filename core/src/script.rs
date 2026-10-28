@@ -2425,4 +2425,49 @@ Insert(document, {type:'frame', name:'C', width:10, height:10})
         wait(&|| !busy());
         assert_eq!(call(101.0).unwrap()[0]["width"], 101.0);
     }
+
+    /// The settled layer composites a semi-transparent parent with its children as one group, which a
+    /// slide painted over the parent's own paint cannot match (47 levels off, then a pop): an insert
+    /// under a node with opacity below 1, at any depth, appears in place instead.
+    #[test]
+    fn insert_under_a_semi_transparent_ancestor_appears_in_place() {
+        let mut e = engine();
+        let out = execute(&mut e, &json!({"input": r##"
+            root = Insert(document, {type:"frame", name:"Root", width:300, height:300, layout:"none"});
+            Insert(root, {type:"frame", name:"Glass", width:200, height:200, layout:"none", opacity:0.5});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        assert_eq!(e.renderer.slides.len(), 1, "the glass frame itself slides into its opaque parent");
+        e.renderer.slides.clear();
+        let out = execute(&mut e, &json!({"input": r##"
+            Insert(Get(n => n.name === "Glass" ? n.id : undefined)[0], {type:"rectangle", name:"a", width:10, height:10});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        assert!(e.renderer.slides.is_empty(), "a child of a semi-transparent frame does not slide");
+        let out = execute(&mut e, &json!({"input": r##"
+            inner = Insert(Get(n => n.name === "Glass" ? n.id : undefined)[0], {type:"frame", name:"Inner", width:100, height:100, layout:"none"});
+            Insert(inner, {type:"rectangle", name:"b", width:10, height:10});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        assert!(e.renderer.slides.is_empty(), "nor does a deeper descendant");
+        let out = execute(&mut e, &json!({"input": r##"
+            Insert(Get(n => n.name === "Root" ? n.id : undefined)[0], {type:"rectangle", name:"c", width:10, height:10});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        assert_eq!(e.renderer.slides.len(), 1, "an insert under an opaque frame still slides");
+        // Opacity given as a variable counts as its value for the theme active there.
+        e.doc.set_variables(&json!({"dim": {"type": "number", "value": [{"value": 1}, {"value": 0.5, "theme": {"mode": "dark"}}]}}), false).unwrap();
+        for (theme, slides) in [("light", 1), ("dark", 0)] {
+            let out = execute(&mut e, &json!({"input": format!(r##"
+                Insert(Get(n => n.name === "Root" ? n.id : undefined)[0], {{type:"frame", name:"{theme}", width:50, height:50, layout:"none", opacity:"$dim", theme:{{mode:"{theme}"}}}});
+            "##)}));
+            assert!(!out.error, "{}", out.text);
+            e.renderer.slides.clear();
+            let out = execute(&mut e, &json!({"input": format!(r##"
+                Insert(Get(n => n.name === "{theme}" ? n.id : undefined)[0], {{type:"rectangle", width:10, height:10}});
+            "##)}));
+            assert!(!out.error, "{}", out.text);
+            assert_eq!(e.renderer.slides.len(), slides, "{theme}: opacity from a variable");
+        }
+    }
 }
