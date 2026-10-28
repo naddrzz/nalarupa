@@ -70,7 +70,7 @@ impl Client {
             if status >= 400 {
                 let text = body.into_with_config().limit(1 << 20).read_to_string().unwrap_or_default();
                 let msg = serde_json::from_str::<Value>(&text).ok().and_then(|v| v["error"]["message"].as_str().map(str::to_string)).unwrap_or(text);
-                return drop(tx.send(Err(format!("Claude API error {status}: {msg}"))));
+                return drop(tx.send(Err(api_error(status, &msg))));
             }
             for line in BufReader::new(body.into_reader()).lines() {
                 let line = line.map(Some).map_err(|e| format!("stream interrupted: {e}"));
@@ -175,6 +175,15 @@ impl Client {
     }
 }
 
+/// The failure for an HTTP error status. A rejected key can only be fixed in the app's settings, so say so.
+fn api_error(status: u16, msg: &str) -> String {
+    if status == 401 {
+        "The Claude API rejected this key. Replace it in Agent settings (gear icon) or switch the backend to Claude Code.".into()
+    } else {
+        format!("Claude API error {status}: {msg}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -219,6 +228,13 @@ mod tests {
             assert_eq!(r.unwrap_err(), "stopped");
             assert!(t.elapsed() < Duration::from_secs(3), "stop took {:?}", t.elapsed());
         }
+    }
+
+    #[test]
+    fn a_rejected_key_points_at_the_settings() {
+        let e = api_error(401, "invalid x-api-key");
+        assert!(e.contains("Agent settings") && !e.contains("401"), "{e}");
+        assert_eq!(api_error(529, "Overloaded"), "Claude API error 529: Overloaded");
     }
 
     #[test]
