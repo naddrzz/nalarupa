@@ -57,6 +57,8 @@ pub struct Engine {
     /// `script::finished()` at the last `expire_slides`.
     scripts_seen: u64,
     pub saved: u64,
+    /// The document as last saved, created or opened: undoing or redoing back to it is clean again.
+    saved_root: Value,
     /// Each step turns the current document into the one before (undo) or after (redo) it.
     undo: Vec<Patch>,
     redo: Vec<Patch>,
@@ -271,6 +273,7 @@ impl Engine {
             synced: 0,
             scripts_seen: 0,
             saved: 1,
+            saved_root: Value::Null,
             undo: Vec::new(),
             redo: Vec::new(),
             selection: Vec::new(),
@@ -546,6 +549,7 @@ impl Engine {
         self.coalesce = None;
         self.redo.push(step.apply(&mut self.doc.root));
         self.touch();
+        self.clean_if_saved();
         true
     }
 
@@ -557,6 +561,7 @@ impl Engine {
         self.coalesce = None;
         self.undo.push(step.apply(&mut self.doc.root));
         self.touch();
+        self.clean_if_saved();
         true
     }
 
@@ -623,6 +628,20 @@ impl Engine {
         }
     }
 
+    /// Undo or redo that lands on the saved document leaves it clean, whatever the version says.
+    fn clean_if_saved(&mut self) {
+        let clean = same(&self.doc.root, &self.saved_root);
+        self.keep_clean(clean);
+    }
+
+    /// The document as it is now is the saved one. An open coalesced edit ends here, so the next
+    /// edit is its own undo step and undo can land on the saved document.
+    fn mark_saved(&mut self) {
+        self.saved = self.version;
+        self.coalesce = None;
+        self.saved_root = self.doc.root.clone();
+    }
+
     /// Apply a document mutation as one undoable step.
     pub fn edit<R>(&mut self, f: impl FnOnce(&mut Doc) -> Result<R, String>) -> Result<R, String> {
         let before = self.doc.root.clone();
@@ -667,7 +686,7 @@ impl Engine {
         self.slid.clear();
         self.script = Default::default();
         self.touch();
-        self.saved = self.version;
+        self.mark_saved();
     }
 
     pub fn open(&mut self, path: &Path) -> Result<(), String> {
@@ -746,7 +765,7 @@ impl Engine {
             relocate_history(&mut self.redo, &old, &new, relocate);
         }
         self.doc.path = Some(target.clone());
-        self.saved = self.version;
+        self.mark_saved();
         if moved_from.is_some() && !self.streams.is_empty() && !self.executing {
             self.rebuild_preview(); // the live preview is a copy of the old document: redo it from the new folder
         }
@@ -1087,6 +1106,33 @@ mod tests {
         assert!(e.dirty());
         e.end_drag(before, true);
         assert!(!e.dirty() && e.undo.is_empty());
+    }
+
+    #[test]
+    fn undo_back_to_the_saved_document_is_clean() {
+        let mut e = Engine::new(std::env::temp_dir().join(format!("nalarupa-test-undo-clean-{}", std::process::id())));
+        assert!(!e.dirty());
+        e.edit(|d| Ok(d.root["children"] = json!([{"id": "a", "type": "rectangle", "x": 10}]))).unwrap();
+        assert!(e.dirty());
+        e.undo();
+        assert!(!e.dirty(), "back at the created document");
+        e.redo();
+        assert!(e.dirty());
+        e.mark_saved();
+        e.edit(|d| Ok(d.root["children"][0]["x"] = json!(20))).unwrap();
+        e.undo();
+        assert!(!e.dirty(), "back at the saved document");
+        e.undo();
+        assert!(e.dirty(), "past the saved document");
+        e.redo();
+        assert!(!e.dirty(), "forward to the saved document");
+        // A save in the middle of a coalesced field edit: undo after it still stops at the saved document.
+        e.edit_coalesced("x", |d| Ok(d.root["children"][0]["x"] = json!(30))).unwrap();
+        e.mark_saved();
+        e.edit_coalesced("x", |d| Ok(d.root["children"][0]["x"] = json!(40))).unwrap();
+        e.undo();
+        assert_eq!(e.doc.root["children"][0]["x"], 30);
+        assert!(!e.dirty(), "a coalesced edit does not merge across a save");
     }
 
     #[test]
