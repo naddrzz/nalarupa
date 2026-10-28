@@ -741,7 +741,7 @@ impl Engine {
         let mut back = Vec::new();
         crate::doc::walk(self.doc.children(), &mut |n| {
             if let (true, Some(id)) = (n["placeholder"] == true, n["id"].as_str()) {
-                if unflagged.contains(id) && !self.agent.pens.iter().any(|p| p == id) {
+                if unflagged.contains(id) && !self.agent.pens.iter().any(|(p, _)| p == id) {
                     back.push(id.to_string());
                 }
             }
@@ -882,7 +882,8 @@ impl Engine {
         doc.ensure_ids();
         drop_pending(&mut doc.root, &self.inflight);
         let reopen = self.doc.path.as_deref() == Some(path);
-        drop_placeholder(&mut doc.root, if reopen { &self.agent.pens } else { &[] });
+        let pens: Vec<String> = if reopen { self.agent.pens.iter().map(|(id, _)| id.clone()).collect() } else { Vec::new() };
+        drop_placeholder(&mut doc.root, &pens);
         self.doc = doc;
         self.load_libs();
         self.reset_history();
@@ -1429,7 +1430,7 @@ mod tests {
         std::fs::write(dir.join("lib.nala"), r#"{"version":"2.19","children":[{"id":"L","type":"frame","reusable":true,"placeholder":true}]}"#).unwrap();
         e.doc.root["imports"] = json!({"lib": "lib.nala"});
         e.save(None).unwrap();
-        e.agent.pens.push("f".into());
+        e.agent.pens.push(("f".into(), Default::default()));
         e.open(&path).unwrap();
         assert_eq!(e.doc.find("f").unwrap()["placeholder"], true);
         assert_eq!(e.libs[0].1["children"][0]["placeholder"], false);

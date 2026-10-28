@@ -77,10 +77,13 @@ pub struct AgentState {
     /// "Let it cook": designs left in this run (counting the current one) and "layout" | "style".
     pub cook: (usize, String),
     /// Frames an AI Pen is still drawing into, one entry per running pen: its `placeholder` flag is the pen's to clear.
-    pub pens: Vec<String>,
+    /// Each pen has its own cancel flag: it can outlive its run, whose flag the next turn replaces, and Stop still ends it.
+    pub pens: Vec<(String, Arc<AtomicBool>)>,
     /// Frames the built-in agents flagged `placeholder` in this run: the only ones the run's end clears.
     /// An external agent's frames are its own to clear.
     flagged: Vec<String>,
+    /// Stops so far: an `execute` that saw a Stop while its script ran starts its pens stopped (`stopped_since`).
+    pub stops: u64,
 }
 
 pub struct Chat {
@@ -419,7 +422,7 @@ fn clear_generating(e: &mut Engine) {
     let flagged = std::mem::take(&mut e.agent.flagged);
     let off = json!({"placeholder": false}).as_object().cloned().unwrap_or_default();
     for id in flagged {
-        if e.doc.find(&id).is_some_and(|n| n["placeholder"] == true) && !e.agent.pens.contains(&id) {
+        if e.doc.find(&id).is_some_and(|n| n["placeholder"] == true) && !e.agent.pens.iter().any(|(p, _)| *p == id) {
             e.apply_generated(&id, &off, true);
         }
     }
@@ -438,9 +441,20 @@ fn drop_queue(e: &mut Engine) {
     }
 }
 
+/// Whether a pen asked for by `agent`'s `execute` that began at `mark` (`agent.stops` then) starts stopped: a Stop came
+/// while its script ran (the engine is not held meanwhile, and an MCP client's call has no run whose flag Stop sets),
+/// or it is a built-in agent's call and their run is being stopped. An external agent's later call is not that run's.
+pub fn stopped_since(e: &Engine, mark: u64, agent: &str) -> bool {
+    e.agent.stops != mark || (e.agent.profile(agent).is_some() && e.agent.running && e.agent.cancel.load(Ordering::SeqCst))
+}
+
 pub fn stop() {
     let mut e = engine();
+    e.agent.stops += 1;
     e.agent.cancel.store(true, Ordering::SeqCst);
+    for (_, pen) in &e.agent.pens {
+        pen.store(true, Ordering::SeqCst);
+    }
     drop_queue(&mut e);
     e.agent.cook.0 = 1;
     for (_, (_, waiting)) in e.agent.permissions.drain() {
@@ -1556,6 +1570,52 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Stop reaches an AI Pen that outlives its run: a later turn's fresh cancel flag does not orphan
+    /// the pen, and the state reports it drawing so the composer offers Stop.
+    #[test]
+    fn stop_cancels_a_pen_from_an_earlier_turn() {
+        let _busy = agent_busy();
+        let pen = Arc::new(AtomicBool::new(false));
+        {
+            let mut e = engine();
+            e.agent.pens.push(("penframe".into(), pen.clone()));
+            assert_eq!(crate::state(&e)["penDrawing"], true);
+            // A later turn swaps the run's flag, as `start_turn` does.
+            e.agent.cancel = Arc::new(AtomicBool::new(false));
+        }
+        stop();
+        assert!(pen.load(Ordering::SeqCst), "Stop cancels the pen");
+        let mut e = engine();
+        e.agent.pens.retain(|(_, c)| !Arc::ptr_eq(c, &pen));
+        e.agent.cancel = Arc::new(AtomicBool::new(false));
+        assert_eq!(crate::state(&e)["penDrawing"], false);
+    }
+
+    /// A pen whose `execute` saw a Stop while its script ran starts stopped, also from an MCP client's call
+    /// (no run going on); a pen from a call that began after the Stop draws.
+    #[test]
+    fn a_stop_during_execute_reaches_its_pens() {
+        let _busy = agent_busy();
+        let (mark, running) = {
+            let mut e = engine();
+            (e.agent.stops, std::mem::replace(&mut e.agent.running, false))
+        };
+        assert!(!stopped_since(&engine(), mark, "external"), "no Stop: the pen draws");
+        stop();
+        let mut e = engine();
+        assert!(stopped_since(&e, mark, "external"), "a Stop while the script ran stops its pen, with no run going on");
+        let after = e.agent.stops;
+        assert!(!stopped_since(&e, after, "external"), "a call that began after the Stop draws");
+        // While the stopped built-in run winds down, its own later calls start stopped; an external agent's do not.
+        e.agent.running = true;
+        e.agent.profiles.push(Profile { id: "agS".into(), name: "S".into(), color: "#000000".into(), parent: None });
+        assert!(stopped_since(&e, after, "agS"), "the stopping run's own call starts stopped");
+        assert!(!stopped_since(&e, after, "external"), "an external call during the run's wind-down draws");
+        e.agent.profiles.retain(|p| p.id != "agS");
+        e.agent.cancel = Arc::new(AtomicBool::new(false));
+        e.agent.running = running;
+    }
+
     /// Stop drops the queued prompts and says so, so the chat does not keep promising to send them.
     #[test]
     fn stop_announces_dropped_queue() {
@@ -1611,6 +1671,7 @@ mod tests {
     /// "Generating", except the one an AI Pen is still drawing into, and must not touch an external agent's frames.
     #[test]
     fn run_end_clears_stale_placeholders() {
+        // Holds the lock the other tests of `agent.pens` take, so its pen entry never meets theirs.
         let _busy = agent_busy();
         let mut e = engine();
         let old = e.doc.root.clone();
@@ -1632,13 +1693,13 @@ mod tests {
             found
         };
         let (a, nested, drawing, external) = (id(&e, "A"), id(&e, "Nested"), id(&e, "B"), id(&e, "External"));
-        e.agent.pens.push(drawing.clone());
+        e.agent.pens.push((drawing.clone(), Arc::default()));
         clear_generating(&mut e);
         let flag = |e: &Engine, id: &str| e.doc.find(id).unwrap()["placeholder"] == true;
         assert!(!flag(&e, &a) && !flag(&e, &nested), "flags the built-in agent set are cleared, nested frames too");
         assert!(flag(&e, &drawing), "a frame an AI Pen draws into keeps its flag");
         assert!(flag(&e, &external), "a frame an external agent flagged keeps its flag");
-        e.agent.pens.clear();
+        e.agent.pens.retain(|(p, _)| *p != drawing);
         e.agent.profiles.retain(|p| p.id != "agT");
         e.doc.root = old;
     }

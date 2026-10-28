@@ -950,6 +950,17 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
     await until(() => onScreen('Sent with Enter'), 'the message sent with Enter on screen')
     await until(async () => !(await app!.getByTestId('agent-input-ring').count()), 'the composer to drop its focus ring after Enter sent the prompt')
 
+    // An AI Pen can outlive the run that started it: while it draws, the composer still offers Stop, and Stop ends the pen.
+    // The stand-in streams the pen's SVG for ~20 s; the frame comes from an MCP `execute`, so no agent run is going on.
+    await until(async () => !(await app!.getByTestId('agent-stop').count()), 'the run before the pen to finish', 20000)
+    const svg = '<svg viewBox="0 0 200 200">' + Array.from({ length: 12 }, (_, i) => `<circle cx="${20 + i * 14}" cy="100" r="10" fill="#F59E0B"/>`).join('') + '</svg>'
+    writeFileSync(join(bin, 'claude'), `#!/bin/sh\n${svg.match(/.{1,25}/g)!.map((c) => `echo '${delta(c)}'\nsleep 1`).join('\n')}\n`, { mode: 0o755 })
+    await mcp('execute', { input: `f = Insert(document, {type:"frame", name:"PenStop", x:0, y:-3000, width:300, height:300, placeholder:true})\nGenerate("svg", f, "a row of dots")` })
+    await until(async () => !!(await app!.getByTestId('agent-stop').count()), 'Stop to show while only an AI Pen draws')
+    await app.getByTestId('agent-stop').click()
+    await until(async () => !(await app!.getByTestId('agent-stop').count()), 'Stop to end the AI Pen (its Stop button goes once the pen has stopped)')
+    await mcp('execute', { input: `Delete(Get(n => n.name === "PenStop" ? n.id : undefined)[0])` })
+
     // An expanded thought is secondary to the reply: dimmer text (a markdown block takes its colour from its theme,
     // not from style) and indented. Linux only: grim, and sway for the window's origin.
     if (sock) {

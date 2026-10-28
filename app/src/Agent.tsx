@@ -122,7 +122,7 @@ function withoutTabKey(prev: string, next: string) {
   return next[i] === '\t' && next.slice(i + 1) === prev.slice(i) ? prev : next
 }
 
-export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: number; running: boolean; mcpUrl: string; toast: Toast; onSent?: () => void }) {
+export function AgentPanel({ tick, running, drawing, mcpUrl, toast, onSent }: { tick: number; running: boolean; drawing?: boolean; mcpUrl: string; toast: Toast; onSent?: () => void }) {
   const [draft, setDraft] = useKept('draft', () => '')
   liveSetDraft = setDraft
   const input = useFieldRing()
@@ -404,8 +404,9 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
             <ModelPicker settingsOpen={settings} backendRev={backendRev} toast={toast} />
             <div style={{ flexGrow: 1 }} />
             <CookMenu designs={designs} mode={cookMode} set={setCook} />
-            {running ? (
-              <IconButton icon="stop" title="Stop the agent" testId="agent-stop" color={C.danger} onClick={() => tryCall('agent_stop')} />
+            {/* An AI Pen can draw on after its run ended: Stop ends it too. */}
+            {running || drawing ? (
+              <IconButton icon="stop" title={drawing && !running ? 'Stop drawing' : 'Stop the agent'} testId="agent-stop" color={C.danger} onClick={() => tryCall('agent_stop')} />
             ) : null}
             <IconButton icon="send" title="Send" testId="agent-send" color={C.accent} onClick={() => send(draft)} />
           </Row>
