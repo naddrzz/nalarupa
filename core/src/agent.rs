@@ -1709,9 +1709,11 @@ mod tests {
     /// and a later redo must not bring it back "Generating" with no agent running.
     #[test]
     fn redo_after_the_run_does_not_restore_generating() {
+        // Its own engine: the undo history it leaves behind never meets the shared engine's tests.
         let _busy = agent_busy();
-        let mut e = engine();
-        let old = e.doc.root.clone();
+        let mut e = Engine::new(std::env::temp_dir().join(format!("nalarupa-test-redo-generating-{}", std::process::id())));
+        e.offline();
+        e.load_template("empty");
         e.agent.profiles.push(Profile { id: "agR".into(), name: "R".into(), color: "#000000".into(), parent: None });
         e.agent.running = true;
         let out = e.tool("execute", &json!({"input": "Insert(document, {type:'frame', width:100, height:100, placeholder:true, name:'Undone'})", "__agent": "agR"}));
@@ -1727,8 +1729,6 @@ mod tests {
             }
         });
         assert_eq!(flagged, Some(false), "the redone frame is back, not Generating");
-        e.agent.profiles.retain(|p| p.id != "agR");
-        e.doc.root = old;
     }
 
     /// Auto-allowed paths: the workspace for file tools, skills for Read; `..` cannot escape.
