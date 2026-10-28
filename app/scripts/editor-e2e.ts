@@ -917,7 +917,10 @@ try {
   await mcpCall(port, { method: 'tools/call', params: { name: 'execute', arguments: { input: 'comp = Insert(document, {type:"frame", name:"Inst btn", x:700, y:700, width:120, height:40, reusable:true, fill:"#3366ff", layout:"none"}); Insert(comp, {type:"text", name:"Inst label", content:"Click", fontSize:16, fill:"#ffffff", x:10, y:10}); Insert(document, {type:"ref", name:"Inst copy", ref:comp, x:900, y:700})' } } })
   await app.getByTestId('layers').getByText('Inst copy').waitFor({ timeoutMs: 6000 })
   await app.getByTestId('layers').getByText('Inst copy').click()
-  await app.getByTestId('selection-box').waitFor({ timeoutMs: 6000 })
+  await canvas.press('shift-2') // it was inserted outside the fitted view
+  // The previous mixed selection's box lingers until the click renders: wait for the instance's own 3:1 box.
+  const instBox = async () => (await count('selection-box')) === 1 && Math.abs((b => b.width / b.height)(await app.getByTestId('selection-box').bounds()) - 3) < 0.1
+  assert(await until(instBox, 6000), 'the instance alone is selected and in view')
   const inst = await app.getByTestId('selection-box').bounds()
   const k = inst.width / 120
   const label = { x: inst.x + 25 * k, y: inst.y + 20 * k }
