@@ -93,6 +93,11 @@ impl Doc {
         self.path.as_ref().and_then(|p| p.parent().map(Path::to_path_buf))
     }
 
+    /// The file name without its extension, or "Untitled" for an unsaved document.
+    pub fn title(&self) -> String {
+        self.path.as_ref().and_then(|p| p.file_stem()).map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "Untitled".into())
+    }
+
     /// Save as: the relative references of `root` (image and shader `url`, `scriptUri`, `imports`)
     /// resolve against the folder of the document, so a document moving from `from` to `to`
     /// gets them rewritten to reach the same files. Absolute paths, urls and `pencil:` ids stay.
