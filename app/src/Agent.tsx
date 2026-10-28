@@ -200,7 +200,7 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}>
-      <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 4, paddingLeft: 14, paddingRight: 8, height: 40, borderBottomWidth: 1, borderColor: C.border }}>
+      <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 4, paddingLeft: 14, paddingRight: 8, height: 40, flexShrink: 0, borderBottomWidth: 1, borderColor: C.border }}>
         <Icon name="sparkles" size={14} color={C.accent} />
         <T weight="600" grow>Design agent</T>
         <ChatHistory running={running} toast={toast} changed={() => setChatVersion((n) => n + 1)} />
@@ -227,7 +227,7 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
       ) : null}
 
       {items.length === 0 ? (
-        <div testId="agent-empty" style={{ flexGrow: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 8, padding: 14, overflowY: 'scroll' }}>
+        <div testId="agent-empty" style={{ flexGrow: 1, flexBasis: 0, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 8, padding: 14, overflowY: 'scroll' }}>
           <T size={15} weight="600" color={C.text}>Ask me to design anything</T>
           {picks.map((s) => (
             <Pressable key={s} testId={`suggestion-${s.slice(0, 12)}`} label={`Design ${s}`} onClick={() => send(`Design ${s}`)} style={{ padding: 10, borderRadius: 8, borderWidth: 1, borderColor: C.border, hover: { backgroundColor: C.panel2 } }}>
@@ -237,7 +237,7 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
           <T size={11} color={C.ghost}>Each agent gets a cursor on the canvas; what it writes appears while it writes it. Set Agents above 1× to split the work across several agents.</T>
         </div>
       ) : (
-        <virtual-list ref={listEl} estimatedItemHeight={44} followTail alignment="bottom" style={{ flexGrow: 1, minHeight: 0, paddingTop: 8, paddingBottom: 8 }}>
+        <virtual-list ref={listEl} estimatedItemHeight={44} followTail alignment="bottom" style={{ flexGrow: 1, flexBasis: 0, minHeight: 0, paddingTop: 8, paddingBottom: 8 }}>
           {items.map((m) => (
             <div key={m.id} style={{ paddingLeft: 12, paddingRight: 12 }}>
               {/* Items are mutated in place, so `tick` (the store version) is what re-renders one; only the live ones take it (a finished row never changes; `isLast` and the row's own ticks cover the rest). */}
@@ -253,8 +253,8 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
       )}
 
       {todos.length ? (
-        <div style={{ borderTopWidth: 1, borderColor: C.border, paddingLeft: 12, paddingRight: 12, paddingTop: 8, paddingBottom: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <Pressable testId="plan-toggle" focusTestId="plan-toggle-focus" label={`Plan, ${doneTodos} of ${todos.length} done`} expanded={planOpen} onClick={() => setPlanOpen((o) => !o)} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, height: 24, borderRadius: 4 }}>
+        <div style={{ borderTopWidth: 1, borderColor: C.border, paddingLeft: 12, paddingRight: 12, paddingTop: 8, paddingBottom: 8, display: 'flex', flexDirection: 'column', gap: 4, flexShrink: 1, minHeight: 0 }}>
+          <Pressable testId="plan-toggle" focusTestId="plan-toggle-focus" label={`Plan, ${doneTodos} of ${todos.length} done`} expanded={planOpen} onClick={() => setPlanOpen((o) => !o)} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, height: 24, flexShrink: 0, borderRadius: 4 }}>
             <Icon name={planOpen ? 'chevronDown' : 'chevronRight'} size={12} color={C.ghost} />
             <T size={11} weight="600" color={C.muted} grow>Plan</T>
             <T size={11} color={C.ghost}>{`${doneTodos}/${todos.length}`}</T>
@@ -272,7 +272,7 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
         </div>
       ) : null}
 
-      <div style={{ padding: 10, borderTopWidth: 1, borderColor: C.border, display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ padding: 10, flexShrink: 0, borderTopWidth: 1, borderColor: C.border, display: 'flex', flexDirection: 'column', gap: 8 }}>
         <div style={{ position: 'relative', borderRadius: 10, borderWidth: 1, borderColor: C.border, backgroundColor: C.panel2, padding: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
           {input.ring ? <FocusRing radius={10} testId="agent-input-ring" /> : null}
           <div onMouseDown={input.onMouseDown}>
@@ -886,6 +886,8 @@ function PermissionCard({ m }: { m: Extract<ChatItem, { kind: 'permission' }> })
   )
 }
 
+/** The gear's panel. It shrinks and scrolls when the agent panel is short (minimum window height, a plan showing),
+ *  so the composer below never leaves the window. */
 function AgentSettings({ mcpUrl, toast, onBackend }: { mcpUrl: string; toast: Toast; onBackend: () => void }) {
   const s = useMemo(() => tryCall<Record<string, string>>('settings_get') ?? {}, [])
   const [backend, setBackend] = useState(s.backend ?? 'claude-code')
@@ -899,7 +901,7 @@ function AgentSettings({ mcpUrl, toast, onBackend }: { mcpUrl: string; toast: To
     else toast(`Unable to configure ${client}. Check that it is installed and on your PATH, then try again.`, true)
   }
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 12, borderBottomWidth: 1, borderColor: C.border, backgroundColor: C.panel2 }}>
+    <div testId="agent-settings-panel" style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 12, flexShrink: 1, minHeight: 0, overflowY: 'scroll', borderBottomWidth: 1, borderColor: C.border, backgroundColor: C.panel2 }}>
       <T size={11} color={C.muted} weight="600">Backend</T>
       <Segmented
         label="Agent backend"

@@ -444,6 +444,31 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
       await until(async () => rows(await grab()) === idle, `the empty composer to show its placeholder after ${keys}`)
     }
   }
+  // At the minimum window height, Agent settings opened over the plan shrinks and scrolls instead of pushing the
+  // composer (Stop, Send) out of the window (#448). Sway only: the window can be resized there.
+  if (sock) {
+    const swaymsg = (...args: string[]) => Bun.$`swaymsg -s ${join(dir!, sock)} ${args}`.quiet()
+    type Win = { type: string; rect: { width: number; height: number }; nodes?: Win[]; floating_nodes?: Win[] }
+    const windowOf = (n: Win): Win | undefined => n.type === 'floating_con' ? n : [...(n.nodes ?? []), ...(n.floating_nodes ?? [])].map(windowOf).find(Boolean)
+    const size = windowOf(JSON.parse(await Bun.$`swaymsg -s ${join(dir!, sock)} -t get_tree`.text()))!.rect
+    await swaymsg('[app_id=".*"]', 'resize', 'set', '1100', '680')
+    await until(async () => (await app!.getByTestId('canvas').bounds()).y + (await app!.getByTestId('canvas').bounds()).height <= 680, 'the window to shrink to 680 px')
+    await app.getByTestId('agent-settings').click()
+    await app.getByTestId('agent-settings-panel').waitFor()
+    const bottom = async (id: string) => { const b = await app!.getByTestId(id).bounds(); return b.y + b.height }
+    const windowBottom = async () => bottom('canvas')
+    await until(async () => (await bottom('agent-send')) <= (await windowBottom()), 'Send to stay in the 680 px window with Agent settings and the plan open')
+    if ((await bottom('plan-toggle')) > (await bottom('agent-input'))) throw new Error('the Plan toggle left its place above the composer')
+    // The panel scrolls to its last row, the MCP install buttons: they come into view above the Plan toggle,
+    // which does not scroll.
+    const panel = app.getByTestId('agent-settings-panel')
+    await until(async () => { await panel.wheel(0, -400); const c = await app!.getByText('Codex').bounds(); return c.y + c.height <= (await app!.getByTestId('plan-toggle').bounds()).y }, 'scrolling Agent settings reaches the MCP install buttons')
+    await shot('08b-settings-min-height')
+    await app.getByTestId('agent-settings').click()
+    await until(async () => !(await app!.getByTestId('agent-settings-panel').count()), 'Agent settings to close')
+    await swaymsg('[app_id=".*"]', 'resize', 'set', String(size.width), String(size.height))
+    await until(async () => (await windowBottom()) > 680, 'the window to grow back')
+  }
 
   // Shift+Tab leaves a text field backwards (GPUIX registers a field's focus handle twice, so GPUI's own
   // walk lands on the field again): from the composer it reaches the Plan toggle above it, which Enter
