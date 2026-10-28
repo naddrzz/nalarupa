@@ -147,6 +147,12 @@ pub fn hugs(n: &RNode, ax: usize) -> bool {
     dir(n).is_some() && sizing(n, ax) == Sizing::Fit && n.kids.iter().any(|k| in_flow(k) && sizing(k, ax) != Sizing::Fill)
 }
 
+/// A hugging node with a fill child on this axis: the fill child gets what its siblings leave, but a CSS flex item adds
+/// its content width to a shrink-to-fit container, so `fit-content` would size the node differently from the canvas.
+pub fn hugs_fill(n: &RNode, ax: usize) -> bool {
+    hugs(n, ax) && n.kids.iter().any(|k| in_flow(k) && sizing(k, ax) == Sizing::Fill)
+}
+
 /// Post-order: a fit_content node with a layout hugs its in-flow, non-fill children.
 fn fit(n: &mut RNode, ax: usize, fonts: &mut Fonts) {
     for k in &mut n.kids {
@@ -193,7 +199,7 @@ fn fill(n: &mut RNode, ax: usize, fonts: &mut Fonts) {
     }
 }
 
-/// Place in-flow children: justify along the main axis (space_* ignore gap and may go negative),
+/// Place in-flow children: justify along the main axis (space_* ignore gap and never go negative: overflow packs from the start, like CSS),
 /// align on the cross axis; each child's rotated/flipped bounding box lands on its slot.
 fn position(n: &mut RNode) {
     if let Some(e) = dir(n) {
@@ -212,9 +218,9 @@ fn position(n: &mut RNode) {
                 Some("end") => cur[e] += free - gaps,
                 Some("center") => cur[e] += (free - gaps) / 2.0,
                 // One child divides by zero; the step is never used then.
-                Some("space_between") => step = free / (o - 1) as f64,
+                Some("space_between") => step = free.max(0.0) / (o - 1) as f64,
                 Some("space_around") => {
-                    step = free / o as f64;
+                    step = free.max(0.0) / o as f64;
                     cur[e] += step / 2.0;
                 }
                 _ => {}
@@ -266,6 +272,7 @@ fn commit(n: &mut RNode, ax: usize, v: f64, fonts: &mut Fonts) {
 fn text_bounds(n: &mut RNode, fonts: &mut Fonts) {
     let st = TextStyle::of(n);
     let line_h = fonts.metrics(&st).line_h;
+    n.line_h = line_h;
     let content = match n.p.get("content") {
         Some(Value::String(s)) => s.clone(),
         Some(Value::Number(v)) => v.to_string(),
@@ -422,9 +429,11 @@ mod tests {
         assert_eq!(n.kids.iter().map(|k| k.x).collect::<Vec<_>>(), [0.0, 40.0, 80.0]);
         let n = row("space_around", 90.0);
         assert_eq!(n.kids.iter().map(|k| k.x).collect::<Vec<_>>(), [5.0, 35.0, 65.0]);
-        // Overflow makes the spacing negative instead of clamping.
-        let n = row("space_between", 40.0);
-        assert_eq!(n.kids.iter().map(|k| k.x).collect::<Vec<_>>(), [0.0, 10.0, 20.0]);
+        // Overflow packs the children from the start instead of overlapping them (CSS never uses negative space).
+        for j in ["space_between", "space_around"] {
+            let n = row(j, 40.0);
+            assert_eq!(n.kids.iter().map(|k| k.x).collect::<Vec<_>>(), [0.0, 20.0, 40.0], "{j}");
+        }
     }
 
     #[test]

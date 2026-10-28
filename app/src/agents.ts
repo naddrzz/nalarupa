@@ -11,14 +11,14 @@ export type ChatItem =
   | { kind: 'user'; id: number; text: string }
   | { kind: 'queued'; id: number; text: string }
   | { kind: 'assistant'; id: number; agent: Profile; text: string; streaming: boolean; header: boolean; by?: Author }
-  | { kind: 'thinking'; id: number; agent: Profile; text: string; startedAt: number; endedAt?: number }
+  | { kind: 'thinking'; id: number; agent: Profile; text: string; startedAt: number; endedAt?: number; header: boolean; by?: Author }
   | {
       kind: 'tool'; id: number; toolId: string; agent: Profile; name: string; input?: any; output?: string
-      images?: string[]; error?: boolean; lines?: number; running: boolean
+      images?: string[]; error?: boolean; lines?: number; running: boolean; header: boolean; by?: Author
     }
   | { kind: 'note'; id: number; text: string }
   | { kind: 'error'; id: number; agent?: Profile; text: string }
-  | { kind: 'usage'; id: number; agent: Profile; durationMs: number; usage: any; stopped: boolean }
+  | { kind: 'usage'; id: number; agent: Profile; durationMs: number; usage: any; stopped: boolean; failed: boolean }
   | { kind: 'external'; id: number; text: string; error?: boolean }
   /** The agent waits for the user to allow a tool (permission card). */
   | { kind: 'permission'; id: number; reqId: string; agent: Profile; tool: string; input: any }
@@ -55,7 +55,7 @@ export const store = {
   /** Latest assistant text per agent for the canvas pills: text + time it was said. */
   pills: new Map<string, { text: string; at: number }>(),
   /** Pending flash requests whose node boxes the canvas still has to resolve. */
-  activity: [] as { agent: string; ids: string[]; op: string }[],
+  activity: [] as { agent: string; ids: string[]; op: string; at: number }[],
   /** Camera center in doc units, so a fresh cursor can spawn near what the user sees. */
   viewCenter: { x: 0, y: 0 },
 }
@@ -75,6 +75,8 @@ export const FADE_DELAY = 5000
 export const FADE_DUR = 1500
 export const GONE = FADE_DELAY + FADE_DUR
 export const PILL_MS = 3000
+/** How long a flash request stays worth showing: older ones (queued while the canvas layer was not mounted, e.g. in Present) are dropped. */
+export const ACTIVITY_MS = 2000
 
 /**
  * Whether the agent layer must repaint now. Normally any agent presence animates every frame. Under
@@ -111,6 +113,12 @@ function lastOf(agent: string, kinds: ChatItem['kind'][]): ChatItem | undefined 
   return undefined
 }
 
+/** Whether the agent's next item opens its reply (a turn's first thinking, tool or text), which then carries the name and model header. */
+function opensReply(agent: string): boolean {
+  const prev = store.items.filter((i) => i.kind !== 'note' && i.kind !== 'queued').pop() // neither ends the reply: an output-limit note lands mid-run, a queued message waits behind it
+  return !prev || prev.kind === 'user' || prev.kind === 'usage' || !('agent' in prev) || prev.agent?.id !== agent
+}
+
 function endStreaming(agent: string, now: number) {
   for (const it of store.items) {
     if (it.kind === 'assistant' && it.agent.id === agent) it.streaming = false
@@ -123,6 +131,24 @@ export function cursorFaded(agent: string, c: CursorState | undefined, now: numb
   return !c || (!store.running.has(agent) && now - c.lastActivity > GONE)
 }
 
+export const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3)
+
+/** Cursor opacity: 200 ms fade-in from `appearAt`, then full until it has idled FADE_DELAY, then the fade-out. */
+export function cursorOpacity(c: CursorState, now: number, running: boolean): number {
+  const sa = now - c.appearAt
+  const si = running ? 0 : now - c.lastActivity
+  if (sa < FADE_IN) return easeOutCubic(sa / FADE_IN)
+  if (si > FADE_DELAY) return Math.max(0, 1 - easeOutCubic((si - FADE_DELAY) / FADE_DUR))
+  return 1
+}
+
+/** Count the cursor active at `now`. One that is partly faded fades back in from the opacity it has reached, not from 0 and not in a single frame. */
+export function wakeCursor(agent: string, c: CursorState, now: number) {
+  const o = cursorOpacity(c, now, store.running.has(agent))
+  if (o < 1) c.appearAt = now - FADE_IN * (1 - Math.cbrt(1 - o))
+  c.lastActivity = now
+}
+
 /** Wake (or spawn) the agent's cursor without moving it. */
 export function poke(p: Profile, now: number) {
   const c = store.cursors.get(p.id)
@@ -132,8 +158,7 @@ export function poke(p: Profile, now: number) {
     store.cursors.set(p.id, { profile: p, x, y, tx: x, ty: y, appearAt: now, lastActivity: now, wobble: 0, phase: Math.random() * Math.PI * 2 })
     return
   }
-  if (cursorFaded(p.id, c, now)) c.appearAt = now
-  c.lastActivity = now
+  wakeCursor(p.id, c, now)
 }
 
 /** Apply core events; returns true when anything visible changed. */
@@ -141,7 +166,8 @@ export function applyEvents(events: any[], now: number): boolean {
   let changed = false
   for (const ev of events) {
     if (ev.type === 'agent_activity') {
-      store.activity.push({ agent: ev.agent, ids: ev.ids ?? [], op: ev.op })
+      store.activity = store.activity.filter((a) => now - a.at < ACTIVITY_MS) // nothing drains the queue while Present is open
+      store.activity.push({ agent: ev.agent, ids: ev.ids ?? [], op: ev.op, at: now })
       changed = true
       continue
     }
@@ -186,9 +212,7 @@ export function applyEvents(events: any[], now: number): boolean {
         if (last?.kind === 'assistant' && last.streaming) last.text += ev.text
         else if (String(ev.text ?? '').trim()) {
           endStreaming(aid, now)
-          const prev = store.items[store.items.length - 1]
-          const header = !prev || prev.kind === 'user' || !('agent' in prev) || prev.agent?.id !== aid
-          store.items.push({ kind: 'assistant', id: nextId++, agent: p ?? FALLBACK, text: ev.text, streaming: true, header, by: store.authors.get(aid) })
+          store.items.push({ kind: 'assistant', id: nextId++, agent: p ?? FALLBACK, text: ev.text, streaming: true, header: opensReply(aid), by: store.authors.get(aid) })
         }
         const cur = lastOf(aid, ['assistant'])
         if (cur?.kind === 'assistant') store.pills.set(aid, { text: cur.text, at: now })
@@ -199,7 +223,7 @@ export function applyEvents(events: any[], now: number): boolean {
         if (last?.kind === 'thinking' && last.endedAt === undefined) last.text += ev.text
         else {
           endStreaming(aid, now)
-          store.items.push({ kind: 'thinking', id: nextId++, agent: p ?? FALLBACK, text: ev.text, startedAt: now })
+          store.items.push({ kind: 'thinking', id: nextId++, agent: p ?? FALLBACK, text: ev.text, startedAt: now, header: opensReply(aid), by: store.authors.get(aid) })
           if (p) poke(p, now)
         }
         break
@@ -207,7 +231,7 @@ export function applyEvents(events: any[], now: number): boolean {
       case 'tool_start':
         endStreaming(aid, now)
         if (!store.items.some((i) => i.kind === 'tool' && i.toolId === ev.id)) {
-          store.items.push({ kind: 'tool', id: nextId++, toolId: ev.id, agent: p ?? FALLBACK, name: ev.name, running: true })
+          store.items.push({ kind: 'tool', id: nextId++, toolId: ev.id, agent: p ?? FALLBACK, name: ev.name, running: true, header: opensReply(aid), by: store.authors.get(aid) })
         }
         if (p) poke(p, now)
         break
@@ -219,7 +243,7 @@ export function applyEvents(events: any[], now: number): boolean {
       case 'tool_done': {
         let t = store.items.find((i) => i.kind === 'tool' && i.toolId === ev.id)
         if (!t) {
-          t = { kind: 'tool', id: nextId++, toolId: ev.id, agent: p ?? FALLBACK, name: ev.name, running: false }
+          t = { kind: 'tool', id: nextId++, toolId: ev.id, agent: p ?? FALLBACK, name: ev.name, running: false, header: opensReply(aid), by: store.authors.get(aid) }
           store.items.push(t)
         }
         if (t.kind === 'tool') Object.assign(t, { input: ev.input, output: ev.output, images: ev.images, error: ev.error, running: false, name: ev.name || t.name })
@@ -253,8 +277,9 @@ export function applyEvents(events: any[], now: number): boolean {
         store.running.delete(aid)
         for (const it of store.items) if (it.kind === 'tool' && it.agent.id === aid && it.running) Object.assign(it, { running: false, error: true, output: 'Tool call cancelled' })
         // A failed run ends the agent as a Stop does: its unfinished plan must not keep reading as live.
-        if (store.todosOwner === aid && (ev.stopped || failedRun(aid))) store.todos = store.todos.map((t) => (t.status === 'completed' ? t : { ...t, status: 'cancelled' }))
-        store.items.push({ kind: 'usage', id: nextId++, agent: p ?? FALLBACK, durationMs: ev.durationMs ?? 0, usage: ev.usage ?? {}, stopped: !!ev.stopped })
+        const failed = !ev.stopped && failedRun(aid)
+        if (store.todosOwner === aid && (ev.stopped || failed)) store.todos = store.todos.map((t) => (t.status === 'completed' ? t : { ...t, status: 'cancelled' }))
+        store.items.push({ kind: 'usage', id: nextId++, agent: p ?? FALLBACK, durationMs: ev.durationMs ?? 0, usage: ev.usage ?? {}, stopped: !!ev.stopped, failed })
         const c = store.cursors.get(aid)
         if (c) c.lastActivity = now
         store.pills.delete(aid)
@@ -263,6 +288,11 @@ export function applyEvents(events: any[], now: number): boolean {
     }
   }
   return changed
+}
+
+/** How a run's closing row words what happened: a stopped or failed run did not "design" anything. */
+export function runVerb(u: { stopped: boolean; failed: boolean }): string {
+  return u.stopped ? 'stopped after' : u.failed ? 'failed after' : 'designed for'
 }
 
 /** Whether the agent's current run (since its last usage row) reported an error. */
@@ -284,6 +314,19 @@ export function resetChat() {
   store.running.clear()
   store.authors.clear()
   store.cursors.clear()
+}
+
+/** Agent presence on the canvas is in document units: a new or opened document starts without the old one's cursors and flashes. */
+export function clearPresence() {
+  store.cursors.clear()
+  store.pens.clear()
+  store.flashes = []
+  store.activity = []
+}
+
+/** Take the pending flash requests that are still fresh; stale ones are discarded. */
+export function takeActivity(now: number) {
+  return store.activity.splice(0).filter((a) => now - a.at < ACTIVITY_MS)
 }
 
 /** The newest item that is real chat content: a usage row or a note is not a "later message" for the typewriter. */
@@ -320,6 +363,12 @@ export function restoreChat(events: any[]) {
     if (it.kind === 'thinking') it.endedAt ??= it.startedAt
     if (it.kind === 'tool' && it.running) Object.assign(it, { running: false, error: true, output: 'Tool call cancelled' })
   }
+  // The run that owned the plan never reached its `done`: its unfinished steps are cancelled, as after a Stop.
+  // A `done` after the last plan event means the plan was left by an earlier, finished turn, so it stays as it was.
+  const ownedBy = (ev: any, kind: string) => ev.type === 'agent' && ev.kind === kind && (ev.agent?.id ?? 'agent') === store.todosOwner
+  const lastPlan = events.reduce((last, ev, n) => (ownedBy(ev, 'todos') ? n : last), -1)
+  const planDone = events.slice(lastPlan + 1).some((ev) => ownedBy(ev, 'done'))
+  if (lastPlan >= 0 && !planDone && store.running.has(store.todosOwner)) store.todos = store.todos.map((t) => (t.status === 'completed' ? t : { ...t, status: 'cancelled' }))
   store.running.clear()
   store.cursors.clear()
   store.pills.clear()
