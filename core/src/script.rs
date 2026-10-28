@@ -895,7 +895,8 @@ fn finish(e: &mut Engine, prep: Prepared, result: Result<Map<String, Value>, Str
     }
     let mut exports = Vec::new();
     for (ids, format, out, opts) in ex.exports {
-        match crate::html::plan(e, &ids, &format, &out, &opts) {
+        // Checked before the job is planned, so nothing is written for a refused path.
+        match crate::html::check_script_export(e, &format, &out).and_then(|()| crate::html::plan(e, &ids, &format, &out, &opts)) {
             Ok(job) => exports.push(job),
             Err(err) => text += &format!("\nExport failed: {err}\n"),
         }
@@ -2015,9 +2016,10 @@ card = Insert(root, {type:\"frame\", name:\"Card\", width:100, height:100, layou
     #[test]
     fn script_exports_write_after_the_tool_call() {
         // Rasterizing and encoding inside `tool` held the engine lock for the whole export.
-        let dir = std::env::temp_dir().join("nalarupa-test-script-export");
-        let _ = std::fs::remove_dir_all(&dir);
+        // A script may export only inside the document's folder (here the data folder `exports`).
         let mut e = engine();
+        let dir = e.data_dir.join("exports").join("script-export-after-call");
+        let _ = std::fs::remove_dir_all(&dir);
         let src = format!("c = Insert(document, {{type:\"frame\", width:300, height:200, fill:\"#ff0000\"}})\nExport(c, \"png\", {:?}, {{scale: 1}})", dir.to_str().unwrap());
         let out = e.tool("execute", &json!({"input": src}));
         assert!(!out.error, "{}", out.text);
