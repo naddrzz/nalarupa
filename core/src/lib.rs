@@ -8,6 +8,7 @@ pub mod editor;
 pub mod engine;
 pub mod figma;
 pub mod guide;
+pub mod history;
 pub mod html;
 pub mod layout;
 pub mod mcp;
