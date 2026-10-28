@@ -8,6 +8,8 @@ pub mod editor;
 pub mod engine;
 pub mod figma;
 pub mod guide;
+pub mod hit;
+pub mod history;
 pub mod html;
 pub mod layout;
 pub mod mcp;
@@ -48,7 +50,7 @@ fn layers(e: &Engine) -> Value {
             let layout = n["type"] == "frame" && n["layout"] != "none";
             let content = n["content"].as_str().filter(|_| n["type"] == "text").map(|c| c.lines().next().unwrap_or(c));
             out.push(json!({
-                "id": id, "name": n["name"].as_str().or(content).unwrap_or(n["type"].as_str().unwrap_or("node")),
+                "id": id, "name": n["name"].as_str().filter(|s| !s.trim().is_empty()).or(content).unwrap_or(n["type"].as_str().unwrap_or("node")),
                 "type": n["type"], "depth": depth, "parent": parent, "index": index, "layout": layout,
                 "reusable": n["reusable"] == true, "hidden": n["enabled"] == false,
                 "children": n["children"].as_array().map(|c| c.len()).unwrap_or(0),
@@ -75,7 +77,7 @@ fn rect(f: &render::Flat) -> Value {
 
 fn state(e: &Engine) -> Value {
     json!({"version": e.version, "title": e.title(), "path": e.doc.path, "dirty": e.dirty(), "selection": e.selection,
-           "agentRunning": e.agent.running, "mcpPort": e.mcp_port, "animating": !e.renderer.slides.is_empty()})
+           "agentRunning": e.agent.running, "mcpPort": e.mcp_port, "animating": !e.renderer.slides.is_empty() || script::busy()})
 }
 
 /// Execute one UI command.
@@ -139,7 +141,8 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             let mut e = engine();
             e.sync();
             let sel = ids(&req["ids"]);
-            let b = if sel.is_empty() { e.renderer.bounds() } else { editor::painted_bounds(&e, &sel) };
+            // No ids: every top-level layer, as painted.
+            let b = if sel.is_empty() { editor::fit_bounds(&e) } else { editor::painted_bounds(&e, &sel) };
             Ok(b.map_or(Value::Null, |(x, y, w, h)| json!({"x": x, "y": y, "w": w, "h": h})))
         }
         "hit" => {
@@ -187,7 +190,7 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             let mut e = engine();
             let targets = ids(&req["ids"]);
             let props = req["props"].clone();
-            let apply = |d: &mut doc::Doc| targets.iter().try_for_each(|id| d.update(id, &props));
+            let apply = |d: &mut doc::Doc| d.update_all(&targets.iter().map(|id| (id.as_str(), &props)).collect::<Vec<_>>());
             match req["coalesce"].as_str() {
                 Some(key) => e.edit_coalesced(key, apply)?,
                 None => e.edit_or_drag(apply)?,
@@ -224,8 +227,8 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
         "delete" => {
             let mut e = engine();
             // A selected descendant of a selected layer goes with it; deleting it separately would fail.
-            let targets = editor::top_only(&e.doc, &ids(&req["ids"]));
-            e.edit_or_drag(|d| targets.iter().try_for_each(|id| d.delete(id)))?;
+            let targets = e.doc.outermost(&ids(&req["ids"]));
+            e.edit_or_drag(|d| d.delete_all(&targets))?;
             Ok(state(&e))
         }
         "duplicate" => {
@@ -247,7 +250,10 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             e.edit_or_drag(|d| {
                 // Final slot of the previous layer per parent: a one-step move must not pass it (the block stays in order at either end).
                 let mut last: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
-                for (k, (id, parent, _)) in items.iter().enumerate() {
+                // Position within the block per parent: front/back slots count from each parent's own end.
+                let mut rank: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+                for (id, parent, _) in items.iter() {
+                    let k = *rank.entry(parent.as_str()).and_modify(|n| *n += 1).or_insert(0);
                     let (_, idx) = d.parent_of(id).ok_or("node not found")?;
                     let count = if parent == ROOT { d.children().len() } else { d.find(parent).and_then(|p| p["children"].as_array()).map_or(1, |c| c.len()) };
                     let to = match dir.as_str() {
@@ -361,10 +367,13 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             Ok(json!({"text": out.text, "error": out.error, "images": out.images.len()}))
         }
         "export" => {
-            let mut e = engine();
-            let targets = ids(&req["ids"]);
-            let files = html::export(&mut e, &targets, req["format"].as_str().unwrap_or("png"), req["path"].as_str().unwrap_or(""), &req["opts"])?;
-            Ok(json!(files))
+            let job = {
+                let mut e = engine();
+                let targets = ids(&req["ids"]);
+                html::plan(&mut e, &targets, req["format"].as_str().unwrap_or("png"), req["path"].as_str().unwrap_or(""), &req["opts"])?
+            };
+            // The guard is gone: rasterizing and writing must not block the canvas.
+            Ok(json!(job.run()?))
         }
         "variables" => Ok(engine().doc.variables()),
         "set_variable" => {
@@ -400,10 +409,14 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
         "live" => {
             let mut e = engine();
             e.sync();
-            // `clip` is the canvas box its clipping ancestors leave visible; the overlay must not paint outside it.
-            let out: Vec<Value> = e.renderer.live().into_iter().map(|(f, clip)| {
+            // `clip` is the canvas box its clipping ancestors leave visible; the overlay must not paint outside it. `cuts` are
+            // those ancestors that round their corners (box `x y w h` and radii `r`), each of which cuts it too. `radius` is the
+            // node's own [tl, tr, br, bl] (an ellipse is round by its type).
+            let out: Vec<Value> = e.renderer.live().into_iter().map(|(f, clip, cuts)| {
                 let mut v = rect(f);
+                v["radius"] = json!(f.radius);
                 v["clip"] = clip.map_or(Value::Null, |(x, y, w, h)| json!({"x": x, "y": y, "w": w, "h": h}));
+                v["cuts"] = Value::Array(cuts.into_iter().map(|((x, y, w, h), r)| json!({"x": x, "y": y, "w": w, "h": h, "r": r})).collect());
                 v
             }).collect();
             Ok(Value::Array(out))
@@ -423,7 +436,7 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             Ok(json!(true))
         }
         "agent_reset" => agent::reset().map(|_| json!(true)),
-        "agent_permission" => agent::answer_permission(req["id"].as_str().ok_or("id required")?, req["answer"].as_str().unwrap_or("deny")).map(|_| json!(true)),
+        "agent_permission" => agent::answer_permission(req["id"].as_str().ok_or("id required")?, req["answer"].as_str().ok_or("answer required: allow, deny or auto")?).map(|_| json!(true)),
         "chat_list" => Ok(agent::chats()),
         "chat_load" => agent::load_chat(req["id"].as_str().ok_or("id required")?),
         "chat_delete" => agent::delete_chat(req["id"].as_str().ok_or("id required")?).map(|_| json!(true)),
@@ -434,9 +447,10 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             mcp::install(req["client"].as_str().unwrap_or(""), port).map(Value::String)
         }
         "png" => {
-            let mut e = engine();
             let id = req["id"].as_str().ok_or("id required")?;
-            let png = e.ctx().node_png(id, req["scale"].as_f64().unwrap_or(1.0))?;
+            let scale = req["scale"].as_f64().unwrap_or(1.0).clamp(0.05, 8.0);
+            let tree = engine().ctx().node_tree_at(id, scale)?;
+            let png = render::encode_tree(&tree, "png", scale, 0)?;
             Ok(json!(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, png)))
         }
         _ => Err(format!("unknown command '{cmd}'")),

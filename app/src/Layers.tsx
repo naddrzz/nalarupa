@@ -6,11 +6,16 @@ import { nodeIcon } from './icons'
 import { C, LEFT_W } from './theme'
 import { FocusRing, forwardKey, Icon, IconButton, Pressable, Segmented, setKeyboardFocus, ShortcutScope, T, useKeyboardFocusId, type Toast } from './ui'
 
+// What the panel keeps while Present or Home unmounts the editor; App owns it and clears it when a document opens.
+// `revealed` is the selection the Layers reveal last ran for.
+export type LeftSaved = { tab?: 'layers' | 'slides'; open?: Set<string>; revealed?: string[] }
+
 export function LeftPanel(props: {
   version: number; selection: string[]; select: (ids: string[]) => void; focus: (id: string) => void; present: (id?: string) => void
-  toast: Toast; hover?: (id: string | null) => void; onShortcut: (key: string, mods: Mods) => boolean
+  toast: Toast; hover?: (id: string | null) => void; onShortcut: (key: string, mods: Mods) => boolean; saved: { current: LeftSaved }
 }) {
-  const [tab, setTab] = useState<'layers' | 'slides'>('layers')
+  const [tab, setTab] = useState(props.saved.current.tab ?? 'layers')
+  useEffect(() => { props.saved.current.tab = tab }, [tab])
   return (
     <div style={{ width: LEFT_W, flexShrink: 0, height: '100%', display: 'flex', flexDirection: 'column', backgroundColor: C.panel, borderRightWidth: 1, borderColor: C.border }}>
       <div style={{ padding: 10, borderBottomWidth: 1, borderColor: C.border }}>
@@ -24,13 +29,18 @@ export function LeftPanel(props: {
 type Row = Layer & { index: number; layout: boolean }
 type DropAt = { id: string; pos: 'before' | 'after' | 'inside' }
 const ROW_H = 28
+// A row's indent is a margin, so a deep row narrows instead of running off the panel. The first 6 levels step
+// 14 px, deeper ones 3 px, which keeps the name readable at 17+ levels (imported designs nest that deep). It stops
+// growing at 120 px (level 18), so rows nested 40+ levels keep their icon and chevron; `aria-level` still tells the depth.
+const indent = (depth: number) => Math.min(Math.min(depth, 6) * 14 + Math.max(depth - 6, 0) * 3, 120)
 // A slide row is the 14 px number, an 8 px gap and the framed thumbnail: 14 + 8 + (196 + 4) = 222 px,
 // inside the 223 px the panel leaves after its border and the rows' 12 px padding.
 const THUMB_W = 196
 
-function Layers({ version, selection, select, focus, hover, onShortcut }: { version: number; selection: string[]; select: (ids: string[]) => void; focus: (id: string) => void; hover?: (id: string | null) => void; onShortcut: (key: string, mods: Mods) => boolean }) {
+function Layers({ version, selection, select, focus, hover, onShortcut, saved }: { version: number; selection: string[]; select: (ids: string[]) => void; focus: (id: string) => void; hover?: (id: string | null) => void; onShortcut: (key: string, mods: Mods) => boolean; saved: { current: LeftSaved } }) {
   const layers = useMemo(() => tryCall<Row[]>('layers') ?? [], [version])
-  const [open, setOpen] = useState<Set<string>>(new Set())
+  const [open, setOpen] = useState<Set<string>>(saved.current.open ?? new Set())
+  useEffect(() => { saved.current.open = open }, [open])
   const [hoverRow, setHoverRow] = useState<string | null>(null)
   const [renaming, setRenaming] = useState<{ id: string; draft: string } | null>(null)
   // A keyboard tree (WAI-ARIA treeview): one row is the Tab stop, arrows move between visible rows,
@@ -54,7 +64,10 @@ function Layers({ version, selection, select, focus, hover, onShortcut }: { vers
   // Applied while rendering, so a reveal never paints collapsed first, and only into `open`, so Left
   // or the chevron can still collapse an ancestor of the selection. Only newly selected nodes reveal,
   // unless the document changed (a new node can be selected before its layer exists).
-  const [revealed, setRevealed] = useState<{ selection: string[]; layers: Row[] } | null>(null)
+  // A remount with saved rows reveals only what was selected since the last reveal (e.g. while Slides was
+  // shown), so an ancestor the user collapsed stays collapsed.
+  const [revealed, setRevealed] = useState<{ selection: string[]; layers: Row[] } | null>(saved.current.open ? { selection: saved.current.revealed ?? [], layers } : null)
+  useEffect(() => { saved.current.revealed = revealed?.selection }, [revealed])
   if (revealed?.selection !== selection || revealed.layers !== layers) {
     setRevealed({ selection, layers })
     const byId = new Map(layers.map((l) => [l.id, l]))
@@ -264,8 +277,8 @@ function Layers({ version, selection, select, focus, hover, onShortcut }: { vers
                 onMouseLeave={() => { if (hoverRef.current === l.id) setHover(null) }}
                 onAuxClick={() => focus(l.id)}
                 style={{
-                  position: 'relative', display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, height: 28, marginLeft: 6, marginRight: 6,
-                  paddingLeft: 6 + l.depth * 14, paddingRight: 4, borderRadius: 6, cursor: 'pointer',
+                  position: 'relative', display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, height: 28, marginLeft: 6 + indent(l.depth), marginRight: 6,
+                  paddingLeft: 6, paddingRight: 4, borderRadius: 6, cursor: 'pointer',
                   // Hidden layers keep their name at 4.5:1 on the panel and its hover fill: 0.6 for the grey
                   // name, 0.85 for the violet component name (0.6 measured 3.17:1), and none on a selected
                   // component row (0.85 over the selection fill measures 4.13:1).
@@ -337,7 +350,7 @@ function Layers({ version, selection, select, focus, hover, onShortcut }: { vers
                 ) : null}
                 {focusId !== null && rowEls.current.get(l.id)?.id === focusId ? <FocusRing /> : null}
                 {mark === 'before' || mark === 'after' ? (
-                  <div style={{ position: 'absolute', left: 6 + l.depth * 14, right: 0, top: mark === 'before' ? -1 : 27, height: 2, backgroundColor: C.select }} />
+                  <div style={{ position: 'absolute', left: 6, right: 0, top: mark === 'before' ? -1 : 27, height: 2, backgroundColor: C.select }} />
                 ) : null}
               </div>
             </div>

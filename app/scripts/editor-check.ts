@@ -181,6 +181,15 @@ call('undo')
   assert(order() === 'ABCD', `send backward at the back keeps the order (${order()})`)
   call('reorder', { ids: [r.B, r.C], dir: 'up' })
   assert(order() === 'ADBC', `bring forward moves a free block one step (${order()})`)
+  // Layers from two parents in one call: front/back count from each parent's own end.
+  const RG = call('insert', { node: { type: 'frame', name: 'RG', x: 2600, y: 0, width: 500, height: 300, layout: 'none' } }).id
+  const g: Record<string, string> = {}
+  for (const n of ['E', 'F', 'G']) g[n] = call('insert', { parent: RG, node: { type: 'rectangle', name: n, x: 0, y: 0, width: 10, height: 10 } }).id
+  const orderG = () => call<B[]>('children_boxes', { id: RG }).map((k) => Object.keys(g).find((n) => g[n] === k.id)).join('')
+  call('reorder', { ids: [r.A, g.E], dir: 'front' })
+  assert(order() === 'DBCA' && orderG() === 'FGE', `bring to front across parents (${order()}, ${orderG()})`)
+  call('reorder', { ids: [r.A, g.E], dir: 'back' })
+  assert(order() === 'ADBC' && orderG() === 'EFG', `send to back across parents (${order()}, ${orderG()})`)
 }
 
 // Clipboard: copy → paste lands in place next to the visible source; text and SVG paste.
@@ -322,6 +331,17 @@ const icons = Object.fromEntries(['frame', 'group', 'rectangle', 'ellipse', 'tex
 assert(new Set(Object.values(icons)).size === Object.keys(icons).length, `layer types share an icon ${JSON.stringify(icons)}`)
 assert(nodeIcon('path') === nodeIcon('polygon') && nodeIcon('frame', true) === 'component', 'path/polygon and reusable icons')
 
+// A blank or whitespace-only name is labelled like a missing one (the type, or a text layer's content), in Layers and for the frame label / Slides caption.
+{
+  call('new', { template: 'empty' })
+  const fr = call('insert', { node: { type: 'frame', name: '   ', x: 0, y: 0, width: 200, height: 100 } }).id
+  const ids = ['rectangle', 'ellipse'].map((type, i) => call('insert', { parent: fr, node: { type, name: i ? '' : '   ', x: 10, y: 10, width: 20, height: 20 } }).id)
+  const tx = call('insert', { parent: fr, node: { type: 'text', name: ' ', content: 'blank name', x: 10, y: 50, fontSize: 14 } }).id
+  const names = Object.fromEntries(call<{ id: string; name: string }[]>('layers').map((l) => [l.id, l.name]))
+  assert(names[fr] === 'frame' && names[ids[0]] === 'rectangle' && names[ids[1]] === 'ellipse' && names[tx] === 'blank name', `blank names fall back in Layers (${JSON.stringify(names)})`)
+  assert(call<{ id: string; name: string }[]>('frames').find((f) => f.id === fr)?.name === 'frame', 'a blank frame name falls back to its type for the canvas label')
+}
+
 // Save as… into a folder that already holds <title>.nala picks a free name instead of replacing it.
 {
   const dir = mkdtempSync(join(tmpdir(), 'nala-saveas-'))
@@ -342,7 +362,94 @@ assert(nodeIcon('path') === nodeIcon('polygon') && nodeIcon('frame', true) === '
     rmSync(dir, { recursive: true, force: true })
   }
 }
+// Editing many layers at once is linear in their number: select-all + group, set one property and delete
+// each cost about 4x the time for 4x the layers (grouping was ~16x, 4000 layers took 4.9 s).
+{
+  const bulk = (n: number) => {
+    call('new', { template: 'empty' })
+    const kids = Array.from({ length: n }, (_, i) => ({ type: 'rectangle', name: 'r' + i, x: (i % 100) * 5, y: Math.floor(i / 100) * 5, width: 4, height: 4, fill: '#f00' }))
+    const fr = call('insert', { node: { type: 'frame', name: 'bulk', layout: 'none', width: 5000, height: 5000, children: kids } }).id
+    call('frames')
+    const ids = call<{ id: string }[]>('layers').filter((l) => l.id !== fr).map((l) => l.id)
+    const time = (fn: () => void) => {
+      const t0 = performance.now()
+      fn()
+      return performance.now() - t0
+    }
+    const group = time(() => call('wrap', { ids, kind: 'group' }))
+    const g = node(call<{ id: string; type: string }[]>('layers').find((l) => l.type === 'group')!.id).node
+    assert(g.children.length === n && g.children[0].name === 'r0' && g.children[n - 1].name === 'r' + (n - 1), `grouping ${n} layers keeps all of them, in order`)
+    call('undo')
+    const update = time(() => call('update', { ids, props: { opacity: 0.5 } }))
+    assert(node(ids[n - 1]).node.opacity === 0.5, `updating ${n} layers reaches the last one`)
+    call('undo')
+    const del = time(() => call('delete', { ids }))
+    assert(call<{ id: string }[]>('layers').length === 1, `deleting ${n} layers leaves only the frame`)
+    return [group, update, del]
+  }
+  bulk(500) // warm up
+  const [short, long] = [bulk(1000), bulk(4000)]
+  for (const [i, what] of ['group', 'update', 'delete'].entries())
+    assert(long[i] < Math.max(short[i], 20) * 9 && long[i] < 3000, `${what} of selected layers is linear (1000 layers ${short[i].toFixed(0)} ms, 4000 ${long[i].toFixed(0)} ms)`)
+}
+// Fit all frames the union of what the top-level layers paint: a flipped frame (x -600..0) or a
+// turned one (y -300..300) is inside it, and there is no margin on the unflipped side.
+call('new', { template: 'empty' })
+call('insert', { parent: 'document', node: { type: 'frame', name: 'A', x: 0, y: 0, width: 400, height: 300, fill: '#eee' } })
+const FB = call('insert', { parent: 'document', node: { type: 'frame', name: 'B', x: 0, y: 500, width: 600, height: 300, fill: '#fcc', flipX: true } }).id
+const fa = call<B>('bounds', {})
+assert(same({ ...fa, id: '' }, { id: '', x: -600, y: 0, w: 1000, h: 800 }), `fit-all bounds with a flipped frame ${JSON.stringify(fa)}`)
+call('update', { ids: [FB], props: { flipX: false, x: 0, y: 300, rotation: 90 } })
+const ft = call<B>('bounds', {})
+assert(same({ ...ft, id: '' }, { id: '', x: 0, y: -300, w: 400, h: 600 }), `fit-all bounds with a turned frame ${JSON.stringify(ft)}`)
+
+// A child overflowing an unclipped frame is part of Fit all; a clipping frame cuts it off.
+call('new', { template: 'empty' })
+const FO = call('insert', { parent: 'document', node: { type: 'frame', name: 'O', x: 0, y: 0, width: 400, height: 300, layout: 'none', fill: '#eee' } }).id
+call('insert', { parent: FO, node: { type: 'rectangle', x: 300, y: 200, width: 500, height: 400, fill: '#f00' } })
+const fo = call<B>('bounds', {})
+assert(same({ ...fo, id: '' }, { id: '', x: 0, y: 0, w: 800, h: 600 }), `fit-all bounds with an overflowing child ${JSON.stringify(fo)}`)
+call('update', { ids: [FO], props: { clip: true } })
+const fc = call<B>('bounds', {})
+assert(same({ ...fc, id: '' }, { id: '', x: 0, y: 0, w: 400, h: 300 }), `fit-all bounds with a clipping frame ${JSON.stringify(fc)}`)
+
 assert(ICONS.saveAs !== ICONS.open, 'Save as… has its own icon, not the Open folder')
+
+// Pasting into another document brings the variables and components the layers use along.
+{
+  const run = (input: string) => {
+    const o = call('tool', { name: 'execute', args: { input } })
+    assert(!o.error, `execute: ${o.text}`)
+  }
+  call('new', { template: 'empty' })
+  run(`SetVariables({brand:{type:"color",value:[{value:"#ff0000"},{value:"#00ff00",theme:{mode:"dark"}}]},sp:{type:"number",value:24},alias:{type:"color",value:"$brand"}})
+C=Insert(document,{type:"frame",name:"Comp",reusable:true,width:100,height:50,fill:"$alias",layout:"none"})
+P=Insert(document,{type:"frame",name:"P",layout:"vertical",x:300,width:200,padding:"$sp",gap:"$sp",children:[{type:"rectangle",name:"R",width:50,height:50,fill:"$brand"}]})
+Copy(C,P,{name:"Inst"})`)
+  const pid = call<any[]>('layers').find((l) => l.name === 'P').id
+  const png = (id: string) => call<string>('png', { id, scale: 1 })
+  const src = png(pid)
+  const xclip = call('copy', { ids: [pid] })
+  call('new', { template: 'empty' })
+  const view = { x: 0, y: 0, w: 1000, h: 800 }
+  const pasted = call('paste', { html: xclip.html, text: xclip.text, targets: [], view }).ids
+  assert(pasted.length === 1, 'cross-document paste lands the layer')
+  const vars = call('variables')
+  assert(vars.variables.brand && vars.variables.sp?.value === 24 && vars.variables.alias, `variables follow the layers: ${JSON.stringify(vars)}`)
+  assert(vars.themes.mode?.includes('dark'), 'the theme axes follow the variables')
+  const layers = call<any[]>('layers')
+  assert(layers.some((l) => l.name === 'Comp'), 'the instance brings its component along')
+  const q = layers.find((l) => l.name === 'P').id
+  const [cb, pb] = ['Comp', 'P'].map((n) => call('bounds', { ids: [layers.find((l) => l.name === n).id] }))
+  assert(cb.x >= pb.x + pb.w, `the component lands right of the pasted layer: ${JSON.stringify([cb, pb])}`)
+  assert(png(q) === src, 'the pasted frame renders like the source')
+  // Same-document paste adds nothing: variables and components are already there.
+  call('paste', { html: xclip.html, text: xclip.text, targets: [], view })
+  assert(call<any[]>('layers').filter((l) => l.name === 'Comp').length === 1, 'pasting again does not duplicate the component')
+  call('undo')
+  call('undo')
+  assert(Object.keys(call('variables').variables).length === 0 && call<any[]>('layers').length === 0, 'undo takes the pasted layers, variables and components out together')
+}
 
 console.log('editor-check ok')
 process.exit(0)

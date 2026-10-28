@@ -1,6 +1,7 @@
 //! Editor state shared by the UI (FFI), the MCP server and the built-in agent.
 
 use crate::doc::{Doc, ROOT};
+use crate::history::{diff, Patch};
 use crate::render::{Ctx, Renderer};
 use crate::svg::Assets;
 use crate::text::Fonts;
@@ -16,17 +17,25 @@ pub struct ToolOut {
     /// Screenshots (node id, tree, scale) still to rasterize: `finish` does it once the caller has
     /// released the engine lock, so the canvas keeps drawing while the agent looks at its work.
     pub shots: Vec<(String, resvg::usvg::Tree, f64)>,
+    /// `Export(...)` calls from a script, planned under the lock; `finish` renders and writes them.
+    pub exports: Vec<crate::html::ExportJob>,
 }
 
 impl ToolOut {
     pub fn ok(text: impl Into<String>) -> ToolOut {
-        ToolOut { text: text.into(), images: Vec::new(), error: false, shots: Vec::new() }
+        ToolOut { text: text.into(), images: Vec::new(), error: false, shots: Vec::new(), exports: Vec::new() }
     }
     pub fn err(text: impl Into<String>) -> ToolOut {
         ToolOut { error: true, ..ToolOut::ok(text) }
     }
-    /// Rasterize pending screenshots. Call without holding `engine()`.
+    /// Rasterize pending screenshots and write pending exports. Call without holding `engine()`.
     pub fn finish(mut self) -> ToolOut {
+        for job in std::mem::take(&mut self.exports) {
+            match job.run() {
+                Ok(files) => self.text += &format!("\nExported: {}\n", files.join(", ")),
+                Err(err) => self.text += &format!("\nExport failed: {err}\n"),
+            }
+        }
         for (id, tree, scale) in std::mem::take(&mut self.shots) {
             match crate::render::encode_tree(&tree, "png", scale, 0) {
                 Ok(png) => self.images.push(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, png)),
@@ -45,9 +54,14 @@ pub struct Engine {
     pub renderer: Renderer,
     pub version: u64,
     synced: u64,
+    /// `script::finished()` at the last `expire_slides`.
+    scripts_seen: u64,
     pub saved: u64,
-    undo: Vec<Value>,
-    redo: Vec<Value>,
+    /// The document as last saved, created or opened: undoing or redoing back to it is clean again.
+    saved_root: Value,
+    /// Each step turns the current document into the one before (undo) or after (redo) it.
+    undo: Vec<Patch>,
+    redo: Vec<Patch>,
     pub selection: Vec<String>,
     pub events: Vec<Value>,
     pub script: crate::script::ScriptState,
@@ -151,6 +165,23 @@ fn drop_pending(v: &mut Value, inflight: &std::collections::HashSet<String>) {
     }
 }
 
+/// Rewrite a history `stack` (its last step applies to the document `old`) as if `f` had been applied to every
+/// state, where `new` is `f(old)`: replay the steps back from `old`, apply `f` to each state they reach, and diff
+/// the rewritten neighbours. A step is a patch, not a document, so `f` cannot be applied to it directly.
+fn relocate_history(stack: &mut Vec<Patch>, old: &Value, new: &Value, f: impl Fn(&mut Value)) {
+    let (mut old, mut new) = (old.clone(), new.clone());
+    let mut out = Vec::with_capacity(stack.len());
+    for step in stack.drain(..).rev() {
+        step.apply(&mut old);
+        let mut prev = old.clone();
+        f(&mut prev);
+        out.push(diff(&new, &prev).unwrap_or_default());
+        new = prev;
+    }
+    out.reverse();
+    *stack = out;
+}
+
 /// `ours` with the changes that turned `base` into `theirs` applied; where both changed the same
 /// value, `theirs` wins. Lists of nodes (`id`) merge per node, the rest as a whole.
 fn merge3(base: &Value, theirs: &Value, ours: &Value) -> Value {
@@ -240,7 +271,9 @@ impl Engine {
             renderer: Renderer::default(),
             version: 1,
             synced: 0,
+            scripts_seen: 0,
             saved: 1,
+            saved_root: Value::Null,
             undo: Vec::new(),
             redo: Vec::new(),
             selection: Vec::new(),
@@ -276,6 +309,7 @@ impl Engine {
         if self.synced == self.version {
             return;
         }
+        self.unslide_glass();
         let doc = match &self.preview {
             Some(p) if !self.executing => p,
             _ => &self.doc,
@@ -283,16 +317,22 @@ impl Engine {
         let mut cx = Ctx { doc, libs: &self.libs, fonts: &mut self.fonts, assets: &mut self.assets };
         let roots = self.renderer.shift_siblings(&mut cx);
         let rebuilt = self.renderer.sync(&mut cx);
-        if !self.renderer.slides.is_empty() {
-            self.renderer.refresh_slides(&mut cx, &rebuilt, roots);
-        }
-        self.synced = self.version;
+        // A slide dropped for a blend mode goes back into the cached view at the next sync.
+        let dropped = !self.renderer.slides.is_empty() && self.renderer.refresh_slides(&mut cx, &rebuilt, roots);
+        self.synced = if dropped { 0 } else { self.version };
     }
 
     /// An agent `Insert` below the top level slides into place.
     pub fn slide_in(&mut self, id: &str) {
         // Sibling glides start from these slides too, so this one check stills both.
         if self.reduce_motion {
+            return;
+        }
+        // A slide is snapshotted alone, so a background blur in it would blur nothing until it settles:
+        // such a node appears in place, and so does a sliding ancestor that now holds it.
+        if self.holds_glass(id) {
+            self.slid.insert(id.to_string());
+            self.renderer.unslide_with(&self.doc, id);
             return;
         }
         // Past the cap nothing more slides, so skip the parent lookup (a linear search per insert).
@@ -306,9 +346,43 @@ impl Engine {
         }
     }
 
+    /// Whether node `id` shows a background blur, a component instance's content included.
+    pub fn holds_glass(&self, id: &str) -> bool {
+        self.holds_glass_with(&self.doc, id, &Map::new(), &mut None)
+    }
+
+    /// `holds_glass` that builds the document-wide `Resolver` at most once across calls sharing `res`.
+    fn holds_glass_with<'a>(&'a self, doc: &'a Doc, id: &str, empty: &'a Map<String, Value>, res: &mut Option<crate::resolve::Resolver<'a>>) -> bool {
+        let Some(n) = doc.find(id) else { return false };
+        if crate::svg::doc_has_backdrop_blur(n) {
+            return true;
+        }
+        let mut refs = false;
+        crate::doc::walk(std::slice::from_ref(n), &mut |k| refs |= k["type"] == "ref");
+        refs && res.get_or_insert_with(|| crate::resolve::Resolver::new(&doc.root, &self.libs, empty)).resolve(n).is_some_and(|r| crate::svg::has_backdrop_blur(&r))
+    }
+
+    /// Stop every slide whose node now holds a background blur (an update, copy, move, an instance
+    /// whose component gained one, an inspector change): its snapshot would show the backdrop sharp.
+    /// `sync` runs it, so every way of changing the document is covered.
+    pub fn unslide_glass(&mut self) {
+        if self.renderer.slides.is_empty() {
+            return;
+        }
+        let (empty, mut res) = (Map::new(), None);
+        let doc = match &self.preview {
+            Some(p) if !self.executing => p,
+            _ => &self.doc,
+        };
+        let glass: Vec<String> = self.renderer.slides.iter().filter(|s| self.holds_glass_with(doc, &s.id, &empty, &mut res)).map(|s| s.id.clone()).collect();
+        self.renderer.slides.retain(|s| !glass.contains(&s.id));
+    }
+
     /// Settled slides go back into the cached view at the next sync (the document is unchanged).
     pub fn expire_slides(&mut self) {
-        if self.renderer.expire_slides() {
+        // A finished background script run changes a script node's output, not the document.
+        let scripts = crate::script::finished();
+        if self.renderer.expire_slides() || std::mem::replace(&mut self.scripts_seen, scripts) != scripts {
             self.synced = 0;
         }
     }
@@ -372,9 +446,14 @@ impl Engine {
     }
 
     /// The final `execute` for a streamed call arrived: retire its preview and reuse its id seed.
-    fn take_stream(&mut self, key: Option<&str>, source: &str) -> Option<Stream> {
+    /// Without a stream key (Claude Code over MCP) only the calling agent's own streams can match
+    /// by prefix; another agent's script may start with the same statement.
+    fn take_stream(&mut self, key: Option<&str>, agent: Option<&str>, source: &str) -> Option<Stream> {
         let src = source.trim();
-        let i = self.streams.iter().position(|s| key == Some(s.key.as_str()) || (!s.source.trim().is_empty() && src.starts_with(s.source.trim())))?;
+        // The exact key wins over an earlier stream that merely shares a prefix.
+        let i = key
+            .and_then(|k| self.streams.iter().position(|s| s.key == k))
+            .or_else(|| self.streams.iter().position(|s| agent.is_none_or(|a| a == s.agent) && !s.source.trim().is_empty() && src.starts_with(s.source.trim())))?;
         let s = self.streams.remove(i);
         self.rebuild_preview();
         Some(s)
@@ -418,18 +497,15 @@ impl Engine {
     /// middle of a drag (an agent's `execute`) is its own step taken from the pre-drag document, and
     /// the drag's snapshot takes the change along, so the drag undoes without it.
     pub fn commit(&mut self, before: Value) {
-        if same(&before, &self.doc.root) {
-            return;
+        let Some(mut step) = diff(&self.doc.root, &before) else { return };
+        if let Some(start) = self.drag_before.take() {
+            // Undoing this step starts from the drag's snapshot with the change in it, so the patch is relative to that.
+            let merged = merge3(&before, &self.doc.root, &start);
+            step = diff(&merged, &start).unwrap_or_default();
+            self.drag_before = Some(merged);
         }
-        let before = match self.drag_before.take() {
-            Some(start) => {
-                self.drag_before = Some(merge3(&before, &self.doc.root, &start));
-                start
-            }
-            None => before,
-        };
         self.coalesce = None;
-        self.undo.push(before);
+        self.undo.push(step);
         if self.undo.len() > UNDO_LIMIT {
             self.undo.remove(0);
         }
@@ -469,11 +545,13 @@ impl Engine {
         if self.drag_before.is_some() {
             return false;
         }
-        let Some(prev) = self.undo.pop() else { return false };
+        let Some(step) = self.undo.pop() else { return false };
         self.coalesce = None;
-        self.redo.push(std::mem::replace(&mut self.doc.root, prev));
-        self.settle_generating();
+        let unflagged = self.unflagged();
+        self.redo.push(step.apply(&mut self.doc.root));
+        self.settle_generating(unflagged);
         self.touch();
+        self.clean_if_saved();
         true
     }
 
@@ -481,19 +559,47 @@ impl Engine {
         if self.drag_before.is_some() {
             return false;
         }
-        let Some(next) = self.redo.pop() else { return false };
+        let Some(step) = self.redo.pop() else { return false };
         self.coalesce = None;
-        self.undo.push(std::mem::replace(&mut self.doc.root, next));
-        self.settle_generating();
+        let unflagged = self.unflagged();
+        self.undo.push(step.apply(&mut self.doc.root));
+        self.settle_generating(unflagged);
         self.touch();
+        self.clean_if_saved();
         true
     }
 
+    /// Before an undo or redo with no agent running: the nodes not flagged `placeholder` (see `settle_generating`).
+    fn unflagged(&self) -> Option<std::collections::HashSet<String>> {
+        if self.agent.running {
+            return None;
+        }
+        let mut ids = std::collections::HashSet::new();
+        crate::doc::walk(self.doc.children(), &mut |n| {
+            if let (false, Some(id)) = (n["placeholder"] == true, n["id"].as_str()) {
+                ids.insert(id.to_string());
+            }
+        });
+        Some(ids)
+    }
+
     /// History holds the `placeholder: true` an agent set while it built a design; with no agent running,
-    /// an undo or redo must not bring "Generating" back onto a finished design.
-    fn settle_generating(&mut self) {
-        if !self.agent.running {
-            crate::agent::clear_generating(self);
+    /// an undo or redo must not bring "Generating" back onto a finished design. Only a flag the step itself
+    /// put back on an existing node is cleared (out of history too), so a frame an external agent is still
+    /// building, or an AI Pen draws into, keeps its flag. While an agent runs, history is left alone.
+    fn settle_generating(&mut self, unflagged: Option<std::collections::HashSet<String>>) {
+        let Some(unflagged) = unflagged else { return };
+        let mut back = Vec::new();
+        crate::doc::walk(self.doc.children(), &mut |n| {
+            if let (true, Some(id)) = (n["placeholder"] == true, n["id"].as_str()) {
+                if unflagged.contains(id) && !self.agent.pens.iter().any(|p| p == id) {
+                    back.push(id.to_string());
+                }
+            }
+        });
+        let off = json!({"placeholder": false}).as_object().cloned().unwrap_or_default();
+        for id in back {
+            self.apply_generated(&id, &off, true);
         }
     }
 
@@ -517,6 +623,10 @@ impl Engine {
         let r = f(&mut self.doc).inspect_err(|_| self.doc.root = before.clone())?;
         if !same(&before, &self.doc.root) {
             if merge {
+                // The step turned `before` into the group's first document; now it must start from the edited one.
+                let mut first = before;
+                self.undo.pop().unwrap_or_default().apply(&mut first);
+                self.undo.push(diff(&self.doc.root, &first).unwrap_or_default());
                 self.redo.clear();
                 self.touch();
             } else {
@@ -554,6 +664,20 @@ impl Engine {
         if was_clean {
             self.saved = self.version;
         }
+    }
+
+    /// Undo or redo that lands on the saved document leaves it clean, whatever the version says.
+    fn clean_if_saved(&mut self) {
+        let clean = same(&self.doc.root, &self.saved_root);
+        self.keep_clean(clean);
+    }
+
+    /// The document as it is now is the saved one. An open coalesced edit ends here, so the next
+    /// edit is its own undo step and undo can land on the saved document.
+    fn mark_saved(&mut self) {
+        self.saved = self.version;
+        self.coalesce = None;
+        self.saved_root = self.doc.root.clone();
     }
 
     /// Apply a document mutation as one undoable step.
@@ -600,12 +724,13 @@ impl Engine {
         self.slid.clear();
         self.script = Default::default();
         self.touch();
-        self.saved = self.version;
+        self.mark_saved();
     }
 
     pub fn open(&mut self, path: &Path) -> Result<(), String> {
         let mut doc = Doc::load(path)?;
         crate::resolve::migrate(&mut doc.root);
+        doc.ensure_ids();
         drop_pending(&mut doc.root, &self.inflight);
         self.doc = doc;
         self.load_libs();
@@ -648,9 +773,40 @@ impl Engine {
             None => self.doc.path.clone().ok_or("document has no path yet; pass a path to save")?,
         };
         self.doc.root["version"] = json!(crate::doc::FORMAT_VERSION);
-        self.doc.save(&target)?;
+        // Save as into another folder: relative images, scripts and imports are rewritten to reach the same
+        // files from there (also in the undo history, so it never brings back a path that no longer resolves).
+        let to = target.parent().unwrap_or(Path::new("")).to_path_buf();
+        let moved_from = self.doc.dir().filter(|from| !Doc::same_dir(from, &to));
+        let backup = moved_from.as_ref().map(|_| self.doc.root.clone());
+        if let Some(from) = &moved_from {
+            Doc::relocate(&mut self.doc.root, from, &to);
+        }
+        if let Err(err) = self.doc.save(&target) {
+            if let Some(root) = backup {
+                self.doc.root = root;
+            }
+            return Err(err);
+        }
+        if let (Some(from), Some(before)) = (&moved_from, &backup) {
+            let relocate = |v: &mut Value| Doc::relocate(v, from, &to);
+            // During a drag the history steps lead back from the document as the drag began.
+            let (old, new) = match self.drag_before.take() {
+                Some(start) => {
+                    let mut moved = start.clone();
+                    relocate(&mut moved);
+                    self.drag_before = Some(moved.clone());
+                    (start, moved)
+                }
+                None => (before.clone(), self.doc.root.clone()),
+            };
+            relocate_history(&mut self.undo, &old, &new, relocate);
+            relocate_history(&mut self.redo, &old, &new, relocate);
+        }
         self.doc.path = Some(target.clone());
-        self.saved = self.version;
+        self.mark_saved();
+        if moved_from.is_some() && !self.streams.is_empty() && !self.executing {
+            self.rebuild_preview(); // the live preview is a copy of the old document: redo it from the new folder
+        }
         self.remember_recent(&target);
         Ok(target.to_string_lossy().to_string())
     }
@@ -758,13 +914,13 @@ impl Engine {
 
     /// Retire the stream an `execute` call belongs to; the call runs with its id seed.
     fn begin_execute(&mut self, args: &Value) -> ExecuteCall {
-        let stream = self.take_stream(args["__stream"].as_str(), args["input"].as_str().unwrap_or(""));
+        let stream = self.take_stream(args["__stream"].as_str(), args["__agent"].as_str(), args["input"].as_str().unwrap_or(""));
         let mut args = args.clone();
         if let Some(s) = &stream {
             args["__seed"] = json!(s.seed);
         }
         let seen = stream.as_ref().map_or(0, |s| s.touched);
-        let agent = stream.map(|s| s.agent).or_else(|| args["__agent"].as_str().map(str::to_string)).unwrap_or_else(|| "agent".into());
+        let agent = args["__agent"].as_str().map(str::to_string).or_else(|| stream.map(|s| s.agent)).unwrap_or_else(|| "agent".into());
         self.script.edit = None;
         ExecuteCall { args, seen, agent }
     }
@@ -841,8 +997,11 @@ impl Engine {
             }
         }
         let mut hit = walk(&mut self.doc.root, pending, url);
-        for v in self.undo.iter_mut().chain(self.redo.iter_mut()).chain(self.libs.iter_mut().map(|(_, v)| v)) {
+        for v in self.libs.iter_mut().map(|(_, v)| v) {
             hit |= walk(v, pending, url);
+        }
+        for p in self.undo.iter_mut().chain(self.redo.iter_mut()) {
+            p.values_mut(&mut |v| hit |= walk(v, pending, url));
         }
         if hit {
             self.touch();
@@ -884,8 +1043,16 @@ impl Engine {
             set(&mut p.root);
         }
         if done {
-            for v in self.undo.iter_mut().chain(self.redo.iter_mut()) {
-                set(v);
+            // A step is relative to the document next to it, so each is rebuilt from the current one outwards.
+            for stack in [&mut self.undo, &mut self.redo] {
+                let mut cur = self.doc.root.clone();
+                for step in stack.iter_mut().rev() {
+                    let mut next = cur.clone();
+                    std::mem::take(step).apply(&mut next);
+                    set(&mut next);
+                    *step = diff(&cur, &next).unwrap_or_default();
+                    cur = next;
+                }
             }
         }
         if hit {
@@ -938,7 +1105,7 @@ fn same_number(x: &Number, y: &Number) -> bool {
 }
 
 /// Equal as documents: a whole number written back as a float (`10` vs `10.0`) is not a change.
-fn same(a: &Value, b: &Value) -> bool {
+pub(crate) fn same(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Number(x), Value::Number(y)) => same_number(x, y),
         (Value::Array(x), Value::Array(y)) => x.len() == y.len() && x.iter().zip(y).all(|(x, y)| same(x, y)),
@@ -977,6 +1144,33 @@ mod tests {
         assert!(e.dirty());
         e.end_drag(before, true);
         assert!(!e.dirty() && e.undo.is_empty());
+    }
+
+    #[test]
+    fn undo_back_to_the_saved_document_is_clean() {
+        let mut e = Engine::new(std::env::temp_dir().join(format!("nalarupa-test-undo-clean-{}", std::process::id())));
+        assert!(!e.dirty());
+        e.edit(|d| Ok(d.root["children"] = json!([{"id": "a", "type": "rectangle", "x": 10}]))).unwrap();
+        assert!(e.dirty());
+        e.undo();
+        assert!(!e.dirty(), "back at the created document");
+        e.redo();
+        assert!(e.dirty());
+        e.mark_saved();
+        e.edit(|d| Ok(d.root["children"][0]["x"] = json!(20))).unwrap();
+        e.undo();
+        assert!(!e.dirty(), "back at the saved document");
+        e.undo();
+        assert!(e.dirty(), "past the saved document");
+        e.redo();
+        assert!(!e.dirty(), "forward to the saved document");
+        // A save in the middle of a coalesced field edit: undo after it still stops at the saved document.
+        e.edit_coalesced("x", |d| Ok(d.root["children"][0]["x"] = json!(30))).unwrap();
+        e.mark_saved();
+        e.edit_coalesced("x", |d| Ok(d.root["children"][0]["x"] = json!(40))).unwrap();
+        e.undo();
+        assert_eq!(e.doc.root["children"][0]["x"], 30);
+        assert!(!e.dirty(), "a coalesced edit does not merge across a save");
     }
 
     #[test]
@@ -1041,6 +1235,67 @@ mod tests {
         e.resolve_pending("nalarupa:pending-image-1-a", "./images/x.jpg");
         assert_eq!(e.libs[0].1["children"][0]["fill"]["url"], "./images/x.jpg");
         assert!(e.inflight.is_empty());
+    }
+
+    #[test]
+    fn save_as_relocates_the_drag_snapshot() {
+        let root = std::env::temp_dir().join("nalarupa-test-save-as-drag");
+        let mut e = Engine::new(root.join("data"));
+        e.doc.path = Some(root.join("a").join("x.pen"));
+        e.doc.root = json!({"children": [{"id": "i", "type": "rectangle", "fill": {"type": "image", "url": "./img.png"}}]});
+        e.drag_before = Some(e.doc.root.clone());
+        e.save(Some(root.join("b").join("y.pen").to_str().unwrap())).unwrap();
+        assert_eq!(e.drag_before.as_ref().unwrap()["children"][0]["fill"]["url"], "../a/img.png");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The undo history holds patches between states: after Save as into another folder, undo and redo
+    /// bring back each earlier state with its relative urls rewritten, not the ones of the old folder.
+    #[test]
+    fn save_as_relocates_the_undo_history() {
+        let root = std::env::temp_dir().join("nalarupa-test-save-as-history");
+        let mut e = Engine::new(root.join("data"));
+        e.doc.path = Some(root.join("a").join("x.pen"));
+        e.doc.root = json!({"children": [{"id": "i", "type": "rectangle", "fill": {"type": "image", "url": "./one.png"}}]});
+        let url = |e: &Engine| e.doc.root["children"][0]["fill"]["url"].clone();
+        e.edit(|d| d.update("i", &json!({"fill": {"type": "image", "url": "./two.png"}}))).unwrap();
+        e.edit(|d| d.update("i", &json!({"fill": {"type": "image", "url": "./three.png"}}))).unwrap();
+        assert!(e.undo());
+        e.save(Some(root.join("b").join("y.pen").to_str().unwrap())).unwrap();
+        assert_eq!(url(&e), "../a/two.png");
+        assert!(e.redo());
+        assert_eq!(url(&e), "../a/three.png");
+        assert!(e.undo() && e.undo());
+        assert_eq!(url(&e), "../a/one.png");
+        // Save as during a drag: the history leads back from the snapshot taken when the drag began.
+        let mut e = Engine::new(root.join("data"));
+        e.doc.path = Some(root.join("a").join("x.pen"));
+        e.doc.root = json!({"children": [{"id": "i", "type": "rectangle", "fill": {"type": "image", "url": "./one.png"}}]});
+        e.edit(|d| d.update("i", &json!({"fill": {"type": "image", "url": "./two.png"}}))).unwrap();
+        e.drag_before = Some(e.doc.root.clone());
+        e.doc.update("i", &json!({"fill": {"type": "image", "url": "./drag.png"}})).unwrap();
+        e.save(Some(root.join("b").join("y.pen").to_str().unwrap())).unwrap();
+        assert_eq!(e.drag_before.as_ref().unwrap()["children"][0]["fill"]["url"], "../a/two.png");
+        e.doc.root = e.drag_before.take().unwrap();
+        assert!(e.undo());
+        assert_eq!(url(&e), "../a/one.png");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn save_as_moves_the_live_preview() {
+        let root = std::env::temp_dir().join("nalarupa-test-save-as-preview");
+        let mut e = Engine::new(root.join("data"));
+        e.doc.path = Some(root.join("a").join("x.pen"));
+        e.doc.root = json!({"children": [{"id": "i", "type": "rectangle", "fill": {"type": "image", "url": "./img.png"}}]});
+        e.stream_update("k", "agent", "");
+        assert!(e.preview.is_some());
+        e.save(Some(root.join("b").join("y.pen").to_str().unwrap())).unwrap();
+        let p = e.preview.as_ref().unwrap();
+        assert_eq!(p.path, e.doc.path);
+        assert_eq!(p.root["children"][0]["fill"]["url"], "../a/img.png");
+        assert!(!e.dirty());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -1123,10 +1378,12 @@ mod tests {
     fn undo_does_not_restore_generating_without_an_agent() {
         let mut e = Engine::new(std::env::temp_dir().join(format!("nalarupa-test-undo-generating-{}", std::process::id())));
         e.load_template("empty");
-        e.doc.root["children"] = json!([{"id": "g", "type": "frame", "name": "G", "x": 0, "placeholder": true}]);
+        // `h` stands for a frame an external agent is still building: no undo step touches its flag.
+        e.doc.root["children"] = json!([{"id": "g", "type": "frame", "name": "G", "x": 0, "placeholder": true}, {"id": "h", "type": "frame", "name": "H", "placeholder": true}]);
         e.edit(|d| { d.root["children"][0]["x"] = json!(10); Ok(()) }).unwrap();
         e.edit(|d| { d.root["children"][0]["placeholder"] = json!(false); Ok(()) }).unwrap();
         let flag = |e: &Engine| e.doc.root["children"][0]["placeholder"] == true;
+        let external = |e: &Engine| e.doc.root["children"][1]["placeholder"] == true;
         e.agent.running = true;
         assert!(e.undo() && flag(&e), "an agent still works: its flag stays");
         e.agent.running = false;
@@ -1134,6 +1391,7 @@ mod tests {
         assert!(e.undo() && !flag(&e), "no agent: undo does not bring the flag back");
         assert!(e.undo() && !flag(&e), "nor does an older step");
         assert!(e.redo() && e.redo() && !flag(&e));
+        assert!(external(&e), "a flag no undo or redo put back is left to its agent");
     }
 
     /// A font landing in the background redraws the canvas but is not an edit.
@@ -1160,5 +1418,76 @@ mod tests {
         assert_eq!(e.version, v, "nothing new loaded: no redraw");
         assert!(e.dirty());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn big_engine(tag: &str, n: i64) -> Engine {
+        let mut e = Engine::new(std::env::temp_dir().join(format!("nalarupa-test-{tag}-{}", std::process::id())));
+        let kids: Vec<Value> = (0..n).map(|i| json!({"id": format!("n{i}"), "type": "rectangle", "name": format!("r{i}"), "x": i, "y": 0, "width": 20, "height": 20, "fill": "#f00"})).collect();
+        e.doc.root = json!({"children": [{"id": "f", "type": "frame", "children": kids}]});
+        e
+    }
+
+    fn x_of(e: &Engine, i: usize) -> i64 {
+        e.doc.root["children"][0]["children"][i]["x"].as_i64().unwrap()
+    }
+
+    /// An undo step costs what the edit changed, not a copy of the document (10 000 layers took 2 GB after 100 edits).
+    #[test]
+    fn undo_steps_store_only_what_changed() {
+        let mut e = big_engine("undo-size", 5000);
+        let doc_len = e.doc.root.to_string().len();
+        for i in 1..=100 {
+            e.edit(|d| { d.root["children"][0]["children"][5]["x"] = json!(1000 + i); Ok(()) }).unwrap();
+        }
+        let held: usize = e.undo.iter().map(|p| format!("{p:?}").len()).sum();
+        assert_eq!(e.undo.len(), 100);
+        assert!(held * 20 < doc_len, "100 steps hold {held} bytes of a {doc_len}-byte document");
+        for i in (0..100).rev() {
+            assert!(e.undo());
+            assert_eq!(x_of(&e, 5), if i == 0 { 5 } else { 1000 + i });
+        }
+        for i in 1..=100 {
+            assert!(e.redo());
+            assert_eq!(x_of(&e, 5), 1000 + i);
+        }
+    }
+
+    /// Edits that share a coalescing key undo together and redo to the last one.
+    #[test]
+    fn coalesced_edits_undo_to_the_first_state() {
+        let mut e = big_engine("undo-coalesce", 20);
+        for x in [100, 200, 300] {
+            e.edit_coalesced("x", |d| { d.root["children"][0]["children"][3]["x"] = json!(x); Ok(()) }).unwrap();
+        }
+        e.edit_coalesced("y", |d| { d.root["children"][0]["children"][4]["y"] = json!(7); Ok(()) }).unwrap();
+        assert_eq!(e.undo.len(), 2);
+        assert!(e.undo());
+        assert_eq!((x_of(&e, 3), e.doc.root["children"][0]["children"][4]["y"].as_i64()), (300, Some(0)));
+        assert!(e.undo());
+        assert_eq!(x_of(&e, 3), 3);
+        assert!(e.redo());
+        assert_eq!(x_of(&e, 3), 300);
+    }
+
+    /// A finished generation reaches the history too, so undo never brings the half-drawn node back.
+    #[test]
+    fn finished_generation_reaches_the_history() {
+        let mut e = big_engine("undo-generated", 5);
+        e.edit(|d| { d.root["children"][0]["children"][1]["x"] = json!(50); Ok(()) }).unwrap();
+        e.edit(|d| { d.root["children"][0]["children"].as_array_mut().unwrap().remove(2); Ok(()) }).unwrap();
+        let props: Map<String, Value> = json!({"fill": "#0f0"}).as_object().unwrap().clone();
+        for id in ["n1", "n2", "n3"] {
+            assert!(e.apply_generated(id, &props, true) == (id != "n2"));
+        }
+        let fills = |e: &Engine| e.doc.root["children"][0]["children"].as_array().unwrap().iter().map(|n| n["fill"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+        assert_eq!(fills(&e), ["#f00", "#0f0", "#0f0", "#f00"]);
+        assert!(e.undo());
+        assert_eq!(fills(&e), ["#f00", "#0f0", "#0f0", "#0f0", "#f00"], "n2 is only in the history");
+        assert!(e.undo());
+        assert_eq!(x_of(&e, 1), 1);
+        assert_eq!(fills(&e)[1], "#0f0");
+        assert!(e.redo() && e.redo());
+        assert_eq!(x_of(&e, 1), 50);
+        assert_eq!(fills(&e), ["#f00", "#0f0", "#0f0", "#f00"]);
     }
 }

@@ -3,7 +3,8 @@
 
 use serde_json::{json, Map, Value};
 use std::cell::Cell;
-use std::path::{Path, PathBuf};
+use std::collections::{HashMap, HashSet};
+use std::path::{Component, Path, PathBuf};
 
 pub const FORMAT_VERSION: &str = "2.19";
 pub const ROOT: &str = "document";
@@ -50,19 +51,66 @@ impl Doc {
         Ok(d)
     }
 
-    /// Atomic save: write a temp file next to the target, then rename over it.
+    /// Atomic save: write a temp file next to the target, then rename over it. A symlink is followed
+    /// (the rename would replace the link, leaving the real file stale); a failed save leaves no temp file.
     pub fn save(&self, path: &Path) -> Result<(), String> {
         let text = serde_json::to_string_pretty(&self.root).map_err(|e| e.to_string())?;
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
-        let tmp = path.with_extension("tmp-nalarupa");
-        std::fs::write(&tmp, text).map_err(|e| format!("cannot write {}: {e}", tmp.display()))?;
-        std::fs::rename(&tmp, path).map_err(|e| format!("cannot save {}: {e}", path.display()))
+        let target = match std::fs::canonicalize(path) {
+            Ok(target) => target,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && !path.is_symlink() => path.to_path_buf(),
+            Err(e) => return Err(format!("cannot resolve {}: {e}", path.display())),
+        };
+        let mut tmp_name = target.file_name().unwrap_or_default().to_os_string();
+        tmp_name.push(".tmp-nalarupa");
+        let tmp = target.with_file_name(tmp_name);
+        std::fs::write(&tmp, text).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            format!("cannot write {}: {e}", tmp.display())
+        })?;
+        std::fs::rename(&tmp, &target).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            format!("cannot save {}: {e}", path.display())
+        })
+    }
+
+    /// Give every node without a usable id a fresh one and make repeated ids unique
+    /// (the first node keeps its id). Hand-written files and copy-pasted JSON have both.
+    pub fn ensure_ids(&mut self) {
+        let mut taken = std::collections::HashSet::new();
+        collect_ids(self.children(), &mut taken);
+        let mut seen = std::collections::HashSet::new();
+        if let Some(kids) = self.root["children"].as_array_mut() {
+            fix_ids(kids, &mut seen, &mut taken);
+        }
     }
 
     pub fn dir(&self) -> Option<PathBuf> {
         self.path.as_ref().and_then(|p| p.parent().map(Path::to_path_buf))
+    }
+
+    /// Save as: the relative references of `root` (image and shader `url`, `scriptUri`, `imports`)
+    /// resolve against the folder of the document, so a document moving from `from` to `to`
+    /// gets them rewritten to reach the same files. Absolute paths, urls and `pencil:` ids stay.
+    pub fn relocate(root: &mut Value, from: &Path, to: &Path) {
+        let (from, to) = (lexical(from), lexical(to));
+        if let Some(imports) = root.get_mut("imports").and_then(Value::as_object_mut) {
+            for v in imports.values_mut() {
+                if let Some(n) = v.as_str().and_then(|s| relocated(&s.replace("%20", " "), &from, &to)) {
+                    *v = json!(n.replace(' ', "%20"));
+                }
+            }
+        }
+        if let Some(children) = root.get_mut("children") {
+            relocate_in(children, &from, &to);
+        }
+    }
+
+    /// Whether two folders are the same one (by their paths, without touching the disk).
+    pub fn same_dir(a: &Path, b: &Path) -> bool {
+        lexical(a) == lexical(b)
     }
 
     pub fn children(&self) -> &[Value] {
@@ -78,6 +126,10 @@ impl Doc {
     fn index_path(&self, id: &str) -> Option<Vec<usize>> {
         let mut acc = Vec::new();
         index_path_in(self.children(), id, &mut acc).then_some(acc)
+    }
+
+    fn node_at(&self, ip: &[usize]) -> &Value {
+        ip[1..].iter().fold(&self.root["children"][ip[0]], |cur, &i| &cur["children"][i])
     }
 
     fn node_at_mut(&mut self, ip: &[usize]) -> &mut Value {
@@ -128,10 +180,40 @@ impl Doc {
             }
         }
         visit(self.children(), false, &listed, &mut nested);
+        let mut seen = std::collections::HashSet::new();
         ids.iter()
-            .filter(|id| !nested.contains(id.as_str()) && !id.match_indices('/').any(|(i, _)| listed.contains(&id[..i])))
+            .filter(|id| {
+                // A component instance's rendered descendants ("inst/child") are not in the tree: judge them by the instance.
+                let base = id.split('/').next().unwrap_or_default();
+                !nested.contains(base) && !id.match_indices('/').any(|(i, _)| listed.contains(&id[..i])) && seen.insert(id.as_str())
+            })
             .cloned()
             .collect()
+    }
+
+    /// Index paths of the first node with each of `ids`, found in one walk of the document.
+    fn index_paths<'a>(&self, ids: impl Iterator<Item = &'a str>) -> HashMap<String, Vec<usize>> {
+        let mut want: HashSet<&str> = ids.collect();
+        let mut found = HashMap::new();
+        fn visit(nodes: &[Value], acc: &mut Vec<usize>, want: &mut HashSet<&str>, found: &mut HashMap<String, Vec<usize>>) {
+            for (i, n) in nodes.iter().enumerate() {
+                if want.is_empty() {
+                    return;
+                }
+                acc.push(i);
+                if let Some(id) = n["id"].as_str() {
+                    if want.remove(id) {
+                        found.insert(id.to_string(), acc.clone());
+                    }
+                }
+                if let Some(kids) = n["children"].as_array() {
+                    visit(kids, acc, want, found);
+                }
+                acc.pop();
+            }
+        }
+        visit(self.children(), &mut Vec::new(), &mut want, &mut found);
+        found
     }
 
     pub fn all_ids(&self) -> Vec<String> {
@@ -167,25 +249,68 @@ impl Doc {
         Ok(id)
     }
 
+    /// Insert a component pasted from another document at the top level with its ids kept
+    /// (instance overrides are keyed on them).
+    pub fn import_component(&mut self, node: Value) -> Result<String, String> {
+        validate_node(&node)?;
+        let mut ids = Vec::new();
+        walk(std::slice::from_ref(&node), &mut |n| ids.push(n["id"].as_str().unwrap_or_default().to_string()));
+        for (i, id) in ids.iter().enumerate() {
+            if id.is_empty() || ids[..i].contains(id) || self.find(id).is_some() {
+                return Err(format!("component id '{id}' is missing or already used"));
+            }
+        }
+        self.insert_prepared(ROOT, node)
+    }
+
     /// Merge properties into a node; `null` removes a property. Paths with `/`
     /// address descendants of component instances and become overrides.
     pub fn update(&mut self, path: &str, data: &Value) -> Result<(), String> {
-        let props = data.as_object().ok_or("update data must be an object")?;
-        if let Some((inst, rest)) = path.split_once('/') {
-            let ip = self.index_path(inst).ok_or_else(|| format!("node not found: {inst}"))?;
-            let node = self.node_at_mut(&ip);
-            if node["type"] != "ref" {
-                return Err(format!("'{inst}' is not a component instance; '/' paths only address instance descendants"));
-            }
-            check_levels(override_levels(ip.len()), data)?;
-            let desc = ensure_obj(&mut node["descendants"]);
+        let id = path.split('/').next().unwrap_or_default();
+        let ip = self.index_path(id).ok_or_else(|| format!("node not found: {id}"))?;
+        self.update_at(ip, path, data)
+    }
+
+    /// `update` once the index path of `path`'s node (or of its instance, for a `/` path) is known.
+    fn update_at(&mut self, ip: Vec<usize>, path: &str, data: &Value) -> Result<(), String> {
+        self.check_update(&ip, path, data)?;
+        let props = data.as_object().unwrap();
+        if let Some((_, rest)) = path.split_once('/') {
+            let desc = ensure_obj(&mut self.node_at_mut(&ip)["descendants"]);
             let entry = desc.entry(rest.to_string()).or_insert_with(|| json!({}));
             merge_props(entry, props, true);
             return Ok(());
         }
-        let ip = self.index_path(path).ok_or_else(|| format!("node not found: {path}"))?;
-        check_depth(ip.len() - 1, data)?;
         merge_props(self.node_at_mut(&ip), props, false);
+        Ok(())
+    }
+
+    /// Everything that can make `update_at` fail, checked before it changes anything.
+    fn check_update(&self, ip: &[usize], path: &str, data: &Value) -> Result<(), String> {
+        data.as_object().ok_or("update data must be an object")?;
+        if let Some((inst, _)) = path.split_once('/') {
+            if self.node_at(ip)["type"] != "ref" {
+                return Err(format!("'{inst}' is not a component instance; '/' paths only address instance descendants"));
+            }
+            return check_levels(override_levels(ip.len()), data);
+        }
+        check_depth(ip.len() - 1, data)
+    }
+
+    /// `update` for many nodes: finds them all (and the instances of `/` paths) in one walk instead of one walk each.
+    /// All or nothing: every item is checked before the first one is applied.
+    pub fn update_all(&mut self, items: &[(&str, &Value)]) -> Result<(), String> {
+        let paths = self.index_paths(items.iter().map(|(id, _)| id.split('/').next().unwrap_or_default()));
+        let mut found = Vec::with_capacity(items.len());
+        for (id, data) in items {
+            let base = id.split('/').next().unwrap_or_default();
+            let ip = paths.get(base).ok_or_else(|| format!("node not found: {base}"))?;
+            self.check_update(ip, id, data)?;
+            found.push(ip.clone());
+        }
+        for (ip, (id, data)) in found.into_iter().zip(items) {
+            self.update_at(ip, id, data)?;
+        }
         Ok(())
     }
 
@@ -196,6 +321,53 @@ impl Doc {
         let ip = self.index_path(path).ok_or_else(|| format!("node not found: {path}"))?;
         let (last, parent_ip) = ip.split_last().unwrap();
         self.children_at_mut(parent_ip).remove(*last);
+        Ok(())
+    }
+
+    /// `delete` for many nodes: finds them all in one walk instead of one walk each.
+    pub fn delete_all(&mut self, ids: &[String]) -> Result<(), String> {
+        if ids.iter().any(|id| id.contains('/')) {
+            return Err("cannot delete descendants of component instances; override them with {enabled:false}".into());
+        }
+        let found = self.index_paths(ids.iter().map(String::as_str));
+        let mut paths = ids.iter().map(|id| found.get(id).ok_or_else(|| format!("node not found: {id}"))).collect::<Result<Vec<_>, _>>()?;
+        // Last first, so a removal never moves a node that is still to go.
+        paths.sort_unstable_by(|a, b| b.cmp(a));
+        paths.dedup();
+        for ip in paths {
+            let (last, parent_ip) = ip.split_last().unwrap();
+            self.children_at_mut(parent_ip).remove(*last);
+        }
+        Ok(())
+    }
+
+    /// `move_node` to the end of `parent` for each of `ids` in turn, finding them all in one walk.
+    pub fn move_all(&mut self, ids: &[String], parent: &str) -> Result<(), String> {
+        if ids.iter().any(|id| id.contains('/')) {
+            return Err("cannot move descendants of component instances".into());
+        }
+        let tip = self.container_path(parent)?;
+        let found = self.index_paths(ids.iter().map(String::as_str));
+        let mut seen = HashSet::new();
+        let mut paths = Vec::new();
+        for id in ids.iter().filter(|id| seen.insert(id.as_str())) {
+            let ip = found.get(id).ok_or_else(|| format!("node not found: {id}"))?;
+            if tip.starts_with(ip) {
+                return Err("cannot move a node into itself".into());
+            }
+            check_depth(tip.len(), self.node_at(ip))?;
+            paths.push(ip);
+        }
+        // Take them out last first (see `delete_all`), then put them back in the order given.
+        let mut order: Vec<usize> = (0..paths.len()).collect();
+        order.sort_unstable_by(|&a, &b| paths[b].cmp(paths[a]));
+        let mut taken: Vec<Option<Value>> = paths.iter().map(|_| None).collect();
+        for k in order {
+            let (last, parent_ip) = paths[k].split_last().unwrap();
+            taken[k] = Some(self.children_at_mut(parent_ip).remove(*last));
+        }
+        let tip = self.container_path(parent)?;
+        self.children_at_mut(&tip).extend(taken.into_iter().flatten());
         Ok(())
     }
 
@@ -405,6 +577,35 @@ impl Doc {
     }
 }
 
+fn collect_ids(nodes: &[Value], out: &mut std::collections::HashSet<String>) {
+    for n in nodes {
+        if let Some(id) = n["id"].as_str() {
+            out.insert(id.to_string());
+        }
+        if let Some(kids) = n["children"].as_array() {
+            collect_ids(kids, out);
+        }
+    }
+}
+
+fn fix_ids(nodes: &mut [Value], seen: &mut std::collections::HashSet<String>, taken: &mut std::collections::HashSet<String>) {
+    for n in nodes {
+        let Some(obj) = n.as_object_mut() else { continue };
+        let keep = obj.get("id").and_then(Value::as_str).filter(|id| !id.is_empty() && !id.contains('/') && !seen.contains(*id)).map(str::to_string);
+        let id = keep.unwrap_or_else(|| loop {
+            let id = random_id();
+            if taken.insert(id.clone()) {
+                break id;
+            }
+        });
+        obj.insert("id".into(), json!(id));
+        seen.insert(id);
+        if let Some(kids) = obj.get_mut("children").and_then(Value::as_array_mut) {
+            fix_ids(kids, seen, taken);
+        }
+    }
+}
+
 pub fn find_in<'a>(nodes: &'a [Value], id: &str) -> Option<&'a Value> {
     for n in nodes {
         if n["id"] == id {
@@ -577,6 +778,62 @@ fn random_id() -> String {
     }).collect()
 }
 
+/// `p` made absolute with `.` and `..` folded away, without touching the disk (the folder may not exist yet).
+fn lexical(p: &Path) -> PathBuf {
+    let p = if p.as_os_str().is_empty() { Path::new(".") } else { p };
+    let mut out = PathBuf::new();
+    for c in std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf()).components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// The relative reference `url` (resolved against `from`) as written for a document in `to`; None when it is
+/// not a relative path (empty, absolute, a `scheme:` url or a `pencil:` id). Another drive gets an absolute path.
+fn relocated(url: &str, from: &Path, to: &Path) -> Option<String> {
+    let (prefix, url) = url.strip_prefix("file://").map_or(("", url), |rest| ("file://", rest)); // loaders read `file://x` as relative too
+    let scheme = url.split_once(':').is_some_and(|(s, _)| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c)));
+    if url.is_empty() || scheme || url.starts_with(['/', '\\']) || Path::new(url).is_absolute() {
+        return None;
+    }
+    let full = lexical(&from.join(url));
+    let target: Vec<_> = full.components().collect();
+    let base: Vec<_> = to.components().collect();
+    let common = target.iter().zip(&base).take_while(|(a, b)| a == b).count();
+    let names = |cs: &[Component]| cs.iter().map(|c| c.as_os_str().to_string_lossy().to_string()).collect::<Vec<_>>();
+    if common == 0 {
+        return Some(format!("{prefix}{}", full.to_string_lossy().replace('\\', "/")));
+    }
+    let rel = vec!["..".to_string(); base.len() - common].into_iter().chain(names(&target[common..])).collect::<Vec<_>>().join("/");
+    Some(if rel.starts_with("..") { format!("{prefix}{rel}") } else { format!("{prefix}./{rel}") })
+}
+
+fn relocate_in(v: &mut Value, from: &Path, to: &Path) {
+    match v {
+        Value::Array(a) => a.iter_mut().for_each(|x| relocate_in(x, from, to)),
+        Value::Object(o) => {
+            let fill = matches!(o.get("type").and_then(Value::as_str), Some("image" | "shader"));
+            for (k, x) in o.iter_mut() {
+                match x {
+                    Value::String(s) if (k == "url" && fill) || k == "scriptUri" => {
+                        if let Some(n) = relocated(s, from, to) {
+                            *s = n;
+                        }
+                    }
+                    _ => relocate_in(x, from, to),
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -606,6 +863,75 @@ mod tests {
         assert_eq!(d.root["themes"]["mode"], json!(["light","dark"]));
     }
 
+    fn nested_doc() -> Doc {
+        let leaf = |id: &str| json!({"type":"rectangle","id":id});
+        Doc::from_json(&json!({"children":[
+            {"type":"frame","id":"f","children":[leaf("a"), {"type":"group","id":"g","children":[leaf("b"), leaf("c"), leaf("d")]}, leaf("e")]},
+            {"type":"frame","id":"h","children":[leaf("i"), leaf("j")]},
+            {"type":"group","id":"k","children":[]}
+        ]}).to_string()).unwrap()
+    }
+
+    /// The bulk operations are `update` / `delete` / `move_node` over many ids with one walk of the tree.
+    #[test]
+    fn bulk_operations_match_one_node_at_a_time() {
+        let ids = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let (mut one, mut all) = (nested_doc(), nested_doc());
+        let props = json!({"opacity": 0.5, "name": null});
+        let list = ids(&["j", "b", "f", "e", "nope"]);
+        for id in &list[..4] {
+            one.update(id, &props).unwrap();
+        }
+        all.update_all(&list[..4].iter().map(|id| (id.as_str(), &props)).collect::<Vec<_>>()).unwrap();
+        assert_eq!(one.root, all.root);
+        let kept = all.root.clone();
+        assert_eq!(all.update_all(&[("a", &props), ("nope", &props)]).unwrap_err(), "node not found: nope");
+        assert!(all.update_all(&[("a", &props), ("e", &json!(5))]).is_err());
+        assert!(all.update_all(&[("a", &props), ("e/x", &props)]).is_err());
+        assert_eq!(all.root, kept, "a refused update_all changes nothing, not even the items before the bad one");
+        // Instance descendants ("inst/child") become overrides, like `update`; a non-instance is refused.
+        let with_ref = json!({"children":[{"type":"ref","id":"r","ref":"c"},{"type":"rectangle","id":"a"}]}).to_string();
+        let (mut one_i, mut all_i) = (Doc::from_json(&with_ref).unwrap(), Doc::from_json(&with_ref).unwrap());
+        let over = json!({"opacity": 0.5});
+        one_i.update("r/x", &over).unwrap();
+        one_i.update("a", &over).unwrap();
+        all_i.update_all(&[("r/x", &over), ("a", &over)]).unwrap();
+        assert_eq!(one_i.root, all_i.root);
+        assert!(all_i.update_all(&[("a/x", &over)]).is_err());
+
+        for id in ["i", "c", "g", "a"] {
+            one.delete(id).unwrap();
+        }
+        all.delete_all(&ids(&["i", "c", "g", "a"])).unwrap();
+        assert_eq!(one.root, all.root);
+        assert_eq!(all.delete_all(&ids(&["e", "nope"])).unwrap_err(), "node not found: nope");
+        assert!(all.delete_all(&ids(&["f/x"])).is_err());
+
+        let (mut one, mut all) = (nested_doc(), nested_doc());
+        for id in ["j", "e", "b", "i"] {
+            one.move_node(id, Some("k"), None).unwrap();
+        }
+        all.move_all(&ids(&["j", "e", "b", "i", "j"]), "k").unwrap();
+        assert_eq!(one.root, all.root);
+        let kept = all.root.clone();
+        assert!(all.move_all(&ids(&["a", "f"]), "g").is_err(), "a node cannot move into its own descendant");
+        assert!(all.move_all(&ids(&["a", "nope"]), "k").is_err());
+        assert!(all.move_all(&ids(&["a"]), "a").is_err());
+        assert_eq!(all.root, kept, "a refused move changes nothing");
+    }
+
+    #[test]
+    fn outermost_drops_nested_and_repeated_ids() {
+        let d = nested_doc();
+        let ids = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(d.outermost(&ids(&["c", "g", "i", "c", "i", "f", "b"])), ids(&["i", "f"]));
+        assert_eq!(d.outermost(&ids(&["c", "i", "c", "d"])), ids(&["c", "i", "d"]));
+        // An instance's rendered descendant goes with the instance or its ancestors, and stays when only unrelated layers are listed.
+        assert_eq!(d.outermost(&ids(&["k/x", "f"])), ids(&["k/x", "f"]));
+        assert_eq!(d.outermost(&ids(&["g/x", "f"])), ids(&["f"]));
+        assert_eq!(d.outermost(&ids(&["g/x", "g"])), ids(&["g"]));
+    }
+
     #[test]
     fn children_are_validated_like_the_top_level_node() {
         let mut d = Doc::new();
@@ -621,6 +947,27 @@ mod tests {
         assert!(d.insert(ROOT, json!({"type":"frame","children":"x"}), None).is_err());
         assert_eq!(d.children().len(), 1, "nothing was stored");
         d.insert(ROOT, json!({"type":"frame","children":[{"type":"group","children":[{"type":"text"}]}]}), None).unwrap();
+    }
+
+    #[test]
+    fn ensure_ids_fills_missing_and_repeated_ids() {
+        let mut d = Doc::from_json(r#"{"children":[
+            {"type":"frame","id":"f","children":[{"type":"rectangle"},{"type":"rectangle","id":""},{"type":"ellipse","id":"f"}]},
+            {"type":"frame","id":"f"},{"type":"frame","id":7},{"type":"frame","id":"hero/title"}]}"#).unwrap();
+        d.ensure_ids();
+        let mut ids = Vec::new();
+        fn walk(nodes: &[Value], ids: &mut Vec<String>) {
+            for n in nodes {
+                ids.push(n["id"].as_str().expect("every node has a string id").to_string());
+                walk(n["children"].as_array().map(Vec::as_slice).unwrap_or(&[]), ids);
+            }
+        }
+        walk(d.children(), &mut ids);
+        assert_eq!(ids.len(), 7);
+        assert!(ids.iter().all(|i| !i.is_empty() && !i.contains('/')), "an id with '/' (the instance path separator) is replaced");
+        assert_eq!(ids.iter().collect::<std::collections::HashSet<_>>().len(), 7);
+        assert_eq!(ids[0], "f", "the first node keeps its id");
+        assert_eq!(d.find("f").unwrap()["type"], "frame");
     }
 
     #[test]
@@ -697,5 +1044,42 @@ mod tests {
         let err = e.copy(&json!({"type":"frame","children":["str"]}), ROOT, None).unwrap_err();
         assert!(err.contains("source") && err.contains("children[0]"), "{err}");
         assert_eq!(e.children().len(), 0);
+    }
+
+    #[test]
+    fn relocate_rewrites_relative_references() {
+        let (from, to) = (Path::new("/p/a"), Path::new("/p/b/c"));
+        let mut root = json!({"imports": {"lib": "my%20lib.pen", "abs": "/x/l.pen"}, "children": [{"id": "f", "type": "frame", "children": [
+            {"fill": {"type": "image", "url": "img/r.png"}},
+            {"fill": [{"type": "shader", "url": "./s.glsl"}, {"type": "image", "url": "../up/u.png"}]},
+            {"type": "script", "scriptUri": "dots.js"},
+            {"type": "browser", "url": "example.com"},
+            {"fill": {"type": "image", "url": "https://h/i.png"}},
+            {"fill": {"type": "image", "url": "data:image/png;base64,AA=="}},
+            {"fill": {"type": "image", "url": "nalarupa:pending-x"}},
+            {"fill": {"type": "image", "url": "/abs/i.png"}},
+            {"fill": {"type": "image", "url": ""}},
+            {"fill": {"type": "image", "url": "file://img/f.png"}},
+            {"type": "script", "scriptUri": "file:///abs/s.js"}]}]});
+        Doc::relocate(&mut root, from, to);
+        assert_eq!(root["imports"], json!({"lib": "../../a/my%20lib.pen", "abs": "/x/l.pen"}));
+        let k = &root["children"][0]["children"];
+        assert_eq!(k[0]["fill"]["url"], "../../a/img/r.png");
+        assert_eq!(k[1]["fill"][0]["url"], "../../a/s.glsl");
+        assert_eq!(k[1]["fill"][1]["url"], "../../up/u.png");
+        assert_eq!(k[2]["scriptUri"], "../../a/dots.js");
+        assert_eq!(k[3]["url"], "example.com");
+        for (i, url) in [(4, "https://h/i.png"), (5, "data:image/png;base64,AA=="), (6, "nalarupa:pending-x"), (7, "/abs/i.png"), (8, "")] {
+            assert_eq!(k[i]["fill"]["url"], url);
+        }
+        assert_eq!(k[9]["fill"]["url"], "file://../../a/img/f.png");
+        assert_eq!(k[10]["scriptUri"], "file:///abs/s.js");
+        // Into a folder below the old one the path points down.
+        let mut root = json!({"children": [{"fill": {"type": "image", "url": "./images/x.jpg"}}]});
+        Doc::relocate(&mut root, Path::new("/p"), Path::new("/p/sub"));
+        assert_eq!(root["children"][0]["fill"]["url"], "../images/x.jpg");
+        Doc::relocate(&mut root, Path::new("/p/sub"), Path::new("/p"));
+        assert_eq!(root["children"][0]["fill"]["url"], "./images/x.jpg");
+        assert!(Doc::same_dir(Path::new("/p/a/../a/"), Path::new("/p/a")));
     }
 }
