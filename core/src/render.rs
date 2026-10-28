@@ -1085,7 +1085,8 @@ pub fn hit_chain(r: &Renderer, x: f64, y: f64) -> Vec<String> {
         let Some(layer) = r.layers.get(id) else { continue };
         let inside = |f: &Flat| {
             let (x, y) = f.m.map_or((x, y), |m| unapply(m, x, y));
-            x >= f.x && y >= f.y && x <= f.x + f.w && y <= f.y + f.h && f.shape.as_ref().is_none_or(|s| s.hits(x, y))
+            // A shape's own test also takes the stroke it paints outside its box.
+            f.shape.as_ref().map_or_else(|| x >= f.x && y >= f.y && x <= f.x + f.w && y <= f.y + f.h, |s| s.hits(x, y))
         };
         // Per node, in paint order: is it reachable (no clipping ancestor misses the point), and is it
         // under a script node (whose generated children select the script node).
@@ -1385,7 +1386,8 @@ pub(crate) mod tests {
                 {"type":"rectangle","id":"card","x":20,"y":20,"width":360,"height":260,"fill":"#3b82f6"},
                 {"type":"ellipse","id":"avatar","x":100,"y":100,"width":100,"height":100,"fill":"#ef4444"},
                 {"type":"path","id":"diag","x":220,"y":40,"width":150,"height":150,"geometry":"M0 0 L150 150","stroke":"#000000","strokeWidth":2},
-                {"type":"rectangle","id":"outline","x":230,"y":200,"width":100,"height":60,"stroke":"#000000","strokeWidth":2}]}]}"##;
+                {"type":"rectangle","id":"outline","x":230,"y":200,"width":100,"height":60,"stroke":"#000000","strokeWidth":2},
+                {"type":"ellipse","id":"ring","x":40,"y":220,"width":40,"height":40,"stroke":"#000000","strokeWidth":6,"strokeAlignment":"outer"}]}]}"##;
         let doc = Doc::from_json(json).unwrap();
         let mut r = Renderer::default();
         sync(&mut r, &doc);
@@ -1395,6 +1397,7 @@ pub(crate) mod tests {
         assert_eq!(hit_chain(&r, 360.0, 50.0), ["f", "card"], "far from the line, inside its box");
         assert_eq!(hit_chain(&r, 230.0, 230.0), ["f", "outline"]);
         assert_eq!(hit_chain(&r, 280.0, 230.0), ["f", "card"], "inside the unfilled rectangle");
+        assert_eq!(hit_chain(&r, 60.0, 216.0), ["f", "ring"], "an outer stroke is hit outside its box");
     }
 
     /// Horizontal/vertical stroked lines have no layer box; both rasterizers must still draw them
