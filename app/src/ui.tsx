@@ -491,7 +491,7 @@ export function Segmented<V extends string>({ value, options, onChange, label }:
           selected={o.value === value}
           onClick={() => onChange(o.value)}
           style={{
-            flexGrow: 1, height: 24, borderRadius: 5, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            flexGrow: 1, flexBasis: 0, height: 24, borderRadius: 5, display: 'flex', alignItems: 'center', justifyContent: 'center',
             paddingLeft: 6, paddingRight: 6,
             backgroundColor: o.value === value ? C.raised : undefined,
             hover: { backgroundColor: C.raised },
