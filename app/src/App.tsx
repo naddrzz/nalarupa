@@ -5,13 +5,13 @@ import { applyEvents, clearPresence, store } from './agents'
 import { Canvas, fitCam, isMovable, type Cam, type Mods, type Tool } from './Canvas'
 import { defaultSavePath } from './paths'
 import { readClipboard, writeClipboard } from './clipboard'
-import { LeftPanel } from './Layers'
+import { LeftPanel, type LeftSaved } from './Layers'
 import { Inspector } from './Inspector'
 import { AgentPanel } from './Agent'
 import { Home } from './Home'
 import { Present } from './Present'
 import { C, LEFT_W, REDUCED_MOTION, RIGHT_W, TOP_H } from './theme'
-import { hasKeyboardFocus, Icon, IconButton, Pressable, Segmented, ShortcutScope, T, type Toast } from './ui'
+import { FocusBack, hasKeyboardFocus, Icon, IconButton, Pressable, Segmented, ShortcutScope, T, Tip, type Toast } from './ui'
 import { centerOffset, inParent, type M } from './geometry'
 import type { IconName } from './icons'
 
@@ -50,6 +50,9 @@ export function App() {
   const [hoverId, setHoverId] = useState<string | null>(null)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const canvasEl = useRef<PublicInstance>(null)
+  // The left panel's tab and expanded rows, kept across Present and Home (which unmount the editor); opening a
+  // document clears them.
+  const leftSaved = useRef<LeftSaved>({})
 
   const cw = Math.max(100, (win?.width ?? 1440) - LEFT_W - RIGHT_W)
   const ch = Math.max(100, (win?.height ?? 900) - TOP_H)
@@ -75,6 +78,7 @@ export function App() {
   }, [cw, ch])
 
   const openedDoc = useCallback(() => {
+    leftSaved.current = {}
     clearPresence()
     setSelection([])
     setOpened(true)
@@ -340,6 +344,8 @@ export function App() {
           recent={tryCall<{ recent?: string[] }>('settings_get')?.recent ?? []}
           // The polled flag lags an edit by up to 120 ms, so ask the core when a template or file is picked.
           dirty={() => tryCall<State>('state')?.dirty ?? state.dirty}
+          // An agent run or an MCP `execute` in progress: the core refuses the switch either way.
+          busy={() => { const s = tryCall<State>('state') ?? state; return s.agentRunning || !!s.executing }}
           title={state.title}
           save={() => {
             try {
@@ -362,6 +368,7 @@ export function App() {
 
   return (
     <ShortcutScope value={panelShortcut}>
+    <FocusBack value={sent}>
     <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', backgroundColor: C.bg }}>
       <div style={{ height: TOP_H, flexShrink: 0, display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 4, paddingLeft: 8, paddingRight: 10, backgroundColor: C.panel, borderBottomWidth: 1, borderColor: C.border }}>
         <IconButton icon="home" title="Home" testId="home" onClick={() => setScreen('home')} />
@@ -377,9 +384,11 @@ export function App() {
         <IconButton icon="redo" title="Redo (Ctrl+Shift+Z)" testId="redo" onClick={() => tryCall('redo')} />
         <div style={{ flexGrow: 1 }} />
         <IconButton icon="minus" title="Zoom out" onClick={() => zoomBy(0.8)} />
-        <Pressable testId="zoom-level" label={`Zoom ${Math.round(cam.zoom * 100)}%. Fit to screen`} onClick={() => fitTo()} style={{ width: 52, height: 28, borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', hover: { backgroundColor: C.raised } }}>
-          <T size={12} color={C.muted}>{`${Math.round(cam.zoom * 100)}%`}</T>
-        </Pressable>
+        <Tip text="Zoom to fit (Shift+1)">
+          <Pressable testId="zoom-level" label={`Zoom ${Math.round(cam.zoom * 100)}%. Fit to screen`} onClick={() => fitTo()} style={{ width: 52, height: 28, borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', hover: { backgroundColor: C.raised } }}>
+            <T size={12} color={C.muted}>{`${Math.round(cam.zoom * 100)}%`}</T>
+          </Pressable>
+        </Tip>
         <IconButton icon="plus" title="Zoom in" onClick={() => zoomBy(1.25)} />
         <IconButton icon="maximize" title="Zoom to fit (Shift+1)" testId="fit" onClick={() => fitTo()} />
         <div style={{ width: 1, height: 20, backgroundColor: C.border, marginLeft: 6, marginRight: 6 }} />
@@ -388,7 +397,7 @@ export function App() {
         <IconButton icon="saveAs" title="Save as… (Ctrl+Shift+S)" onClick={() => save(true)} />
       </div>
       <div style={{ flexGrow: 1, minHeight: 0, display: 'flex', flexDirection: 'row' }}>
-        <Left version={state.version} selection={selection} select={select} focus={focusLayer} present={present} toast={toast} hover={setHoverId} onShortcut={panelShortcut} />
+        <Left version={state.version} selection={selection} select={select} focus={focusLayer} present={present} toast={toast} hover={setHoverId} onShortcut={panelShortcut} saved={leftSaved} />
         <Canvas
           w={cw} h={ch} cam={cam} setCam={setCam} version={state.version} selection={selection}
           select={select} tool={tool} setTool={setTool} toast={toast} onShortcut={onShortcut} penKeyRef={penKeyRef} chatOpen={rightTab === 'agent'} hoverId={hoverId}
@@ -409,6 +418,7 @@ export function App() {
       </div>
       {toastEl}
     </div>
+    </FocusBack>
     </ShortcutScope>
   )
 }

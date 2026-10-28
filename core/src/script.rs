@@ -828,6 +828,7 @@ fn finish(e: &mut Engine, prep: Prepared, result: Result<Map<String, Value>, Str
         Ok(g) => g,
         Err(err) => {
             e.doc.root = before;
+            e.forget_gone_slides();
             e.touch();
             e.keep_clean(was_clean);
             let id = edit_id.unwrap_or_else(|| format!("e{:x}", crate::doc::random_u64() & 0xffffff));
@@ -840,6 +841,7 @@ fn finish(e: &mut Engine, prep: Prepared, result: Result<Map<String, Value>, Str
     if let Some(id) = &edit_id {
         e.script.failed.remove(id);
     }
+    crate::agent::note_flagged(e, &agent, &before);
     e.script.globals.entry(agent).or_default().extend(new_globals.clone());
     e.commit(before);
     let edit = json!({"type": "agent_edit", "ids": ex.touched, "read": ex.read});
@@ -880,7 +882,7 @@ fn finish(e: &mut Engine, prep: Prepared, result: Result<Map<String, Value>, Str
             text += &format!("- {w}\n");
         }
     }
-    // Only the tree is built under the engine lock; `ToolOut::finish` rasterizes it.
+    // Only the trees are built under the engine lock; `ToolOut::finish` rasterizes screenshots and writes exports.
     let mut shots = Vec::new();
     for id in &ex.shots {
         let target = if id == "document" { e.doc.children().first().and_then(|n| n["id"].as_str()).unwrap_or("").to_string() } else { id.clone() };
@@ -891,13 +893,14 @@ fn finish(e: &mut Engine, prep: Prepared, result: Result<Map<String, Value>, Str
             Err(err) => text += &format!("Screenshot of {id} failed: {err}\n"),
         }
     }
+    let mut exports = Vec::new();
     for (ids, format, out, opts) in ex.exports {
-        match crate::html::export(e, &ids, &format, &out, &opts) {
-            Ok(files) => text += &format!("\nExported: {}\n", files.join(", ")),
+        match crate::html::plan(e, &ids, &format, &out, &opts) {
+            Ok(job) => exports.push(job),
             Err(err) => text += &format!("\nExport failed: {err}\n"),
         }
     }
-    ToolOut { text, images: Vec::new(), error: false, shots }
+    ToolOut { text, images: Vec::new(), error: false, shots, exports }
 }
 
 /// Layout and content checks on nodes touched by this call.
@@ -990,7 +993,7 @@ pub const SCRIPT_NODES: usize = 1000;
 /// What a script node shows instead of its output.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Status {
-    /// "error" or "empty".
+    /// "error", "empty" or "running".
     pub kind: &'static str,
     pub title: String,
     pub description: Option<String>,
@@ -1407,10 +1410,114 @@ fn script_output(json_text: &str, schema: &str) -> Result<Vec<Value>, Status> {
 }
 
 type ScriptRun = Result<Vec<Value>, Status>;
-static SCRIPT_RUNS: std::sync::Mutex<Option<HashMap<u64, ScriptRun>>> = std::sync::Mutex::new(None);
+
+/// One script run waiting for, or handed to, a worker.
+struct Job {
+    key: u64,
+    src: String,
+    file: String,
+    input: String,
+    schema: String,
+}
+
+/// A script node's worker: runs one job at a time, so a newer size or input replaces the one
+/// still waiting instead of queueing behind it.
+#[derive(Default)]
+struct Slot {
+    running: bool,
+    current: Option<u64>,
+    next: Option<Job>,
+    /// Last finished output: shown while a newer run is pending.
+    last: Option<ScriptRun>,
+    /// Tick of the last request, so eviction drops the longest-unused slots first.
+    used: u64,
+}
+
+#[derive(Default)]
+struct Scripts {
+    cache: HashMap<u64, ScriptRun>,
+    slots: HashMap<String, Slot>,
+    /// Worker threads alive; waiting slots queue beyond `WORKERS`.
+    active: usize,
+    tick: u64,
+}
+
+/// Most script runs going at once: a document with many script nodes queues the rest.
+const WORKERS: usize = 8;
+const SLOTS: usize = 1024;
+
+static SCRIPTS: std::sync::Mutex<Option<Scripts>> = std::sync::Mutex::new(None);
+/// Counts finished background runs, so the renderer knows when to rebuild a waiting layer.
+static FINISHED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn scripts() -> std::sync::MutexGuard<'static, Option<Scripts>> {
+    SCRIPTS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn run_job(j: &Job) -> ScriptRun {
+    run_script(&j.src, &j.file, &j.input).and_then(|out| script_output(&out, &j.schema))
+}
+
+/// Background runs finished so far.
+pub fn finished() -> u64 {
+    FINISHED.load(std::sync::atomic::Ordering::Acquire)
+}
+
+/// Whether a background run is still going or waiting.
+pub fn busy() -> bool {
+    scripts().as_ref().is_some_and(|s| s.slots.values().any(|l| l.running || l.next.is_some()))
+}
+
+/// A worker thread: runs its slot's jobs, then takes over any slot still waiting for a worker.
+fn work(mut slot: String) {
+    loop {
+        let job = {
+            let mut g = scripts();
+            let Some(sc) = g.as_mut() else { return };
+            let job = sc.slots.get_mut(&slot).and_then(|s| {
+                let job = s.next.take()?;
+                s.current = Some(job.key);
+                Some(job)
+            });
+            match job {
+                Some(job) => job,
+                None => {
+                    if let Some(s) = sc.slots.get_mut(&slot) {
+                        s.running = false;
+                        s.current = None;
+                    }
+                    let Some(waiting) = sc.slots.iter().find(|(_, s)| !s.running && s.next.is_some()).map(|(k, _)| k.clone()) else {
+                        sc.active -= 1;
+                        return;
+                    };
+                    if let Some(s) = sc.slots.get_mut(&waiting) {
+                        s.running = true;
+                    }
+                    slot = waiting;
+                    continue;
+                }
+            }
+        };
+        let cached = scripts().as_ref().and_then(|s| s.cache.get(&job.key).cloned());
+        let r = cached.unwrap_or_else(|| std::panic::catch_unwind(|| run_job(&job)).unwrap_or_else(|_| Err(Status::error("An internal error occurred", None))));
+        let mut g = scripts();
+        let g = g.get_or_insert_with(Scripts::default);
+        if g.cache.len() > 256 {
+            g.cache.clear();
+        }
+        g.cache.insert(job.key, r.clone());
+        if let Some(s) = g.slots.get_mut(&slot) {
+            s.last = Some(r);
+        }
+        FINISHED.fetch_add(1, std::sync::atomic::Ordering::Release);
+    }
+}
 
 /// Output of a script node: read its file, check the header, coerce inputs and run (cached).
-pub fn script_node(uri: &str, dir: Option<&std::path::Path>, inputs: Option<&Map<String, Value>>, w: f64, h: f64) -> ScriptRun {
+/// With a `slot` (the node's identity) a cache miss runs on a worker thread and returns the previous
+/// output, or a "running" status, at once: the caller holds the engine lock and must not wait for
+/// the script. Without one the call waits for the run.
+pub fn script_node(uri: &str, dir: Option<&std::path::Path>, inputs: Option<&Map<String, Value>>, w: f64, h: f64, slot: Option<&str>) -> ScriptRun {
     if uri.is_empty() {
         return Err(Status { kind: "empty", title: "No script file selected".into(), description: None, code: None });
     }
@@ -1429,31 +1536,70 @@ pub fn script_node(uri: &str, dir: Option<&std::path::Path>, inputs: Option<&Map
     };
     let input = json!({"width": w, "height": h, "input": script_inputs(&decl, inputs)?}).to_string();
     let key = crate::svg::fxhash(&format!("{src}\u{0}{input}\u{0}{rel}"));
-    let mut cache = SCRIPT_RUNS.lock().unwrap_or_else(|e| e.into_inner());
-    let cache = cache.get_or_insert_with(HashMap::new);
-    if let Some(r) = cache.get(&key) {
+    let file = path.file_name().map_or(rel.to_string(), |f| f.to_string_lossy().to_string());
+    let job = Job { key, src, file, input, schema };
+    let mut guard = scripts();
+    let g = guard.get_or_insert_with(Scripts::default);
+    if let Some(r) = g.cache.get(&key) {
         return r.clone();
     }
-    if cache.len() > 256 {
-        cache.clear();
+    let Some(slot) = slot else {
+        // Not under the lock of a render: wait for the run, with the cache unlocked meanwhile.
+        drop(guard);
+        let r = run_job(&job);
+        let mut guard = scripts();
+        let g = guard.get_or_insert_with(Scripts::default);
+        if g.cache.len() > 256 {
+            g.cache.clear();
+        }
+        g.cache.insert(key, r.clone());
+        return r;
+    };
+    g.tick += 1;
+    if g.slots.len() >= SLOTS {
+        // Drop the longest-unused idle slots (their node is gone or off screen); busy ones stay.
+        let mut idle: Vec<(u64, String)> = g.slots.iter().filter(|(_, s)| !s.running && s.next.is_none()).map(|(k, s)| (s.used, k.clone())).collect();
+        idle.sort_unstable();
+        for (_, k) in idle.into_iter().take(SLOTS / 4) {
+            g.slots.remove(&k);
+        }
     }
-    let file = path.file_name().map_or(rel.to_string(), |f| f.to_string_lossy().to_string());
-    let r = run_script(&src, &file, &input).and_then(|out| script_output(&out, &schema));
-    cache.insert(key, r.clone());
-    r
+    let (tick, free) = (g.tick, g.active < WORKERS);
+    let s = g.slots.entry(slot.to_string()).or_default();
+    s.used = tick;
+    if s.current == Some(key) {
+        // The size or input went back to what is running: drop the stale one waiting behind it.
+        s.next = None;
+    } else if s.next.as_ref().is_none_or(|j| j.key != key) {
+        s.next = Some(job);
+    }
+    let start = !s.running && s.next.is_some() && free;
+    if start {
+        s.running = true;
+    }
+    let last = s.last.clone();
+    if start {
+        g.active += 1;
+        let slot = slot.to_string();
+        std::thread::spawn(move || work(slot));
+    }
+    last.unwrap_or_else(|| Err(Status { kind: "running", title: "Running script".into(), description: None, code: None }))
 }
 
 /// Replace every laid-out script node's children with its output (or mark its status), then lay
-/// the output out in the node's box. Ids are `scriptId/k`, so they never collide with saved nodes.
-pub fn expand_scripts(n: &mut RNode, r: &crate::resolve::Resolver, fonts: &mut crate::text::Fonts, dir: Option<&std::path::Path>) {
+/// the output out in the node's box. `doc` = the document's file. `live` = the caller holds the engine lock: runs happen in the background. Ids are `scriptId/k`, so they never collide with saved nodes.
+pub fn expand_scripts(n: &mut RNode, r: &crate::resolve::Resolver, fonts: &mut crate::text::Fonts, dir: Option<&std::path::Path>, doc: Option<&std::path::Path>, live: bool) {
     for k in &mut n.kids {
-        expand_scripts(k, r, fonts, dir);
+        expand_scripts(k, r, fonts, dir, doc, live);
     }
     if n.ty != "script" {
         return;
     }
     let inputs = n.p.get("inputs").and_then(Value::as_object);
-    let run = script_node(n.s("scriptUri").unwrap_or(""), dir, inputs, n.w, n.h).and_then(|mut out| {
+    let uri = n.s("scriptUri").unwrap_or("");
+    // A slot belongs to one node of one document, so another document's output never shows here.
+    let slot = live.then(|| format!("{}\u{0}{}\u{0}{uri}", doc.map_or(String::new(), |d| d.to_string_lossy().into_owned()), n.id));
+    let run = script_node(uri, dir, inputs, n.w, n.h, slot.as_deref()).and_then(|mut out| {
         let mut k = 0;
         fn ids(v: &mut Value, sid: &str, k: &mut usize, r: &crate::resolve::Resolver) -> Result<(), Status> {
             v["id"] = json!(format!("{sid}/{k}"));
@@ -1608,6 +1754,167 @@ mod tests {
             assert!(!out.error, "{}", out.text);
             assert_eq!(e.renderer.slides.len(), slides, "{theme}: opacity from a variable");
         }
+    /// A rolled-back script's slides had no node to paint and no clock: `animating` stayed true
+    /// until `SLIDE_WAIT`. Slides of nodes that survive (an earlier call's) are kept.
+    #[test]
+    fn a_rolled_back_script_leaves_no_slides_behind() {
+        let mut e = engine();
+        let out = execute(&mut e, &json!({"input": r##"
+            root = Insert(document, {type:"frame", name:"Root", width:300, height:300, layout:"none"});
+            kept = Insert(root, {type:"rectangle", name:"Kept", width:10, height:10});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        assert_eq!(e.renderer.slides.len(), 1);
+        let out = execute(&mut e, &json!({"input": "Insert(root, {type:'rectangle', name:'R', width:10, height:10})\nthrow new Error('boom')"}));
+        assert!(out.error && out.text.contains("rolled back"), "{}", out.text);
+        assert_eq!(e.renderer.slides.len(), 1, "only the surviving node still slides");
+        assert!(e.renderer.slides.iter().all(|s| e.doc.find(&s.id).is_some()));
+        let out = execute(&mut e, &json!({"input": "Insert(root, {type:'rectangle', name:'R', width:10, height:10})"}));
+        assert!(!out.error, "{}", out.text);
+        assert_eq!(e.renderer.slides.len(), 2, "the retry slides its own node");
+    }
+
+    /// A slide is snapshotted alone, so a glass node would show the backdrop sharp until it settled:
+    /// it appears in place, and so does a sliding card that gets a glass child.
+    #[test]
+    fn glass_nodes_do_not_slide() {
+        let mut e = engine();
+        let out = execute(&mut e, &json!({"input": r##"
+            root = Insert(document, {type:"frame", name:"Root", width:300, height:300, layout:"none"});
+            Insert(root, {type:"rectangle", name:"Glass", width:100, height:100, effect:{type:"background_blur", radius:20}});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        assert!(e.renderer.slides.is_empty());
+
+        let mut e = engine();
+        let out = execute(&mut e, &json!({"input": r##"
+            root = Insert(document, {type:"frame", name:"Root", width:300, height:300, layout:"none"});
+            card = Insert(root, {type:"frame", name:"Card", width:100, height:100, layout:"none"});
+            Insert(card, {type:"rectangle", name:"Plain", width:10, height:10});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        assert_eq!(e.renderer.slides.len(), 1, "a plain card slides");
+        let out = execute(&mut e, &json!({"input": r##"
+            card = Get(n => n.name === "Card" ? n.id : undefined)[0];
+            Insert(card, {type:"rectangle", name:"Glass", width:50, height:50, effect:[{type:"background_blur", radius:20}]});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        assert!(e.renderer.slides.is_empty(), "the card holds a glass node now");
+    }
+
+    /// Glass inside a component instance, glass added by an update, and glass inserted at the slide
+    /// cap all leave no slide behind either.
+    #[test]
+    fn glass_found_through_instances_updates_and_the_cap() {
+        let mut e = engine();
+        let out = execute(&mut e, &json!({"input": r##"
+            comp = Insert(document, {type:"frame", name:"Comp", reusable:true, x:900, width:50, height:50, layout:"none", children:[{type:"rectangle", name:"Pane", width:50, height:50, effect:{type:"background_blur", radius:20}}]});
+            root = Insert(document, {type:"frame", name:"Root", width:300, height:300, layout:"none"});
+            Insert(root, {type:"ref", ref:comp, width:50, height:50});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        assert!(e.renderer.slides.is_empty(), "an instance of a glass component appears in place");
+
+        let mut e = engine();
+        let out = execute(&mut e, &json!({"input": r##"
+            root = Insert(document, {type:"frame", name:"Root", width:300, height:300, layout:"none"});
+            card = Insert(root, {type:"frame", name:"Card", width:100, height:100, layout:"none"});
+            r = Insert(card, {type:"rectangle", name:"Plain", width:10, height:10});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        assert_eq!(e.renderer.slides.len(), 1);
+        let out = execute(&mut e, &json!({"input": r##"
+            Update(Get(n => n.name === "Plain" ? n.id : undefined)[0], {effect:{type:"background_blur", radius:20}});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        e.sync();
+        assert!(e.renderer.slides.is_empty(), "the sliding card holds a glass node after the update");
+
+        let mut e = engine();
+        let out = execute(&mut e, &json!({"input": r##"
+            root = Insert(document, {type:"frame", name:"Root", width:300, height:300, layout:"none"});
+            card = Insert(root, {type:"frame", name:"Card", width:100, height:100, layout:"none"});
+            for (let i = 0; i < 40; i++) Insert(root, {type:"rectangle", name:"r"+i, x:i, y:200, width:10, height:10});
+            Insert(card, {type:"rectangle", name:"Glass", width:50, height:50, effect:{type:"background_blur", radius:20}});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        assert!(e.renderer.slides.iter().all(|s| e.doc.find(&s.id).is_some_and(|n| n["name"] != "Card")), "the card does not slide once it holds glass, even at the cap");
+    }
+
+    /// Copy, Move, Replace and an edit of a component definition also stop a card that holds glass afterwards.
+    #[test]
+    fn glass_added_by_copy_move_replace_or_a_component_edit_unslides() {
+        let setup = r##"
+            glass = Insert(document, {type:"rectangle", name:"Glass", x:900, width:50, height:50, effect:{type:"background_blur", radius:20}});
+            comp = Insert(document, {type:"frame", name:"Comp", reusable:true, x:700, width:50, height:50, layout:"none", children:[{type:"rectangle", name:"Pane", width:50, height:50}]});
+            root = Insert(document, {type:"frame", name:"Root", width:300, height:300, layout:"none"});
+            card = Insert(root, {type:"frame", name:"Card", width:100, height:100, layout:"none"});
+            plain = Insert(card, {type:"rectangle", name:"Plain", width:10, height:10});
+        "##;
+        for edit in [
+            r#"Copy(glass, card);"#,
+            r#"Move(glass, card);"#,
+            r#"Replace(plain, {type:"rectangle", name:"G2", width:10, height:10, effect:{type:"background_blur", radius:20}});"#,
+        ] {
+            let mut e = engine();
+            let out = execute(&mut e, &json!({"input": setup}));
+            assert!(!out.error, "{}", out.text);
+            assert_eq!(e.renderer.slides.len(), 1, "{edit}: the card slides first");
+            let out = execute(&mut e, &json!({"input": format!("glass = Get(n => n.name === 'Glass' ? n.id : undefined)[0]; card = Get(n => n.name === 'Card' ? n.id : undefined)[0]; plain = Get(n => n.name === 'Plain' ? n.id : undefined)[0]; {edit}")}));
+            assert!(!out.error, "{edit}: {}", out.text);
+            e.sync();
+            assert!(e.renderer.slides.is_empty(), "{edit}: the card holds glass now");
+        }
+
+        let mut e = engine();
+        let out = execute(&mut e, &json!({"input": r##"
+            comp = Insert(document, {type:"frame", name:"Comp", reusable:true, x:700, width:50, height:50, layout:"none", children:[{type:"rectangle", name:"Pane", width:50, height:50}]});
+            root = Insert(document, {type:"frame", name:"Root", width:300, height:300, layout:"none"});
+            Insert(root, {type:"ref", ref:comp, width:50, height:50});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        assert_eq!(e.renderer.slides.len(), 1, "the instance slides first");
+        let out = execute(&mut e, &json!({"input": r##"
+            Update(Get(n => n.name === "Pane" ? n.id : undefined)[0], {effect:{type:"background_blur", radius:20}});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        e.sync();
+        assert!(e.renderer.slides.is_empty(), "the instance's component gained glass");
+    }
+
+    /// An edit that does not come from a script (the inspector) stops a sliding card that gains glass too.
+    #[test]
+    fn glass_added_outside_a_script_unslides() {
+        let mut e = engine();
+        let out = execute(&mut e, &json!({"input": r##"
+            root = Insert(document, {type:"frame", name:"Root", width:300, height:300, layout:"none"});
+            card = Insert(root, {type:"frame", name:"Card", width:100, height:100, layout:"none"});
+            Insert(card, {type:"rectangle", name:"Plain", width:10, height:10});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        assert_eq!(e.renderer.slides.len(), 1);
+        let id = e.doc.root["children"][0]["children"][0]["children"][0]["id"].as_str().unwrap().to_string();
+        e.edit(|d| d.update(&id, &json!({"effect": {"type": "background_blur", "radius": 20}}))).unwrap();
+        e.sync();
+        assert!(e.renderer.slides.is_empty(), "the card holds glass after an inspector edit");
+    }
+
+    /// A streamed step that gives a sliding card glass stops the slide: the card lives in the preview
+    /// document, which is the one `sync` renders.
+    #[test]
+    fn glass_added_by_a_streamed_update_unslides() {
+        let mut e = engine();
+        let head = "root = Insert(document, {type:\"frame\", name:\"Root\", width:300, height:300, layout:\"none\"})
+card = Insert(root, {type:\"frame\", name:\"Card\", width:100, height:100, layout:\"none\"})
+";
+        let full = format!("{head}Update(card, {{effect:{{type:\"background_blur\", radius:20}}}})\nx = 1\n");
+        e.stream_update("toolu_1", "ag0", &format!("{head}Update(card"));
+        e.sync();
+        assert!(e.doc.children().is_empty(), "the card exists only in the preview");
+        assert_eq!(e.renderer.slides.len(), 1, "a plain streamed card slides");
+        e.stream_update("toolu_1", "ag0", &full);
+        e.sync();
+        assert!(e.renderer.slides.is_empty(), "the streamed update gave the card glass");
     }
 
     /// A slide is an isolated snapshot, so a blended paint would show its plain colour until the
@@ -1688,6 +1995,7 @@ mod tests {
         let blocked = crate::engine::engine().tool("open_document", &json!({"path": "never-opened.pen"}));
         assert!(blocked.error && blocked.text == crate::engine::SWITCH_BUSY, "a document switch waits for the running script: {}", blocked.text);
         assert!(crate::engine::engine().tool("execute", &json!({"input": "Print(1)"})).error, "a direct execute does not interleave with the running one");
+        assert_eq!(crate::dispatch(&json!({"cmd": "state"})).unwrap()["executing"], true, "the UI state reports the running script, so Home skips its save prompt");
         stop.store(true, Ordering::SeqCst);
         let out = run.join().unwrap();
         assert!(out.error && out.text.contains("stopped"), "{}", out.text);
@@ -1711,6 +2019,22 @@ mod tests {
     }
 
     #[test]
+    fn script_exports_write_after_the_tool_call() {
+        // Rasterizing and encoding inside `tool` held the engine lock for the whole export.
+        let dir = std::env::temp_dir().join("nalarupa-test-script-export");
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut e = engine();
+        let src = format!("c = Insert(document, {{type:\"frame\", width:300, height:200, fill:\"#ff0000\"}})\nExport(c, \"png\", {:?}, {{scale: 1}})", dir.to_str().unwrap());
+        let out = e.tool("execute", &json!({"input": src}));
+        assert!(!out.error, "{}", out.text);
+        assert!(out.exports.len() == 1 && !dir.exists(), "only the tree is built during the call");
+        let out = out.finish();
+        assert!(out.text.contains("Exported:"), "{}", out.text);
+        let file = std::fs::read_dir(&dir).unwrap().next().unwrap().unwrap().path();
+        assert!(std::fs::read(file).unwrap().starts_with(b"\x89PNG"));
+    }
+
+    #[test]
     fn streaming_preview_then_commit() {
         let mut e = engine();
         let full = "card = Insert(document, {type:\"frame\", name:\"Card\", width:200, height:100, fill:\"#ffffff\"})
@@ -1730,6 +2054,38 @@ Insert(card, {type:\"text\", name:\"Title\", content:\"Hi\", fill:\"#111111\"})
         assert_eq!(e.doc.children()[0]["children"].as_array().unwrap().len(), 1);
         assert!(e.undo());
         assert!(e.doc.children().is_empty(), "one undo step for the whole call");
+    }
+
+    #[test]
+    fn keyless_execute_only_takes_its_own_agents_stream() {
+        let mut e = engine();
+        let common = "pos = {x: 0, y: 0}\n";
+        let frame = |name: &str| format!("{common}Insert(document, {{type:\"frame\", name:\"{name}\", width:10, height:10}})");
+        // Agent B streams a script that starts with the same statement as agent A's final call.
+        e.stream_update("toolu_b", "agB", &format!("{common}Insert("));
+        e.events.clear();
+        // Claude Code's MCP `execute` carries no `__stream`, only the caller's `__agent`.
+        let out = e.tool("execute", &json!({"input": frame("A frame"), "__agent": "agA"}));
+        assert!(!out.error, "{}", out.text);
+        assert_eq!(e.streams.len(), 1, "agent B's stream is untouched");
+        let writes: Vec<&Value> = e.events.iter().filter(|ev| ev["type"] == "agent_activity" && ev["op"] == "write" && ev["streaming"] == false).collect();
+        assert!(!writes.is_empty() && writes.iter().all(|ev| ev["agent"] == "agA"), "{writes:?}");
+        // The owner's own keyless call still retires its stream.
+        let out = e.tool("execute", &json!({"input": frame("B frame"), "__agent": "agB"}));
+        assert!(!out.error, "{}", out.text);
+        assert!(e.streams.is_empty() && e.preview.is_none());
+    }
+
+    #[test]
+    fn a_keyed_execute_takes_its_own_stream_before_an_earlier_prefix_match() {
+        let mut e = engine();
+        let common = "pos = {x: 0, y: 0}\n";
+        e.stream_update("toolu_1", "agA", &format!("{common}Insert("));
+        e.stream_update("toolu_2", "agA", &format!("{common}Insert("));
+        let out = e.tool("execute", &json!({"input": format!("{common}Insert(document, {{type:\"frame\", name:\"Two\", width:10, height:10}})"), "__stream": "toolu_2", "__agent": "agA"}));
+        assert!(!out.error, "{}", out.text);
+        assert_eq!(e.streams.iter().map(|s| s.key.as_str()).collect::<Vec<_>>(), ["toolu_1"], "the keyed stream is retired, the earlier one stays");
+        e.stream_end("toolu_1");
     }
 
     #[test]
@@ -1971,7 +2327,7 @@ Insert(document, {type:'frame', name:'C', width:10, height:10})
             ("noschema.js", "return [];"),
         ]);
         let inputs = json!({"count": 2}).as_object().cloned().unwrap();
-        let out = script_node("./bars.js", Some(&dir), Some(&inputs), 100.0, 50.0).unwrap();
+        let out = script_node("./bars.js", Some(&dir), Some(&inputs), 100.0, 50.0, None).unwrap();
         assert_eq!(out.len(), 2);
         assert!(out[0].get("id").is_none(), "ids are dropped");
         assert_eq!((out[0]["strokeWidth"].clone(), out[0]["strokeAlignment"].clone()), (json!(2), json!("outer")), "2.10 output is migrated");
@@ -1985,9 +2341,9 @@ Insert(document, {type:'frame', name:'C', width:10, height:10})
         let mut seed = 0u32;
         assert!((out[0]["height"].as_f64().unwrap() - 50.0 * mulberry(&mut seed)).abs() < 1e-9);
         assert!((out[1]["height"].as_f64().unwrap() - 50.0 * mulberry(&mut seed)).abs() < 1e-9);
-        assert_eq!(script_node("./bars.js", Some(&dir), Some(&inputs), 100.0, 50.0).unwrap(), out, "deterministic");
+        assert_eq!(script_node("./bars.js", Some(&dir), Some(&inputs), 100.0, 50.0, None).unwrap(), out, "deterministic");
 
-        let err = |f: &str| script_node(f, Some(&dir), None, 10.0, 10.0).unwrap_err();
+        let err = |f: &str| script_node(f, Some(&dir), None, 10.0, 10.0, None).unwrap_err();
         assert_eq!(err("").kind, "empty");
         assert!(err("./none.js").description.unwrap().contains("Script must return an array of nodes"));
         let t = err("./throws.js");
@@ -2024,5 +2380,53 @@ Insert(document, {type:'frame', name:'C', width:10, height:10})
         assert!(e.renderer.find("s/1").is_some_and(|f| f.y == 30.0), "ref output resolves the component");
         assert_eq!(crate::render::hit_chain(&e.renderer, 290.0, 10.0).last().map(String::as_str), Some("s"));
         assert!(e.doc.find("s").unwrap().get("children").is_none(), "output is never saved");
+    }
+
+    #[test]
+    fn live_script_runs_off_the_lock() {
+        let dir = script_dir("live", &[("slow.js", "/** @schema 2.19 */\nconst s = Date.now(); while (Date.now() - s < 400) {}\nreturn [{type: 'rectangle', width: nalarupa.width, height: 10}];")]);
+        let doc = json!({"version": "2.19", "children": [
+            {"type": "frame", "id": "page", "x": 0, "y": 0, "width": 300, "height": 200, "layout": "none", "children": [
+                {"type": "script", "id": "s", "x": 0, "y": 0, "width": 100, "height": 100, "scriptUri": "./slow.js"}]}
+        ]});
+        std::fs::write(dir.join("doc.pen"), doc.to_string()).unwrap();
+        let mut e = engine();
+        e.open(&dir.join("doc.pen")).unwrap();
+        let started = Instant::now();
+        e.sync();
+        assert!(started.elapsed() < Duration::from_millis(300), "sync does not wait for the script: {:?}", started.elapsed());
+        assert!(e.renderer.find("s/0").is_none(), "no output yet");
+        assert!(busy(), "the run is in the background");
+        // A resize meanwhile only queues the newest size and is as quick.
+        let started = Instant::now();
+        for w in 101..106 {
+            e.edit(|d| d.update("s", &json!({"width": w}))).unwrap();
+            e.sync();
+        }
+        assert!(started.elapsed() < Duration::from_millis(300), "resizing does not wait either: {:?}", started.elapsed());
+        let until = Instant::now() + Duration::from_secs(10);
+        while e.renderer.find("s/0").is_none_or(|f| f.w != 105.0) {
+            assert!(Instant::now() < until, "the runs finish and the layer is rebuilt");
+            std::thread::sleep(Duration::from_millis(20));
+            e.expire_slides();
+            e.sync();
+        }
+        assert!(!busy());
+        // Back to the size that is running drops the stale one waiting behind it.
+        let call = |w: f64| script_node("./slow.js", Some(&dir), None, w, 10.0, Some("back-slot"));
+        let wait = |until: &dyn Fn() -> bool| {
+            let limit = Instant::now() + Duration::from_secs(10);
+            while !until() {
+                assert!(Instant::now() < limit);
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        };
+        assert!(call(101.0).is_err());
+        wait(&|| scripts().as_ref().unwrap().slots["back-slot"].next.is_none()); // the worker has taken it
+        call(102.0);
+        call(101.0);
+        assert!(scripts().as_ref().unwrap().slots["back-slot"].next.is_none(), "the stale size no longer waits");
+        wait(&|| !busy());
+        assert_eq!(call(101.0).unwrap()[0]["width"], 101.0);
     }
 }

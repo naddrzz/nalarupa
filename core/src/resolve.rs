@@ -218,6 +218,28 @@ impl<'a> Resolver<'a> {
         Some((merged, merged_scope))
     }
 
+    /// The props a `ref` instance inherits from its component (the chain expanded), without the
+    /// instance's own values and without children. `node` is written in the open document. A library
+    /// component's variables mean nothing there, so they are settled in the library under the theme
+    /// the instance paints with; the open document's own `$variables` stay as written.
+    pub fn inherited(&self, node: &Value) -> Option<Value> {
+        let mut theme = self.scopes[""].1.clone();
+        let (mut comp, scope) = self.expand(&json!({"type": "ref", "ref": node["ref"]}), "", &theme, 0)?;
+        comp.as_object_mut()?.remove("children");
+        if scope.is_empty() {
+            return Some(comp);
+        }
+        // As `resolve_in`: the library's defaults, the component root's theme, the instance's over it.
+        for (axis, val) in &self.scopes[scope.as_str()].1 {
+            if !theme.iter().any(|(a, _)| a == axis) {
+                theme.push((axis.clone(), val.clone()));
+            }
+        }
+        apply_theme(&mut theme, &comp);
+        apply_theme(&mut theme, node);
+        Some(self.subst(&comp, &scope, &theme, 0))
+    }
+
     /// Replace `$name` strings with the variable's value for the active theme, looked up in `scope`.
     /// Unknown names stay literal (so "$49" prices survive).
     fn subst(&self, v: &Value, scope: &str, theme: &[(String, String)], depth: usize) -> Value {
@@ -496,6 +518,46 @@ mod tests {
         assert_eq!((inst.p["width"].as_f64(), inst.p["x"].as_f64()), (Some(80.0), Some(5.0)));
         assert_eq!(inst.kids.len(), 1);
         assert_eq!((inst.kids[0].id.as_str(), inst.kids[0].p["content"].as_str()), ("i/t", Some("B")));
+    }
+
+    /// What an instance inherits: the component's props through the whole ref chain, without the
+    /// instance's own values or the children (the Inspector shows them where the instance has none).
+    #[test]
+    fn inherited_props_of_an_instance() {
+        let root = json!({"children": [
+            {"type": "frame", "id": "card", "reusable": true, "width": 100, "fill": "#336699", "cornerRadius": 8, "children": [{"type": "text", "id": "t"}]},
+            {"type": "ref", "id": "v", "ref": "card", "reusable": true, "width": 80},
+            {"type": "ref", "id": "i", "ref": "v", "x": 5, "fill": "#ff0000"}
+        ]});
+        let empty = Map::new();
+        let r = Resolver::new(&root, &[], &empty);
+        let got = r.inherited(&root["children"][2]).unwrap();
+        assert_eq!((got["fill"].as_str(), got["width"].as_f64(), got["cornerRadius"].as_f64()), (Some("#336699"), Some(80.0), Some(8.0)));
+        assert!(got.get("x").is_none() && got.get("children").is_none(), "{got}");
+        assert!(r.inherited(&json!({"type": "ref", "ref": "gone"})).is_none());
+    }
+
+    /// A library component's inherited `$variable` comes back as the color the instance paints:
+    /// the library's value, under the component's theme or the instance's own.
+    #[test]
+    fn inherited_library_variables_are_settled() {
+        let lib = json!({
+            "themes": {"mode": ["light", "dark"]},
+            "variables": {"fg": {"type": "color", "value": [{"value": "#111111"}, {"value": "#eeeeee", "theme": {"mode": "dark"}}]}},
+            "children": [{"type": "frame", "id": "btn", "reusable": true, "theme": {"mode": "dark"}, "fill": "$fg"}]
+        });
+        let root = json!({"variables": {"fg": {"type": "color", "value": "#0000ff"}}, "children": [
+            {"type": "ref", "id": "a", "ref": "kit:btn"},
+            {"type": "ref", "id": "b", "ref": "kit:btn", "theme": {"mode": "light"}}
+        ]});
+        let libs = vec![("kit".to_string(), lib)];
+        let empty = Map::new();
+        let r = Resolver::new(&root, &libs, &empty);
+        for (i, want) in [(0, "#eeeeee"), (1, "#111111")] {
+            let inst = &root["children"][i];
+            assert_eq!(r.inherited(inst).unwrap()["fill"], want);
+            assert_eq!(r.resolve(inst).unwrap().p["fill"], want, "the same color the instance paints");
+        }
     }
 
     /// An imported library resolves its own variables and its plain-id refs in its own scope,
