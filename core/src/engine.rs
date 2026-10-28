@@ -153,6 +153,23 @@ fn drop_pending(v: &mut Value, inflight: &std::collections::HashSet<String>) {
     }
 }
 
+/// Rewrite a history `stack` (its last step applies to the document `old`) as if `f` had been applied to every
+/// state, where `new` is `f(old)`: replay the steps back from `old`, apply `f` to each state they reach, and diff
+/// the rewritten neighbours. A step is a patch, not a document, so `f` cannot be applied to it directly.
+fn relocate_history(stack: &mut Vec<Patch>, old: &Value, new: &Value, f: impl Fn(&mut Value)) {
+    let (mut old, mut new) = (old.clone(), new.clone());
+    let mut out = Vec::with_capacity(stack.len());
+    for step in stack.drain(..).rev() {
+        step.apply(&mut old);
+        let mut prev = old.clone();
+        f(&mut prev);
+        out.push(diff(&new, &prev).unwrap_or_default());
+        new = prev;
+    }
+    out.reverse();
+    *stack = out;
+}
+
 /// `ours` with the changes that turned `base` into `theirs` applied; where both changed the same
 /// value, `theirs` wins. Lists of nodes (`id`) merge per node, the rest as a whole.
 fn merge3(base: &Value, theirs: &Value, ours: &Value) -> Value {
@@ -654,9 +671,12 @@ impl Engine {
             }
             return Err(err);
         }
-        if let Some(from) = &moved_from {
-            for v in self.undo.iter_mut().chain(self.redo.iter_mut()).chain(self.drag_before.iter_mut()) {
-                Doc::relocate(v, from, &to);
+        if let (Some(from), Some(before)) = (&moved_from, &backup) {
+            let relocate = |v: &mut Value| Doc::relocate(v, from, &to);
+            relocate_history(&mut self.undo, before, &self.doc.root, relocate);
+            relocate_history(&mut self.redo, before, &self.doc.root, relocate);
+            if let Some(v) = self.drag_before.as_mut() {
+                relocate(v);
             }
         }
         self.doc.path = Some(target.clone());
@@ -1076,6 +1096,27 @@ mod tests {
         e.drag_before = Some(e.doc.root.clone());
         e.save(Some(root.join("b").join("y.pen").to_str().unwrap())).unwrap();
         assert_eq!(e.drag_before.as_ref().unwrap()["children"][0]["fill"]["url"], "../a/img.png");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The undo history holds patches between states: after Save as into another folder, undo and redo
+    /// bring back each earlier state with its relative urls rewritten, not the ones of the old folder.
+    #[test]
+    fn save_as_relocates_the_undo_history() {
+        let root = std::env::temp_dir().join("nalarupa-test-save-as-history");
+        let mut e = Engine::new(root.join("data"));
+        e.doc.path = Some(root.join("a").join("x.pen"));
+        e.doc.root = json!({"children": [{"id": "i", "type": "rectangle", "fill": {"type": "image", "url": "./one.png"}}]});
+        let url = |e: &Engine| e.doc.root["children"][0]["fill"]["url"].clone();
+        e.edit(|d| d.update("i", &json!({"fill": {"type": "image", "url": "./two.png"}}))).unwrap();
+        e.edit(|d| d.update("i", &json!({"fill": {"type": "image", "url": "./three.png"}}))).unwrap();
+        assert!(e.undo());
+        e.save(Some(root.join("b").join("y.pen").to_str().unwrap())).unwrap();
+        assert_eq!(url(&e), "../a/two.png");
+        assert!(e.redo());
+        assert_eq!(url(&e), "../a/three.png");
+        assert!(e.undo() && e.undo());
+        assert_eq!(url(&e), "../a/one.png");
         let _ = std::fs::remove_dir_all(&root);
     }
 
