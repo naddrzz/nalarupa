@@ -1602,6 +1602,65 @@ mod tests {
         assert_eq!(e.renderer.slides.len(), 31, "the panel settles under the square past the cap");
     }
 
+    /// A slide is an isolated snapshot, so a blended paint would show its plain colour until the
+    /// slide ends: a node with a blend mode (itself or in its subtree) appears in place instead.
+    #[test]
+    fn blended_inserts_do_not_slide() {
+        let mut e = engine();
+        let out = execute(&mut e, &json!({"input": r##"
+            root = Insert(document, {type:"frame", name:"Root", width:300, height:300, layout:"none"});
+            Insert(root, {type:"rectangle", name:"plain", width:10, height:10, fill:"#ff8800"});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        assert_eq!(e.renderer.slides.len(), 1, "a plain insert slides");
+
+        for (name, props) in [
+            ("fill", r##"fill:{type:"color", color:"#ff8800", blendMode:"multiply"}"##),
+            ("fill list", r##"fill:["#ffffff", {type:"color", color:"#ff8800", blendMode:"overlay"}]"##),
+            ("stroke", r##"fill:"#ffffff", stroke:{type:"color", color:"#ff8800", blendMode:"screen"}, strokeWidth:4"##),
+            ("shadow", r##"fill:"#ffffff", effect:[{type:"shadow", blur:8, color:"#ff0066a0", blendMode:"multiply"}]"##),
+        ] {
+            let mut e = engine();
+            let src = format!(r##"root = Insert(document, {{type:"frame", name:"Root", width:300, height:300, layout:"none"}}); Insert(root, {{type:"rectangle", name:"b", width:10, height:10, {props}}});"##);
+            let out = execute(&mut e, &json!({ "input": src }));
+            assert!(!out.error, "{name}: {}", out.text);
+            e.sync();
+            assert!(e.renderer.slides.is_empty(), "{name}: a blended insert appears in place");
+        }
+
+        // A hidden blended child paints nothing, so it does not stop the slide.
+        let mut e = engine();
+        let out = execute(&mut e, &json!({"input": r##"
+            root = Insert(document, {type:"frame", name:"Root", width:300, height:300, layout:"none"});
+            Insert(root, {type:"frame", name:"Card", width:100, height:100, layout:"none", children:[
+                {type:"rectangle", width:10, height:10, enabled:false, fill:{type:"color", color:"#ff8800", blendMode:"multiply"}}]});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        e.sync();
+        assert_eq!(e.renderer.slides.len(), 1, "a disabled blended child is not painted");
+
+        // A blend mode that arrives through a component instance is found in the resolved tree.
+        let mut e = engine();
+        let comp = e.doc.insert("document", json!({"type":"frame", "x":500, "y":0, "width":10, "height":10, "reusable":true, "fill":{"type":"color", "color":"#ff8800", "blendMode":"multiply"}}), None).unwrap();
+        let out = execute(&mut e, &json!({"input": format!(r##"
+            root = Insert(document, {{type:"frame", name:"Root", width:300, height:300, layout:"none"}});
+            Insert(root, {{type:"ref", ref:"{comp}"}});
+        "##)}));
+        assert!(!out.error, "{}", out.text);
+        e.sync();
+        assert!(e.renderer.slides.is_empty(), "a blended instance appears in place");
+
+        let mut e = engine();
+        let out = execute(&mut e, &json!({"input": r##"
+            root = Insert(document, {type:"frame", name:"Root", width:300, height:300, layout:"none"});
+            card = Insert(root, {type:"frame", name:"Card", width:100, height:100, layout:"none", children:[
+                {type:"rectangle", width:10, height:10, fill:{type:"color", color:"#ff8800", blendMode:"multiply"}}]});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        e.sync();
+        assert!(e.renderer.slides.is_empty(), "a blended descendant keeps the card in place");
+    }
+
     #[test]
     fn a_running_script_leaves_the_engine_free_and_stops_with_the_agent() {
         // The script ran under the engine lock: the window froze and Stop was dead until it ended.
