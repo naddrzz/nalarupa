@@ -883,10 +883,13 @@ fn finish(e: &mut Engine, prep: Prepared, result: Result<Map<String, Value>, Str
         }
     }
     // Only the trees are built under the engine lock; `ToolOut::finish` rasterizes screenshots and writes exports.
-    let mut shots = Vec::new();
+    let (mut shots, mut downloads) = (Vec::new(), Vec::new());
     for id in &ex.shots {
         match shot_tree(e, id) {
-            Ok((tree, scale)) => shots.push((id.clone(), tree, scale)),
+            Ok((tree, scale, waits)) => {
+                shots.push((id.clone(), tree, scale));
+                downloads.extend(waits);
+            }
             Err(err) => text += &format!("Screenshot of {id} failed: {err}\n"),
         }
     }
@@ -897,18 +900,22 @@ fn finish(e: &mut Engine, prep: Prepared, result: Result<Map<String, Value>, Str
             Err(err) => text += &format!("\nExport failed: {err}\n"),
         }
     }
-    // Building a shot starts the downloads of the icons and images it shows; `ToolOut::finish` waits for them.
-    let downloads = if shots.is_empty() { Vec::new() } else { e.assets.in_flight() };
-    let shot_doc = (!shots.is_empty() && (!icons.is_empty() || !downloads.is_empty())).then(|| e.doc.clone());
+    // The shots are redrawn in `ToolOut::finish` once the icons and images they show have downloaded, from
+    // this document and these libraries (the live ones may change meanwhile).
+    let shot_doc = (!shots.is_empty() && (!icons.is_empty() || !downloads.is_empty())).then(|| (e.doc.clone(), e.libs.clone()));
     ToolOut { text, images: Vec::new(), error: false, shots, icons, downloads, shot_doc, exports }
 }
 
-/// The render tree and scale of a screenshot target (`document` is the first top-level node).
-pub fn shot_tree(e: &mut Engine, id: &str) -> Result<(resvg::usvg::Tree, f64), String> {
+/// The render tree and scale of a screenshot target (`document` is the first top-level node), and the
+/// icons and images it shows that are still downloading.
+pub fn shot_tree(e: &mut Engine, id: &str) -> Result<(resvg::usvg::Tree, f64, Vec<String>), String> {
     let target = shot_target(&e.doc, id);
     e.sync();
     let scale = e.renderer.find(&target).map(|f| (1400.0 / f.w.max(f.h).max(1.0)).min(2.0)).unwrap_or(1.0).clamp(0.05, 8.0);
-    e.ctx().node_tree_at(&target, scale).map(|tree| (tree, scale))
+    e.assets.record();
+    let tree = e.ctx().node_tree_at(&target, scale);
+    let waits = e.assets.recorded();
+    tree.map(|tree| (tree, scale, waits))
 }
 
 /// The node a screenshot of `id` draws: `document` is the first top-level node.
@@ -1665,11 +1672,10 @@ pub fn expand_scripts(n: &mut RNode, r: &crate::resolve::Resolver, fonts: &mut c
 mod tests {
     use super::*;
 
-    /// Tests that run `execute` or `ToolOut::finish` against the process-wide engine hold this, so one's script
-    /// (`executing`) never makes another's call fail with "Another execute call is still running".
-    static GLOBAL_EXECUTE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    /// Tests that run `execute` or `ToolOut::finish` against the process-wide engine hold the crate-wide lock,
+    /// so one's script (`executing`) never makes another's call fail with "Another execute call is still running".
     fn global_execute() -> std::sync::MutexGuard<'static, ()> {
-        GLOBAL_EXECUTE.lock().unwrap_or_else(|e| e.into_inner())
+        crate::engine::engine_test_lock()
     }
 
     fn engine() -> Engine {
@@ -2027,17 +2033,22 @@ card = Insert(root, {type:\"frame\", name:\"Card\", width:100, height:100, layou
                 let _ = s.write_all(&red);
             }
         });
+        let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let other = format!("http://{}/elsewhere.png", silent.local_addr().unwrap());
         let input = format!("c = Insert(document, {{type:\"frame\", width:100, height:100, layout:\"none\", fill:{{type:\"image\", url:\"{url}\", mode:\"fill\"}}}})\nTakeScreenshot(c)");
         // The global engine: `finish` waits on it, and the download reports to it.
         let out = {
             let mut e = crate::engine::engine();
             let was = std::mem::replace(&mut e.assets.online, true);
+            // A download the screenshot does not show (this server never answers) is not waited for.
+            assert!(e.assets.image(&other, None).is_none() && e.assets.loading(&other));
             let out = e.tool("execute", &json!({ "input": input }));
             e.assets.online = was;
             out
         };
         assert!(!out.error, "{}", out.text);
         assert!(out.downloads.contains(&url) && out.shot_doc.is_some(), "the shot is redrawn once the image is in");
+        assert!(!out.downloads.contains(&other), "only what the screenshot shows is waited for: {:?}", out.downloads);
         let out = out.finish();
         assert!(!crate::engine::engine().assets.loading(&url));
         let png = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &out.images[0]).unwrap();

@@ -9,6 +9,14 @@ use serde_json::{json, Map, Number, Value};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
+/// Held by every test that runs a script or an agent on the process-wide `engine()`: in parallel, one's
+/// running script (`executing`) or agent (`running`) changes what the other's call does.
+#[cfg(test)]
+pub(crate) fn engine_test_lock() -> MutexGuard<'static, ()> {
+    static LOCK: Mutex<()> = Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 pub struct ToolOut {
     pub text: String,
     /// Base64 PNGs; screenshots land here only after `finish`.
@@ -20,11 +28,11 @@ pub struct ToolOut {
     /// Icons still downloading when the call ended (warning, library, name, weight): `finish` waits for
     /// them without the engine lock and reports the ones that turn out not to exist.
     pub icons: Vec<(String, String, String, u32)>,
-    /// Icons and images still downloading when the screenshots were taken: `finish` waits for them too.
+    /// Icons and images the screenshots show that were still downloading: `finish` waits for them too.
     pub downloads: Vec<String>,
-    /// The document the screenshots were taken of, kept only when icons or images were still downloading:
-    /// `finish` redraws the shots from it, since the live document may have changed (or been switched) meanwhile.
-    pub shot_doc: Option<Doc>,
+    /// The document and libraries the screenshots were taken of, kept only when icons or images were still
+    /// downloading: `finish` redraws the shots from them, since the live ones may have changed (or been switched) meanwhile.
+    pub shot_doc: Option<(Doc, Vec<(String, Value)>)>,
     /// `Export(...)` calls from a script, planned under the lock; `finish` renders and writes them.
     pub exports: Vec<crate::html::ExportJob>,
 }
@@ -55,11 +63,11 @@ impl ToolOut {
         for (id, mut tree, scale) in std::mem::take(&mut self.shots) {
             // The tree was built while icons or images were still downloading, so it has none of them: redraw it
             // from the same document, not whatever the live one is now.
-            if let Some(doc) = &shot_doc {
+            if let Some((doc, libs)) = &shot_doc {
                 let target = crate::script::shot_target(doc, &id);
                 let mut e = engine();
                 let e = &mut *e;
-                let mut cx = Ctx { doc, libs: &e.libs, fonts: &mut e.fonts, assets: &mut e.assets };
+                let mut cx = Ctx { doc, libs, fonts: &mut e.fonts, assets: &mut e.assets };
                 if let Ok(fresh) = cx.node_tree_at(&target, scale) {
                     tree = fresh;
                 }

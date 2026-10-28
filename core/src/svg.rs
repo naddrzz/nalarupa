@@ -42,13 +42,15 @@ pub struct Assets {
     /// Full-decode verdicts by href hash, kept for one verifying export.
     decoded: HashMap<u64, bool>,
     pub online: bool,
+    /// While a screenshot's tree is built (`record`): the downloads in flight that it asked for.
+    asked: Option<Vec<String>>,
 }
 
 impl Assets {
     pub fn new(dir: PathBuf) -> Assets {
         let _ = std::fs::create_dir_all(dir.join("icons"));
         let _ = std::fs::create_dir_all(dir.join("images"));
-        Assets { dir, icons: HashMap::new(), failed: Default::default(), loading: Default::default(), queue: Default::default(), running: 0, generation: 0, data_ok: HashMap::new(), deep: HashMap::new(), verify: false, decoded: HashMap::new(), online: true }
+        Assets { dir, icons: HashMap::new(), failed: Default::default(), loading: Default::default(), queue: Default::default(), running: 0, generation: 0, data_ok: HashMap::new(), deep: HashMap::new(), verify: false, decoded: HashMap::new(), online: true, asked: None }
     }
 
     /// Turn the full-decode check of `image` on or off; each switch drops the cached verdicts, as files may change between exports.
@@ -72,7 +74,8 @@ impl Assets {
         let file = self.dir.join("icons").join(format!("{tag}-{}.svg", name.replace(['/', '\\', '.'], "_")));
         let svg = std::fs::read_to_string(&file).ok();
         if svg.is_none() && self.online && !name.is_empty() && !self.failed.contains(&key) {
-            self.spawn(key, move || crate::net::get_text(&url).filter(|t| t.contains("<svg")).is_some_and(|t| store(&file, t.as_bytes())));
+            self.spawn(key.clone(), move || crate::net::get_text(&url).filter(|t| t.contains("<svg")).is_some_and(|t| store(&file, t.as_bytes())));
+            self.note(&key);
             return None;
         }
         self.icons.insert(key, svg.clone());
@@ -89,9 +92,22 @@ impl Assets {
         self.loading.contains(key)
     }
 
-    /// The icon keys and image urls downloading now (running or queued).
-    pub fn in_flight(&self) -> Vec<String> {
-        self.loading.iter().cloned().collect()
+    /// Start noting the downloads in flight that icons and images asked for from now on (a screenshot's).
+    pub fn record(&mut self) {
+        self.asked = Some(Vec::new());
+    }
+
+    /// Stop noting; the icon keys and image urls asked for since `record` that were still downloading.
+    pub fn recorded(&mut self) -> Vec<String> {
+        self.asked.take().unwrap_or_default()
+    }
+
+    fn note(&mut self, key: &str) {
+        if let Some(asked) = self.asked.as_mut().filter(|_| self.loading.contains(key)) {
+            if !asked.iter().any(|k| k == key) {
+                asked.push(key.to_string());
+            }
+        }
     }
 
     /// Run `job` (a download that stores its result on disk, true on success) on a background thread
@@ -204,6 +220,7 @@ impl Assets {
                             let (u, stem) = (url.to_string(), stem.clone());
                             self.spawn(url.to_string(), move || crate::net::get_bytes(&u).is_some_and(|b| store(&stem.with_extension(image_ext(&b)), &b)));
                         }
+                        self.note(url);
                         return None;
                     };
                     let file = stem.with_extension(image_ext(&bytes));
