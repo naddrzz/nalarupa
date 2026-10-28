@@ -1059,6 +1059,23 @@ try {
   await app.getByTestId('layers').getByText('Inspect rect').click({ modifiers: 'ctrl' })
   assert(await until(async () => (await count('inspector-fill')) > 0), 'a line, a note and a rectangle together keep the Fill field')
 
+  // A component instance without its own fill shows the component's fill (its swatch; the color is the field's placeholder),
+  // not an empty field that reads as white.
+  await mcpCall(port, { method: 'tools/call', params: { name: 'execute', arguments: { input: 'const c = Insert(document, {type:"frame", name:"Inspect button", reusable:true, x:0, y:400, width:120, height:40, fill:"#336699", cornerRadius:8}); Insert(document, {type:"ref", name:"Inspect instance", ref:c, x:200, y:400})' } } })
+  await app.getByTestId('layers').getByText('Inspect instance').waitFor({ timeoutMs: 6000 })
+  await app.getByTestId('layers').getByText('Inspect line').click()
+  assert(await until(async () => !(await count('inspector-fill'))), 'the line is selected again before the instance')
+  await app.getByTestId('layers').getByText('Inspect instance').click()
+  assert(await until(async () => (await count('inspector-fill-swatch')) > 0), 'an instance shows the fill it inherits from its component')
+  // Typing a color overrides the fill on the instance only; the component keeps its own.
+  const fills = async () => {
+    const res: any = await (await mcpCall(port, { method: 'tools/call', params: { name: 'execute', arguments: { input: 'Get(undefined, n => { if (n.name === "Inspect instance" || n.name === "Inspect button") Print(n.name + "=" + n.fill) })' } } })).json()
+    return String(res.result?.content?.[0]?.text ?? '').toLowerCase()
+  }
+  await typeInto('inspector-fill', 'ctrl-a # f f 0 0 0 0')
+  assert(await until(async () => { const t = await fills(); return t.includes('inspect instance=#ff0000') && t.includes('inspect button=#336699') }), `a color typed on the instance overrides its fill only (${await fills()})`)
+  assert(await count('inspector-fill-swatch'), 'the overridden instance shows its own fill')
+
   // A flipped top-level frame is titled at the top-left of where it is painted, not at its layout origin.
   await mcpCall(port, { method: 'tools/call', params: { name: 'execute', arguments: { input: 'Insert(document, {type:"frame", name:"Title FlipX", x:5000, y:100, width:300, height:200, fill:"#EEFFEE", flipX:true}); Insert(document, {type:"frame", name:"Title FlipY", x:5000, y:600, width:300, height:200, fill:"#EEEEFF", flipY:true});' } } })
   await app.getByTestId('layers').getByText('Title FlipY').waitFor({ timeoutMs: 6000 })

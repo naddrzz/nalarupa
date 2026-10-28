@@ -6,7 +6,8 @@ import { C } from './theme'
 import { Button, Field, FocusRing, Icon, IconButton, NumField, Row, Section, Segmented, Swatch, T, Toggle, useFieldRing, useScrollToFocus, type Toast } from './ui'
 
 type Props = { version: number; selection: string[]; select: (ids: string[]) => void; toast: Toast }
-type Info = { id: string; node: any; box: { w: number; h: number } | null; local: { bx: number; by: number } | null; parentLayout: string; variables: Record<string, any> }
+/** `inherited`: for a component instance, the component's props (the instance's own `node` holds only its overrides). */
+type Info = { id: string; node: any; inherited?: Record<string, any> | null; box: { w: number; h: number } | null; local: { bx: number; by: number } | null; parentLayout: string; variables: Record<string, any> }
 
 const str = (v: unknown) => (v === undefined || v === null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v))
 /** Drawn from fixed colors (notes) or from the stroke alone (a line): a fill does nothing. */
@@ -216,8 +217,12 @@ export function Inspector({ version, selection, select, toast }: Props) {
   const inFlow = (i: Info) => i.parentLayout !== 'none' && i.node.layoutPosition !== 'absolute'
   const isFrame = !multi && n.type === 'frame'
   const fillValues = infos.map((i) => str(i.node.fill))
-  const fillMixed = fillValues.some((v) => v !== fillValues[0])
-  const fill = fillMixed ? null : solidColor(n.fill, vars)
+  // An instance without its own fill paints the component's: show that one, as the placeholder an override replaces.
+  const fillInherited = infos.map((i) => (i.node.fill === undefined ? str(i.inherited?.fill) : ''))
+  // Mixed when the layers' own fills differ, or when what they paint differs (instances of differently filled components).
+  const fillMixed = fillValues.some((v, k) => v !== fillValues[0] || fillInherited[k] !== fillInherited[0])
+  const fillHint = !fillMixed && !fillValues[0] ? fillInherited[0] : ''
+  const fill = fillMixed ? null : solidColor(fillHint ? infos[0].inherited?.fill : n.fill, vars)
   const stroke = solidColor(n.stroke, vars)
 
   const fresh = (i: Info) => ({ ...i, ...tryCall('node', { id: i.id }) }) as Info
@@ -391,8 +396,8 @@ export function Inspector({ version, selection, select, toast }: Props) {
       {all((i) => i.node.type !== 'group') && !all((i) => NO_FILL.includes(i.node.type)) ? (
         <Section title="Fill">
           <Row>
-            {fill ? <Swatch color={fill} /> : null}
-            <Field value={fillMixed ? '' : fillValues[0]} mono onCommit={setPaint('fill', vars)} name="Fill" placeholder={fillMixed ? 'Mixed' : '#FFFFFF'} testId="inspector-fill" />
+            {fill ? <Swatch color={fill} testId="inspector-fill-swatch" /> : null}
+            <Field value={fillMixed ? '' : fillValues[0]} mono onCommit={setPaint('fill', vars)} name="Fill" placeholder={fillMixed ? 'Mixed' : fillHint || '#FFFFFF'} testId="inspector-fill" />
           </Row>
         </Section>
       ) : null}
