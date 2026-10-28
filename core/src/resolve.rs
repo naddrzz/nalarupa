@@ -21,6 +21,8 @@ pub struct RNode {
     pub bx: f64,
     pub by: f64,
     pub lines: Vec<crate::text::Line>,
+    /// Height of one entry of `lines` (text only), so exports can reach lines past a fixed box.
+    pub line_h: f64,
     pub problem: Option<&'static str>,
     /// Component id when this node is an expanded `ref` instance.
     pub inst: Option<String>,
@@ -267,7 +269,7 @@ impl<'a> Resolver<'a> {
 
 impl RNode {
     pub fn leaf(id: String, ty: &str, p: Map<String, Value>, problem: Option<&'static str>) -> RNode {
-        RNode { id, ty: ty.to_string(), p, kids: Vec::new(), x: 0.0, y: 0.0, w: 0.0, h: 0.0, bx: 0.0, by: 0.0, lines: Vec::new(), problem, inst: None }
+        RNode { id, ty: ty.to_string(), p, kids: Vec::new(), x: 0.0, y: 0.0, w: 0.0, h: 0.0, bx: 0.0, by: 0.0, lines: Vec::new(), line_h: 0.0, problem, inst: None }
     }
 }
 
