@@ -1482,7 +1482,7 @@ mod tests {
             let id = e.insert_root(json!({"type":"frame","width":120,"height":80,"layout":"none","children":[rect]})).unwrap();
             for format in ["png", "svg", "html-css", "pdf"] {
                 let out = dir.join(format!("{name}-{format}"));
-                super::export(&mut e, &[id.clone()], format, out.to_str().unwrap(), &json!({})).unwrap_or_else(|err| panic!("{name} {format}: {err}"));
+                export(&mut e, &[id.clone()], format, out.to_str().unwrap(), &json!({})).unwrap_or_else(|err| panic!("{name} {format}: {err}"));
             }
         }
         let _ = std::fs::remove_dir_all(dir);
