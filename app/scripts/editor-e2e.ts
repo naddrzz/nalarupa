@@ -53,6 +53,12 @@ try {
   const at = (x: number, y: number) => ({ x: c.x + x, y: c.y + y })
   const canvas = app.getByTestId('canvas')
 
+  // An icon-only button names itself (and its shortcut) in a tooltip after a short hover; leaving it hides the tooltip.
+  await app.getByTestId('tool-frame').hover()
+  assert(await until(async () => (await app.getByTestId('tooltip').getByText('Frame (F / A)').count()) > 0), 'hovering the Frame tool shows "Frame (F / A)"')
+  await app.mouse.move(at(400, 400))
+  assert(await until(async () => !(await count('tooltip'))), 'the tooltip goes when the pointer leaves the button')
+
   // A real mouse wheel pans a little. GPUIX reports a notch as 60 px with precise=false; reading that
   // as lines (×40) threw the view ~2400 px per notch and the canvas looked empty. The automation wheel
   // only sends pixel deltas, so post a real WM_MOUSEWHEEL to this window (no cursor move, no focus).
@@ -606,6 +612,20 @@ try {
     await sleep(1200)
   }
   assert((await app.getByTestId('inspector-name').bounds())!.y >= c.y + 3, 'Shift+Tab back to the name field keeps it, ring included, below the panel top')
+  // Tab entering the Inspector from another panel while it is scrolled to its end scrolls back up to the name field.
+  const nameTop = (await app.getByTestId('inspector-name').bounds())!.y
+  assert(await until(async () => {
+    await app.getByTestId('inspector-w').wheel(0, -2000)
+    return (await app.getByTestId('inspector-name').bounds())!.y < nameTop - 10
+  }), 'the wheel scrolls the Inspector down')
+  await app.getByTestId('tab-design').click()
+  for (let i = 0; i < 4 && !(await count('inspector-name-ring')); i++) {
+    await app.call('keystrokes', { keys: 'tab' })
+    await sleep(300)
+  }
+  assert(await until(async () => !!(await count('inspector-name-ring'))), 'Tab from the Design/Agent tabs reaches the name field')
+  assert(await until(async () => (await app.getByTestId('inspector-name').bounds())!.y >= nameTop - 1),
+    'Tab into the scrolled Inspector scrolls the name field, ring included, back into view')
 
   // Handle centers (canvas px), tl, tr, br, bl. Each sits 12 px in at radius 0 and slides toward the middle
   // (80 px for a 180×160 box) as the radius grows: inset = 12 + radius·68/80.
