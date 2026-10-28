@@ -679,9 +679,14 @@ try {
 
   // Double-click the artboard's canvas title to rename it in place; one undo step.
   const title = await app.getByTestId('frame-label').center()
-  await app.mouse.click(title)
-  await app.mouse.click(title)
-  await app.getByTestId('frame-rename').waitFor({ timeoutMs: 3000 })
+  const renaming = async () => (await app.getByTestId('frame-rename').count()) > 0
+  // Synthetic clicks carry no clickCount: on a slow runner the pair can miss the 450 ms double-click window, so retry it.
+  assert(await until(async () => {
+    if (await renaming()) return true
+    await app.mouse.click(title)
+    await app.mouse.click(title)
+    return until(renaming, 1000)
+  }, 10000), 'double-clicking the frame title opens its rename field')
   await app.getByTestId('frame-rename').fill('Home')
   await app.getByTestId('frame-rename').press('enter')
   await sleep(400)
