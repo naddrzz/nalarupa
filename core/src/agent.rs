@@ -302,11 +302,12 @@ fn wrap_parallel(prompt: &str) -> String {
 }
 
 /// False when a child was not started because Stop already ran: checked under the lock that registers it,
-/// so a Stop cannot land between the check and the child counting as active.
+/// so a Stop cannot land between the check and the child counting as active. Its profile is dropped again.
 fn start_thread(p: Profile, prompt: String, child: Option<String>) -> bool {
     {
         let mut e = engine();
         if child.is_some() && e.agent.cancel.load(Ordering::SeqCst) {
+            e.agent.profiles.retain(|q| q.id != p.id);
             return false;
         }
         e.agent.active += 1;
