@@ -200,7 +200,7 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}>
-      <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 4, paddingLeft: 14, paddingRight: 8, height: 40, borderBottomWidth: 1, borderColor: C.border }}>
+      <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 4, paddingLeft: 14, paddingRight: 8, height: 40, flexShrink: 0, borderBottomWidth: 1, borderColor: C.border }}>
         <Icon name="sparkles" size={14} color={C.accent} />
         <T weight="600" grow>Design agent</T>
         <ChatHistory running={running} toast={toast} changed={() => setChatVersion((n) => n + 1)} />
@@ -483,6 +483,8 @@ function ChatHistory({ running, toast, changed }: { running: boolean; toast: Toa
     restoreChat(r.events ?? [])
     revealAll(store.items) // a saved reply shows whole, the typewriter is for live ones
     close()
+    // Picked from the keyboard: hand focus back to the history button, as Escape does, so Tab goes on from it.
+    if (kbChat !== null) trigger.restore()
     changed()
   }
   const remove = (id: string) => {
@@ -548,6 +550,7 @@ function ChatHistory({ running, toast, changed }: { running: boolean; toast: Toa
                             <Pressable
                               ref={keep(`row:${c.id}`)}
                               testId={`chat-${c.id}`}
+                              focusTestId={`chat-${c.id}-focus`}
                               label={`Open chat: ${c.title || 'Untitled chat'}`}
                               onClick={() => open(c.id)}
                               style={{ flexGrow: 1, minWidth: 0, height: 30, display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, paddingLeft: 8, borderRadius: 6 }}
