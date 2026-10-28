@@ -803,7 +803,7 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
     await app.getByTestId('agent-stop').waitFor()
     await app.getByTestId('home').click()
     await app.getByTestId('template-empty').click()
-    await app.getByText('Stop the agent before opening another document.').waitFor({ timeoutMs: 10000 })
+    await app.getByText('Stop the agent or the AI Pen before opening another document.').waitFor({ timeoutMs: 10000 })
     if (await app.getByTestId('unsaved-prompt').count()) throw new Error('Home asked to save changes before refusing a switch while the agent runs')
     await app.getByTestId('home-back').click()
     await until(async () => !(await app!.getByTestId('agent-stop').count()), 'the stand-in agent to finish', 20000)

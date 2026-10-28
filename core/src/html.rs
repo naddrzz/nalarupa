@@ -1,7 +1,8 @@
 //! Export: PNG / JPEG / WebP / SVG files, multi-page PDF decks and HTML+CSS code generation (flexbox maps 1:1).
 
+use crate::doc::Doc;
 use crate::engine::Engine;
-use crate::render::find_rnode;
+use crate::render::{find_rnode, Ctx};
 use crate::resolve::{num, RNode};
 use crate::svg::{blend_mode, color, esc, fills};
 use resvg::usvg;
@@ -11,12 +12,11 @@ use std::path::{Path, PathBuf};
 
 /// Where exports go when no path is given, and the only place a script's `Export` may write:
 /// the document's folder, or the data folder `exports` for an unsaved document.
-fn export_base(e: &Engine) -> PathBuf {
-    e.doc.dir().unwrap_or_else(|| e.data_dir.join("exports"))
+fn export_base(doc: &Doc, data_dir: &Path) -> PathBuf {
+    doc.dir().unwrap_or_else(|| data_dir.join("exports"))
 }
 
-fn out_path(e: &Engine, out: &str, default_name: &str) -> PathBuf {
-    let base = export_base(e);
+fn out_path(base: &Path, out: &str, default_name: &str) -> PathBuf {
     let p = if out.is_empty() { base.join(default_name) } else { PathBuf::from(out) };
     if p.is_absolute() { p } else { base.join(p) }
 }
@@ -25,14 +25,14 @@ fn out_path(e: &Engine, out: &str, default_name: &str) -> PathBuf {
 /// inside the document's folder, never the open document itself, and a PDF / HTML file must be named like one
 /// so it cannot replace some other file (another document, a dotfile) in that folder.
 pub fn check_script_export(e: &Engine, format: &str, out: &str) -> Result<(), String> {
-    let base = export_base(e);
+    let base = export_base(&e.doc, &e.data_dir);
     // The default destination is checked too: a link at its place could point anywhere.
     let default = match format {
         "pdf" => format!("{}.pdf", e.title()),
         "html-css" | "html-tailwind" | "html" => "export.html".into(),
         _ => "exports".into(),
     };
-    let file = out_path(e, out, &default);
+    let file = out_path(&base, out, &default);
     let hidden = file.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.'));
     let ext = |want: &[&str]| !hidden && file.extension().and_then(|x| x.to_str()).is_some_and(|x| want.iter().any(|w| x.eq_ignore_ascii_case(w)));
     let named = match format {
@@ -49,6 +49,29 @@ pub fn check_script_export(e: &Engine, format: &str, out: &str) -> Result<(), St
     Ok(())
 }
 
+/// Files a script's export wrote since the app started (resolved paths): the only existing files it may write again,
+/// so the agent can export the same file after a fix.
+static SCRIPT_WRITTEN: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+fn script_wrote(file: &Path) -> bool {
+    SCRIPT_WRITTEN.lock().unwrap_or_else(|p| p.into_inner()).contains(&crate::agent::normalize(file))
+}
+
+fn taken(file: &Path) -> String {
+    format!("{} already exists and Export did not write it; export under a new name, or ask the user before replacing it", file.display())
+}
+
+/// A script's export never replaces a file it did not write: each file of the job must be new, or one an earlier
+/// script export wrote. Checked here so a refused export renders nothing, and again as `run` creates each file.
+pub fn claim_script_files(job: &mut ExportJob) -> Result<(), String> {
+    // `symlink_metadata` of the path itself: a link counts as an existing file even when it dangles.
+    if let Some((f, _)) = job.files.iter().find(|(f, _)| f.symlink_metadata().is_ok() && !script_wrote(f)) {
+        return Err(taken(f));
+    }
+    job.script = true;
+    Ok(())
+}
+
 /// A node id as a file name: anything but letters, digits, `-` and `_` (a separator, `..`) becomes `_`.
 fn file_stem(id: &str) -> String {
     id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect()
@@ -59,6 +82,15 @@ fn file_stem(id: &str) -> String {
 /// call it after the guard drops or the canvas freezes for the length of the export.
 pub struct ExportJob {
     files: Vec<(PathBuf, Output)>,
+    /// A script's export (`claim_script_files`): it creates new files and replaces only its own.
+    script: bool,
+    /// Icon keys and image urls the files draw that were still downloading: they are drawn without them,
+    /// so the caller waits for these (without the lock) and plans again (`replan`).
+    pub waits: Vec<String>,
+    /// Script runs the files drew as running (none run under the engine lock): the caller runs them and plans again.
+    pub runs: crate::script::Runs,
+    /// What was asked for (ids, format, out, opts), for `replan`.
+    request: (Vec<String>, String, String, Value),
 }
 
 enum Output {
@@ -70,6 +102,24 @@ enum Output {
 }
 
 impl ExportJob {
+    /// The files lack downloads or script output still to come: `settle`, then plan again.
+    pub fn stale(&self) -> bool {
+        !self.waits.is_empty() || !self.runs.is_empty()
+    }
+
+    /// Run the script nodes and wait for the downloads (until `until`) the files need. Call without holding `engine()`.
+    pub fn settle(&self, until: std::time::Instant) {
+        self.runs.run();
+        crate::engine::wait_downloads(&self.waits, until);
+    }
+
+    /// Plan the same export again, from `cx` (once `waits` have landed).
+    pub fn replan(&self, cx: &mut Ctx, data_dir: &Path) -> Result<ExportJob, String> {
+        let (ids, format, out, opts) = &self.request;
+        // A script's export stays one: it still never replaces a file it did not write.
+        plan_in(cx, data_dir, ids, format, out, opts).map(|job| ExportJob { script: self.script, ..job })
+    }
+
     /// Render and write every file; returns the written file paths.
     pub fn run(self) -> Result<Vec<String>, String> {
         // The engine lock used to order exports; two requests for one path must not interleave their writes.
@@ -86,31 +136,78 @@ impl ExportJob {
                 Output::Image(tree, format, scale, quality) => crate::render::encode_tree(&tree, &format, scale, quality)?,
                 Output::Pdf(trees) => crate::render::encode_pdf(&trees)?,
             };
-            std::fs::write(&file, bytes).map_err(|err| err.to_string())?;
+            if self.script && !script_wrote(&file) {
+                // Created exclusively: a file (or link) that appeared since the check is never replaced.
+                use std::io::Write as _;
+                let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&file).map_err(|err| {
+                    if err.kind() == std::io::ErrorKind::AlreadyExists { taken(&file) } else { err.to_string() }
+                })?;
+                SCRIPT_WRITTEN.lock().unwrap_or_else(|p| p.into_inner()).push(crate::agent::normalize(&file));
+                f.write_all(&bytes).map_err(|err| err.to_string())?;
+            } else {
+                std::fs::write(&file, bytes).map_err(|err| err.to_string())?;
+            }
             written.push(file.display().to_string());
         }
         Ok(written)
     }
 }
 
-/// Plan an export of nodes; `ExportJob::run` writes the files.
+/// Export nodes for the UI: plan under the engine lock; when the targets draw icons or images still downloading or
+/// script nodes not run yet, run those and wait for the downloads without the lock (at most 12 s, as screenshots do)
+/// and plan again from the same document (the live one may change or be switched meanwhile); then write the files
+/// without the lock.
+pub fn export(ids: &[String], format: &str, out: &str, opts: &Value) -> Result<Vec<String>, String> {
+    let (mut job, then) = {
+        let mut e = crate::engine::engine();
+        let job = plan(&mut e, ids, format, out, opts)?;
+        let then = job.stale().then(|| (e.doc.clone(), e.libs.clone()));
+        (job, then)
+    };
+    if let Some((doc, libs)) = then {
+        job.settle(std::time::Instant::now() + std::time::Duration::from_secs(12));
+        let mut e = crate::engine::engine();
+        let e = &mut *e;
+        job = job.replan(&mut Ctx { doc: &doc, libs: &libs, fonts: &mut e.fonts, assets: &mut e.assets }, &e.data_dir)?;
+    }
+    job.run()
+}
+
+/// Plan an export of nodes; `ExportJob::run` writes the files. Nothing slow runs here: a job that is `stale` (its
+/// files lack downloads or script output) is meant to be `settle`d off the engine lock and planned again first, as
+/// `export` and `ToolOut::finish` do.
 pub fn plan(e: &mut Engine, ids: &[String], format: &str, out: &str, opts: &Value) -> Result<ExportJob, String> {
+    let data_dir = e.data_dir.clone();
+    plan_in(&mut e.ctx(), &data_dir, ids, format, out, opts)
+}
+
+/// `plan` from a document and libraries that may not be the engine's (a script's, kept for `ToolOut::finish`).
+fn plan_in(cx: &mut Ctx, data_dir: &Path, ids: &[String], format: &str, out: &str, opts: &Value) -> Result<ExportJob, String> {
+    cx.assets.record();
+    crate::script::record_runs();
+    let files = plan_files(cx, data_dir, ids, format, out, opts);
+    let runs = crate::script::recorded_runs();
+    let waits = cx.assets.recorded();
+    Ok(ExportJob { files: files?, script: false, waits, runs, request: (ids.to_vec(), format.to_string(), out.to_string(), opts.clone()) })
+}
+
+fn plan_files(cx: &mut Ctx, data_dir: &Path, ids: &[String], format: &str, out: &str, opts: &Value) -> Result<Vec<(PathBuf, Output)>, String> {
+    let base = export_base(cx.doc, data_dir);
     let mut files = Vec::new();
     let format = if format == "jpg" { "jpeg" } else { format };
     match format {
         "png" | "jpeg" | "webp" | "svg" => {
-            let dir = out_path(e, out, "exports");
+            let dir = out_path(&base, out, "exports");
             let scale = opts["scale"].as_f64().unwrap_or(2.0);
             let quality = opts["quality"].as_f64().unwrap_or(90.0).clamp(1.0, 100.0) as u8;
             for id in ids {
                 let file = dir.join(format!("{}.{format}", file_stem(id)));
                 let output = if format == "svg" {
-                    let mut cx = e.ctx();
                     let (svg, embedded) = cx.export_svg(id).ok_or_else(|| cx.missing(id))?;
                     Output::Svg(svg, embedded)
                 } else {
                     let scale = scale.clamp(0.05, 8.0);
-                    Output::Image(e.ctx().node_tree_at(id, scale)?, format.to_string(), scale, quality)
+                    Output::Image(cx.node_tree_at(id, scale)?, format.to_string(), scale, quality)
                 };
                 files.push((file, output));
             }
@@ -118,39 +215,42 @@ pub fn plan(e: &mut Engine, ids: &[String], format: &str, out: &str, opts: &Valu
         "pdf" => {
             // No ids = the whole deck: every visible top-level frame, in document order (hidden slides are skipped, as in Present).
             let ids: Vec<String> = if ids.is_empty() {
-                e.doc.children().iter().filter(|n| n["type"] == "frame" && n["enabled"] != false).filter_map(|n| n["id"].as_str().map(str::to_string)).collect()
+                cx.doc.children().iter().filter(|n| n["type"] == "frame" && n["enabled"] != false).filter_map(|n| n["id"].as_str().map(str::to_string)).collect()
             } else {
                 ids.to_vec()
             };
             if ids.is_empty() {
                 return Err("nothing to export: the document has no visible top-level frames".into());
             }
-            let file = out_path(e, out, &format!("{}.pdf", e.title()));
-            let trees = e.ctx().pdf_trees(&ids)?;
+            let file = out_path(&base, out, &format!("{}.pdf", cx.doc.title()));
+            let trees = cx.pdf_trees(&ids)?;
             files.push((file, Output::Pdf(trees)));
         }
         "html-css" | "html-tailwind" | "html" => {
-            let file = out_path(e, out, "export.html");
-            files.push((file, Output::Bytes(html_document(e, ids, opts)?.into_bytes())));
+            let file = out_path(&base, out, "export.html");
+            files.push((file, Output::Bytes(html_in(cx, ids, opts)?.into_bytes())));
         }
         other => return Err(format!("unknown export format '{other}' (use png, jpeg, webp, svg, pdf or html-css)")),
     }
-    Ok(ExportJob { files })
+    Ok(files)
 }
 
 pub fn html_document(e: &mut Engine, ids: &[String], opts: &Value) -> Result<String, String> {
+    html_in(&mut e.ctx(), ids, opts)
+}
+
+fn html_in(cx: &mut Ctx, ids: &[String], opts: &Value) -> Result<String, String> {
     let names = opts["includeLayerNames"] != false;
     let ids_attr = opts["includeLayerIds"] == true;
-    let base = e.doc.dir();
+    let base = cx.doc.dir();
     let mut body = String::new();
     let mut fonts = Vec::new();
     let mut svg_ids = 0;
     for id in ids {
-        let mut cx = e.ctx();
         let top = crate::render::top_index(cx.doc, id).ok_or_else(|| cx.missing(id))?;
         let root = cx.laid_out(top).ok_or_else(|| cx.missing(id))?;
         let n = find_rnode(&root, id).ok_or_else(|| cx.missing(id))?;
-        let mut h = Html { out: &mut body, names, ids: ids_attr, base: base.clone(), families: &mut fonts, fonts: &mut e.fonts, assets: &mut e.assets, svg_ids };
+        let mut h = Html { out: &mut body, names, ids: ids_attr, base: base.clone(), families: &mut fonts, fonts: &mut *cx.fonts, assets: &mut *cx.assets, svg_ids };
         h.node(n, None);
         svg_ids = h.svg_ids;
     }
@@ -174,7 +274,7 @@ pub fn html_document(e: &mut Engine, ids: &[String], opts: &Value) -> Result<Str
     }
     Ok(format!(
         "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{}</title>\n{link}\n<style>*{{box-sizing:border-box;margin:0;padding:0}}body{{display:flex;flex-direction:column;align-items:center;gap:40px;padding:40px 0;background:#f4f4f5}}</style>\n</head>\n<body>\n{body}</body>\n</html>\n",
-        esc(&e.title())
+        esc(&cx.doc.title())
     ))
 }
 
