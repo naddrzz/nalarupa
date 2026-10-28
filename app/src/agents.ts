@@ -351,6 +351,11 @@ export function spinning(it: ChatItem): boolean {
   return (it.kind === 'tool' && it.running) || (it.kind === 'thinking' && it.endedAt === undefined)
 }
 
+/** How often a chat row re-renders itself, in ms; 0 for never. Under reduced motion the ellipsis is a constant `…` and the reply shows in full, so nothing ticks. */
+export function rowTickMs(typing: boolean, spin: boolean, reduced: boolean, indicatorMs: number, typingMs = 16): number {
+  return reduced ? 0 : typing ? typingMs : spin ? indicatorMs : 0
+}
+
 /** An item that still changes in place while the agent works, so its row must re-render on a store change. */
 export function changing(it: ChatItem): boolean {
   return spinning(it) || (it.kind === 'assistant' && it.streaming)
