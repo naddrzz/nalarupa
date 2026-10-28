@@ -1242,16 +1242,16 @@ fn run_claude_code(p: &Profile, prompt: &str, child: bool, model: Option<String>
 fn error_cause(ev: &Value) -> Option<String> {
     let result = ev["result"].as_str().map(str::trim).filter(|t| !t.is_empty());
     let errors: Vec<&str> = ev["errors"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::trim).filter(|t| !t.is_empty()).collect();
-    result.map(str::to_string).or_else(|| (!errors.is_empty()).then(|| errors.join("\n"))).map(|t| clip_ends(&t, ERROR_MAX)).map(sign_in_hint)
+    result.map(str::to_string).or_else(|| (!errors.is_empty()).then(|| errors.join("\n"))).map(|t| sign_in_hint(&t).unwrap_or_else(|| clip_ends(&t, ERROR_MAX)))
 }
 
 /// The CLI tells a signed-out user to run `/login`, a command of its own terminal UI; point at what works here.
-fn sign_in_hint(text: String) -> String {
-    if text.contains("/login") || text.to_lowercase().contains("not logged in") {
+/// Checked on the whole text, before clipping can drop the phrase; a bare path like `/login.js` is no match.
+fn sign_in_hint(text: &str) -> Option<String> {
+    let text = text.to_lowercase();
+    (text.contains("run /login") || text.contains("not logged in")).then(|| {
         "Claude Code is not signed in. Open a terminal, run `claude` and sign in with /login, or switch the backend to the Claude API in Agent settings (gear icon).".into()
-    } else {
-        text
-    }
+    })
 }
 
 /// Longest error text kept in the chat card and the saved chat (tool output is capped at 6000).
@@ -1267,7 +1267,7 @@ fn exit_error(status: &str, stderr: &str, reported: bool) -> String {
     } else if stderr.is_empty() {
         prefix
     } else {
-        sign_in_hint(format!("{prefix}: {}", clip_ends(stderr, ERROR_MAX.saturating_sub(prefix.len() + 2))))
+        sign_in_hint(stderr).unwrap_or_else(|| format!("{prefix}: {}", clip_ends(stderr, ERROR_MAX.saturating_sub(prefix.len() + 2))))
     }
 }
 
@@ -1404,6 +1404,13 @@ mod tests {
         assert_eq!(error_cause(&json!({"result": "Invalid API key · Please run /login"})).unwrap(), hint);
         assert_eq!(exit_error("exit status: 1", "Error: Not logged in", false), hint);
         assert_eq!(error_cause(&json!({"result": "Credit balance is too low"})).as_deref(), Some("Credit balance is too low"));
+        // A path that merely contains /login keeps the real cause.
+        assert_eq!(exit_error("exit status: 1", "Cannot find module /app/login.js", false), "claude exited with exit status: 1: Cannot find module /app/login.js");
+        assert_eq!(error_cause(&json!({"result": "ENOENT: /srv/login/config.json"})).as_deref(), Some("ENOENT: /srv/login/config.json"));
+        // The phrase in the middle of a long text, where clipping would drop it, still gives the hint.
+        let long = format!("{}Not logged in · Please run /login{}", "x".repeat(5000), "y".repeat(5000));
+        assert_eq!(error_cause(&json!({"result": long})).unwrap(), hint);
+        assert_eq!(exit_error("exit status: 1", &long, false), hint);
     }
 
     #[test]
