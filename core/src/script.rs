@@ -1594,6 +1594,20 @@ mod tests {
         "##}));
         assert!(!out.error, "{}", out.text);
         assert_eq!(e.renderer.slides.len(), 1, "an insert under an opaque frame still slides");
+        // Opacity given as a variable counts as its value for the theme active there.
+        e.doc.set_variables(&json!({"dim": {"type": "number", "value": [{"value": 1}, {"value": 0.5, "theme": {"mode": "dark"}}]}}), false).unwrap();
+        for (theme, slides) in [("light", 1), ("dark", 0)] {
+            let out = execute(&mut e, &json!({"input": format!(r##"
+                Insert(Get(n => n.name === "Root" ? n.id : undefined)[0], {{type:"frame", name:"{theme}", width:50, height:50, layout:"none", opacity:"$dim", theme:{{mode:"{theme}"}}}});
+            "##)}));
+            assert!(!out.error, "{}", out.text);
+            e.renderer.slides.clear();
+            let out = execute(&mut e, &json!({"input": format!(r##"
+                Insert(Get(n => n.name === "{theme}" ? n.id : undefined)[0], {{type:"rectangle", width:10, height:10}});
+            "##)}));
+            assert!(!out.error, "{}", out.text);
+            assert_eq!(e.renderer.slides.len(), slides, "{theme}: opacity from a variable");
+        }
     }
 
     #[test]

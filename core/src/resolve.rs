@@ -247,6 +247,19 @@ impl<'a> Resolver<'a> {
     }
 }
 
+/// `key` of each node on `chain` (a top-level node of `root` down to one of its plain
+/// descendants), its variables substituted for the theme active at that node.
+pub fn along(root: &Value, chain: &[&Value], key: &str) -> Vec<Value> {
+    let empty = Map::new();
+    let scopes = HashMap::from([("", (root["variables"].as_object().unwrap_or(&empty), theme_defaults(root)))]);
+    let r = Resolver { scopes, index: HashMap::new() };
+    let mut theme = r.scopes[""].1.clone();
+    chain.iter().map(|n| {
+        apply_theme(&mut theme, n);
+        r.subst(&n[key], "", &theme, 0)
+    }).collect()
+}
+
 impl RNode {
     pub fn leaf(id: String, ty: &str, p: Map<String, Value>, problem: Option<&'static str>) -> RNode {
         RNode { id, ty: ty.to_string(), p, kids: Vec::new(), x: 0.0, y: 0.0, w: 0.0, h: 0.0, bx: 0.0, by: 0.0, lines: Vec::new(), problem, inst: None }
