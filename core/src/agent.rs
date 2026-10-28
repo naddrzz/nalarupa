@@ -1603,7 +1603,7 @@ mod tests {
             e.doc.root.clone()
         };
         // Never opened: a missing file is created by `open_document`, so it stays out of the repo.
-        let path = std::env::temp_dir().join(format!("nalarupa-test-pen-switch-{}.nala", std::process::id()));
+        let path = std::env::temp_dir().join(format!("nalarupa-test-pen-switch-{:x}.nala", crate::doc::random_u64()));
         let new = crate::dispatch(&json!({"cmd": "new", "template": "empty"}));
         let open = crate::dispatch(&json!({"cmd": "open", "path": path}));
         let tool = engine().tool("open_document", &json!({"path": path}));
@@ -1613,7 +1613,9 @@ mod tests {
         assert_eq!(open.err().as_deref(), Some(crate::engine::SWITCH_BUSY), "Open waits for the pen");
         assert!(tool.error && tool.text == crate::engine::SWITCH_BUSY, "open_document waits for the pen: {}", tool.text);
         assert_eq!(e.doc.root, before, "the document stays");
-        assert!(!path.exists(), "nothing was created on disk");
+        let created = path.exists();
+        let _ = std::fs::remove_file(&path);
+        assert!(!created, "nothing was created on disk");
     }
 
     /// A pen whose `execute` saw a Stop while its script ran starts stopped, also from an MCP client's call

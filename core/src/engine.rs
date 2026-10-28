@@ -382,8 +382,9 @@ fn merge3(base: &Value, theirs: &Value, ours: &Value) -> Value {
 }
 
 const UNDO_LIMIT: usize = 100;
-/// The agent edits whatever document is open, so a document switch waits for it to stop.
-pub const SWITCH_BUSY: &str = "Stop the agent before opening another document.";
+/// The agent, and an AI Pen that outlives its run, edit whatever document is open, so a document switch
+/// waits for them to stop. Home shows any refusal starting "Stop the agent" as is.
+pub const SWITCH_BUSY: &str = "Stop the agent or the AI Pen before opening another document.";
 /// An external agent has no Save / Don't save prompt, so it must not replace unsaved work.
 pub const SWITCH_DIRTY: &str = "The open document has unsaved changes; ask the user to save it first.";
 
