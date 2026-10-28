@@ -50,7 +50,8 @@ export function App() {
   const [hoverId, setHoverId] = useState<string | null>(null)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const canvasEl = useRef<PublicInstance>(null)
-  // The left panel's tab and expanded rows, kept across Present (which unmounts the editor); Home clears them.
+  // The left panel's tab and expanded rows, kept across Present and Home (which unmount the editor); opening a
+  // document clears them.
   const leftSaved = useRef<LeftSaved>({})
 
   const cw = Math.max(100, (win?.width ?? 1440) - LEFT_W - RIGHT_W)
@@ -77,6 +78,7 @@ export function App() {
   }, [cw, ch])
 
   const openedDoc = useCallback(() => {
+    leftSaved.current = {}
     clearPresence()
     setSelection([])
     setOpened(true)
@@ -366,7 +368,7 @@ export function App() {
     <ShortcutScope value={panelShortcut}>
     <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', backgroundColor: C.bg }}>
       <div style={{ height: TOP_H, flexShrink: 0, display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 4, paddingLeft: 8, paddingRight: 10, backgroundColor: C.panel, borderBottomWidth: 1, borderColor: C.border }}>
-        <IconButton icon="home" title="Home" testId="home" onClick={() => { leftSaved.current = {}; setScreen('home') }} />
+        <IconButton icon="home" title="Home" testId="home" onClick={() => setScreen('home')} />
         <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, width: LEFT_W - 48, paddingLeft: 4 }}>
           <T size={13} weight="600" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{state.title}</T>
           {state.dirty ? <div testId="unsaved-dot" style={{ width: 6, height: 6, flexShrink: 0, borderRadius: 3, backgroundColor: C.accent }} /> : null}
