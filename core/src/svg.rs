@@ -24,6 +24,11 @@ pub struct Assets {
     data_ok: HashMap<u64, bool>,
     /// Too-deep verdicts of SVG images, keyed by `deep_key` and valid while the stamp matches.
     deep: HashMap<String, (u64, bool)>,
+    /// PDF export: refuse a raster image whose data does not fully decode (see `decodes`), since
+    /// the PDF library decodes late and one damaged image would fail the whole document.
+    verify: bool,
+    /// Full-decode verdicts by href hash, kept for one verifying export.
+    decoded: HashMap<u64, bool>,
     pub online: bool,
 }
 
@@ -31,7 +36,13 @@ impl Assets {
     pub fn new(dir: PathBuf) -> Assets {
         let _ = std::fs::create_dir_all(dir.join("icons"));
         let _ = std::fs::create_dir_all(dir.join("images"));
-        Assets { dir, icons: HashMap::new(), failed: Default::default(), data_ok: HashMap::new(), deep: HashMap::new(), online: true }
+        Assets { dir, icons: HashMap::new(), failed: Default::default(), data_ok: HashMap::new(), deep: HashMap::new(), verify: false, decoded: HashMap::new(), online: true }
+    }
+
+    /// Turn the full-decode check of `image` on or off; each switch drops the cached verdicts, as files may change between exports.
+    pub fn verify(&mut self, on: bool) {
+        self.verify = on;
+        self.decoded.clear();
     }
 
     /// Icon at the default weight (200; only Material Symbols has weights).
@@ -79,6 +90,17 @@ impl Assets {
     pub fn image(&mut self, url: &str, base: Option<&Path>) -> Option<String> {
         let href = self.resolve_image(url, base)?;
         if !self.within_pixel_limit(&href, url) {
+            return None;
+        }
+        if self.verify
+            && !*self.decoded.entry(fxhash(&href)).or_insert_with(|| {
+                let ok = decodes(&href);
+                if !ok {
+                    eprintln!("image {}: damaged, left out of the export", if href.starts_with("data:") { "<data URL>" } else { url });
+                }
+                ok
+            })
+        {
             return None;
         }
         let too_deep = match deep_key(&href) {
@@ -159,6 +181,35 @@ impl Assets {
 
 /// Largest raster image decoded, in pixels (RGBA: 400 MB).
 const MAX_IMAGE_PIXELS: u64 = 100_000_000;
+
+/// Whether a PNG, GIF or WebP image decodes completely (a truncated or CRC-damaged one passes the
+/// header check but fails here); other formats, which the PDF library embeds as they are, count as fine.
+fn decodes(href: &str) -> bool {
+    let bytes = if href.starts_with("data:") {
+        match data_url::DataUrl::process(href).ok().and_then(|u| u.decode_to_vec().ok()) {
+            Some((b, _)) => b,
+            None => return true,
+        }
+    } else {
+        match std::fs::read(href) {
+            Ok(b) => b,
+            Err(_) => return true,
+        }
+    };
+    match image_ext(&bytes) {
+        "png" => tiny_skia::Pixmap::decode_png(&bytes).is_ok(),
+        "gif" => {
+            let mut opts = gif::DecodeOptions::new();
+            opts.set_color_output(gif::ColorOutput::RGBA);
+            matches!(opts.read_info(&bytes[..]).and_then(|mut d| d.read_next_frame().map(|f| f.is_some())), Ok(true))
+        }
+        "webp" => image_webp::WebPDecoder::new(std::io::Cursor::new(&bytes)).and_then(|mut d| {
+            let mut buf = vec![0; d.output_buffer_size().ok_or(image_webp::DecodingError::ImageTooLarge)?];
+            d.read_image(&mut buf)
+        }).is_ok(),
+        _ => true,
+    }
+}
 
 /// Declared pixel size of a raster image given as `Assets::image` returns it (a file path or a
 /// `data:` url), read from its header without decoding. None for SVG or anything unrecognised.

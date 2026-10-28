@@ -1288,6 +1288,40 @@ mod tests {
         assert!(super::export(&mut e, &ids, "tiff", "", &json!({})).is_err());
     }
 
+    /// A truncated or CRC-damaged image fill is left out of the PDF like in every other export, instead of failing the document.
+    #[test]
+    fn pdf_export_skips_damaged_images() {
+        let dir = std::env::temp_dir().join(format!("nalarupa-pdf-damaged-{:x}", crate::doc::random_u64()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut pm = resvg::tiny_skia::Pixmap::new(64, 32).unwrap();
+        for (i, b) in pm.data_mut().iter_mut().enumerate() {
+            *b = (i * 7) as u8;
+        }
+        let png = pm.encode_png().unwrap();
+        let mut crc = png.clone();
+        let n = crc.len();
+        // The IDAT CRC (4 bytes) sits right before the IEND chunk (12 bytes).
+        crc[n - 13] ^= 0xFF;
+        let mut webp = Vec::new();
+        image_webp::WebPEncoder::new(&mut webp).encode(pm.data(), 64, 32, image_webp::ColorType::Rgba8).unwrap();
+        let files = [("ok.png", png.clone()), ("cut.png", png[..png.len() / 2].to_vec()), ("crc.png", crc), ("ok.webp", webp.clone()), ("cut.webp", webp[..webp.len() / 2].to_vec())];
+        for (name, bytes) in &files {
+            std::fs::write(dir.join(name), bytes).unwrap();
+        }
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        for (name, _) in &files {
+            let url = dir.join(name).to_string_lossy().replace('\\', "/");
+            let rect = json!({"type":"rectangle","x":0,"y":0,"width":100,"height":50,"fill":{"type":"image","url":url,"mode":"fill"}});
+            let id = e.insert_root(json!({"type":"frame","width":120,"height":80,"layout":"none","children":[rect]})).unwrap();
+            for format in ["png", "svg", "html-css", "pdf"] {
+                let out = dir.join(format!("{name}-{format}"));
+                super::export(&mut e, &[id.clone()], format, out.to_str().unwrap(), &json!({})).unwrap_or_else(|err| panic!("{name} {format}: {err}"));
+            }
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// A hidden layer (or one inside a hidden parent) says so instead of "node not found".
     #[test]
     fn hidden_layer_export_says_hidden() {

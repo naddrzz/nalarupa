@@ -284,20 +284,27 @@ impl Ctx<'_> {
 
     /// One PDF page per node (1 px = 1 pt), in the given order; text stays selectable.
     pub fn nodes_pdf(&mut self, ids: &[String]) -> Result<Vec<u8>, String> {
-        use krilla_svg::SurfaceExt;
         let mut pdf = krilla::Document::new();
-        for id in ids {
-            let tree = self.node_tree(id)?;
-            let size = tree.size();
-            let settings = krilla::page::PageSettings::from_wh(size.width(), size.height()).ok_or("empty page")?;
-            let mut page = pdf.start_page_with(settings);
-            let mut surface = page.surface();
-            let pt = krilla::geom::Size::from_wh(size.width(), size.height()).ok_or("empty page")?;
-            surface.draw_svg(&tree, pt, krilla_svg::SvgSettings::default());
-            surface.finish();
-            page.finish();
-        }
+        // krilla decodes late and fails the whole document on one damaged image: leave those out.
+        self.assets.verify(true);
+        let pages = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ids.iter().try_for_each(|id| self.pdf_page(&mut pdf, id))));
+        self.assets.verify(false);
+        pages.unwrap_or_else(|p| std::panic::resume_unwind(p))?;
         pdf.finish().map_err(|e| format!("PDF export failed: {e:?}"))
+    }
+
+    fn pdf_page(&mut self, pdf: &mut krilla::Document, id: &str) -> Result<(), String> {
+        use krilla_svg::SurfaceExt;
+        let tree = self.node_tree(id)?;
+        let size = tree.size();
+        let settings = krilla::page::PageSettings::from_wh(size.width(), size.height()).ok_or("empty page")?;
+        let mut page = pdf.start_page_with(settings);
+        let mut surface = page.surface();
+        let pt = krilla::geom::Size::from_wh(size.width(), size.height()).ok_or("empty page")?;
+        surface.draw_svg(&tree, pt, krilla_svg::SvgSettings::default());
+        surface.finish();
+        page.finish();
+        Ok(())
     }
 }
 
