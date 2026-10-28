@@ -177,6 +177,10 @@ cd app && bun run drag-check && bun run viewport-check && bun run issues-check
 cd app && bun run layout-check && bun run text-check && bun run scriptnode-check
 ```
 
+```bash
+cd app && bun run shader-check && bun run paint-check && bun run component-check
+```
+
 `text-check` depends on the installed fonts and runs only in the Linux CI job for now.
 
 ```bash
@@ -206,6 +210,12 @@ cd app && bun run a11y-check && bun run motion-check && bun run window-check
   `scriptnode-check` covers script nodes (inputs and their clamping, re-running on a new input or size, the
   error shown in the node, children never saved). All three run without a window; `text-check` is Linux-only for
   now (it depends on the installed fonts).
+- `shader-check` covers shader fills (`.glsl` uniforms and their defaults, `@resolution`, `@sdf`, opacity, an edited
+  file, the red hatch for a missing or broken file, save and reopen); `paint-check` covers fills and strokes read
+  back as pixels (image modes, mesh, linear, radial and angular gradients, stacked and blended fills, stroke
+  alignment); `component-check` covers instances (root and `descendants` overrides, `enabled: false`, a replacing
+  `type`, component edits reaching instances, nested instances, undeletable instance children, a deleted
+  component). All three run without a window; `shader-check` needs a Vulkan device (lavapipe on CI).
 - `a11y-check` reads the Windows UI Automation tree and fails on any unnamed control; `motion-check` makes
   sure animations stop under *reduced motion*; `window-check` makes sure the window fits the screen and its
   frame carries the Nalarupa icon (`bun run window-check dist/nalarupa.exe` for the built exe).
