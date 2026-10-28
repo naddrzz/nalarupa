@@ -362,6 +362,15 @@ impl Engine {
         }
     }
 
+    /// A rolled-back script took its inserted nodes with it: their slides have nothing to paint and
+    /// no clock, so they would only end after `SLIDE_WAIT` while `animating` stays true.
+    pub fn forget_gone_slides(&mut self) {
+        // One walk of each tree: `slid` only grows, and `find` per id would scan the document every time.
+        let live: std::collections::HashSet<String> = self.doc.all_ids().into_iter().chain(self.preview.iter().flat_map(|p| p.all_ids())).collect();
+        self.renderer.slides.retain(|s| live.contains(&s.id));
+        self.slid.retain(|id| live.contains(id));
+    }
+
     /// Whether node `id` shows a background blur, a component instance's content included.
     pub fn holds_glass(&self, id: &str) -> bool {
         self.holds_glass_with(&self.doc, id, &Map::new(), &mut None)
