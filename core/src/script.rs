@@ -1706,6 +1706,8 @@ card = Insert(root, {type:\"frame\", name:\"Card\", width:100, height:100, layou
         e.stream_update("toolu_1", "ag0", &full);
         e.sync();
         assert!(e.renderer.slides.is_empty(), "the streamed update gave the card glass");
+    }
+
     /// A slide is an isolated snapshot, so a blended paint would show its plain colour until the
     /// slide ends: a node with a blend mode (itself or in its subtree) appears in place instead.
     #[test]
