@@ -2,8 +2,12 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ImgInstance } from '@gpuix/react'
 import { renderPixels, tryCall, type Box } from './core'
 import { fitCam } from './Canvas'
+import { painted } from './geometry'
 import { C, DPR } from './theme'
 import { T } from './ui'
+
+/** The camera showing a slide fitted to the window: the core paints a turned or flipped slide through its matrix, so fit where it is painted. */
+export const slideCam = (slide: Box, w: number, h: number) => fitCam(painted(slide), w, h, 40, 8)
 
 /** Presentation mode: each top-level frame is a slide, shown alone and fitted to the window. */
 export function Present({ w, h, start, version, animating, exit }: { w: number; h: number; start?: string; version: number; animating?: boolean; exit: () => void }) {
@@ -22,7 +26,7 @@ export function Present({ w, h, start, version, animating, exit }: { w: number; 
 
   const draw = () => {
     if (!slide || w < 2 || h < 2) return
-    const cam = fitCam(slide, w, h, 40, 8)
+    const cam = slideCam(slide, w, h)
     const pw = Math.round(w * DPR)
     const ph = Math.round(h * DPR)
     const px = renderPixels(pw, ph, cam.x, cam.y, cam.zoom * DPR, 0x000000, slide.id)

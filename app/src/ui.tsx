@@ -56,6 +56,9 @@ export const forwardKey = (onShortcut: Shortcut, e: EventPayload) => {
 }
 /** The editor's shortcuts for the buttons beneath it: a button keeps keyboard focus after a click. */
 export const ShortcutScope = createContext<Shortcut | null>(null)
+/** Hands keyboard focus back to the canvas. A text input keeps focus after Enter commits it and drops the editor's
+ *  shortcuts (Ctrl+Z never reaches `onKeyDown`: the input binds it), so `Field` and `NumField` call this on Enter. */
+export const FocusBack = createContext<(() => void) | null>(null)
 type PressableProps = {
   onClick?: () => void; testId?: string; role?: string; label?: string; selected?: boolean; expanded?: boolean
   /** -1 leaves the Tab order (a parent owns the keyboard path, e.g. a tree row's chevron). */
@@ -169,13 +172,16 @@ export function useFieldRing(onFocus?: Handler, onBlur?: Handler) {
     backStops.set(field, stop.current.id)
     return () => void backStops.delete(field)
   })
+  // Leave the id alone when it already names another element: Tab sets it before the blur arrives.
+  const release = () => { setFocus(false); if (el.current?.id === keyboardFocusId) setKeyboardFocus(null) }
   return {
     ref,
     back: <div ref={stop} onKeyDown={noKey} style={{ position: 'absolute', width: 0, height: 0 }} />,
     ring: focus || on,
     onFocus: (e: EventPayload) => { setFocus(true); onFocus?.(e) },
-    // Leave the id alone when it already names another element: Tab sets it before the blur arrives.
-    onBlur: (e: EventPayload) => { setFocus(false); if (el.current?.id === keyboardFocusId) setKeyboardFocus(null); onBlur?.(e) },
+    onBlur: (e: EventPayload) => { release(); onBlur?.(e) },
+    /** Drop the ring after focus was moved away from code (`focusElement`): the field gets no blur event then. */
+    release,
     onMouseDown: () => void setTimeout(() => setKeyboardFocus(renderer.getFocusedElementId?.() ?? null), 30),
   }
 }
@@ -283,6 +289,7 @@ export function Field({ label, value, onCommit, width, mono, testId, placeholder
   /** Accessible name when the visible label is the section title (a placeholder is not a label). */
   name?: string
 }) {
+  const back = useContext(FocusBack)
   const [draft, setDraft] = useState(value)
   // Typed and committed values as of the last event: Enter and the blur after it may both run before a
   // re-render, and the blur must neither send a stale draft nor repeat the commit.
@@ -292,14 +299,17 @@ export function Field({ label, value, onCommit, width, mono, testId, placeholder
     setDraft(value)
     typed.current = sent.current = value
   }, [value])
+  /** False when `onCommit` rejected the value (the field reverts and keeps focus, so it can be fixed). */
   const commit = (v = typed.current) => {
     typed.current = v
-    if (v === sent.current) return
+    if (v === sent.current) return true
     sent.current = v
     if (onCommit(v) === false) {
       typed.current = sent.current = value
       setDraft(value)
+      return false
     }
+    return true
   }
   return (
     <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, width, flexGrow: width ? undefined : 1, minWidth: 0 }}>
@@ -311,7 +321,7 @@ export function Field({ label, value, onCommit, width, mono, testId, placeholder
         mono={mono}
         placeholder={placeholder}
         onChange={(e) => setDraft((typed.current = e.value ?? ''))}
-        onSubmit={(e) => commit(e.value ?? typed.current)}
+        onSubmit={(e) => { if (commit(e.value ?? typed.current)) back?.() }}
         onBlur={() => commit()}
         theme={{ caret: C.accent }}
       />
@@ -347,6 +357,7 @@ export function NumField({ label, name = label, value, mixed, onCommit, onStep, 
   /** Accessible name when the visible label is a letter or symbol ("W", "↻"). */
   name?: string
 }) {
+  const back = useContext(FocusBack)
   const fmt = (v: number) => String(Number(v.toFixed(2)))
   const shown = mixed ? '' : fmt(value)
   const [draft, setDraft] = useState(shown)
@@ -365,11 +376,14 @@ export function NumField({ label, name = label, value, mixed, onCommit, onStep, 
     setDraft(latest.current)
     onCommit(v, k)
   }
+  /** False when the draft is not a number: the field reverts and keeps focus. */
   const typed = () => {
-    if (draft === shown) return
+    if (draft === shown) return true
     // An empty field is not 0: Number('') would commit it as 0.
     const t = draft.trim()
-    commit(t === '' ? NaN : Number(t))
+    const v = t === '' ? NaN : Number(t)
+    commit(v)
+    return Number.isFinite(v)
   }
   return (
     <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, width, flexGrow: width ? undefined : 1, minWidth: 0 }}>
@@ -395,7 +409,7 @@ export function NumField({ label, name = label, value, mixed, onCommit, onStep, 
         value={draft}
         placeholder={mixed ? 'Mixed' : undefined}
         onChange={(e) => setDraft(e.value ?? '')}
-        onSubmit={typed}
+        onSubmit={() => { if (typed()) back?.() }}
         onBlur={() => {
           typed()
           session.current = null
@@ -491,7 +505,7 @@ export function Segmented<V extends string>({ value, options, onChange, label }:
           selected={o.value === value}
           onClick={() => onChange(o.value)}
           style={{
-            flexGrow: 1, height: 24, borderRadius: 5, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            flexGrow: 1, flexBasis: 0, height: 24, borderRadius: 5, display: 'flex', alignItems: 'center', justifyContent: 'center',
             paddingLeft: 6, paddingRight: 6,
             backgroundColor: o.value === value ? C.raised : undefined,
             hover: { backgroundColor: C.raised },

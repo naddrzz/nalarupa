@@ -79,6 +79,33 @@ try {
   await sleep(250)
   if ((await rows()) !== rows0 || (await app.getByTestId('layer-rename').count())) throw new Error('a quick second chevron click did not collapse (or opened rename)')
 
+  // Rows nested 17 levels deep stay inside the 247 px panel with a readable name: the indent narrows the row
+  // instead of pushing a full-width row off the right edge, where the deepest layers could not be reached.
+  const made = await mcp('execute', { input: `let p = Insert(document, {type:"frame", name:"Deep0", x:0, y:0, width:800, height:800})
+for (let i = 1; i <= 16; i++) p = Insert(p, {type: i % 2 ? "group" : "frame", name: "Level " + i + " with a descriptive name", width: 700 - i * 20, height: 700 - i * 20})
+Insert(p, {type:"text", name:"Deepest text layer", content:"deep", fontSize:20})` })
+  const chain = [...made.matchAll(/^"(?:Deep0|Level \d+ [^"]*|Deepest text layer)": "(\w+)"/gm)].map((m) => m[1])
+  if (chain.length !== 18) throw new Error(`expected 18 nested layers, created ${chain.length}`)
+  const panel = (await app.getByTestId('layers').bounds())!
+  for (const id of chain.slice(0, 17)) {
+    const t = app.getByTestId(`layer-toggle-${id}`)
+    await until(async () => (await t.count()) > 0, `the chevron of layer ${id}`)
+    await t.click()
+    await sleep(100)
+  }
+  const deepest = app.getByTestId('layers').getByText('Deepest text layer')
+  await until(async () => (await deepest.count()) > 0, 'the deepest layer row')
+  for (const [depth, id] of chain.entries()) {
+    const b = (await app.getByTestId(`layer-${id}`).bounds())!
+    if (b.x + b.width > panel.x + panel.width + 0.5 || b.width < 100) throw new Error(`layer row at depth ${depth} is ${JSON.stringify(b)}: it runs off the ${panel.width}px panel or is too narrow`)
+  }
+  const name = (await deepest.bounds())!
+  if (name.width < 40 || name.x + name.width > panel.x + panel.width) throw new Error(`the deepest layer name is ${JSON.stringify(name)}: it is clipped or off the panel`)
+  await mcp('execute', { input: `Delete("${chain[0]}")` })
+  await until(async () => (await rows()) === rows0, 'the deep layers to go away')
+  // The agent's edit opened the Agent tab; the steps below read the Inspector.
+  await app.getByTestId('tab-design').click()
+
   // The eye icon hides and shows its layer (the row's press capture used to swallow the click). A hidden
   // layer keeps its eye while the pointer is away; the click does not select the row.
   const eyeShown = async (want: boolean) => {
@@ -110,13 +137,29 @@ try {
   // Present starts at the slide holding the selection, also when a layer inside it is selected.
   await app.getByTestId('layer-toggle-sld03').click()
   await app.getByTestId('layers').getByText('Thanks').click()
+  await app.getByTestId('layer-toggle-sld01').click()
   await sleep(500)
+  const rowsBeforePresent = await rows()
   await app.getByTestId('present').click()
   await app.getByText('3 / 3 · Esc to exit').waitFor({ timeoutMs: 10000 }).catch(() => { throw new Error('Present from a layer inside slide 3 did not open on slide 3') })
   await app.getByTestId('presentation').press('escape')
   await sleep(500)
+  // Leaving Present returns to the panel as it was: slide 1, which is no ancestor of the selection, stays expanded.
+  await until(async () => (await app!.getByTestId('layers').count()) > 0, 'the Layers panel after Present')
+  if ((await rows()) !== rowsBeforePresent) throw new Error('leaving Present collapsed (or expanded) Layers rows')
+  await app.getByTestId('layer-toggle-sld01').click()
   await app.getByTestId('layer-toggle-sld03').click()
   await app.getByTestId('canvas').press('escape')
+  await sleep(250)
+
+  // Present from the Slides tab comes back to the Slides tab.
+  await app.getByText('Slides').click()
+  await app.getByTestId('present-from-slides').click()
+  await app.getByText('Esc to exit').waitFor({ timeoutMs: 10000 })
+  await app.getByTestId('presentation').press('escape')
+  await until(async () => (await app!.getByTestId('present-from-slides').count()) > 0, 'the Slides tab after Present')
+  if (await app.getByTestId('layers').count()) throw new Error('leaving Present from the Slides tab came back to Layers')
+  await app.getByText('Layers').click()
   await sleep(250)
 
   // Layers as a keyboard tree (rows topmost first: sld03, sld02, sld01). Keys without an element id go
@@ -268,6 +311,20 @@ TakeScreenshot([s])`,
   await mcp('execute', { input: `Delete(Get(n => n.name === "SpinImg" ? n.id : undefined)[0]); Delete(Get(n => n.name === "SpinGen" ? n.id : undefined)[0])` })
   await sleep(300)
 
+  // The shimmer of a round placeholder (ellipse, corner radius) or one inside a rounded clip frame is cut to that shape:
+  // it is drawn as a shaped overlay, while a plain rectangle keeps the cheap one.
+  await mcp('execute', { input: `Insert(document, {type:"ellipse", name:"RoundImg", x:300, y:300, width:200, height:200, fill:{type:"image", url:"nalarupa:pending-e2e-1", mode:"fill"}});
+Insert(document, {type:"rectangle", name:"PlainImg", x:300, y:600, width:200, height:100, fill:{type:"image", url:"nalarupa:pending-e2e-2", mode:"fill"}});
+Insert(document, {type:"frame", name:"RoundClip", x:600, y:300, width:200, height:200, cornerRadius:60, clip:true, layout:"none", fill:"#eeeeee", children:[{type:"rectangle", name:"ClipImg", x:0, y:0, width:200, height:200, fill:{type:"image", url:"nalarupa:pending-e2e-3", mode:"fill"}}]})` })
+  if (!(await poll(async () => (await app!.getByTestId('agent-shimmer-round').count()) === 2))) throw new Error(`${await app.getByTestId('agent-shimmer-round').count()} shaped shimmers for an ellipse and a rounded clip frame, expected 2`)
+  // Both are 200 × 200 and sit side by side (x 300 and 600, same y): equal boxes 1.5 widths apart, so neither is cut short or misplaced.
+  const [oval, clipped] = (await app.getByTestId('agent-shimmer-round').all()).map((n) => n.bounds!).sort((a, b) => a.x - b.x)
+  if (Math.abs(oval.width - clipped.width) > 3 || Math.abs(oval.height - clipped.height) > 3 || Math.abs(oval.height - oval.width) > 3
+    || Math.abs(clipped.x - oval.x - 1.5 * oval.width) > 4 || Math.abs(clipped.y - oval.y) > 3) {
+    throw new Error(`shaped shimmers at ${JSON.stringify(oval)} and ${JSON.stringify(clipped)}, expected two equal squares 1.5 widths apart on one row`)
+  }
+  await shot('05c-round-shimmer')
+  await mcp('execute', { input: `for (const id of Get(n => ["RoundImg", "PlainImg", "RoundClip"].includes(n.name) ? n.id : undefined)) Delete(id)` })
   // A flash goes with its node: deleting the node while the flash shows removes the outline at once
   // (it used to hang around the empty spot for the rest of the ~0.9 s flash).
   await mcp('execute', { input: `Insert(document, {type:"rectangle", name:"SpinGone", x:300, y:600, width:400, height:160, rotation:-30, fill:"#ff3355"})` })
@@ -400,10 +457,10 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
   const dir = process.env.XDG_RUNTIME_DIR
   const sock = process.platform === 'linux' && dir ? readdirSync(dir).find((f) => f.startsWith('sway-ipc')) : undefined
   if (process.platform === 'linux' && !sock) throw new Error('sway IPC socket not found in XDG_RUNTIME_DIR: run via scripts/wl-run.sh')
+  type Node = { type: string; rect: { x: number; y: number }; nodes?: Node[]; floating_nodes?: Node[] }
+  const windowOf = (n: Node): Node | undefined => n.type === 'floating_con' ? n : [...(n.nodes ?? []), ...(n.floating_nodes ?? [])].map(windowOf).find(Boolean)
+  const origin = sock ? windowOf(JSON.parse(await Bun.$`swaymsg -s ${join(dir!, sock)} -t get_tree`.text()))!.rect : { x: 0, y: 0 }
   if (sock) {
-    type Node = { type: string; rect: { x: number; y: number }; nodes?: Node[]; floating_nodes?: Node[] }
-    const windowOf = (n: Node): Node | undefined => n.type === 'floating_con' ? n : [...(n.nodes ?? []), ...(n.floating_nodes ?? [])].map(windowOf).find(Boolean)
-    const origin = windowOf(JSON.parse(await Bun.$`swaymsg -s ${join(dir!, sock)} -t get_tree`.text()))!.rect
     const box = (await app.getByTestId('agent-input').bounds())!
     const rows = (g: Awaited<ReturnType<typeof grab>>) => Array.from({ length: Math.floor(box.height) }, (_, i) => {
       const from = ((Math.floor(origin.y + box.y) + i) * g.w + Math.floor(origin.x + box.x)) * 3
@@ -506,10 +563,17 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
   await app.getByTestId('agent-new').click()
   await until(async () => !!(await app.getByText('Ask me to design anything').count()), 'the empty state after + (New agent)')
   if (await app.getByType('markdown').count()) throw new Error('+ (New agent) left the old conversation on screen')
+  // Picking a chat with the keyboard (Tab to its row, Enter) hands focus back to the history button, as Escape does.
   await app.getByTestId('agent-history').click()
   await app.getByTestId(`chat-${chatId}`).waitFor()
-  await app.getByTestId(`chat-${chatId}`).click()
+  for (let i = 0; i < 10 && !(await app.getByTestId(`chat-${chatId}-focus`).count()); i++) {
+    await app.call('keystrokes', { keys: 'tab' })
+    await sleep(200)
+  }
+  if (!(await app.getByTestId(`chat-${chatId}-focus`).count())) throw new Error('Tab never reached the saved chat row in the history popover')
+  await app.call('keystrokes', { keys: 'enter' })
   await until(async () => (await app.getByType('markdown').count()) === 1, 'the saved chat to reopen')
+  await until(async () => !!(await app.getByTestId('agent-history-focus').count()), 'the history button to regain keyboard focus after a keyboard pick')
   await app.getByTestId('agent-history').click()
   await app.getByTestId(`chat-${chatId}`).hover()
   // Removal cannot be undone, so the first press only arms it.
@@ -563,7 +627,12 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
     for (let i = 0; i < 30 && !ok(); i++) await sleep(100)
     return ok()
   }
+  // The settings panel is taller than the room left under the header: the header keeps its 40 px, so the
+  // gear does not move when the panel opens (#452).
+  const gearBefore = await app.getByTestId('agent-settings').bounds()
   await openKeyBox()
+  const gearAfter = await app.getByTestId('agent-settings').bounds()
+  if (gearAfter.y !== gearBefore.y) throw new Error(`opening Agent settings moved the header's gear from y=${gearBefore.y} to y=${gearAfter.y}`)
   await app.getByTestId('api-key').fill('sk-ant-first')
   await app.getByTestId('api-key').press('enter')
   if (!(await settled(() => savedKey() === 'sk-ant-first'))) throw new Error(`typing a key did not save it: ${savedKey()}`)
@@ -611,7 +680,12 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
   // A textarea's value cannot be read, so send it: the prompt bubble shows what the composer held (the stand-in
   // replies; on Windows a send would start the real CLI).
   if (standIn) {
+    const tabs = async () => { const d = await app!.getByTestId('tab-design').bounds(); const a = await app!.getByTestId('tab-agent').bounds(); return `${d.x},${d.width},${a.x},${a.width}` }
+    const idleTabs = await tabs()
     await app.getByTestId('agent-send').click()
+    // The running dot widens the Agent label: the two tab buttons must keep their size and position.
+    await until(async () => !!(await app!.getByText('Agent •').count()), 'the Agent tab to show the running dot')
+    if ((await tabs()) !== idleTabs) throw new Error(`the Design/Agent tabs moved while the agent ran: ${idleTabs} -> ${await tabs()}`)
     await until(async () => (await app!.getByText('make the title bigger').count()) > 0, 'the composer draft to survive the Design tab and be sent')
     await until(async () => !(await app!.getByTestId('agent-stop').count()), 'the stand-in agent to finish', 20000)
   }
@@ -619,6 +693,21 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
   const one = (await app.getByText('1×').all()).map((n) => n.bounds!).sort((a, b) => a.width - b.width)[0]
   await app.mouse.click({ x: one.x + one.width / 2, y: one.y + one.height / 2 })
   await app.getByTestId('agent-input').fill('')
+
+  // Two submits before the panel re-renders (Enter+Enter, Enter+Send) send the draft once.
+  if (standIn) {
+    for (const [name, second] of [['enter', () => app!.getByTestId('agent-input').press('enter')], ['send', () => app!.getByTestId('agent-send').click()]] as const) {
+      const text = `dup ${name} twice`
+      await app.getByTestId('agent-input').click()
+      await app.getByTestId('agent-input').fill(text)
+      await Promise.all([app.getByTestId('agent-input').press('enter'), second()])
+      await until(async () => (await app!.getByText(text).count()) > 0, `the "${text}" bubble`)
+      await sleep(1000)
+      const n = await app.getByText(text).count()
+      if (n !== 1) throw new Error(`two submits in one frame (${name}) sent "${text}" ${n} times, expected once`)
+      await until(async () => !(await app!.getByTestId('agent-stop').count()), 'the stand-in agent to finish', 30000)
+    }
+  }
 
   // The agent message pill: a reply long enough to fill the pill must not squash its status dot.
   if (standIn) {
@@ -670,7 +759,16 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
     await sleep(200)
     await app.getByTestId('agent-send').click()
     await app.getByText('Got editor state').waitFor({ timeoutMs: 15000 })
-    await app.getByText('Got editor state').click()
+    // The list is still scrolling to the new reply when the row first appears, and a slow renderer can move the row between measuring and clicking: click again until the second detail card (the "Designed" one is still open) is up.
+    for (let tries = 0; tries < 4; tries++) {
+      await app.getByText('Got editor state').click()
+      try {
+        await until(async () => (await app!.getByTestId('tool-detail').count()) > 1, 'the long result to expand', 3000)
+        break
+      } catch (e) {
+        if (tries === 3) throw e
+      }
+    }
     await until(async () => (await app!.getByText('result row 119').count()) > 0, 'the last line of a long tool result')
 
     // Sending while scrolled up in the chat returns the list to the bottom: the echo and the reply are on screen, not off it.
@@ -725,6 +823,13 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
     await sleep(500)
     const later = (await lastReply())!.height
     if (later !== away) throw new Error(`the reply that streamed while away was not shown whole on return (${away} px, then ${later} px)`)
+    // Enter hands the keys to the canvas, so the composer must not keep drawing its focus ring: typed keys would look like they go to it.
+    await app.getByTestId('agent-input').click()
+    await app.getByTestId('agent-input').fill('Sent with Enter')
+    await until(async () => !!(await app!.getByTestId('agent-input-ring').count()), 'the focus ring on the focused composer')
+    await app.call('keystrokes', { keys: 'enter' })
+    await until(() => onScreen('Sent with Enter'), 'the message sent with Enter on screen')
+    await until(async () => !(await app!.getByTestId('agent-input-ring').count()), 'the composer to drop its focus ring after Enter sent the prompt')
 
     // An expanded thought is secondary to the reply: dimmer text (a markdown block takes its colour from its theme,
     // not from style) and indented. Linux only: grim, and sway for the window's origin.
@@ -805,10 +910,20 @@ for (let i = 0; i < 149; i++) Insert(f, {type:"rectangle", name:"Chip " + i, x:(
   await until(async () => await rowShown('Backdrop'), 'the Layers list scrolled to the layer selected on the canvas')
   await shot('05b-layers-follow-selection')
 
+  const areaBefore = (await app.getByTestId('canvas').bounds())!
   await app.getByTestId('present').click()
   await sleep(1500)
   await shot('06-present')
   await app.getByTestId('presentation').press('escape')
+  if (process.platform === 'linux') {
+    // Leaving Present remounts the canvas: its first frames must show the document, not the unrendered
+    // image placeholder (31,34,48) that used to stay up until the 200 ms sharp-frame timer.
+    for (const end = Date.now() + 600; Date.now() < end;) {
+      const g = await grab()
+      const k = (Math.round(origin.y + areaBefore.y + areaBefore.height - 40) * g.w + Math.round(origin.x + areaBefore.x + areaBefore.width / 2)) * 3
+      if (g.px[k] === 31 && g.px[k + 1] === 34 && g.px[k + 2] === 48) throw new Error('the canvas showed the image placeholder after leaving Present')
+    }
+  }
   await sleep(500)
   // A new document starts without the external agent's cursor from the one before. Fit everything first: a cursor that has
   // faded spawns at its target, and the camera still sits on the far-off Many frame, where the layer culls it.
@@ -822,6 +937,29 @@ for (let i = 0; i < 149; i++) Insert(f, {type:"rectangle", name:"Chip " + i, x:(
   await until(async () => (await app!.getByTestId('canvas').count()) > 0, 'the new document')
   await sleep(1500) // the old cursor, if kept, shows within a frame or two of the canvas
   if (await app.getByTestId('agent-cursor-external').count()) throw new Error("the previous document's external agent cursor is still on the new canvas")
+  // The agent's cursor is decoration: a press on its arrow or name pill reaches the layer under it. A rectangle fills the new
+  // document's frame, the agent reads it (its cursor lands on it), and a click on the pill selects the rectangle.
+  await mcp('execute', { input: 'const f = Get(undefined, n => n.type === "frame" ? n.id : undefined)[0]; rect = Insert(f, {type:"rectangle", name:"Under cursor", x:0, y:0, width:1440, height:900, fill:"#CCCCCC"})' })
+  const cvBox = (await app.getByTestId('canvas').bounds())!
+  // The cursor lands at a random point of the rectangle and its pill sits down and to the right of that point, so near the
+  // frame's far edges the pill is over empty canvas: such a click selects nothing, and a press the pill swallows would
+  // do the same on every try, so only a run of misses fails.
+  for (let i = 0; i < 3; i++) {
+    let selected = false
+    for (let attempt = 0; attempt < 4 && !selected; attempt++) {
+      await app.mouse.click({ x: cvBox.x + 20, y: cvBox.y + 20 }) // empty canvas: nothing selected
+      await until(async () => (await mcp('get_editor_state', {})).includes('Selection: nothing'), 'the selection cleared')
+      await sleep(2500) // the cursor from the insert fades
+      await mcp('execute', { input: 'Get(rect)' })
+      await until(async () => ((await app!.getByTestId('agent-cursor-external').getByType('text').all())[0]?.bounds?.width ?? 0) > 0, "the external agent's name pill")
+      await sleep(800)
+      const pill = (await app.getByTestId('agent-cursor-external').getByType('text').all())[0].bounds
+      await app.mouse.click({ x: pill.x + pill.width / 2, y: pill.y + pill.height / 2 })
+      await sleep(500)
+      selected = !(await mcp('get_editor_state', {})).includes('Selection: nothing')
+    }
+    if (!selected) throw new Error("a click on the external agent cursor's name pill never selected the layer under it")
+  }
   console.log('e2e ok — screenshots in', out)
 } finally {
   await app?.close()

@@ -1,5 +1,5 @@
 // Documents, export, variables, settings and edit commands through the core (no window): `bun scripts/doc-check.ts`
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { call } from '../src/core'
@@ -67,6 +67,53 @@ const b = join(data, 'b.pen')
 call('save', { path: b })
 assert(readFileSync(a, 'utf8') === readFileSync(b, 'utf8'), 'save → open → save is byte-identical')
 
+// Undo or redo back to the saved (or just created) document leaves it clean again.
+call('new', { template: 'blank' })
+const undoFrame = call('layers')[0].id
+const undoRect = call('insert', { parent: undoFrame, node: { type: 'rectangle', x: 10, y: 10, width: 50, height: 50 } }).id
+assert(call('state').dirty, 'drawing a rectangle marks a new document dirty')
+call('undo')
+assert(!call('state').dirty, 'undo back to the new document is clean')
+call('redo')
+assert(call('state').dirty, 'redo away from the new document is dirty')
+call('save', { path: join(data, 'undo.pen') })
+call('update', { ids: [undoRect], props: { x: 20 } })
+call('undo')
+assert(!call('state').dirty, 'undo back to the saved document is clean')
+call('undo')
+assert(call('state').dirty, 'undo past the saved document is dirty')
+call('redo')
+assert(!call('state').dirty, 'redo forward to the saved document is clean')
+
+// Saving through a symlink updates the real file and keeps the link; a failed save leaves no temp file behind.
+const folder = join(data, 'folder')
+mkdirSync(folder)
+throws(() => call('save', { path: folder }), /cannot save/, 'saving over a folder')
+assert(!existsSync(`${folder}.tmp-nalarupa`), 'a failed save removes its temp file')
+const real = join(data, 'real.pen')
+const link = join(data, 'link.pen')
+writeFileSync(real, '{"version":"2.19","children":[]}')
+let linked = true
+try {
+  symlinkSync(real, link)
+} catch (e) {
+  const code = (e as NodeJS.ErrnoException).code
+  if (process.platform !== 'win32' || (code !== 'EPERM' && code !== 'EACCES')) throw e
+  linked = false // creating a symlink needs a privilege on Windows
+}
+if (linked) {
+  call('open', { path: link })
+  exec('Insert("document", {type:"rectangle", name:"via-link", width:5, height:5, fill:"#ff0000"})')
+  assert(call('save').path === link, 'save keeps the document path')
+  assert(lstatSync(link).isSymbolicLink(), 'saving through a symlink keeps the link')
+  assert(readFileSync(real, 'utf8').includes('via-link'), 'saving through a symlink updates the real file')
+  assert(!existsSync(join(data, 'link.pen.tmp-nalarupa')) && !existsSync(join(data, 'real.pen.tmp-nalarupa')), 'a save leaves no temp file')
+  const dangling = join(data, 'dangling.pen')
+  symlinkSync(join(data, 'missing.pen'), dangling)
+  throws(() => call('save', { path: dangling }), /cannot resolve/, 'saving through a dangling symlink')
+  assert(lstatSync(dangling).isSymbolicLink(), 'a dangling symlink is not replaced by a save')
+}
+
 // A file saved while a generated image was still loading keeps its pending url; reopening it counts that as a failed load.
 for (const url of ['nalarupa:pending-image-1-ab', 'pencil:pending-1']) {
   const pend = join(data, 'pending.pen')
@@ -77,6 +124,33 @@ for (const url of ['nalarupa:pending-image-1-ab', 'pencil:pending-1']) {
   assert(node('pr').node.fill.url === '', `open drops the leftover ${url}`)
 }
 
+// A hand-written file may omit node ids or repeat them: open makes them unique so every frame renders and the tree is right.
+{
+  const rect = (name: string, id?: string) => ({ type: 'rectangle', ...(id === undefined ? {} : { id }), name, x: 20, y: 20, width: 60, height: 40, fill: '#ff0000' })
+  const frame = (name: string, x: number, kids: unknown[], id?: string) => ({ type: 'frame', ...(id === undefined ? {} : { id }), name, x, y: 0, width: 200, height: 150, fill: '#ffffff', children: kids })
+  const fixtures: Record<string, unknown[]> = {
+    noid: [frame('NoIdA', 0, [rect('NoIdRect')]), frame('NoIdB', 300, [rect('NoIdRect2')])],
+    dupid: [frame('One', 0, [rect('R1', 'r')], 'f'), frame('Two', 300, [rect('R2', 'r')], 'f')],
+  }
+  for (const [name, children] of Object.entries(fixtures)) {
+    const p = join(data, `${name}.nala`)
+    writeFileSync(p, JSON.stringify({ version: '2.19', children }))
+    call('new', { template: 'empty' })
+    call('open', { path: p })
+    const frames = call<any[]>('frames')
+    assert(frames.length === 2 && new Set(frames.map((f) => f.x)).size === 2, `${name}: both top-level frames are listed (${frames.map((f) => `${f.name}@${f.x}`)})`)
+    const layers = call<any[]>('layers')
+    assert(layers.every((l) => l.id) && new Set(layers.map((l) => l.id)).size === layers.length, `${name}: every layer has its own id`)
+    assert(layers.map((l) => `${l.depth}`).join('') === '0101', `${name}: children sit under their frame (${layers.map((l) => `${l.name}:${l.depth}`)})`)
+    assert(call<string[]>('export', { ids: frames.map((f) => f.id), format: 'svg', path: join(data, `exp-${name}`) }).length === 2, `${name}: every top-level frame exports`)
+    call('save')
+    const saved = JSON.parse(readFileSync(p, 'utf8'))
+    assert(saved.children.every((f: any) => f.id && f.children[0].id), `${name}: save writes the ids back`)
+  }
+  const dup = JSON.parse(readFileSync(join(data, 'dupid.nala'), 'utf8')).children
+  assert(dup[0].id === 'f' && dup[0].children[0].id === 'r', 'the first node keeps a repeated id')
+}
+
 // A pending image inside a clipping frame reports the box the frame leaves visible, so its shimmer is cut there.
 exec('p = Insert(document, {type:"frame", name:"Clip", x:100, y:100, width:300, height:200, layout:"none", clip:true}); Insert(p, {type:"rectangle", name:"Img", x:150, y:50, width:400, height:300, fill:{type:"image", url:"nalarupa:pending-qa"}}); Insert(document, {type:"rectangle", name:"Free", x:600, y:0, width:50, height:50, fill:{type:"image", url:"nalarupa:pending-qa"}})')
 {
@@ -84,6 +158,23 @@ exec('p = Insert(document, {type:"frame", name:"Clip", x:100, y:100, width:300, 
   const img = lv.find((n: any) => n.name === 'Img')
   assert(JSON.stringify(img?.clip) === '{"x":100,"y":100,"w":300,"h":200}', `a pending image in a clip frame carries the frame's box (${JSON.stringify(img?.clip)})`)
   assert(lv.find((n: any) => n.name === 'Free')?.clip === null, 'an unclipped pending image has no clip box')
+}
+
+// A round pending image reports its corner radii and its clipping frame's, so the shimmer is cut to that shape.
+exec('Insert(document, {type:"rectangle", name:"Pill", x:0, y:600, width:100, height:100, cornerRadius:[50,50,10,0], fill:{type:"image", url:"nalarupa:pending-qa"}}); p = Insert(document, {type:"frame", name:"Rounded", x:300, y:600, width:100, height:100, layout:"none", clip:true, cornerRadius:30}); Insert(p, {type:"rectangle", name:"InRounded", x:0, y:0, width:100, height:100, fill:{type:"image", url:"nalarupa:pending-qa"}})')
+{
+  const lv = call('live')
+  const pill = lv.find((n: any) => n.name === 'Pill')
+  assert(JSON.stringify(pill?.radius) === '[50,50,10,0]', `a pending image reports its corner radii (${JSON.stringify(pill?.radius)})`)
+  const inner = lv.find((n: any) => n.name === 'InRounded')
+  assert(JSON.stringify(inner?.cuts) === '[{"x":300,"y":600,"w":100,"h":100,"r":[30,30,30,30]}]', `a pending image in a rounded clip frame carries the frame's radii (${JSON.stringify(inner?.cuts)})`)
+  assert(lv.find((n: any) => n.name === 'Img')?.cuts.length === 0, 'a square clip frame has no radii')
+}
+// A square clip frame inside a rounded one leaves the outer frame's corners in force.
+exec('p = Insert(document, {type:"frame", name:"Outer", x:600, y:600, width:100, height:100, layout:"none", clip:true, cornerRadius:30}); p = Insert(p, {type:"frame", name:"Inner", x:0, y:0, width:60, height:60, layout:"none", clip:true}); Insert(p, {type:"rectangle", name:"Deep", x:0, y:0, width:60, height:60, fill:{type:"image", url:"nalarupa:pending-qa"}})')
+{
+  const deep = call('live').find((n: any) => n.name === 'Deep')
+  assert(JSON.stringify(deep?.cuts?.map((c: any) => c.r)) === '[[30,30,30,30]]', `overlapping clip frames keep the rounded one (${JSON.stringify(deep?.cuts)})`)
 }
 call('open', { path: b })
 
@@ -112,6 +203,39 @@ throws(() => call('open'), /path required/, 'open without a path')
   assert(cb.w > 0 && cb.h > 0, `a library component's internal ref resolves (card box ${cb.w}x${cb.h})`)
   const fill = JSON.parse(exec('Print(JSON.stringify(Get("b",{resolveInstances:true,resolveVariables:true})))').split('Print output\n')[1]).fill
   assert(fill === '#ff0000', `a library variable resolves for its own nodes (fill ${fill})`)
+  call('open', { path: b })
+}
+
+// Save as into another folder keeps relative images and imports pointing at the same files, in the open
+// document, in the saved copy when reopened, and in undo history.
+{
+  const dir = mkdtempSync(join(data, 'saveas-'))
+  mkdirSync(join(dir, 'a', 'img'), { recursive: true })
+  mkdirSync(join(dir, 'b'))
+  writeFileSync(join(dir, 'a', 'img', 'red.svg'), '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8" fill="#ff0000"/></svg>')
+  writeFileSync(join(dir, 'a', 'lib.pen'), JSON.stringify({ version: '2.19', children: [{ id: 'comp', type: 'frame', reusable: true, width: 40, height: 40, fill: '#00ff00' }] }))
+  writeFileSync(join(dir, 'a', 'doc.pen'), JSON.stringify({ version: '2.19', imports: { lib: 'lib.pen' }, children: [{ id: 'f', type: 'frame', width: 100, height: 100, fill: '#ffffff', layout: 'none', children: [
+    { id: 'r', type: 'rectangle', x: 0, y: 0, width: 50, height: 50, fill: { type: 'image', url: 'img/red.svg', mode: 'fill' } },
+    { id: 'i', type: 'ref', ref: 'lib:comp', x: 50, y: 50 }] }] }))
+  const shot = () => call('png', { id: 'f' }) as string
+  call('open', { path: join(dir, 'a', 'doc.pen') })
+  const before = shot()
+  call('update', { ids: ['i'], props: { x: 55 } })
+  const edited = shot()
+  call('save', { path: join(dir, 'b', 'doc.pen') })
+  assert(shot() === edited, 'the open document still shows its image and component after Save as')
+  const saved = JSON.parse(readFileSync(join(dir, 'b', 'doc.pen'), 'utf8'))
+  assert(saved.children[0].children[0].fill.url === '../a/img/red.svg' && saved.imports.lib === '../a/lib.pen', `Save as rewrites relative references (${JSON.stringify([saved.children[0].children[0].fill.url, saved.imports])})`)
+  assert(edited !== before, 'the edit before Save as moved the component')
+  call('undo')
+  assert(call('state').path === join(dir, 'b', 'doc.pen') && shot() === before, 'an undo after Save as brings back the earlier state with its image and component')
+  call('redo')
+  call('save', { path: join(dir, 'b', 'doc.pen') })
+  call('open', { path: join(dir, 'b', 'doc.pen') })
+  assert(shot() === edited, 'the saved copy reopens with its image and imported component')
+  // Saving again in place leaves the paths alone.
+  call('save')
+  assert(JSON.parse(readFileSync(join(dir, 'b', 'doc.pen'), 'utf8')).imports.lib === '../a/lib.pen', 'a plain save keeps the paths')
   call('open', { path: b })
 }
 
@@ -196,6 +320,7 @@ assert(htmlOf({ fill: grad({ rotation: 60 }) }).includes('data:image/svg+xml,%3C
 assert(htmlOf({ fill: grad({ gradientType: 'radial', rotation: 45, size: { width: 0.3, height: 0.8 } }) }).includes('matrix(0.106066 -0.106066 0.282843 0.282843 0.5 0.5)'), 'html exports a rotated radial gradient as an svg background with the canvas ellipse')
 assert(htmlOf({ fill: '#ff0000', effect: { type: 'blur', radius: 4 } }).includes('filter:blur(2px)'), 'html exports layer blur')
 assert(/padding:12px;background:linear-gradient/.test(htmlOf({ fill: '#ffff00', stroke: grad(), strokeWidth: 12 })), 'html exports a gradient stroke')
+assert(/inset:-3px;border-radius:50%;box-shadow:inset 0 0 0 6px #000000;/.test(htmlOf({ type: 'ellipse', width: 120, height: 80, fill: '#f0c000', stroke: '#000000', strokeWidth: 6 })), 'html draws a centered stroke as one ring, not two abutting shadows with a hairline between them')
 // A bottom fill or stroke with a blend mode blends with the layers beneath the element: an overlay with mix-blend-mode
 // outside any isolated box, not a background (background-blend-mode only blends the element's own layers).
 const blendHtml = htmlOf({ fill: [{ type: 'color', color: '#00ffff', blendMode: 'multiply' }] })
@@ -244,6 +369,21 @@ const frame = call('insert', { parent: 'document', node: { type: 'frame', width:
 const kid = call('insert', { parent: frame, node: rect({ name: 'kid', flipX: true, x: 150, y: 20 }) }).id
 const kidSvg = readFileSync(call('export', { ids: [kid], format: 'svg', path: out })[0], 'utf8')
 assert(kidSvg.includes('width="100" height="60" viewBox="500 500 100 60"'), `a flipped child of a frame exports its painted box: ${kidSvg.slice(0, 160)}`)
+// Text lines past a fixed-width-height box are painted, so the export covers them (not just the layer box).
+{
+  const over = (name: string, extra: object = {}) => call('insert', { parent: 'document', node: { type: 'text', name, content: 'a\nb\nc\nd\ne', textGrowth: 'fixed-width-height', width: 120, height: 40, fontSize: 24, fill: '#000000', x: 900, y: 900, ...extra } }).id
+  const top = over('overflow')
+  const p = png(top)
+  assert(p.w === 120 && p.h > 100, `an overflowing text exports its lines, not the 120x40 box (got ${p.w}x${p.h})`)
+  const svg = readFileSync(call('export', { ids: [top], format: 'svg', path: out })[0], 'utf8')
+  assert(svg.includes(`height="${p.h}" viewBox="900 900 120 ${p.h}`), `svg of an overflowing text is as tall as the png: ${svg.slice(0, 160)}`)
+  assert(readFileSync(call('export', { ids: [top], format: 'pdf', path: join(out, 'overflow.pdf') })[0], 'latin1').includes(`/MediaBox[0 0 120 ${p.h}]`), 'pdf page of an overflowing text covers its lines')
+  const lowId = over('overflow-bottom', { textAlignVertical: 'bottom', y: 1200 })
+  const low = png(lowId)
+  assert(low.w === 120 && low.h === p.h, `a bottom-aligned overflowing text exports the same height (got ${low.w}x${low.h})`)
+  const lowSvg = readFileSync(call('export', { ids: [lowId], format: 'svg', path: out })[0], 'utf8')
+  assert(lowSvg.includes(`viewBox="900 ${1240 - low.h} 120 ${low.h}"`), `a bottom-aligned overflow reaches above its box: ${lowSvg.slice(0, 160)}`)
+}
 
 // HTML export reserves the rotated bounding box of a child in an auto layout, like the canvas does.
 {
@@ -311,13 +451,24 @@ if (process.platform !== 'win32') {
     const doc = call('tool', { name: 'open_document', args: { path: a } })
     assert(doc.error && /Stop the agent/.test(doc.text), 'open_document while the agent runs')
     assert(call('frames').length === 0 && call('state').path === null, 'a refused switch keeps the document')
-    exec('Insert(document, {type:"frame", name:"Pricing", x:0, y:0, width:400, height:200, placeholder:true})')
-    assert(call('frames')[0].placeholder === true, 'the agent left a frame generating')
+    // The built-in agent flags one frame, an external agent (MCP) another: Stop clears only the former.
+    // `agentRunning` is set before the run's thread emits `start`, so wait for the event.
+    let agent: string | undefined
+    await until(() => {
+      agent ??= call('poll').events.find((ev: any) => ev.kind === 'start')?.agent.id
+      return Boolean(agent)
+    }, 'the running agent announces itself')
+    const frame = (name: string, x: number) => `Insert(document, {type:"frame", name:"${name}", x:${x}, y:0, width:400, height:200, placeholder:true})`
+    assert(!call('tool', { name: 'execute', args: { input: frame('Pricing', 0), __agent: agent } }).error, 'the agent flags a frame')
+    assert(!call('tool', { name: 'execute', args: { input: frame('External job', 500), __agent: 'external' } }).error, 'an external agent flags a frame')
+    assert(call('frames').every((f: any) => f.placeholder === true), 'both frames are generating')
   } finally {
     call('agent_stop')
   }
   await until(() => !call('state').agentRunning, 'the agent stops')
-  assert(call('frames')[0].placeholder === false && call('live').length === 0, 'Stop ends the "Generating" state of the frames the agent left')
+  const flag = (name: string) => call('frames').find((f: any) => f.name === name)?.placeholder
+  assert(flag('Pricing') === false, 'Stop ends the "Generating" state of the frames the agent left')
+  assert(flag('External job') === true && call('live').length === 1, 'Stop leaves a frame an external agent is still building generating')
   assert(call('agent_reset') === true && call('chat_list').current === null, 'new conversation once the agent has stopped')
   call('new', { template: 'slides' })
   assert(ids() === 'sld01,sld02,sld03', 'switching works again once the agent stopped')

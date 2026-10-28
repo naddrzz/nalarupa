@@ -170,14 +170,18 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
     kept.set('scroll', t && t[0] < store.items.length ? [t[0], t[1]] : null)
   }, [])
 
+  const spent = useRef<string | null>(null) // the text just sent, until the panel re-renders: a second submit in the same frame still holds it
+  useEffect(() => { spent.current = null })
   const send = (text: string) => {
     const t = text.trim()
-    if (!t) return
+    if (!t || t === spent.current) return
     const lastRow = items[items.length - 1]?.id ?? -1 // read before the call: the echo may be pushed while it runs
     if (tryCall('agent_send', { text: t, parallel: Number(parallel), mode, designs, iterate: cookMode }) !== null) {
       setDraft('')
+      spent.current = t
       pinNext.current = lastRow
       onSent?.()
+      input.release() // onSent moves the keys to the canvas, so the composer is no longer focused
     } else toast('Unable to start the agent. Check the backend in Agent settings and try again.', true)
   }
   // The core refuses while an agent runs ("Stop the agent before …"): keep the chat and say why.
@@ -218,7 +222,7 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}>
-      <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 4, paddingLeft: 14, paddingRight: 8, height: 40, borderBottomWidth: 1, borderColor: C.border }}>
+      <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 4, paddingLeft: 14, paddingRight: 8, height: 40, flexShrink: 0, borderBottomWidth: 1, borderColor: C.border }}>
         <Icon name="sparkles" size={14} color={C.accent} />
         <T weight="600" grow>Design agent</T>
         <ChatHistory running={running} toast={toast} changed={() => setChatVersion((n) => n + 1)} />
@@ -292,7 +296,7 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
 
       <div style={{ padding: 10, borderTopWidth: 1, borderColor: C.border, display: 'flex', flexDirection: 'column', gap: 8 }}>
         <div style={{ position: 'relative', borderRadius: 10, borderWidth: 1, borderColor: C.border, backgroundColor: C.panel2, padding: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {input.ring ? <FocusRing radius={10} /> : null}
+          {input.ring ? <FocusRing radius={10} testId="agent-input-ring" /> : null}
           <div onMouseDown={input.onMouseDown}>
             {input.back}
             <textarea
@@ -501,6 +505,8 @@ function ChatHistory({ running, toast, changed }: { running: boolean; toast: Toa
     restoreChat(r.events ?? [])
     revealAll(store.items) // a saved reply shows whole, the typewriter is for live ones
     close()
+    // Picked from the keyboard: hand focus back to the history button, as Escape does, so Tab goes on from it.
+    if (kbChat !== null) trigger.restore()
     changed()
   }
   const remove = (id: string) => {
@@ -566,6 +572,7 @@ function ChatHistory({ running, toast, changed }: { running: boolean; toast: Toa
                             <Pressable
                               ref={keep(`row:${c.id}`)}
                               testId={`chat-${c.id}`}
+                              focusTestId={`chat-${c.id}-focus`}
                               label={`Open chat: ${c.title || 'Untitled chat'}`}
                               onClick={() => open(c.id)}
                               style={{ flexGrow: 1, minWidth: 0, height: 30, display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, paddingLeft: 8, borderRadius: 6 }}

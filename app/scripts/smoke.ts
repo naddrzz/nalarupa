@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { call, renderPixels } from '../src/core'
 import { applyEvents, barAgents, changing, clearPresence, cursorFaded, cursorOpacity, FADE_IN, imageSrc, lastContentId, needsFrame, poke, resetChat, restoreChat, runVerb, spinning, store, takeActivity } from '../src/agents'
+import { slideCam } from '../src/Present'
 import { own, painted, pointIn, shimmerHalves } from '../src/geometry'
 import { FRAME_LABEL_TEXT, INDICATOR_TICK_MS, ellipsisAt, ellipsisPadAt, pulseAt } from '../src/theme'
 
@@ -45,6 +46,14 @@ await Bun.sleep(700) // the inserted child slides in first
 renderPixels(320, 180, 5000, 5000, 1, 0x1c1c1f)
 const overflow = call('hit', { x: 5150, y: 5150 }).map((i: string) => call('layers').find((l: any) => l.id === i)?.name)
 assert(overflow.join() === 'Host,Overflow', `hit finds a child outside its unclipped parent (got ${overflow})`)
+call('undo')
+// A click lands on what a shape paints, not on the empty part of its box.
+call('tool', { name: 'execute', args: { input: 'f = Insert(document, {type:"frame", name:"Shapes", layout:"none", x:9000, y:9000, width:400, height:300, fill:"#ffffff"}); Insert(f, {type:"rectangle", name:"Card", x:20, y:20, width:360, height:260, fill:"#3b82f6"}); Insert(f, {type:"ellipse", name:"Avatar", x:100, y:100, width:100, height:100, fill:"#ef4444"}); Insert(f, {type:"path", name:"Diagonal", x:220, y:40, width:150, height:150, geometry:"M0 0 L150 150", stroke:"#000000", strokeWidth:2})' } })
+const topmost = (x: number, y: number) => call('layers').find((l: any) => l.id === call('hit', { x: 9000 + x, y: 9000 + y }).at(-1))?.name
+assert(topmost(150, 150) === 'Avatar', `hit finds the ellipse on its area (got ${topmost(150, 150)})`)
+assert(topmost(103, 103) === 'Card', `hit falls through the empty corner of an ellipse's box (got ${topmost(103, 103)})`)
+assert(topmost(295, 115) === 'Diagonal', `hit finds a path on its stroke (got ${topmost(295, 115)})`)
+assert(topmost(360, 50) === 'Card', `hit falls through the empty part of a path's box (got ${topmost(360, 50)})`)
 call('undo')
 const out = call('tool', { name: 'execute', args: { input: 'x = Insert(document, {type:"frame", name:"Smoke", width:100, height:100, fill:"#ff0000", x:0, y:2000})' } })
 assert(!out.error && out.text.includes('"Smoke"'), `execute works: ${out.text}`)
@@ -95,6 +104,49 @@ assert(!call('state').animating, 'presented slide settled after ~0.6 s')
 assert(lit() >= before, 'presented slide keeps its existing content')
 assert(greens() > greenBefore, 'presented slide shows its inserted content')
 call('undo')
+// Present fits a turned or flipped slide where the core paints it, not its unturned box: the slide fills the window.
+call('tool', { name: 'execute', args: { input: 'Insert(document, {type:"frame", name:"FlipSlide", x:5000, y:0, width:960, height:540, fill:"#00ff00", flipX:true, layout:"none"}); Insert(document, {type:"frame", name:"TurnSlide", x:5000, y:1000, width:960, height:540, fill:"#00ff00", rotation:90, layout:"none"})' } })
+for (const name of ['FlipSlide', 'TurnSlide']) {
+  const slide = call('frames').find((f: any) => f.name === name)
+  const cam = slideCam(slide, 480, 270)
+  const p = renderPixels(480, 270, cam.x, cam.y, cam.zoom, 0x000000, slide.id, true)!
+  let n = 0
+  for (let i = 0; i < p.length; i += 4) if (p[i + 1] > 180 && p[i] < 100) n++
+  const want = (painted(slide).w * cam.zoom * painted(slide).h * cam.zoom) * 0.9
+  assert(n > want, `${name} is presented fitted to the window (${n} green px, want > ${Math.round(want)})`)
+}
+call('undo')
+call('undo')
+// An insert into a centered card that grows moves the card and its children: the children glide with the card,
+// not with a doubled offset (they used to jump 34 px the wrong way, then fly back through the old spot).
+{
+  const run = (input: string) => {
+    const o = call('tool', { name: 'execute', args: { input } })
+    assert(!o.error, `execute works: ${o.text}`)
+  }
+  const redTop = (f: Uint8Array) => {
+    for (let i = 0; i < f.length; i += 4) if (f[i] > 200 && f[i + 1] < 40 && f[i + 2] < 40) return (i / 4 / 640) | 0
+    return -1
+  }
+  const grab = () => new Uint8Array(renderPixels(640, 400, 0, 3000, 1, 0x1c1c1f, undefined, true)!)
+  run(`Insert(document, {type:"frame", name:"GlideRoot", x:0, y:3000, width:400, height:340, layout:"vertical", justifyContent:"center", alignItems:"center", fill:"#000000"})
+card = Insert(Get(n => n.name === "GlideRoot" ? n.id : undefined)[0], {type:"frame", name:"Card", layout:"vertical", gap:8, padding:10, fill:"#222222"})
+Insert(card, {type:"rectangle", name:"R", width:100, height:40, fill:"#ff0000"})`)
+  grab()
+  await Bun.sleep(800)
+  grab()
+  await Bun.sleep(700)
+  call('poll')
+  const from = redTop(grab())
+  run(`Insert(Get(n => n.name === "Card" ? n.id : undefined)[0], {type:"rectangle", name:"N", width:100, height:60, fill:"#00ff00"})`)
+  const tops = [redTop(grab())]
+  for (const t0 = performance.now(); performance.now() - t0 < 700; await Bun.sleep(30)) tops.push(redTop(grab()))
+  const to = tops[tops.length - 1]
+  assert(from > 0 && to < from, `the card's child moves up when the card grows (${from} -> ${to})`)
+  assert(tops.every((t) => t >= to && t <= from), `the card's child glides between its old and new spot, not past them (${from} -> ${to}: ${tops})`)
+  assert(tops.every((t, i) => i === 0 || t <= tops[i - 1]), `the card's child moves one way (${tops})`)
+  run(`Delete(Get(n => n.name === "GlideRoot" ? n.id : undefined)[0])`)
+}
 // Reduced motion (an OS preference the app passes in): agent inserts appear in place.
 call('reduce_motion', { on: true })
 call('tool', { name: 'execute', args: { input: 'Insert("sld01", {type:"rectangle", name:"Still", width:100, height:100, fill:"#0000ff"})' } })
@@ -205,6 +257,23 @@ resetChat()
   const helper = { id: 'ag2', name: 'Chandra', color: '#ED8936' }
   applyEvents([ev('user', { text: 'go' }), ev('start'), plan, { type: 'agent', kind: 'start', agent: helper }, { type: 'agent', kind: 'error', text: 'boom', agent: helper }, { type: 'agent', kind: 'done', durationMs: 1, usage: {}, agent: helper }], 0)
   assert(store.todos.map((t) => t.status).join(',') === 'completed,in_progress,pending', "a helper's failure leaves the plan owner's steps alone")
+}
+// A chat saved mid-run (crash, kill) reopens with its unfinished plan steps cancelled, not live; a finished run's plan is left as it ended.
+{
+  const agent = { id: 'ag1', name: 'Surya', color: '#38B2AC' }
+  const ev = (kind: string, o: object = {}) => ({ type: 'agent', kind, agent, ...o })
+  const todos = [{ content: 'Build hero', status: 'in_progress', activeForm: 'Building hero' }, { content: 'Build footer', status: 'pending' }]
+  const saved = [ev('user', { text: 'Design a page' }), ev('start'), ev('todos', { todos: [{ content: 'Plan', status: 'completed' }, ...todos] }), ev('message_end')]
+  restoreChat(saved)
+  assert(store.todos.map((t) => t.status).join(',') === 'completed,cancelled,cancelled', 'a plan whose run never finished reopens cancelled')
+  restoreChat([...saved, ev('done', { durationMs: 1, usage: {} })])
+  assert(store.todos.map((t) => t.status).join(',') === 'completed,in_progress,pending', 'a plan whose run finished reopens as it ended')
+  restoreChat([...saved, ev('done', { stopped: true, durationMs: 1, usage: {} })])
+  assert(store.todos.map((t) => t.status).join(',') === 'completed,cancelled,cancelled', 'a stopped run reopens with a cancelled plan')
+  // A plan finished in an earlier turn is not reopened cancelled because the same agent was mid-run in a later turn that set no plan.
+  restoreChat([...saved, ev('done', { durationMs: 1, usage: {} }), ev('user', { text: 'Tweak it' }), ev('start'), ev('message_end')])
+  assert(store.todos.map((t) => t.status).join(',') === 'completed,in_progress,pending', "a later turn that set no plan leaves the earlier turn's plan alone")
+  resetChat()
 }
 // A long chat keeps every item, the first prompt included, live and when reopened from history.
 {
@@ -449,5 +518,33 @@ const layoutMs = (chars: number) => {
 layoutMs(10000) // warm the font and shaping caches
 const [short, long] = [layoutMs(40000), layoutMs(160000)]
 assert(long < short * 9 && long < 4000, `a long single line lays out in linear time (40k chars ${short.toFixed(0)} ms, 160k ${long.toFixed(0)} ms)`)
+// Exporting rasterizes, encodes and writes after the engine lock is released: a 2x PNG and a PDF of a page of
+// blurred, shadowed cards (seconds of work) never stall another thread's core calls (they did for the whole export).
+{
+  call('new', { template: 'empty' })
+  const out = mkdtempSync(join(tmpdir(), 'smoke-export-'))
+  const page = call('insert', { parent: 'document', node: { type: 'frame', name: 'Page', layout: 'none', x: 0, y: 0, width: 1440, height: 900, fill: { type: 'gradient', gradientType: 'linear', rotation: 45, colors: [{ color: '#667eea', position: 0 }, { color: '#764ba2', position: 1 }] } } }).id
+  for (let i = 0; i < 12; i++) call('insert', { parent: page, node: { type: 'frame', name: 'Card' + i, layout: 'none', x: 40 + (i % 4) * 340, y: 40 + Math.floor(i / 4) * 240, width: 300, height: 200, cornerRadius: 16, fill: '#ffffffcc', effect: [{ type: 'shadow', offset: { x: 0, y: 12 }, blur: 40, color: '#00000055' }, { type: 'background_blur', radius: 20 }] } })
+  const worker = new Worker(new URL('./export-lock-worker.ts', import.meta.url))
+  const done = new Promise<{ max: number }>((resolve, reject) => {
+    worker.onmessage = (e) => resolve(e.data)
+    worker.onerror = (e) => reject(new Error('export lock worker failed: ' + e.message))
+  })
+  done.catch(() => {}) // a failure while the exports run is rethrown at the await below
+  try {
+    await Bun.sleep(300)
+    const t0 = performance.now()
+    const png = call('export', { ids: [page], format: 'png', path: out, opts: { scale: 2 } })
+    const pdf = call('export', { ids: [page], format: 'pdf', path: join(out, 'page.pdf'), opts: {} })
+    const took = performance.now() - t0
+    worker.postMessage('stop')
+    const { max } = await done
+    assert(png.length === 1 && pdf.length === 1, 'the exports report their files')
+    assert(took > 1000 && max < took / 4 && max < 1000, `another thread's core calls keep answering during an export (slowest ${max} ms of ${took.toFixed(0)} ms)`)
+  } finally {
+    worker.terminate()
+    rmSync(out, { recursive: true, force: true })
+  }
+}
 console.log('smoke ok — MCP at', init.mcpUrl)
 process.exit(0)
