@@ -44,6 +44,8 @@ png = "0.18"
 # Figma clipboard archives: raw-deflate (schema) and zstd (newer message chunks).
 miniz_oxide = "0.8"
 zstd = { version = "0.13", default-features = false }
+# SVGZ image fills inlined by SVG export, decoded with a size cap (usvg uses the same crate).
+flate2 = "1"
 
 # resvg 0.47.0 (Apache-2.0 OR MIT) with two fixes in src/render.rs: group layers (and filter
 # regions) are clamped to their own target pixmap. Upstream clamps nested layers to a box in

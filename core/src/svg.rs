@@ -426,6 +426,18 @@ fn image_ext(b: &[u8]) -> &'static str {
     }
 }
 
+/// Largest SVGZ image the SVG export decompresses, like the Figma clipboard's archive cap: a small
+/// gzip bomb would otherwise expand without limit.
+const MAX_SVGZ_BYTES: usize = 256 << 20;
+
+/// `gz` decompressed; None when it is broken or larger than `MAX_SVGZ_BYTES`.
+fn gunzip_capped(gz: &[u8]) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let mut out = Vec::new();
+    flate2::read::GzDecoder::new(gz).take(MAX_SVGZ_BYTES as u64 + 1).read_to_end(&mut out).ok()?;
+    (out.len() <= MAX_SVGZ_BYTES).then_some(out)
+}
+
 /// The file at `href` (a `data:` URI stays as it is) as a `data:` URI.
 fn data_uri(href: &str) -> Option<String> {
     if href.starts_with("data:") {
@@ -433,7 +445,7 @@ fn data_uri(href: &str) -> Option<String> {
     }
     let mut bytes = std::fs::read(href).ok()?;
     if bytes.starts_with(&[0x1f, 0x8b]) {
-        bytes = resvg::usvg::decompress_svgz(&bytes).ok()?; // a browser reads no gzip inside a data: URI
+        bytes = gunzip_capped(&bytes)?; // a browser reads no gzip inside a data: URI
     }
     let mime = match image_ext(&bytes) {
         "jpg" => "jpeg",
@@ -2074,6 +2086,29 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::sync::Arc;
+
+    #[test]
+    fn svgz_inlines_decompressed_and_a_gzip_bomb_is_refused() {
+        use std::io::{Read, Write};
+        let gz = |r: &mut dyn Read| {
+            let mut w = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+            std::io::copy(r, &mut w).unwrap();
+            w.finish().unwrap()
+        };
+        let dir = std::env::temp_dir().join(format!("nalarupa-test-svgz-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"/>"#;
+        let small = dir.join("a.svgz");
+        std::fs::File::create(&small).unwrap().write_all(&gz(&mut &svg[..])).unwrap();
+        let uri = data_uri(small.to_str().unwrap()).unwrap();
+        let b64 = uri.strip_prefix("data:image/svg+xml;base64,").unwrap();
+        assert_eq!(base64::engine::general_purpose::STANDARD.decode(b64).unwrap(), svg);
+        let bomb = dir.join("bomb.svgz");
+        std::fs::write(&bomb, gz(&mut std::io::repeat(b' ').take(MAX_SVGZ_BYTES as u64 + 1))).unwrap();
+        assert!(std::fs::metadata(&bomb).unwrap().len() < 2 << 20);
+        assert_eq!(data_uri(bomb.to_str().unwrap()), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn node(ty: &str, p: Value, (x, y, w, h): Rect) -> RNode {
         let mut n = RNode::leaf("n".into(), ty, p.as_object().cloned().unwrap_or_default(), None);
