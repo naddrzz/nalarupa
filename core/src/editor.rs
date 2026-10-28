@@ -950,12 +950,18 @@ pub fn paste(e: &mut Engine, html: &str, text: &str, targets: &[String], view: O
         } else {
             vec![(ROOT.to_string(), view.map(center_on).unwrap_or_default())]
         };
-        // Components the nodes use that this document lacks go in a row right of everything, ids intact.
-        let (mut cx, cy) = match union(e.doc.children().iter().filter_map(|n| v.rect(n["id"].as_str()?)).chain([u])) {
+        // Components the nodes use that this document lacks go in a row right of everything, pasted
+        // nodes included, ids intact. One whose ids clash with this document's is left out.
+        let pasted = places.iter().filter(|(p, _)| p == ROOT).map(|(_, (sx, sy))| (u.0 + sx, u.1 + sy, u.2, u.3));
+        let (mut cx, cy) = match union(e.doc.children().iter().filter_map(|n| v.rect(n["id"].as_str()?)).chain(pasted)) {
             Some(r) => (r.0 + r.2 + 100.0, r.1),
             None => (0.0, 0.0),
         };
-        let comps = clip.needs["components"].as_array().map(Vec::as_slice).unwrap_or(&[]).iter().filter(|c| c["id"].as_str().is_some_and(|id| e.doc.find(id).is_none())).map(|c| {
+        let comps = clip.needs["components"].as_array().map(Vec::as_slice).unwrap_or(&[]).iter().filter(|c| {
+            let mut ok = c["id"].is_string();
+            walk(std::slice::from_ref(*c), &mut |n| ok &= n["id"].as_str().is_some_and(|id| e.doc.find(id).is_none()));
+            ok
+        }).map(|c| {
             let mut c = c.clone();
             (c["x"], c["y"]) = (num(cx), num(cy));
             cx += c["width"].as_f64().unwrap_or(0.0).max(100.0) + 100.0;
@@ -986,7 +992,7 @@ pub fn paste(e: &mut Engine, html: &str, text: &str, targets: &[String], view: O
         let vars: Map<String, Value> = clip.needs["variables"].as_object().into_iter().flatten().filter(|(k, _)| d.root["variables"].get(k.as_str()).is_none()).map(|(k, v)| (k.clone(), v.clone())).collect();
         if !vars.is_empty() {
             for (axis, list) in clip.needs["themes"].as_object().into_iter().flatten() {
-                if d.root["themes"].get(axis).is_none() {
+                if list.is_array() && (d.root["themes"].is_null() || d.root["themes"].is_object()) && d.root["themes"].get(axis).is_none() {
                     d.root["themes"][axis] = list.clone();
                 }
             }

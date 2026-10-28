@@ -389,6 +389,8 @@ Copy(C,P,{name:"Inst"})`)
   const layers = call<any[]>('layers')
   assert(layers.some((l) => l.name === 'Comp'), 'the instance brings its component along')
   const q = layers.find((l) => l.name === 'P').id
+  const [cb, pb] = ['Comp', 'P'].map((n) => call('bounds', { ids: [layers.find((l) => l.name === n).id] }))
+  assert(cb.x >= pb.x + pb.w, `the component lands right of the pasted layer: ${JSON.stringify([cb, pb])}`)
   assert(png(q) === src, 'the pasted frame renders like the source')
   // Same-document paste adds nothing: variables and components are already there.
   call('paste', { html: xclip.html, text: xclip.text, targets: [], view })

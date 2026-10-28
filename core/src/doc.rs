@@ -171,6 +171,13 @@ impl Doc {
     /// (instance overrides are keyed on them).
     pub fn import_component(&mut self, node: Value) -> Result<String, String> {
         validate_node(&node)?;
+        let mut ids = Vec::new();
+        walk(std::slice::from_ref(&node), &mut |n| ids.push(n["id"].as_str().unwrap_or_default().to_string()));
+        for (i, id) in ids.iter().enumerate() {
+            if id.is_empty() || ids[..i].contains(id) || self.find(id).is_some() {
+                return Err(format!("component id '{id}' is missing or already used"));
+            }
+        }
         self.insert_prepared(ROOT, node)
     }
 
