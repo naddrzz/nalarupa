@@ -4,6 +4,7 @@ import type { CursorValue } from '@gpuix/native/host'
 import { useGpuixRequired, type ImgInstance, type PublicInstance } from '@gpuix/react'
 import { call, renderPixels, tryCall, type Box } from './core'
 import { CANVAS_BG, C, DPR, FONT, FRAME_LABEL_TEXT, LEFT_W, TOP_H } from './theme'
+
 import { FocusRing, setKeyboardFocus, SvgOverlay, T, useRing, type Toast } from './ui'
 import { AgentLayer } from './AgentLayer'
 import {
@@ -15,6 +16,9 @@ import {
   mirrored, other, overlay, pointAt, pt as ptOf, round, roundRay, shownHandles, snapPoints, snapRay, split, toggleSmooth,
   type Anchor, type Contour, type Seg, type Side,
 } from './pen'
+
+// The canvas background behind the bitmap, as CSS (shown until the first frame is drawn).
+const CANVAS_BG_CSS = `#${CANVAS_BG.toString(16).padStart(6, '0')}`
 
 export type Tool = 'move' | 'frame' | 'rectangle' | 'ellipse' | 'text' | 'hand' | 'pen'
 export type Cam = { x: number; y: number; zoom: number }
@@ -242,6 +246,10 @@ export function Canvas(props: {
   // What the bitmap shows (null until the first frame): a pan paints right away, so the commit's
   // scheduled frame can skip it, but a fresh mount has nothing to skip.
   const drawn = useRef<typeof live.current | null>(null)
+  // The bitmap stays 0×0 until it holds a frame: GPUI can present a new <img> (a fresh mount, as
+  // when leaving Present) before any commit-time draw, and an empty one shows its placeholder.
+  const [hasFrame, setHasFrame] = useState(false)
+  const framed = useRef(false)
   const draw = (sharp: boolean) => {
     drawn.current = live.current
     const { cam: c, w: vw, h: vh } = live.current
@@ -249,7 +257,13 @@ export function Canvas(props: {
     const pw = Math.round(vw * DPR)
     const ph = Math.round(vh * DPR)
     const px = renderPixels(pw, ph, c.x, c.y, c.zoom * DPR, CANVAS_BG, undefined, sharp)
-    if (px) img.current?.setImagePixels(pw, ph, px)
+    if (px && img.current) {
+      img.current.setImagePixels(pw, ph, px)
+      if (!framed.current) {
+        framed.current = true
+        setHasFrame(true)
+      }
+    }
   }
   /** Camera moves from pans and the wheel: paint the bitmap now, in the same task as the overlays'
    *  re-render, instead of after the commit and a timer (each pan step used to wait ~10–20 ms). */
@@ -1357,11 +1371,11 @@ export function Canvas(props: {
         if (key === 'alt') setMeasured(null)
       }}
       style={{
-        position: 'relative', width: w, height: h, overflow: 'hidden', flexShrink: 0, userSelect: 'none',
+        position: 'relative', width: w, height: h, overflow: 'hidden', flexShrink: 0, userSelect: 'none', background: CANVAS_BG_CSS,
         cursor: panning ? 'grabbing' : tool === 'hand' || spaceDown ? 'grab' : tool === 'move' ? cursor : 'crosshair',
       }}
     >
-      <img ref={img} objectFit="fill" style={{ position: 'absolute', left: 0, top: 0, width: w, height: h }} />
+      <img ref={img} objectFit="fill" style={{ position: 'absolute', left: 0, top: 0, width: hasFrame ? w : 0, height: hasFrame ? h : 0 }} />
       {visibleFrames.map((f) => {
         const { x, y, w: fw } = screenRect(painted(f))
         const active = selection.includes(f.id)
