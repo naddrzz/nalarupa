@@ -4,9 +4,9 @@
 // Positions are kept in document units and projected with the camera every frame.
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { tryCall, type Box } from './core'
-import { FADE_IN, GONE, PILL_MS, PRESENCE, cursorFaded, cursorOpacity, easeOutCubic, needsFrame, profileOf, store, takeActivity, wakeCursor } from './agents'
+import { FADE_IN, GONE, PILL_MS, PRESENCE, cursorFaded, cursorOpacity, easeOutCubic, needsFrame, pillShown, profileOf, store, takeActivity, wakeCursor } from './agents'
 import { ICONS } from './icons'
-import { painted, pointIn, shimmerHalves, turned, type M, type Rect } from './geometry'
+import { flipRadii, outline, painted, pointIn, shimmerHalves, turned, type M, type Rect } from './geometry'
 import { SvgOverlay } from './ui'
 import { C, FONT, REDUCED_MOTION } from './theme'
 import type { Cam } from './Canvas'
@@ -80,7 +80,7 @@ export function AgentLayer({ cam, w, h, version, chatOpen }: { cam: Cam; w: numb
   const lastFrame = useRef(performance.now())
   const boxes = useRef(new Map<string, Box>())
   const glowPhase = useRef(new Map<string, number>())
-  const live = useMemo(() => tryCall<(Box & { placeholder?: boolean; pending?: boolean; clip?: Rect | null })[]>('live') ?? [], [version])
+  const live = useMemo(() => tryCall<(Box & { placeholder?: boolean; pending?: boolean; radius: number[]; clip?: Rect | null; cuts: (Rect & { r: number[] })[] })[]>('live') ?? [], [version])
 
   store.viewCenter = { x: cam.x + w / 2 / cam.zoom, y: cam.y + h / 2 / cam.zoom }
 
@@ -103,10 +103,10 @@ export function AgentLayer({ cam, w, h, version, chatOpen }: { cam: Cam; w: numb
   // 60 fps while anything animates; idle otherwise (under reduced motion only while a fade is due).
   useEffect(() => {
     const t = setInterval(() => {
-      if (needsFrame(performance.now(), REDUCED_MOTION, live.length, lastFrame.current)) setFrame((f) => (f + 1) % 1_000_000)
+      if (needsFrame(performance.now(), REDUCED_MOTION, live.length, lastFrame.current, chatOpen)) setFrame((f) => (f + 1) % 1_000_000)
     }, 16)
     return () => clearInterval(t)
-  }, [live.length])
+  }, [live.length, chatOpen])
 
   const now = performance.now()
   const dt = clamp((now - lastFrame.current) / 1000, 0, 0.1)
@@ -134,15 +134,20 @@ export function AgentLayer({ cam, w, h, version, chatOpen }: { cam: Cam; w: numb
   const sy = (y: number) => (y - cam.y) * cam.zoom
   const rgb = (hex: string) => `#${hex.replace('#', '').slice(0, 6)}`
   /** Overlay of a rotated node: GPUI cannot rotate divs, so `body` is SVG in the node's own document units,
-   *  placed by the painted transform `m` and the camera, on an image over where the node is painted. */
-  const spun = (r: Rect, m: M, body: string, testId: string, key: string) => {
+   *  placed by the painted transform `m` and the camera, on an image over where the node is painted. `cut` is the paths
+   *  in screen px (clipping frames' rounded corners) that the overlay is cut to. */
+  const spun = (r: Rect, m: M, body: string, testId: string, key: string, cut: string[] = []) => {
     const p = painted({ ...r, m })
     const x = Math.floor(sx(p.x)) - 2
     const y = Math.floor(sy(p.y)) - 2
     const box = { x, y, w: Math.ceil(sx(p.x + p.w)) + 2 - x, h: Math.ceil(sy(p.y + p.h)) + 2 - y }
     const t = [m[0] * cam.zoom, m[1] * cam.zoom, m[2] * cam.zoom, m[3] * cam.zoom, (m[4] - cam.x) * cam.zoom, (m[5] - cam.y) * cam.zoom]
-    return <SvgOverlay key={key} testId={testId} box={box} body={`<g transform="matrix(${t.join(' ')})">${body}</g>`} />
+    const g = `<g transform="matrix(${t.join(' ')})">${body}</g>`
+    return <SvgOverlay key={key} testId={testId} box={box} body={cutDefs(cut) + cutTo(cut, g)} />
   }
+  /** Clip paths for each of `cut` (rounded clipping frames), and `body` cut to all of them. */
+  const cutDefs = (cut: string[]) => cut.map((d, i) => `<clipPath id="cut${i}"><path d="${d}"/></clipPath>`).join('')
+  const cutTo = (cut: string[], body: string) => cut.reduce((g, _, i) => `<g clip-path="url(#cut${i})">${g}</g>`, body)
 
   // ── flashes ───────────────────────────────────────────────────────────────
   const flashEls = []
@@ -203,7 +208,7 @@ export function AgentLayer({ cam, w, h, version, chatOpen }: { cam: Cam; w: numb
       <div key={`f${i}-${f.nodeId}`} style={{ position: 'absolute', left: X, top: Y, width: W, height: H, borderRadius: radius, borderWidth: 2, borderColor: hexAlpha(f.color, alpha), overflow: 'hidden', pointerEvents: 'none' }}>
         {P >= 0 && P < 1 ? (
           <div style={{
-            position: 'absolute', left: 0, top: ctr - H / 2, width: W, height: H,
+            position: 'absolute', left: 0, top: ctr - H / 2, width: W, height: H, pointerEvents: 'none',
             background: { type: 'linear-gradient', angle: 180, stops: [{ color: hexAlpha(f.color, 0), position: 0 }, { color: hexAlpha(f.color, 0.2 * alpha), position: 1 }] },
           }} />
         ) : null}
@@ -222,6 +227,10 @@ export function AgentLayer({ cam, w, h, version, chatOpen }: { cam: Cam; w: numb
     const m = turned(n.m) ? n.m! : null
     // The node's own screen size: a turned node's painted bounds (W×H) are larger than its box.
     const [nw, nh] = [n.w * cam.zoom, n.h * cam.zoom]
+    // The node's own shape (round for an ellipse or a corner radius) and its clipping frame's rounded corners, in screen px.
+    // A flipped or half-turned node has its corners mirrored; a rotated one is drawn in its own space, where they are not.
+    const shape = (k: number) => (n.type === 'ellipse' ? 'ellipse' as const : (m ? n.radius : flipRadii(n.radius, n.m)).map((r) => r * k))
+    const cut = n.cuts.map((c) => outline(sx(c.x), sy(c.y), c.w * cam.zoom, c.h * cam.zoom, c.r.map((r) => r * cam.zoom)))
     if (n.pending) {
       const band = 0.5 * Math.max(nw, nh)
       const p = REDUCED_MOTION ? 0.5 : (now % 1600) / 1600
@@ -231,14 +240,26 @@ export function AgentLayer({ cam, w, h, version, chatOpen }: { cam: Cam; w: numb
         const [bd, o] = [band / cam.zoom, pos / cam.zoom]
         const grad = `<linearGradient id="a"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset="0.5" stop-color="#fff" stop-opacity="0.45"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>`
         // One rect with a peaked gradient: two adjacent rects would blend their shared edge twice, a seam.
-        return spun(n, m, `<defs><clipPath id="k"><rect x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}"/></clipPath>${grad}</defs>`
+        return spun(n, m, `<defs><clipPath id="k"><path d="${outline(n.x, n.y, n.w, n.h, shape(1))}"/></clipPath>${grad}</defs>`
           + `<g clip-path="url(#k)"><rect x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}" fill="#000" fill-opacity="0.25"/>`
-          + `<rect x="${n.x + o}" y="${n.y}" width="${bd}" height="${n.h}" fill="url(#a)"/></g>`, 'agent-shimmer-turned', `p${n.id}`)
+          + `<rect x="${n.x + o}" y="${n.y}" width="${bd}" height="${n.h}" fill="url(#a)"/></g>`, 'agent-shimmer-turned', `p${n.id}`, cut)
+      }
+      if (n.type === 'ellipse' || n.radius.some((r) => r > 0) || cut.length) {
+        // GPUI cannot cut a div to a round shape, so the same wash and band are SVG in screen px, on the part of the node in view.
+        const vis = [[X, Y, X + W, Y + H], [0, 0, w, h], ...(n.clip ? [[sx(n.clip.x), sy(n.clip.y), sx(n.clip.x + n.clip.w), sy(n.clip.y + n.clip.h)]] : [])]
+        const box = { x: Math.floor(Math.max(...vis.map((v) => v[0]))), y: Math.floor(Math.max(...vis.map((v) => v[1]))), w: 0, h: 0 }
+        box.w = Math.ceil(Math.min(...vis.map((v) => v[2]))) - box.x
+        box.h = Math.ceil(Math.min(...vis.map((v) => v[3]))) - box.y
+        if (box.w <= 0 || box.h <= 0) return null
+        const grad = `<linearGradient id="a"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset="0.5" stop-color="#fff" stop-opacity="0.45"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>`
+        return <SvgOverlay key={`p${n.id}`} testId="agent-shimmer-round" box={box} body={`<defs><clipPath id="k"><path d="${outline(X, Y, W, H, shape(cam.zoom))}"/></clipPath>${cutDefs(cut)}${grad}</defs>`
+          + cutTo(cut, `<g clip-path="url(#k)"><rect x="${X}" y="${Y}" width="${W}" height="${H}" fill="#000" fill-opacity="0.25"/>`
+          + `<rect x="${X + pos}" y="${Y}" width="${band}" height="${H}" fill="url(#a)"/></g>`)} />
       }
       return (
         <div key={`p${n.id}`} style={{ position: 'absolute', left: X, top: Y, width: W, height: H, overflow: 'hidden', backgroundColor: '#00000040', pointerEvents: 'none' }}>
           {shimmerHalves(X + pos, band).map(([left, width], k) => (
-            <div key={k} style={{ position: 'absolute', left: left - X, top: 0, width, height: H, background: { type: 'linear-gradient', angle: 90, stops: k ? [{ color: '#FFFFFF73', position: 0 }, { color: '#FFFFFF00', position: 1 }] : [{ color: '#FFFFFF00', position: 0 }, { color: '#FFFFFF73', position: 1 }] } }} />
+            <div key={k} style={{ position: 'absolute', left: left - X, top: 0, width, height: H, pointerEvents: 'none', background: { type: 'linear-gradient', angle: 90, stops: k ? [{ color: '#FFFFFF73', position: 0 }, { color: '#FFFFFF00', position: 1 }] : [{ color: '#FFFFFF00', position: 0 }, { color: '#FFFFFF73', position: 1 }] } }} />
           ))}
         </div>
       )
@@ -266,24 +287,24 @@ export function AgentLayer({ cam, w, h, version, chatOpen }: { cam: Cam; w: numb
         <div style={{ position: 'absolute', left: X, top: Y, width: W, height: H, pointerEvents: 'none' }}>
           {m ? null : (
             <>
-              <div style={{ position: 'absolute', left: 0, top: 0, width: W, height: H, borderRadius: 5, overflow: 'hidden' }}>
+              <div style={{ position: 'absolute', left: 0, top: 0, width: W, height: H, borderRadius: 5, overflow: 'hidden', pointerEvents: 'none' }}>
                 {blobs.map((bl, k) => (
                   <div key={k} style={{
-                    position: 'absolute', left: bl.cx - r, top: bl.cy - r, width: 2 * r, height: 2 * r, borderRadius: r,
+                    position: 'absolute', left: bl.cx - r, top: bl.cy - r, width: 2 * r, height: 2 * r, borderRadius: r, pointerEvents: 'none',
                     // The glow is 0.5-alpha blobs blurred with sigma 0.2·c; GPUI has no blur filter, so a faint core
                     // with a wide soft shadow gives the same glow.
                     backgroundColor: '#607dff10', boxShadow: { offsetX: 0, offsetY: 0, blurRadius: 0.5 * c, spreadRadius: 0, color: '#607dff38' },
                   }} />
                 ))}
               </div>
-              <div style={{ position: 'absolute', left: 0, top: 0, width: W, height: H, borderRadius: 5, borderWidth: 2, borderColor: PRESENCE }} />
+              <div style={{ position: 'absolute', left: 0, top: 0, width: W, height: H, borderRadius: 5, borderWidth: 2, borderColor: PRESENCE, pointerEvents: 'none' }} />
             </>
           )}
           {n.parent ? null : (
             // A turned node keeps its pill upright, above where it is painted.
-            <div style={{ position: 'absolute', left: 0, top: -18 + wave(now / 200) * 0.6, height: 16, maxWidth: Math.max(60, W), display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 5, overflow: 'hidden' }}>
-              <svg source={ICONS.sparkles} style={{ width: 13, height: 13, color: PRESENCE }} />
-              <text style={{ fontSize: 11, fontWeight: '500', color: PRESENCE, fontFamily: FONT, whiteSpace: 'nowrap' }}>{`Generating: ${n.name}`}</text>
+            <div style={{ position: 'absolute', left: 0, top: -18 + wave(now / 200) * 0.6, height: 16, maxWidth: Math.max(60, W), display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 5, overflow: 'hidden', pointerEvents: 'none' }}>
+              <svg source={ICONS.sparkles} style={{ width: 13, height: 13, color: PRESENCE, pointerEvents: 'none' }} />
+              <text style={{ fontSize: 11, fontWeight: '500', color: PRESENCE, pointerEvents: 'none', fontFamily: FONT, whiteSpace: 'nowrap' }}>{`Generating: ${n.name}`}</text>
             </div>
           )}
         </div>
@@ -324,14 +345,14 @@ export function AgentLayer({ cam, w, h, version, chatOpen }: { cam: Cam; w: numb
     const color = c.profile.color
     cursorEls.push(
       <div key={`c${id}`} testId={`agent-cursor-${id}`} style={{ position: 'absolute', left: px - 4, top: py - 5, width: 200, height: 40, opacity, pointerEvents: 'none' }}>
-        <svg source={ARROW_OUTLINE} style={{ position: 'absolute', left: 0, top: 1, width: 24, height: 24, color: '#00000059' }} />
-        <svg source={ARROW_OUTLINE} style={{ position: 'absolute', left: 0, top: 0, width: 24, height: 24, color: '#FFFFFF' }} />
-        <svg source={ARROW_FILL} style={{ position: 'absolute', left: 0, top: 0, width: 24, height: 24, color }} />
+        <svg source={ARROW_OUTLINE} style={{ position: 'absolute', left: 0, top: 1, width: 24, height: 24, color: '#00000059', pointerEvents: 'none' }} />
+        <svg source={ARROW_OUTLINE} style={{ position: 'absolute', left: 0, top: 0, width: 24, height: 24, color: '#FFFFFF', pointerEvents: 'none' }} />
+        <svg source={ARROW_FILL} style={{ position: 'absolute', left: 0, top: 0, width: 24, height: 24, color, pointerEvents: 'none' }} />
         <div style={{
-          position: 'absolute', left: 18, top: 18, paddingTop: 2, paddingBottom: 2, paddingLeft: 5, paddingRight: 5, borderRadius: 2,
+          position: 'absolute', left: 18, top: 18, paddingTop: 2, paddingBottom: 2, paddingLeft: 5, paddingRight: 5, borderRadius: 2, pointerEvents: 'none',
           backgroundColor: color, boxShadow: { offsetX: 0, offsetY: 1, blurRadius: 3.5, spreadRadius: 0, color: '#00000040' },
         }}>
-          <text style={{ fontSize: 11, fontWeight: '500', color: contrastText(color), fontFamily: FONT, whiteSpace: 'nowrap' }}>{c.profile.name}</text>
+          <text style={{ pointerEvents: 'none', fontSize: 11, fontWeight: '500', color: contrastText(color), fontFamily: FONT, whiteSpace: 'nowrap' }}>{c.profile.name}</text>
         </div>
       </div>,
     )
@@ -347,20 +368,20 @@ export function AgentLayer({ cam, w, h, version, chatOpen }: { cam: Cam; w: numb
     cursorEls.push(
       // lucide "pen-tool" has its nib tip at (2, 2) of 24.
       <div key={`pen${id}`} testId="ai-pen" style={{ position: 'absolute', left: px - 2, top: py - 2, width: 120, height: 44, opacity: easeOutCubic(clamp((now - pen.appearAt) / FADE_IN, 0, 1)), pointerEvents: 'none' }}>
-        <svg source={ICONS.pen} style={{ position: 'absolute', left: 0, top: 1, width: 24, height: 24, color: '#00000080' }} />
-        <svg source={ICONS.pen} style={{ position: 'absolute', left: 0, top: 0, width: 24, height: 24, color: PRESENCE }} />
+        <svg source={ICONS.pen} style={{ position: 'absolute', left: 0, top: 1, width: 24, height: 24, color: '#00000080', pointerEvents: 'none' }} />
+        <svg source={ICONS.pen} style={{ position: 'absolute', left: 0, top: 0, width: 24, height: 24, color: PRESENCE, pointerEvents: 'none' }} />
         <div style={{
-          position: 'absolute', left: 22, top: 22, paddingTop: 2, paddingBottom: 2, paddingLeft: 5, paddingRight: 5, borderRadius: 2,
+          position: 'absolute', left: 22, top: 22, paddingTop: 2, paddingBottom: 2, paddingLeft: 5, paddingRight: 5, borderRadius: 2, pointerEvents: 'none',
           backgroundColor: PRESENCE, boxShadow: { offsetX: 0, offsetY: 1, blurRadius: 3.5, spreadRadius: 0, color: '#00000040' },
         }}>
-          <text style={{ fontSize: 11, fontWeight: '500', color: contrastText(PRESENCE), fontFamily: FONT, whiteSpace: 'nowrap' }}>AI Pen</text>
+          <text style={{ pointerEvents: 'none', fontSize: 11, fontWeight: '500', color: contrastText(PRESENCE), fontFamily: FONT, whiteSpace: 'nowrap' }}>AI Pen</text>
         </div>
       </div>,
     )
   }
 
   // ── agent message pills (bottom center) ───────────────────────────────────
-  const pills = [...store.pills.entries()].filter(([id, p]) => now - p.at < PILL_MS && !(chatOpen && !profileOf(id).parent))
+  const pills = [...store.pills.entries()].filter(([id, p]) => now - p.at < PILL_MS && pillShown(id, chatOpen))
   const pulse = REDUCED_MOTION ? 1 : 0.55 + 0.45 * Math.sin(now / 250)
 
   return (
@@ -369,20 +390,20 @@ export function AgentLayer({ cam, w, h, version, chatOpen }: { cam: Cam; w: numb
       {flashEls}
       {cursorEls}
       {pills.length ? (
-        <div style={{ position: 'absolute', left: 0, bottom: 16, width: w, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+        <div style={{ position: 'absolute', left: 0, bottom: 16, width: w, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, pointerEvents: 'none' }}>
           {pills.map(([id, p]) => {
             const prof = profileOf(id)
             const msg = p.text.replace(/\s+/g, ' ').trim()
             return (
               <div key={id} style={{
                 display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8, maxWidth: Math.min(512, w - 32),
-                paddingLeft: 12, paddingRight: 12, paddingTop: 6, paddingBottom: 6, borderRadius: 999,
+                paddingLeft: 12, paddingRight: 12, paddingTop: 6, paddingBottom: 6, borderRadius: 999, pointerEvents: 'none',
                 backgroundColor: C.panel, borderWidth: 1, borderColor: C.border,
                 boxShadow: { offsetX: 0, offsetY: 4, blurRadius: 12, spreadRadius: 0, color: '#00000055' },
               }}>
-                <div testId={`agent-pill-dot-${id}`} style={{ width: 8, height: 8, flexShrink: 0, borderRadius: 4, backgroundColor: prof.color, opacity: pulse }} />
-                <text style={{ fontSize: 12, fontWeight: '600', color: prof.color, fontFamily: FONT, whiteSpace: 'nowrap' }}>{prof.name}</text>
-                <text style={{ fontSize: 12, color: C.text, fontFamily: FONT, whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden', flexShrink: 1, minWidth: 0 }}>
+                <div testId={`agent-pill-dot-${id}`} style={{ width: 8, height: 8, flexShrink: 0, borderRadius: 4, backgroundColor: prof.color, opacity: pulse, pointerEvents: 'none' }} />
+                <text style={{ pointerEvents: 'none', fontSize: 12, fontWeight: '600', color: prof.color, fontFamily: FONT, whiteSpace: 'nowrap' }}>{prof.name}</text>
+                <text style={{ pointerEvents: 'none', fontSize: 12, color: C.text, fontFamily: FONT, whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden', flexShrink: 1, minWidth: 0 }}>
                   {msg.length > 140 ? `${msg.slice(0, 140)}…` : msg}
                 </text>
               </div>

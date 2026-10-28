@@ -8,6 +8,7 @@ pub mod editor;
 pub mod engine;
 pub mod figma;
 pub mod guide;
+pub mod hit;
 pub mod history;
 pub mod html;
 pub mod layout;
@@ -76,7 +77,7 @@ fn rect(f: &render::Flat) -> Value {
 
 fn state(e: &Engine) -> Value {
     json!({"version": e.version, "title": e.title(), "path": e.doc.path, "dirty": e.dirty(), "selection": e.selection,
-           "agentRunning": e.agent.running, "mcpPort": e.mcp_port, "animating": !e.renderer.slides.is_empty()})
+           "agentRunning": e.agent.running, "executing": e.executing, "mcpPort": e.mcp_port, "animating": !e.renderer.slides.is_empty() || script::busy()})
 }
 
 /// Execute one UI command.
@@ -177,9 +178,12 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
                 json!({"bx": bx, "by": by, "rotation": rotation, "flipX": flip_x, "flipY": flip_y})
             });
             let flat = e.renderer.find(id).map(rect);
+            // A component instance holds only its overrides: what it inherits, for the Inspector to show where it has none.
             let empty = serde_json::Map::new();
-            let exists = raw.is_some() || crate::resolve::Resolver::new(&e.doc.root, &e.libs, &empty).has_path(id);
-            Ok(json!({"node": raw, "exists": exists, "box": flat, "local": local, "parent": parent, "parentLayout": parent_layout,
+            let resolver = resolve::Resolver::new(&e.doc.root, &e.libs, &empty);
+            let inherited = raw.as_ref().filter(|n| n["type"] == "ref").and_then(|n| resolver.inherited(n));
+            let exists = raw.is_some() || resolver.has_path(id);
+            Ok(json!({"node": raw, "exists": exists, "inherited": inherited, "box": flat, "local": local, "parent": parent, "parentLayout": parent_layout,
                       "variables": e.doc.root.get("variables").cloned().unwrap_or(json!({}))}))
         }
         "select" => {
@@ -191,7 +195,7 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             let mut e = engine();
             let targets = ids(&req["ids"]);
             let props = req["props"].clone();
-            let apply = |d: &mut doc::Doc| targets.iter().try_for_each(|id| d.update(id, &props));
+            let apply = |d: &mut doc::Doc| d.update_all(&targets.iter().map(|id| (id.as_str(), &props)).collect::<Vec<_>>());
             match req["coalesce"].as_str() {
                 Some(key) => e.edit_coalesced(key, apply)?,
                 None => e.edit_or_drag(apply)?,
@@ -228,8 +232,8 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
         "delete" => {
             let mut e = engine();
             // A selected descendant of a selected layer goes with it; deleting it separately would fail.
-            let targets = editor::top_only(&e.doc, &ids(&req["ids"]));
-            e.edit_or_drag(|d| targets.iter().try_for_each(|id| d.delete(id)))?;
+            let targets = e.doc.outermost(&ids(&req["ids"]));
+            e.edit_or_drag(|d| d.delete_all(&targets))?;
             Ok(state(&e))
         }
         "duplicate" => {
@@ -368,10 +372,13 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             Ok(json!({"text": out.text, "error": out.error, "images": out.images.len()}))
         }
         "export" => {
-            let mut e = engine();
-            let targets = ids(&req["ids"]);
-            let files = html::export(&mut e, &targets, req["format"].as_str().unwrap_or("png"), req["path"].as_str().unwrap_or(""), &req["opts"])?;
-            Ok(json!(files))
+            let job = {
+                let mut e = engine();
+                let targets = ids(&req["ids"]);
+                html::plan(&mut e, &targets, req["format"].as_str().unwrap_or("png"), req["path"].as_str().unwrap_or(""), &req["opts"])?
+            };
+            // The guard is gone: rasterizing and writing must not block the canvas.
+            Ok(json!(job.run()?))
         }
         "variables" => Ok(engine().doc.variables()),
         "set_variable" => {
@@ -407,10 +414,14 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
         "live" => {
             let mut e = engine();
             e.sync();
-            // `clip` is the canvas box its clipping ancestors leave visible; the overlay must not paint outside it.
-            let out: Vec<Value> = e.renderer.live().into_iter().map(|(f, clip)| {
+            // `clip` is the canvas box its clipping ancestors leave visible; the overlay must not paint outside it. `cuts` are
+            // those ancestors that round their corners (box `x y w h` and radii `r`), each of which cuts it too. `radius` is the
+            // node's own [tl, tr, br, bl] (an ellipse is round by its type).
+            let out: Vec<Value> = e.renderer.live().into_iter().map(|(f, clip, cuts)| {
                 let mut v = rect(f);
+                v["radius"] = json!(f.radius);
                 v["clip"] = clip.map_or(Value::Null, |(x, y, w, h)| json!({"x": x, "y": y, "w": w, "h": h}));
+                v["cuts"] = Value::Array(cuts.into_iter().map(|((x, y, w, h), r)| json!({"x": x, "y": y, "w": w, "h": h, "r": r})).collect());
                 v
             }).collect();
             Ok(Value::Array(out))
@@ -430,7 +441,7 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             Ok(json!(true))
         }
         "agent_reset" => agent::reset().map(|_| json!(true)),
-        "agent_permission" => agent::answer_permission(req["id"].as_str().ok_or("id required")?, req["answer"].as_str().unwrap_or("deny")).map(|_| json!(true)),
+        "agent_permission" => agent::answer_permission(req["id"].as_str().ok_or("id required")?, req["answer"].as_str().ok_or("answer required: allow, deny or auto")?).map(|_| json!(true)),
         "chat_list" => Ok(agent::chats()),
         "chat_load" => agent::load_chat(req["id"].as_str().ok_or("id required")?),
         "chat_delete" => agent::delete_chat(req["id"].as_str().ok_or("id required")?).map(|_| json!(true)),
@@ -441,9 +452,10 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             mcp::install(req["client"].as_str().unwrap_or(""), port).map(Value::String)
         }
         "png" => {
-            let mut e = engine();
             let id = req["id"].as_str().ok_or("id required")?;
-            let png = e.ctx().node_png(id, req["scale"].as_f64().unwrap_or(1.0))?;
+            let scale = req["scale"].as_f64().unwrap_or(1.0).clamp(0.05, 8.0);
+            let tree = engine().ctx().node_tree_at(id, scale)?;
+            let png = render::encode_tree(&tree, "png", scale, 0)?;
             Ok(json!(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, png)))
         }
         _ => Err(format!("unknown command '{cmd}'")),
