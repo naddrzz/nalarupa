@@ -1,6 +1,7 @@
 //! Editor state shared by the UI (FFI), the MCP server and the built-in agent.
 
 use crate::doc::{Doc, ROOT};
+use crate::history::{diff, Patch};
 use crate::render::{Ctx, Renderer};
 use crate::svg::Assets;
 use crate::text::Fonts;
@@ -46,8 +47,9 @@ pub struct Engine {
     pub version: u64,
     synced: u64,
     pub saved: u64,
-    undo: Vec<Value>,
-    redo: Vec<Value>,
+    /// Each step turns the current document into the one before (undo) or after (redo) it.
+    undo: Vec<Patch>,
+    redo: Vec<Patch>,
     pub selection: Vec<String>,
     pub events: Vec<Value>,
     pub script: crate::script::ScriptState,
@@ -149,6 +151,23 @@ fn drop_pending(v: &mut Value, inflight: &std::collections::HashSet<String>) {
         }
         _ => {}
     }
+}
+
+/// Rewrite a history `stack` (its last step applies to the document `old`) as if `f` had been applied to every
+/// state, where `new` is `f(old)`: replay the steps back from `old`, apply `f` to each state they reach, and diff
+/// the rewritten neighbours. A step is a patch, not a document, so `f` cannot be applied to it directly.
+fn relocate_history(stack: &mut Vec<Patch>, old: &Value, new: &Value, f: impl Fn(&mut Value)) {
+    let (mut old, mut new) = (old.clone(), new.clone());
+    let mut out = Vec::with_capacity(stack.len());
+    for step in stack.drain(..).rev() {
+        step.apply(&mut old);
+        let mut prev = old.clone();
+        f(&mut prev);
+        out.push(diff(&new, &prev).unwrap_or_default());
+        new = prev;
+    }
+    out.reverse();
+    *stack = out;
 }
 
 /// `ours` with the changes that turned `base` into `theirs` applied; where both changed the same
@@ -283,10 +302,9 @@ impl Engine {
         let mut cx = Ctx { doc, libs: &self.libs, fonts: &mut self.fonts, assets: &mut self.assets };
         let roots = self.renderer.shift_siblings(&mut cx);
         let rebuilt = self.renderer.sync(&mut cx);
-        if !self.renderer.slides.is_empty() {
-            self.renderer.refresh_slides(&mut cx, &rebuilt, roots);
-        }
-        self.synced = self.version;
+        // A slide dropped for a blend mode goes back into the cached view at the next sync.
+        let dropped = !self.renderer.slides.is_empty() && self.renderer.refresh_slides(&mut cx, &rebuilt, roots);
+        self.synced = if dropped { 0 } else { self.version };
     }
 
     /// An agent `Insert` below the top level slides into place.
@@ -418,18 +436,15 @@ impl Engine {
     /// middle of a drag (an agent's `execute`) is its own step taken from the pre-drag document, and
     /// the drag's snapshot takes the change along, so the drag undoes without it.
     pub fn commit(&mut self, before: Value) {
-        if same(&before, &self.doc.root) {
-            return;
+        let Some(mut step) = diff(&self.doc.root, &before) else { return };
+        if let Some(start) = self.drag_before.take() {
+            // Undoing this step starts from the drag's snapshot with the change in it, so the patch is relative to that.
+            let merged = merge3(&before, &self.doc.root, &start);
+            step = diff(&merged, &start).unwrap_or_default();
+            self.drag_before = Some(merged);
         }
-        let before = match self.drag_before.take() {
-            Some(start) => {
-                self.drag_before = Some(merge3(&before, &self.doc.root, &start));
-                start
-            }
-            None => before,
-        };
         self.coalesce = None;
-        self.undo.push(before);
+        self.undo.push(step);
         if self.undo.len() > UNDO_LIMIT {
             self.undo.remove(0);
         }
@@ -469,9 +484,9 @@ impl Engine {
         if self.drag_before.is_some() {
             return false;
         }
-        let Some(prev) = self.undo.pop() else { return false };
+        let Some(step) = self.undo.pop() else { return false };
         self.coalesce = None;
-        self.redo.push(std::mem::replace(&mut self.doc.root, prev));
+        self.redo.push(step.apply(&mut self.doc.root));
         self.touch();
         true
     }
@@ -480,9 +495,9 @@ impl Engine {
         if self.drag_before.is_some() {
             return false;
         }
-        let Some(next) = self.redo.pop() else { return false };
+        let Some(step) = self.redo.pop() else { return false };
         self.coalesce = None;
-        self.undo.push(std::mem::replace(&mut self.doc.root, next));
+        self.undo.push(step.apply(&mut self.doc.root));
         self.touch();
         true
     }
@@ -507,6 +522,10 @@ impl Engine {
         let r = f(&mut self.doc).inspect_err(|_| self.doc.root = before.clone())?;
         if !same(&before, &self.doc.root) {
             if merge {
+                // The step turned `before` into the group's first document; now it must start from the edited one.
+                let mut first = before;
+                self.undo.pop().unwrap_or_default().apply(&mut first);
+                self.undo.push(diff(&self.doc.root, &first).unwrap_or_default());
                 self.redo.clear();
                 self.touch();
             } else {
@@ -639,9 +658,40 @@ impl Engine {
             None => self.doc.path.clone().ok_or("document has no path yet; pass a path to save")?,
         };
         self.doc.root["version"] = json!(crate::doc::FORMAT_VERSION);
-        self.doc.save(&target)?;
+        // Save as into another folder: relative images, scripts and imports are rewritten to reach the same
+        // files from there (also in the undo history, so it never brings back a path that no longer resolves).
+        let to = target.parent().unwrap_or(Path::new("")).to_path_buf();
+        let moved_from = self.doc.dir().filter(|from| !Doc::same_dir(from, &to));
+        let backup = moved_from.as_ref().map(|_| self.doc.root.clone());
+        if let Some(from) = &moved_from {
+            Doc::relocate(&mut self.doc.root, from, &to);
+        }
+        if let Err(err) = self.doc.save(&target) {
+            if let Some(root) = backup {
+                self.doc.root = root;
+            }
+            return Err(err);
+        }
+        if let (Some(from), Some(before)) = (&moved_from, &backup) {
+            let relocate = |v: &mut Value| Doc::relocate(v, from, &to);
+            // During a drag the history steps lead back from the document as the drag began.
+            let (old, new) = match self.drag_before.take() {
+                Some(start) => {
+                    let mut moved = start.clone();
+                    relocate(&mut moved);
+                    self.drag_before = Some(moved.clone());
+                    (start, moved)
+                }
+                None => (before.clone(), self.doc.root.clone()),
+            };
+            relocate_history(&mut self.undo, &old, &new, relocate);
+            relocate_history(&mut self.redo, &old, &new, relocate);
+        }
         self.doc.path = Some(target.clone());
         self.saved = self.version;
+        if moved_from.is_some() && !self.streams.is_empty() && !self.executing {
+            self.rebuild_preview(); // the live preview is a copy of the old document: redo it from the new folder
+        }
         self.remember_recent(&target);
         Ok(target.to_string_lossy().to_string())
     }
@@ -832,8 +882,11 @@ impl Engine {
             }
         }
         let mut hit = walk(&mut self.doc.root, pending, url);
-        for v in self.undo.iter_mut().chain(self.redo.iter_mut()).chain(self.libs.iter_mut().map(|(_, v)| v)) {
+        for v in self.libs.iter_mut().map(|(_, v)| v) {
             hit |= walk(v, pending, url);
+        }
+        for p in self.undo.iter_mut().chain(self.redo.iter_mut()) {
+            p.values_mut(&mut |v| hit |= walk(v, pending, url));
         }
         if hit {
             self.touch();
@@ -875,8 +928,16 @@ impl Engine {
             set(&mut p.root);
         }
         if done {
-            for v in self.undo.iter_mut().chain(self.redo.iter_mut()) {
-                set(v);
+            // A step is relative to the document next to it, so each is rebuilt from the current one outwards.
+            for stack in [&mut self.undo, &mut self.redo] {
+                let mut cur = self.doc.root.clone();
+                for step in stack.iter_mut().rev() {
+                    let mut next = cur.clone();
+                    std::mem::take(step).apply(&mut next);
+                    set(&mut next);
+                    *step = diff(&cur, &next).unwrap_or_default();
+                    cur = next;
+                }
             }
         }
         if hit {
@@ -929,7 +990,7 @@ fn same_number(x: &Number, y: &Number) -> bool {
 }
 
 /// Equal as documents: a whole number written back as a float (`10` vs `10.0`) is not a change.
-fn same(a: &Value, b: &Value) -> bool {
+pub(crate) fn same(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Number(x), Value::Number(y)) => same_number(x, y),
         (Value::Array(x), Value::Array(y)) => x.len() == y.len() && x.iter().zip(y).all(|(x, y)| same(x, y)),
@@ -1035,6 +1096,67 @@ mod tests {
     }
 
     #[test]
+    fn save_as_relocates_the_drag_snapshot() {
+        let root = std::env::temp_dir().join("nalarupa-test-save-as-drag");
+        let mut e = Engine::new(root.join("data"));
+        e.doc.path = Some(root.join("a").join("x.pen"));
+        e.doc.root = json!({"children": [{"id": "i", "type": "rectangle", "fill": {"type": "image", "url": "./img.png"}}]});
+        e.drag_before = Some(e.doc.root.clone());
+        e.save(Some(root.join("b").join("y.pen").to_str().unwrap())).unwrap();
+        assert_eq!(e.drag_before.as_ref().unwrap()["children"][0]["fill"]["url"], "../a/img.png");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The undo history holds patches between states: after Save as into another folder, undo and redo
+    /// bring back each earlier state with its relative urls rewritten, not the ones of the old folder.
+    #[test]
+    fn save_as_relocates_the_undo_history() {
+        let root = std::env::temp_dir().join("nalarupa-test-save-as-history");
+        let mut e = Engine::new(root.join("data"));
+        e.doc.path = Some(root.join("a").join("x.pen"));
+        e.doc.root = json!({"children": [{"id": "i", "type": "rectangle", "fill": {"type": "image", "url": "./one.png"}}]});
+        let url = |e: &Engine| e.doc.root["children"][0]["fill"]["url"].clone();
+        e.edit(|d| d.update("i", &json!({"fill": {"type": "image", "url": "./two.png"}}))).unwrap();
+        e.edit(|d| d.update("i", &json!({"fill": {"type": "image", "url": "./three.png"}}))).unwrap();
+        assert!(e.undo());
+        e.save(Some(root.join("b").join("y.pen").to_str().unwrap())).unwrap();
+        assert_eq!(url(&e), "../a/two.png");
+        assert!(e.redo());
+        assert_eq!(url(&e), "../a/three.png");
+        assert!(e.undo() && e.undo());
+        assert_eq!(url(&e), "../a/one.png");
+        // Save as during a drag: the history leads back from the snapshot taken when the drag began.
+        let mut e = Engine::new(root.join("data"));
+        e.doc.path = Some(root.join("a").join("x.pen"));
+        e.doc.root = json!({"children": [{"id": "i", "type": "rectangle", "fill": {"type": "image", "url": "./one.png"}}]});
+        e.edit(|d| d.update("i", &json!({"fill": {"type": "image", "url": "./two.png"}}))).unwrap();
+        e.drag_before = Some(e.doc.root.clone());
+        e.doc.update("i", &json!({"fill": {"type": "image", "url": "./drag.png"}})).unwrap();
+        e.save(Some(root.join("b").join("y.pen").to_str().unwrap())).unwrap();
+        assert_eq!(e.drag_before.as_ref().unwrap()["children"][0]["fill"]["url"], "../a/two.png");
+        e.doc.root = e.drag_before.take().unwrap();
+        assert!(e.undo());
+        assert_eq!(url(&e), "../a/one.png");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn save_as_moves_the_live_preview() {
+        let root = std::env::temp_dir().join("nalarupa-test-save-as-preview");
+        let mut e = Engine::new(root.join("data"));
+        e.doc.path = Some(root.join("a").join("x.pen"));
+        e.doc.root = json!({"children": [{"id": "i", "type": "rectangle", "fill": {"type": "image", "url": "./img.png"}}]});
+        e.stream_update("k", "agent", "");
+        assert!(e.preview.is_some());
+        e.save(Some(root.join("b").join("y.pen").to_str().unwrap())).unwrap();
+        let p = e.preview.as_ref().unwrap();
+        assert_eq!(p.path, e.doc.path);
+        assert_eq!(p.root["children"][0]["fill"]["url"], "../a/img.png");
+        assert!(!e.dirty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn failed_settings_save_keeps_old_values() {
         let dir = std::env::temp_dir().join("nalarupa-test-settings-save");
         let _ = std::fs::remove_dir_all(&dir);
@@ -1132,5 +1254,76 @@ mod tests {
         assert_eq!(e.version, v, "nothing new loaded: no redraw");
         assert!(e.dirty());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn big_engine(tag: &str, n: i64) -> Engine {
+        let mut e = Engine::new(std::env::temp_dir().join(format!("nalarupa-test-{tag}-{}", std::process::id())));
+        let kids: Vec<Value> = (0..n).map(|i| json!({"id": format!("n{i}"), "type": "rectangle", "name": format!("r{i}"), "x": i, "y": 0, "width": 20, "height": 20, "fill": "#f00"})).collect();
+        e.doc.root = json!({"children": [{"id": "f", "type": "frame", "children": kids}]});
+        e
+    }
+
+    fn x_of(e: &Engine, i: usize) -> i64 {
+        e.doc.root["children"][0]["children"][i]["x"].as_i64().unwrap()
+    }
+
+    /// An undo step costs what the edit changed, not a copy of the document (10 000 layers took 2 GB after 100 edits).
+    #[test]
+    fn undo_steps_store_only_what_changed() {
+        let mut e = big_engine("undo-size", 5000);
+        let doc_len = e.doc.root.to_string().len();
+        for i in 1..=100 {
+            e.edit(|d| { d.root["children"][0]["children"][5]["x"] = json!(1000 + i); Ok(()) }).unwrap();
+        }
+        let held: usize = e.undo.iter().map(|p| format!("{p:?}").len()).sum();
+        assert_eq!(e.undo.len(), 100);
+        assert!(held * 20 < doc_len, "100 steps hold {held} bytes of a {doc_len}-byte document");
+        for i in (0..100).rev() {
+            assert!(e.undo());
+            assert_eq!(x_of(&e, 5), if i == 0 { 5 } else { 1000 + i });
+        }
+        for i in 1..=100 {
+            assert!(e.redo());
+            assert_eq!(x_of(&e, 5), 1000 + i);
+        }
+    }
+
+    /// Edits that share a coalescing key undo together and redo to the last one.
+    #[test]
+    fn coalesced_edits_undo_to_the_first_state() {
+        let mut e = big_engine("undo-coalesce", 20);
+        for x in [100, 200, 300] {
+            e.edit_coalesced("x", |d| { d.root["children"][0]["children"][3]["x"] = json!(x); Ok(()) }).unwrap();
+        }
+        e.edit_coalesced("y", |d| { d.root["children"][0]["children"][4]["y"] = json!(7); Ok(()) }).unwrap();
+        assert_eq!(e.undo.len(), 2);
+        assert!(e.undo());
+        assert_eq!((x_of(&e, 3), e.doc.root["children"][0]["children"][4]["y"].as_i64()), (300, Some(0)));
+        assert!(e.undo());
+        assert_eq!(x_of(&e, 3), 3);
+        assert!(e.redo());
+        assert_eq!(x_of(&e, 3), 300);
+    }
+
+    /// A finished generation reaches the history too, so undo never brings the half-drawn node back.
+    #[test]
+    fn finished_generation_reaches_the_history() {
+        let mut e = big_engine("undo-generated", 5);
+        e.edit(|d| { d.root["children"][0]["children"][1]["x"] = json!(50); Ok(()) }).unwrap();
+        e.edit(|d| { d.root["children"][0]["children"].as_array_mut().unwrap().remove(2); Ok(()) }).unwrap();
+        let props: Map<String, Value> = json!({"fill": "#0f0"}).as_object().unwrap().clone();
+        for id in ["n1", "n2", "n3"] {
+            assert!(e.apply_generated(id, &props, true) == (id != "n2"));
+        }
+        let fills = |e: &Engine| e.doc.root["children"][0]["children"].as_array().unwrap().iter().map(|n| n["fill"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+        assert_eq!(fills(&e), ["#f00", "#0f0", "#0f0", "#f00"]);
+        assert!(e.undo());
+        assert_eq!(fills(&e), ["#f00", "#0f0", "#0f0", "#0f0", "#f00"], "n2 is only in the history");
+        assert!(e.undo());
+        assert_eq!(x_of(&e, 1), 1);
+        assert_eq!(fills(&e)[1], "#0f0");
+        assert!(e.redo() && e.redo());
+        assert_eq!(x_of(&e, 1), 50);
+        assert_eq!(fills(&e), ["#f00", "#0f0", "#0f0", "#f00"]);
     }
 }
