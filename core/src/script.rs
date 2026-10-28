@@ -906,10 +906,11 @@ fn finish(e: &mut Engine, prep: Prepared, result: Result<Map<String, Value>, Str
             Err(err) => text += &format!("\nExport failed: {err}\n"),
         }
     }
-    // The shots are redrawn in `ToolOut::finish` once the icons and images they show have downloaded, from
-    // this document and these libraries (the live ones may change meanwhile).
-    let shot_doc = (!shots.is_empty() && (!icons.is_empty() || !downloads.is_empty())).then(|| (e.doc.clone(), e.libs.clone()));
-    ToolOut { text, images: Vec::new(), error: false, shots, icons, downloads, shot_doc, exports }
+    // The shots are redrawn and the exports planned again in `ToolOut::finish` once the icons and images they show
+    // have downloaded, from this document and these libraries (the live ones may change meanwhile).
+    let redraw = !shots.is_empty() && (!icons.is_empty() || !downloads.is_empty());
+    let call_doc = (redraw || exports.iter().any(|job| !job.waits.is_empty())).then(|| (e.doc.clone(), e.libs.clone()));
+    ToolOut { text, images: Vec::new(), error: false, shots, icons, downloads, call_doc, exports }
 }
 
 /// The render tree and scale of a screenshot target (`document` is the first top-level node), and the
@@ -2059,13 +2060,11 @@ card = Insert(root, {type:\"frame\", name:\"Card\", width:100, height:100, layou
         assert!(png.starts_with(b"\x89PNG"));
     }
 
-    /// A screenshot of an image still downloading waits for it (without the engine lock) and shows it.
-    #[test]
-    fn screenshots_wait_for_images_still_downloading() {
-        let _serial = global_execute();
+    /// The url of a red PNG on a local server that answers each request after 300 ms.
+    pub(crate) fn slow_red_png(name: &str) -> String {
         use std::io::{Read, Write};
         let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let url = format!("http://{}/shot.png", server.local_addr().unwrap());
+        let url = format!("http://{}/{name}.png", server.local_addr().unwrap());
         std::thread::spawn(move || {
             for mut s in server.incoming().flatten() {
                 let mut req = [0; 1024];
@@ -2076,6 +2075,21 @@ card = Insert(root, {type:\"frame\", name:\"Card\", width:100, height:100, layou
                 let _ = s.write_all(&red);
             }
         });
+        url
+    }
+
+    /// Whether the middle pixel of a PNG is red.
+    pub(crate) fn red_middle(png: &[u8]) -> bool {
+        let px = resvg::tiny_skia::Pixmap::decode_png(png).unwrap();
+        let c = px.pixel(px.width() / 2, px.height() / 2).unwrap();
+        c.red() > 200 && c.green() < 80
+    }
+
+    /// A screenshot of an image still downloading waits for it (without the engine lock) and shows it.
+    #[test]
+    fn screenshots_wait_for_images_still_downloading() {
+        let _serial = global_execute();
+        let url = slow_red_png("shot");
         let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let other = format!("http://{}/elsewhere.png", silent.local_addr().unwrap());
         let input = format!("c = Insert(document, {{type:\"frame\", width:100, height:100, layout:\"none\", fill:{{type:\"image\", url:\"{url}\", mode:\"fill\"}}}})\nTakeScreenshot(c)");
@@ -2090,14 +2104,53 @@ card = Insert(root, {type:\"frame\", name:\"Card\", width:100, height:100, layou
             out
         };
         assert!(!out.error, "{}", out.text);
-        assert!(out.downloads.contains(&url) && out.shot_doc.is_some(), "the shot is redrawn once the image is in");
+        assert!(out.downloads.contains(&url) && out.call_doc.is_some(), "the shot is redrawn once the image is in");
         assert!(!out.downloads.contains(&other), "only what the screenshot shows is waited for: {:?}", out.downloads);
         let out = out.finish();
         assert!(!crate::engine::engine().assets.loading(&url));
         let png = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &out.images[0]).unwrap();
-        let px = resvg::tiny_skia::Pixmap::decode_png(&png).unwrap();
-        let c = px.pixel(px.width() / 2, px.height() / 2).unwrap();
-        assert!(c.red() > 200 && c.green() < 80, "the image is in the screenshot: {c:?}");
+        assert!(red_middle(&png), "the image is in the screenshot");
+    }
+
+    /// An export of an image still downloading waits for it (without the engine lock) and includes it.
+    #[test]
+    fn script_exports_wait_for_images_still_downloading() {
+        let _serial = global_execute();
+        let url = slow_red_png("export");
+        let mut e = crate::engine::engine();
+        let dir = e.data_dir.join("exports").join("script-export-waits");
+        let _ = std::fs::remove_dir_all(&dir);
+        let src = format!("c = Insert(document, {{type:\"frame\", width:100, height:100, layout:\"none\", fill:{{type:\"image\", url:\"{url}\", mode:\"fill\"}}}})\nExport(c, \"png\", {:?}, {{scale: 1}})", dir.to_str().unwrap());
+        let was = std::mem::replace(&mut e.assets.online, true);
+        let out = e.tool("execute", &json!({"input": src}));
+        e.assets.online = was;
+        drop(e);
+        assert!(!out.error, "{}", out.text);
+        let out = out.finish();
+        assert!(out.text.contains("Exported:"), "{}", out.text);
+        let file = std::fs::read_dir(&dir).unwrap().next().unwrap().unwrap().path();
+        assert!(red_middle(&std::fs::read(file).unwrap()), "the image is in the export");
+    }
+
+    /// The UI's export of an image still downloading waits for it (without the engine lock) and includes it.
+    #[test]
+    fn ui_exports_wait_for_images_still_downloading() {
+        let _serial = global_execute();
+        let url = slow_red_png("ui-export");
+        let (id, dir) = {
+            let mut e = crate::engine::engine();
+            let dir = e.data_dir.join("exports").join("ui-export-waits");
+            let _ = std::fs::remove_dir_all(&dir);
+            let src = format!("c = Insert(document, {{type:\"frame\", width:100, height:100, layout:\"none\", fill:{{type:\"image\", url:\"{url}\", mode:\"fill\"}}}})");
+            let out = e.tool("execute", &json!({"input": src}));
+            assert!(!out.error, "{}", out.text);
+            (e.doc.children().last().unwrap()["id"].as_str().unwrap().to_string(), dir)
+        };
+        let was = std::mem::replace(&mut crate::engine::engine().assets.online, true);
+        let files = crate::html::export(&[id], "png", dir.to_str().unwrap(), &json!({"scale": 1}));
+        crate::engine::engine().assets.online = was;
+        let files = files.unwrap();
+        assert!(red_middle(&std::fs::read(&files[0]).unwrap()), "the image is in the export");
     }
 
     #[test]

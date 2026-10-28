@@ -28,42 +28,36 @@ pub struct ToolOut {
     /// Icons still downloading when the call ended (warning, library, name, weight): `finish` waits for
     /// them without the engine lock and reports the ones that turn out not to exist.
     pub icons: Vec<(String, String, String, u32)>,
-    /// Icons and images the screenshots show that were still downloading: `finish` waits for them too.
+    /// Icons and images the screenshots show that were still downloading: `finish` waits for them too
+    /// (and for each export's `waits`).
     pub downloads: Vec<String>,
-    /// The document and libraries the screenshots were taken of, kept only when icons or images were still
-    /// downloading: `finish` redraws the shots from them, since the live ones may have changed (or been switched) meanwhile.
-    pub shot_doc: Option<(Doc, Vec<(String, Value)>)>,
+    /// The document and libraries the screenshots and exports were made of, kept only when icons or images were still
+    /// downloading: `finish` redraws and replans them from it, since the live ones may have changed (or been switched) meanwhile.
+    pub call_doc: Option<(Doc, Vec<(String, Value)>)>,
     /// `Export(...)` calls from a script, planned under the lock; `finish` renders and writes them.
     pub exports: Vec<crate::html::ExportJob>,
 }
 
 impl ToolOut {
     pub fn ok(text: impl Into<String>) -> ToolOut {
-        ToolOut { text: text.into(), images: Vec::new(), error: false, shots: Vec::new(), icons: Vec::new(), downloads: Vec::new(), shot_doc: None, exports: Vec::new() }
+        ToolOut { text: text.into(), images: Vec::new(), error: false, shots: Vec::new(), icons: Vec::new(), downloads: Vec::new(), call_doc: None, exports: Vec::new() }
     }
     pub fn err(text: impl Into<String>) -> ToolOut {
         ToolOut { error: true, ..ToolOut::ok(text) }
     }
-    /// Write pending exports, settle pending icons and rasterize pending screenshots. Call without holding `engine()`.
+    /// Settle pending icons, rasterize pending screenshots and write pending exports once the icons and images
+    /// they show have downloaded. Call without holding `engine()`.
     pub fn finish(mut self) -> ToolOut {
-        for job in std::mem::take(&mut self.exports) {
-            match job.run() {
-                Ok(files) => self.text += &format!("\nExported: {}\n", files.join(", ")),
-                Err(err) => self.text += &format!("\nExport failed: {err}\n"),
-            }
-        }
         let until = std::time::Instant::now() + std::time::Duration::from_secs(12);
+        let redraw = !self.icons.is_empty() || !self.downloads.is_empty();
         self.settle_icons(until);
-        for key in std::mem::take(&mut self.downloads) {
-            while engine().assets.loading(&key) && std::time::Instant::now() < until {
-                std::thread::sleep(std::time::Duration::from_millis(20));
-            }
-        }
-        let shot_doc = self.shot_doc.take();
+        wait_downloads(self.downloads.iter().chain(self.exports.iter().flat_map(|job| &job.waits)), until);
+        self.downloads.clear();
+        let call_doc = self.call_doc.take();
         for (id, mut tree, scale) in std::mem::take(&mut self.shots) {
             // The tree was built while icons or images were still downloading, so it has none of them: redraw it
             // from the same document, not whatever the live one is now.
-            if let Some((doc, libs)) = &shot_doc {
+            if let Some((doc, libs)) = call_doc.as_ref().filter(|_| redraw) {
                 let target = crate::script::shot_target(doc, &id);
                 let mut e = engine();
                 let e = &mut *e;
@@ -75,6 +69,25 @@ impl ToolOut {
             match crate::render::encode_tree(&tree, "png", scale, 0) {
                 Ok(png) => self.images.push(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, png)),
                 Err(err) => self.text += &format!("Screenshot of {id} failed: {err}\n"),
+            }
+        }
+        for mut job in std::mem::take(&mut self.exports) {
+            // Planned without the icons or images still downloading then: plan it again from the same document.
+            if let Some((doc, libs)) = call_doc.as_ref().filter(|_| !job.waits.is_empty()) {
+                let mut e = engine();
+                let e = &mut *e;
+                let mut cx = Ctx { doc, libs, fonts: &mut e.fonts, assets: &mut e.assets };
+                match job.replan(&mut cx, &e.data_dir) {
+                    Ok(fresh) => job = fresh,
+                    Err(err) => {
+                        self.text += &format!("\nExport failed: {err}\n");
+                        continue;
+                    }
+                }
+            }
+            match job.run() {
+                Ok(files) => self.text += &format!("\nExported: {}\n", files.join(", ")),
+                Err(err) => self.text += &format!("\nExport failed: {err}\n"),
             }
         }
         self
@@ -111,6 +124,16 @@ impl ToolOut {
                 self.text.insert_str(end, &bullets);
             }
             None => self.text += &format!("\n{head}{bullets}"),
+        }
+    }
+}
+
+/// Wait until none of these downloads (icon keys, image urls) is running or `until` passes. The engine lock is
+/// free between polls, so the downloads can land: call without holding `engine()`.
+pub fn wait_downloads<'a>(keys: impl IntoIterator<Item = &'a String>, until: std::time::Instant) {
+    for key in keys {
+        while engine().assets.loading(key) && std::time::Instant::now() < until {
+            std::thread::sleep(std::time::Duration::from_millis(20));
         }
     }
 }
@@ -849,7 +872,7 @@ impl Engine {
     }
 
     pub fn title(&self) -> String {
-        self.doc.path.as_ref().and_then(|p| p.file_stem()).map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "Untitled".into())
+        self.doc.title()
     }
 
     pub fn emit(&mut self, ev: Value) {

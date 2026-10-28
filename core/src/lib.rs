@@ -371,15 +371,8 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             let out = out.finish();
             Ok(json!({"text": out.text, "error": out.error, "images": out.images.len()}))
         }
-        "export" => {
-            let job = {
-                let mut e = engine();
-                let targets = ids(&req["ids"]);
-                html::plan(&mut e, &targets, req["format"].as_str().unwrap_or("png"), req["path"].as_str().unwrap_or(""), &req["opts"])?
-            };
-            // The guard is gone: rasterizing and writing must not block the canvas.
-            Ok(json!(job.run()?))
-        }
+        // Plans under the engine lock, then waits for downloads and writes without it, so the canvas keeps drawing.
+        "export" => Ok(json!(html::export(&ids(&req["ids"]), req["format"].as_str().unwrap_or("png"), req["path"].as_str().unwrap_or(""), &req["opts"])?)),
         "variables" => Ok(engine().doc.variables()),
         "set_variable" => {
             let mut e = engine();
