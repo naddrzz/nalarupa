@@ -82,10 +82,17 @@ export const ACTIVITY_MS = 2000
  * Whether the agent layer must repaint now. Normally any agent presence animates every frame. Under
  * reduced motion only fades and the pill expiry change on their own; everything else moves on events,
  * which already re-render the layer. `painted` is when the layer last rendered: a pill that was still
- * showing then needs one more render at or after its expiry, however late the next tick lands.
+ * showing then needs one more render at or after its expiry, however late the next tick lands, and none
+ * while it shows (a new pill arrives with an event). A pill hidden behind the open chat tab
+ * (`chatOpen`) needs no frames at all.
  */
-export function needsFrame(now: number, reduced: boolean, liveCount: number, painted = now): boolean {
-  const pills = [...store.pills.values()].some((p) => Math.min(now, painted) - p.at < PILL_MS)
+export function needsFrame(now: number, reduced: boolean, liveCount: number, painted = now, chatOpen = false): boolean {
+  const pills = [...store.pills.entries()].some(([id, p]) => {
+    if (!pillShown(id, chatOpen)) return false
+    // Reduced motion: one repaint for a pill that was showing at the last paint and has expired since.
+    if (reduced) return painted - p.at < PILL_MS && now - p.at >= PILL_MS
+    return Math.min(now, painted) - p.at < PILL_MS
+  })
   if (store.activity.length > 0 || store.flashes.length > 0 || pills) return true
   if (!reduced) {
     return liveCount > 0 || store.pens.size > 0 || [...store.cursors.values()].some((c) => store.running.has(c.profile.id) || now - c.lastActivity < GONE)
@@ -95,6 +102,11 @@ export function needsFrame(now: number, reduced: boolean, liveCount: number, pai
       const idle = now - c.lastActivity
       return now - c.appearAt < FADE_IN || (!store.running.has(c.profile.id) && idle > FADE_DELAY && idle < GONE)
     })
+}
+
+/** Whether an agent's message pill is on the canvas: the open chat tab already shows a top-level agent's messages. */
+export function pillShown(id: string, chatOpen: boolean): boolean {
+  return !(chatOpen && !profileOf(id).parent)
 }
 
 export const FALLBACK: Profile = { id: 'agent', name: 'Agent', color: '#808080' }
