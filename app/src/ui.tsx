@@ -507,6 +507,6 @@ export function Segmented<V extends string>({ value, options, onChange, label }:
   )
 }
 
-export function Swatch({ color }: { color: string }) {
-  return <div style={{ width: 18, height: 18, borderRadius: 4, backgroundColor: color, borderWidth: 1, borderColor: '#FFFFFF22', flexShrink: 0 }} />
+export function Swatch({ color, testId }: { color: string; testId?: string }) {
+  return <div testId={testId} style={{ width: 18, height: 18, borderRadius: 4, backgroundColor: color, borderWidth: 1, borderColor: '#FFFFFF22', flexShrink: 0 }} />
 }

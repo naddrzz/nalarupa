@@ -218,6 +218,14 @@ impl<'a> Resolver<'a> {
         Some((merged, merged_scope))
     }
 
+    /// The props a `ref` instance inherits from its component (the chain expanded), without the
+    /// instance's own values and without children. `node` is written in the open document.
+    pub fn inherited(&self, node: &Value) -> Option<Value> {
+        let (mut comp, _) = self.expand(&json!({"type": "ref", "ref": node["ref"]}), "", &self.scopes[""].1, 0)?;
+        comp.as_object_mut()?.remove("children");
+        Some(comp)
+    }
+
     /// Replace `$name` strings with the variable's value for the active theme, looked up in `scope`.
     /// Unknown names stay literal (so "$49" prices survive).
     fn subst(&self, v: &Value, scope: &str, theme: &[(String, String)], depth: usize) -> Value {
@@ -483,6 +491,23 @@ mod tests {
         assert_eq!((inst.p["width"].as_f64(), inst.p["x"].as_f64()), (Some(80.0), Some(5.0)));
         assert_eq!(inst.kids.len(), 1);
         assert_eq!((inst.kids[0].id.as_str(), inst.kids[0].p["content"].as_str()), ("i/t", Some("B")));
+    }
+
+    /// What an instance inherits: the component's props through the whole ref chain, without the
+    /// instance's own values or the children (the Inspector shows them where the instance has none).
+    #[test]
+    fn inherited_props_of_an_instance() {
+        let root = json!({"children": [
+            {"type": "frame", "id": "card", "reusable": true, "width": 100, "fill": "#336699", "cornerRadius": 8, "children": [{"type": "text", "id": "t"}]},
+            {"type": "ref", "id": "v", "ref": "card", "reusable": true, "width": 80},
+            {"type": "ref", "id": "i", "ref": "v", "x": 5, "fill": "#ff0000"}
+        ]});
+        let empty = Map::new();
+        let r = Resolver::new(&root, &[], &empty);
+        let got = r.inherited(&root["children"][2]).unwrap();
+        assert_eq!((got["fill"].as_str(), got["width"].as_f64(), got["cornerRadius"].as_f64()), (Some("#336699"), Some(80.0), Some(8.0)));
+        assert!(got.get("x").is_none() && got.get("children").is_none(), "{got}");
+        assert!(r.inherited(&json!({"type": "ref", "ref": "gone"})).is_none());
     }
 
     /// An imported library resolves its own variables and its plain-id refs in its own scope,

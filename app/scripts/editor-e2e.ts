@@ -994,6 +994,15 @@ try {
   await app.getByTestId('layers').getByText('Inspect rect').click({ modifiers: 'ctrl' })
   assert(await until(async () => (await count('inspector-fill')) > 0), 'a line, a note and a rectangle together keep the Fill field')
 
+  // A component instance without its own fill shows the component's fill (its swatch; the color is the field's placeholder),
+  // not an empty field that reads as white.
+  await mcpCall(port, { method: 'tools/call', params: { name: 'execute', arguments: { input: 'const c = Insert(document, {type:"frame", name:"Inspect button", reusable:true, x:0, y:400, width:120, height:40, fill:"#336699", cornerRadius:8}); Insert(document, {type:"ref", name:"Inspect instance", ref:c, x:200, y:400})' } } })
+  await app.getByTestId('layers').getByText('Inspect instance').waitFor({ timeoutMs: 6000 })
+  await app.getByTestId('layers').getByText('Inspect line').click()
+  assert(await until(async () => !(await count('inspector-fill'))), 'the line is selected again before the instance')
+  await app.getByTestId('layers').getByText('Inspect instance').click()
+  assert(await until(async () => (await count('inspector-fill-swatch')) > 0), 'an instance shows the fill it inherits from its component')
+
   // Alt-hover measures to where a flipped layer is painted: its outline sits on the layer and the distance runs to
   // its painted edge (the unflipped box lies 100 further right, in empty space).
   await mcpCall(port, { method: 'tools/call', params: { name: 'execute', arguments: { input: 'const f = Insert(document, {type:"frame", name:"Measure frame", layout:"none", x:4000, y:0, width:700, height:900, fill:"#FFFFFF"}); Insert(f, {type:"rectangle", name:"Measure A", x:100, y:760, width:100, height:60, fill:"#FF0000"}); Insert(f, {type:"rectangle", name:"Measure B", x:500, y:760, width:100, height:60, fill:"#0000FF", flipX:true})' } } })
