@@ -106,6 +106,33 @@ for (const url of ['nalarupa:pending-image-1-ab', 'pencil:pending-1']) {
   assert(node('pr').node.fill.url === '', `open drops the leftover ${url}`)
 }
 
+// A hand-written file may omit node ids or repeat them: open makes them unique so every frame renders and the tree is right.
+{
+  const rect = (name: string, id?: string) => ({ type: 'rectangle', ...(id === undefined ? {} : { id }), name, x: 20, y: 20, width: 60, height: 40, fill: '#ff0000' })
+  const frame = (name: string, x: number, kids: unknown[], id?: string) => ({ type: 'frame', ...(id === undefined ? {} : { id }), name, x, y: 0, width: 200, height: 150, fill: '#ffffff', children: kids })
+  const fixtures: Record<string, unknown[]> = {
+    noid: [frame('NoIdA', 0, [rect('NoIdRect')]), frame('NoIdB', 300, [rect('NoIdRect2')])],
+    dupid: [frame('One', 0, [rect('R1', 'r')], 'f'), frame('Two', 300, [rect('R2', 'r')], 'f')],
+  }
+  for (const [name, children] of Object.entries(fixtures)) {
+    const p = join(data, `${name}.nala`)
+    writeFileSync(p, JSON.stringify({ version: '2.19', children }))
+    call('new', { template: 'empty' })
+    call('open', { path: p })
+    const frames = call<any[]>('frames')
+    assert(frames.length === 2 && new Set(frames.map((f) => f.x)).size === 2, `${name}: both top-level frames are listed (${frames.map((f) => `${f.name}@${f.x}`)})`)
+    const layers = call<any[]>('layers')
+    assert(layers.every((l) => l.id) && new Set(layers.map((l) => l.id)).size === layers.length, `${name}: every layer has its own id`)
+    assert(layers.map((l) => `${l.depth}`).join('') === '0101', `${name}: children sit under their frame (${layers.map((l) => `${l.name}:${l.depth}`)})`)
+    assert(call<string[]>('export', { ids: frames.map((f) => f.id), format: 'svg', path: join(data, `exp-${name}`) }).length === 2, `${name}: every top-level frame exports`)
+    call('save')
+    const saved = JSON.parse(readFileSync(p, 'utf8'))
+    assert(saved.children.every((f: any) => f.id && f.children[0].id), `${name}: save writes the ids back`)
+  }
+  const dup = JSON.parse(readFileSync(join(data, 'dupid.nala'), 'utf8')).children
+  assert(dup[0].id === 'f' && dup[0].children[0].id === 'r', 'the first node keeps a repeated id')
+}
+
 // A pending image inside a clipping frame reports the box the frame leaves visible, so its shimmer is cut there.
 exec('p = Insert(document, {type:"frame", name:"Clip", x:100, y:100, width:300, height:200, layout:"none", clip:true}); Insert(p, {type:"rectangle", name:"Img", x:150, y:50, width:400, height:300, fill:{type:"image", url:"nalarupa:pending-qa"}}); Insert(document, {type:"rectangle", name:"Free", x:600, y:0, width:50, height:50, fill:{type:"image", url:"nalarupa:pending-qa"}})')
 {

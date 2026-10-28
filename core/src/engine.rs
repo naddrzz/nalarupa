@@ -655,6 +655,7 @@ impl Engine {
     pub fn open(&mut self, path: &Path) -> Result<(), String> {
         let mut doc = Doc::load(path)?;
         crate::resolve::migrate(&mut doc.root);
+        doc.ensure_ids();
         drop_pending(&mut doc.root, &self.inflight);
         self.doc = doc;
         self.load_libs();
