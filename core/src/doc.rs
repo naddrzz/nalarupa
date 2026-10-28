@@ -430,7 +430,7 @@ fn collect_ids(nodes: &[Value], out: &mut std::collections::HashSet<String>) {
 fn fix_ids(nodes: &mut [Value], seen: &mut std::collections::HashSet<String>, taken: &mut std::collections::HashSet<String>) {
     for n in nodes {
         let Some(obj) = n.as_object_mut() else { continue };
-        let keep = obj.get("id").and_then(Value::as_str).filter(|id| !id.is_empty() && !seen.contains(*id)).map(str::to_string);
+        let keep = obj.get("id").and_then(Value::as_str).filter(|id| !id.is_empty() && !id.contains('/') && !seen.contains(*id)).map(str::to_string);
         let id = keep.unwrap_or_else(|| loop {
             let id = random_id();
             if taken.insert(id.clone()) {
@@ -667,7 +667,7 @@ mod tests {
     fn ensure_ids_fills_missing_and_repeated_ids() {
         let mut d = Doc::from_json(r#"{"children":[
             {"type":"frame","id":"f","children":[{"type":"rectangle"},{"type":"rectangle","id":""},{"type":"ellipse","id":"f"}]},
-            {"type":"frame","id":"f"},{"type":"frame","id":7}]}"#).unwrap();
+            {"type":"frame","id":"f"},{"type":"frame","id":7},{"type":"frame","id":"hero/title"}]}"#).unwrap();
         d.ensure_ids();
         let mut ids = Vec::new();
         fn walk(nodes: &[Value], ids: &mut Vec<String>) {
@@ -677,9 +677,9 @@ mod tests {
             }
         }
         walk(d.children(), &mut ids);
-        assert_eq!(ids.len(), 6);
-        assert!(ids.iter().all(|i| !i.is_empty()));
-        assert_eq!(ids.iter().collect::<std::collections::HashSet<_>>().len(), 6);
+        assert_eq!(ids.len(), 7);
+        assert!(ids.iter().all(|i| !i.is_empty() && !i.contains('/')), "an id with '/' (the instance path separator) is replaced");
+        assert_eq!(ids.iter().collect::<std::collections::HashSet<_>>().len(), 7);
         assert_eq!(ids[0], "f", "the first node keeps its id");
         assert_eq!(d.find("f").unwrap()["type"], "frame");
     }
