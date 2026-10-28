@@ -82,6 +82,8 @@ pub struct AgentState {
     /// Frames the built-in agents flagged `placeholder` in this run: the only ones the run's end clears.
     /// An external agent's frames are its own to clear.
     flagged: Vec<String>,
+    /// Stops so far: an `execute` that saw a Stop while its script ran starts its pens stopped (`stopped_since`).
+    pub stops: u64,
 }
 
 pub struct Chat {
@@ -439,8 +441,16 @@ fn drop_queue(e: &mut Engine) {
     }
 }
 
+/// Whether a pen asked for by an `execute` that began at `mark` (`agent.stops` then) starts stopped: a Stop came
+/// while its script ran (the engine is not held meanwhile, and an MCP client's call has no run whose flag Stop sets),
+/// or the run it belongs to is being stopped.
+pub fn stopped_since(e: &Engine, mark: u64) -> bool {
+    e.agent.stops != mark || (e.agent.running && e.agent.cancel.load(Ordering::SeqCst))
+}
+
 pub fn stop() {
     let mut e = engine();
+    e.agent.stops += 1;
     e.agent.cancel.store(true, Ordering::SeqCst);
     for (_, pen) in &e.agent.pens {
         pen.store(true, Ordering::SeqCst);
@@ -1581,6 +1591,24 @@ mod tests {
         assert_eq!(crate::state(&e)["penDrawing"], false);
     }
 
+    /// A pen whose `execute` saw a Stop while its script ran starts stopped, also from an MCP client's call
+    /// (no run going on); a pen from a call that began after the Stop draws.
+    #[test]
+    fn a_stop_during_execute_reaches_its_pens() {
+        let _busy = agent_busy();
+        let (mark, running) = {
+            let mut e = engine();
+            (e.agent.stops, std::mem::replace(&mut e.agent.running, false))
+        };
+        assert!(!stopped_since(&engine(), mark), "no Stop: the pen draws");
+        stop();
+        let mut e = engine();
+        assert!(stopped_since(&e, mark), "a Stop while the script ran stops its pen, with no run going on");
+        assert!(!stopped_since(&e, e.agent.stops), "a call that began after the Stop draws");
+        e.agent.cancel = Arc::new(AtomicBool::new(false));
+        e.agent.running = running;
+    }
+
     /// Stop drops the queued prompts and says so, so the chat does not keep promising to send them.
     #[test]
     fn stop_announces_dropped_queue() {
@@ -1636,6 +1664,8 @@ mod tests {
     /// "Generating", except the one an AI Pen is still drawing into, and must not touch an external agent's frames.
     #[test]
     fn run_end_clears_stale_placeholders() {
+        // Holds the lock the other tests of `agent.pens` take, so its pen entry never meets theirs.
+        let _busy = agent_busy();
         let mut e = engine();
         let old = e.doc.root.clone();
         e.agent.profiles.push(Profile { id: "agT".into(), name: "T".into(), color: "#000000".into(), parent: None });
@@ -1662,7 +1692,7 @@ mod tests {
         assert!(!flag(&e, &a) && !flag(&e, &nested), "flags the built-in agent set are cleared, nested frames too");
         assert!(flag(&e, &drawing), "a frame an AI Pen draws into keeps its flag");
         assert!(flag(&e, &external), "a frame an external agent flagged keeps its flag");
-        e.agent.pens.clear();
+        e.agent.pens.retain(|(p, _)| *p != drawing);
         e.agent.profiles.retain(|p| p.id != "agT");
         e.doc.root = old;
     }

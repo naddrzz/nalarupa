@@ -761,6 +761,8 @@ struct Prepared {
     agent: String,
     globals: Map<String, Value>,
     was_clean: bool,
+    /// `agent.stops` when the call began: a Stop while the script runs still reaches its pens.
+    stops: u64,
 }
 
 fn prepare(e: &mut Engine, args: &Value) -> Result<Prepared, ToolOut> {
@@ -789,7 +791,7 @@ fn prepare(e: &mut Engine, args: &Value) -> Result<Prepared, ToolOut> {
     if let Some(seed) = args["__seed"].as_u64() {
         crate::doc::reseed(seed);
     }
-    Ok(Prepared { source, edit_id, before, agent, globals, was_clean })
+    Ok(Prepared { source, edit_id, before, agent, globals, was_clean, stops: e.agent.stops })
 }
 
 fn execute_within(e: &mut Engine, args: &Value, budget: Duration) -> ToolOut {
@@ -822,7 +824,7 @@ pub fn execute_shared(mut e: MutexGuard<'static, Engine>, args: &Value, cancel: 
 }
 
 fn finish(e: &mut Engine, prep: Prepared, result: Result<Map<String, Value>, String>, ex: Exec) -> ToolOut {
-    let Prepared { source, edit_id, before, agent, was_clean, .. } = prep;
+    let Prepared { source, edit_id, before, agent, was_clean, stops, .. } = prep;
 
     let new_globals = match result {
         Ok(g) => g,
@@ -851,9 +853,9 @@ fn finish(e: &mut Engine, prep: Prepared, result: Result<Map<String, Value>, Str
         e.sync();
         for (frame, prompt) in &ex.pens {
             let size = e.renderer.find(frame).map_or((400.0, 400.0), |f| (f.w.max(1.0), f.h.max(1.0)));
-            // Its own flag, set by Stop even after a later turn replaced the run's. A run being stopped starts it stopped;
-            // the flag of a run that has ended does not (an MCP client's pen after a Stop draws).
-            let cancel = Arc::new(AtomicBool::new(e.agent.running && e.agent.cancel.load(Ordering::SeqCst)));
+            // Its own flag, set by Stop even after a later turn replaced the run's. It starts set when a Stop came while
+            // this script ran or its run is being stopped; an earlier Stop's flag does not stop a later call's pen.
+            let cancel = Arc::new(AtomicBool::new(crate::agent::stopped_since(e, stops)));
             e.agent.pens.push((frame.clone(), cancel.clone()));
             crate::pen::start(frame.clone(), prompt.clone(), size, cancel);
         }
