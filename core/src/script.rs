@@ -2154,12 +2154,12 @@ card = Insert(root, {type:\"frame\", name:\"Card\", width:100, height:100, layou
             std::thread::sleep(Duration::from_millis(5));
         }
         let before = std::mem::take(&mut crate::engine::engine().doc);
-        let files = export.join().unwrap();
+        let joined = export.join();
         let mut e = crate::engine::engine();
         e.doc = before;
         e.assets.online = was;
         drop(e);
-        let files = files.unwrap();
+        let files = joined.unwrap().unwrap();
         assert!(red_middle(&std::fs::read(&files[0]).unwrap()), "the image is in the export");
     }
 
