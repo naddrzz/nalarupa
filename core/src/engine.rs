@@ -844,6 +844,12 @@ impl Engine {
         }
     }
 
+    /// An agent run, an `execute`, or an AI Pen that outlives its run still edits the open document, so it must
+    /// not be replaced (see `SWITCH_BUSY`).
+    pub fn switch_busy(&self) -> bool {
+        self.agent.running || self.executing || !self.agent.pens.is_empty()
+    }
+
     pub fn dirty(&self) -> bool {
         self.version != self.saved
     }
@@ -1114,7 +1120,7 @@ impl Engine {
                 out
             }
             "open_document" => {
-                if self.agent.running || self.executing {
+                if self.switch_busy() {
                     return ToolOut::err(SWITCH_BUSY);
                 }
                 if self.dirty() {
