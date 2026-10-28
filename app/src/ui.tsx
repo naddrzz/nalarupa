@@ -1,4 +1,5 @@
-import { createContext, forwardRef, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode, type Ref } from 'react'
+import { createContext, forwardRef, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactElement, type ReactNode, type Ref } from 'react'
+import * as Tooltip from '@gpuix/react/tooltip'
 import type { EventPayload } from '@gpuix/native'
 import { useGpuixRequired, type ImgInstance, type PublicInstance } from '@gpuix/react'
 import { ICONS, type IconName } from './icons'
@@ -214,26 +215,42 @@ export function T({ children, size = 12, color = C.text, weight, mono, grow, sty
   )
 }
 
+/** A control's name (and shortcut) under it after a short hover or on keyboard focus: an icon or a number alone does not say
+ *  what it does. `children` is one Pressable. The hint takes no clicks, so it never covers what is under it. */
+export function Tip({ text, children }: { text?: string; children: ReactElement }) {
+  if (!text) return children
+  return (
+    <Tooltip.Root delayDuration={350} disableHoverableContent style={{ flexShrink: 0 }}>
+      <Tooltip.Trigger asChild>{children}</Tooltip.Trigger>
+      <Tooltip.Content testId="tooltip" side="bottom" align="center" sideOffset={4} style={{ pointerEvents: 'none', paddingLeft: 8, paddingRight: 8, paddingTop: 4, paddingBottom: 4, borderRadius: 6, backgroundColor: C.raised, borderWidth: 1, borderColor: C.border }}>
+        <T size={12} style={{ whiteSpace: 'nowrap' }}>{text}</T>
+      </Tooltip.Content>
+    </Tooltip.Root>
+  )
+}
+
 export const IconButton = forwardRef<PublicInstance, {
   icon: IconName; onClick?: () => void; active?: boolean; title?: string; testId?: string; focusTestId?: string; color?: string; size?: number
 }>(function IconButton({ icon, onClick, active, title, testId, focusTestId, color, size = 28 }, ref) {
   return (
-    <Pressable
-      ref={ref}
-      testId={testId}
-      focusTestId={focusTestId}
-      label={title}
-      selected={active}
-      onClick={onClick}
-      style={{
-        width: size, height: size, borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-        backgroundColor: active ? C.accentSoft : undefined,
-        hover: { backgroundColor: active ? C.accentSoft : C.raised },
-        active: { backgroundColor: C.border },
-      }}
-    >
-      <Icon name={icon} color={color ?? (active ? C.accent : C.muted)} />
-    </Pressable>
+    <Tip text={title}>
+      <Pressable
+        ref={ref}
+        testId={testId}
+        focusTestId={focusTestId}
+        label={title}
+        selected={active}
+        onClick={onClick}
+        style={{
+          width: size, height: size, borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+          backgroundColor: active ? C.accentSoft : undefined,
+          hover: { backgroundColor: active ? C.accentSoft : C.raised },
+          active: { backgroundColor: C.border },
+        }}
+      >
+        <Icon name={icon} color={color ?? (active ? C.accent : C.muted)} />
+      </Pressable>
+    </Tip>
   )
 })
 

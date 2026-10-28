@@ -11,7 +11,7 @@ import { AgentPanel } from './Agent'
 import { Home } from './Home'
 import { Present } from './Present'
 import { C, LEFT_W, REDUCED_MOTION, RIGHT_W, TOP_H } from './theme'
-import { FocusBack, hasKeyboardFocus, Icon, IconButton, Pressable, Segmented, ShortcutScope, T, type Toast } from './ui'
+import { FocusBack, hasKeyboardFocus, Icon, IconButton, Pressable, Segmented, ShortcutScope, T, Tip, type Toast } from './ui'
 import { centerOffset, inParent, type M } from './geometry'
 import type { IconName } from './icons'
 
@@ -384,9 +384,11 @@ export function App() {
         <IconButton icon="redo" title="Redo (Ctrl+Shift+Z)" testId="redo" onClick={() => tryCall('redo')} />
         <div style={{ flexGrow: 1 }} />
         <IconButton icon="minus" title="Zoom out" onClick={() => zoomBy(0.8)} />
-        <Pressable testId="zoom-level" label={`Zoom ${Math.round(cam.zoom * 100)}%. Fit to screen`} onClick={() => fitTo()} style={{ width: 52, height: 28, borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', hover: { backgroundColor: C.raised } }}>
-          <T size={12} color={C.muted}>{`${Math.round(cam.zoom * 100)}%`}</T>
-        </Pressable>
+        <Tip text="Zoom to fit (Shift+1)">
+          <Pressable testId="zoom-level" label={`Zoom ${Math.round(cam.zoom * 100)}%. Fit to screen`} onClick={() => fitTo()} style={{ width: 52, height: 28, borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', hover: { backgroundColor: C.raised } }}>
+            <T size={12} color={C.muted}>{`${Math.round(cam.zoom * 100)}%`}</T>
+          </Pressable>
+        </Tip>
         <IconButton icon="plus" title="Zoom in" onClick={() => zoomBy(1.25)} />
         <IconButton icon="maximize" title="Zoom to fit (Shift+1)" testId="fit" onClick={() => fitTo()} />
         <div style={{ width: 1, height: 20, backgroundColor: C.border, marginLeft: 6, marginRight: 6 }} />

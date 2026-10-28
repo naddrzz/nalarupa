@@ -53,6 +53,12 @@ try {
   const at = (x: number, y: number) => ({ x: c.x + x, y: c.y + y })
   const canvas = app.getByTestId('canvas')
 
+  // An icon-only button names itself (and its shortcut) in a tooltip after a short hover; leaving it hides the tooltip.
+  await app.getByTestId('tool-frame').hover()
+  assert(await until(async () => (await app.getByTestId('tooltip').getByText('Frame (F / A)').count()) > 0), 'hovering the Frame tool shows "Frame (F / A)"')
+  await app.mouse.move(at(400, 400))
+  assert(await until(async () => !(await count('tooltip'))), 'the tooltip goes when the pointer leaves the button')
+
   // A real mouse wheel pans a little. GPUIX reports a notch as 60 px with precise=false; reading that
   // as lines (×40) threw the view ~2400 px per notch and the canvas looked empty. The automation wheel
   // only sends pixel deltas, so post a real WM_MOUSEWHEEL to this window (no cursor move, no focus).
