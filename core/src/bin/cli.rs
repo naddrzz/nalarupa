@@ -57,7 +57,10 @@ fn run(args: &[String]) -> Result<(), String> {
                 e.load_template("empty");
             }
             let src = std::fs::read_to_string(arg(3)?).map_err(|e| e.to_string())?;
-            let out = e.tool("execute", &json!({"input": src})).finish();
+            let out = e.tool("execute", &json!({"input": src}));
+            drop(e);
+            let out = out.finish();
+            let mut e = engine();
             println!("{}", out.text);
             for (i, img) in out.images.iter().enumerate() {
                 let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, img).map_err(|e| e.to_string())?;
