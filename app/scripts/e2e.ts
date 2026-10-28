@@ -399,7 +399,7 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
     version: 1, id: chatId, title: 'E2E saved chat', updatedAt: Date.now(), agent, messages: [], session: null,
     events: [
       { type: 'agent', kind: 'user', agent, text: 'E2E saved chat', at: Date.now() - 3000 },
-      { type: 'agent', kind: 'text_delta', agent, text: 'Restored from disk.', at: Date.now() - 2000 },
+      { type: 'agent', kind: 'text_delta', agent, text: 'Restored from disk.\n\n| Plan | Price | Seats | Support |\n|---|---|---|---|\n| Free | $0 | 1 | Community |\n| Team | $40 | 25 | Priority chat |', at: Date.now() - 2000 },
       { type: 'agent', kind: 'todos', todos, at: Date.now() - 1500 },
       { type: 'agent', kind: 'done', agent, durationMs: 1000, usage: {}, stopped: false, at: Date.now() - 1000 },
     ],
@@ -461,6 +461,26 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
   const windowOf = (n: Node): Node | undefined => n.type === 'floating_con' ? n : [...(n.nodes ?? []), ...(n.floating_nodes ?? [])].map(windowOf).find(Boolean)
   const origin = sock ? windowOf(JSON.parse(await Bun.$`swaymsg -s ${join(dir!, sock)} -t get_tree`.text()))!.rect : { x: 0, y: 0 }
   if (sock) {
+    type Node = { type: string; rect: { x: number; y: number }; nodes?: Node[]; floating_nodes?: Node[] }
+    const windowOf = (n: Node): Node | undefined => n.type === 'floating_con' ? n : [...(n.nodes ?? []), ...(n.floating_nodes ?? [])].map(windowOf).find(Boolean)
+    const origin = windowOf(JSON.parse(await Bun.$`swaymsg -s ${join(dir!, sock)} -t get_tree`.text()))!.rect
+    // The restored reply's 4-column table is wider than the chat panel: its columns share the panel's width (long
+    // cells wrap) instead of running past the edge, where the text was clipped (#450). The cell padding keeps the
+    // reply's rightmost pixels clear of text; a clipped cell paints bright text right up to that edge.
+    {
+      const md = (await app.getByType('markdown').all()).map((n) => n.bounds).find((b) => (b?.height ?? 0) > 0)!
+      const plan = (await app.getByTestId('plan-toggle').bounds())!
+      const g = await grab()
+      const right = Math.floor(origin.x + md.x + md.width) - 1
+      let lit = 0
+      for (let y = Math.ceil(origin.y + Math.max(md.y, 0)); y < origin.y + Math.min(md.y + md.height, plan.y - 8); y++) {
+        for (let x = right - 2; x <= right; x++) {
+          const i = (y * g.w + x) * 3
+          if (g.px[i] + g.px[i + 1] + g.px[i + 2] > 3 * 140) lit++
+        }
+      }
+      if (lit) throw new Error(`a markdown table in a reply runs past the chat panel's edge (${lit} text pixels at its right edge)`)
+    }
     const box = (await app.getByTestId('agent-input').bounds())!
     const rows = (g: Awaited<ReturnType<typeof grab>>) => Array.from({ length: Math.floor(box.height) }, (_, i) => {
       const from = ((Math.floor(origin.y + box.y) + i) * g.w + Math.floor(origin.x + box.x)) * 3

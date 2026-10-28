@@ -788,7 +788,11 @@ function Planning() {
 }
 
 // <markdown> ignores style.color and style.fontSize: its text comes from the theme, so a thought is dimmed here.
-const THOUGHT_THEME = { text: C.muted, metrics: { mdTextSize: 12, mdLineHeight: 18 } }
+// A table's columns keep a minimum width by default, so one with four or more columns ran past the narrow chat panel
+// and was clipped: with no minimum the columns share the panel's width and long cells wrap instead.
+const TABLE_METRICS = { mdTableCellPadding: 6, mdTableMinColumnWidth: 0, mdTableMinColumnContent: 0 }
+const REPLY_THEME = { metrics: TABLE_METRICS }
+const THOUGHT_THEME = { text: C.muted, metrics: { mdTextSize: 12, mdLineHeight: 18, ...TABLE_METRICS } }
 
 // Host ids of the transcript's Tab stops (the tool, thought and usage toggles), so a focus change can tell it landed in the list.
 const cards = new Set<number>()
@@ -822,7 +826,7 @@ const Item = memo(function Item({ m, isLast, expanded, toggle }: { m: ChatItem; 
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingBottom: 4 }}>
           {m.header ? <AgentHeader agentId={m.agent.id} by={m.by} /> : null}
-          <markdown source={text} style={{ fontSize: 13, color: C.text, fontFamily: FONT }} />
+          <markdown source={text} theme={REPLY_THEME} style={{ fontSize: 13, color: C.text, fontFamily: FONT }} />
         </div>
       )
     }
