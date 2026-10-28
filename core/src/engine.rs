@@ -160,8 +160,6 @@ pub struct Engine {
     slid: std::collections::HashSet<String>,
     /// Pending image urls whose download thread is still running; opening a file keeps them.
     pub inflight: std::collections::HashSet<String>,
-    /// Files a script's `Export` wrote this session (resolved paths): the only existing files it may write again.
-    pub script_exports: std::collections::HashSet<PathBuf>,
 }
 
 pub struct Stream {
@@ -427,7 +425,6 @@ impl Engine {
             coalesce: None,
             slid: Default::default(),
             inflight: Default::default(),
-            script_exports: Default::default(),
         };
         e.load_template("blank");
         e.saved = e.version;

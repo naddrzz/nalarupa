@@ -902,7 +902,7 @@ fn finish(e: &mut Engine, prep: Prepared, result: Result<Map<String, Value>, Str
     for (ids, format, out, opts) in ex.exports {
         // Checked before the job is planned, so nothing is written for a refused path.
         let job = crate::html::check_script_export(e, &format, &out).and_then(|()| crate::html::plan(e, &ids, &format, &out, &opts));
-        match job.and_then(|job| crate::html::claim_script_files(e, &job).map(|()| job)) {
+        match job.and_then(|mut job| crate::html::claim_script_files(&mut job).map(|()| job)) {
             Ok(job) => exports.push(job),
             Err(err) => text += &format!("\nExport failed: {err}\n"),
         }
@@ -2138,6 +2138,19 @@ card = Insert(root, {type:\"frame\", name:\"Card\", width:100, height:100, layou
             let res = e.tool("execute", &json!({"input": src})).finish();
             assert!(res.text.contains("Export failed") && res.text.contains("already exists") && !res.text.contains("Exported:"), "{file}: {}", res.text);
             assert_eq!(std::fs::read_to_string(dir.join(file)).unwrap(), "the user's own file", "{file} is kept");
+        }
+        // A file that appears after the call (the export is written in `finish`) is not replaced either.
+        let out = e.tool("execute", &json!({"input": format!("Export([{id:?}], \"pdf\", \"late.pdf\")")}));
+        std::fs::write(dir.join("late.pdf"), "the user's own file").unwrap();
+        let res = out.finish();
+        assert!(res.text.contains("already exists") && !res.text.contains("Exported:"), "{}", res.text);
+        assert_eq!(std::fs::read_to_string(dir.join("late.pdf")).unwrap(), "the user's own file");
+        // Nor is a dangling link followed to create its target.
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(dir.join("target.pdf"), dir.join("link.pdf")).unwrap();
+            let res = e.tool("execute", &json!({"input": format!("Export([{id:?}], \"pdf\", \"link.pdf\")")})).finish();
+            assert!(res.text.contains("already exists") && !dir.join("target.pdf").exists(), "{}", res.text);
         }
         // A file the script exported itself is written again (the agent fixes a slide and re-exports).
         for _ in 0..2 {
