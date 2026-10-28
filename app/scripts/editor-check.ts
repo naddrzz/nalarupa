@@ -385,5 +385,41 @@ assert(same({ ...fc, id: '' }, { id: '', x: 0, y: 0, w: 400, h: 300 }), `fit-all
 
 assert(ICONS.saveAs !== ICONS.open, 'Save as… has its own icon, not the Open folder')
 
+// Pasting into another document brings the variables and components the layers use along.
+{
+  const run = (input: string) => {
+    const o = call('tool', { name: 'execute', args: { input } })
+    assert(!o.error, `execute: ${o.text}`)
+  }
+  call('new', { template: 'empty' })
+  run(`SetVariables({brand:{type:"color",value:[{value:"#ff0000"},{value:"#00ff00",theme:{mode:"dark"}}]},sp:{type:"number",value:24},alias:{type:"color",value:"$brand"}})
+C=Insert(document,{type:"frame",name:"Comp",reusable:true,width:100,height:50,fill:"$alias",layout:"none"})
+P=Insert(document,{type:"frame",name:"P",layout:"vertical",x:300,width:200,padding:"$sp",gap:"$sp",children:[{type:"rectangle",name:"R",width:50,height:50,fill:"$brand"}]})
+Copy(C,P,{name:"Inst"})`)
+  const pid = call<any[]>('layers').find((l) => l.name === 'P').id
+  const png = (id: string) => call<string>('png', { id, scale: 1 })
+  const src = png(pid)
+  const xclip = call('copy', { ids: [pid] })
+  call('new', { template: 'empty' })
+  const view = { x: 0, y: 0, w: 1000, h: 800 }
+  const pasted = call('paste', { html: xclip.html, text: xclip.text, targets: [], view }).ids
+  assert(pasted.length === 1, 'cross-document paste lands the layer')
+  const vars = call('variables')
+  assert(vars.variables.brand && vars.variables.sp?.value === 24 && vars.variables.alias, `variables follow the layers: ${JSON.stringify(vars)}`)
+  assert(vars.themes.mode?.includes('dark'), 'the theme axes follow the variables')
+  const layers = call<any[]>('layers')
+  assert(layers.some((l) => l.name === 'Comp'), 'the instance brings its component along')
+  const q = layers.find((l) => l.name === 'P').id
+  const [cb, pb] = ['Comp', 'P'].map((n) => call('bounds', { ids: [layers.find((l) => l.name === n).id] }))
+  assert(cb.x >= pb.x + pb.w, `the component lands right of the pasted layer: ${JSON.stringify([cb, pb])}`)
+  assert(png(q) === src, 'the pasted frame renders like the source')
+  // Same-document paste adds nothing: variables and components are already there.
+  call('paste', { html: xclip.html, text: xclip.text, targets: [], view })
+  assert(call<any[]>('layers').filter((l) => l.name === 'Comp').length === 1, 'pasting again does not duplicate the component')
+  call('undo')
+  call('undo')
+  assert(Object.keys(call('variables').variables).length === 0 && call<any[]>('layers').length === 0, 'undo takes the pasted layers, variables and components out together')
+}
+
 console.log('editor-check ok')
 process.exit(0)
