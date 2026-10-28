@@ -145,6 +145,11 @@ export function Inspector({ version, selection, select, toast }: Props) {
     if (tryCall('delete', { ids: selection }) !== null) select([])
     else toast('Unable to delete the selection. Select the layers again and try again.', true)
   }
+  /** A descendant of an instance cannot be removed: the core takes `enabled:false` on its path as an override instead. */
+  const hide = () => {
+    if (tryCall('update', { ids: selection, props: { enabled: false } }) !== null) select([])
+    else toast('Unable to hide the selection. Select the layers again and try again.', true)
+  }
   const infos = useMemo(() => selection.map((id) => ({ id, ...tryCall('node', { id }) }) as Info).filter((i) => i.node), [selection, version])
   // A relative gesture on a mixed field: each layer's current value and the total delta already applied.
   const stepBase = useRef<{ key: string; vals: Map<string, number>; last: number } | null>(null)
@@ -193,15 +198,17 @@ export function Inspector({ version, selection, select, toast }: Props) {
     return (
       <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
         <T color={C.text}>{`Instance child ${selection[0]}`}</T>
+        <T size={11} color={C.ghost}>A layer inside a component instance cannot be deleted or duplicated. Hide it for this instance instead; Ctrl+Z brings it back.</T>
         <Row>
-          <Button icon="copy" onClick={() => tryCall('duplicate', { ids: selection })}>Duplicate</Button>
-          <Button icon="trash" danger onClick={remove}>Delete</Button>
+          <Button icon="hidden" testId="hide-instance-child" onClick={hide}>Hide</Button>
         </Row>
       </div>
     )
   }
 
   const multi = infos.length > 1
+  /** Instance children (paths without a node of their own) mixed in: Duplicate and Delete would fail on them, Hide works on all. */
+  const hasInstanceChild = infos.length < selection.length
   const n = infos[0].node
   /** A hidden layer has no render box; its own numeric size stands in. */
   const dimOf = (i: Info, axis: 'width' | 'height') => i.box?.[axis === 'width' ? 'w' : 'h'] ?? (typeof i.node[axis] === 'number' ? i.node[axis] : 0)
@@ -429,10 +436,19 @@ export function Inspector({ version, selection, select, toast }: Props) {
             <Button testId="inspector-visibility" onClick={() => update({ enabled: n.enabled === false ? null : false })}>{n.enabled === false ? 'Show' : 'Hide'}</Button>
           </Row>
         ) : null}
-        <Row gap={6}>
-          <Button icon="copy" onClick={() => { const r = tryCall('duplicate', { ids: selection }); if (r?.ids) select(r.ids) }}>Duplicate</Button>
-          <Button icon="trash" danger onClick={remove}>Delete</Button>
-        </Row>
+        {hasInstanceChild ? (
+          <>
+            <T size={11} color={C.ghost}>The selection includes a layer inside a component instance, which cannot be deleted or duplicated. Hide hides every selected layer; Ctrl+Z brings them back.</T>
+            <Row gap={6}>
+              <Button icon="hidden" testId="hide-instance-child" onClick={hide}>Hide</Button>
+            </Row>
+          </>
+        ) : (
+          <Row gap={6}>
+            <Button icon="copy" onClick={() => { const r = tryCall('duplicate', { ids: selection }); if (r?.ids) select(r.ids) }}>Duplicate</Button>
+            <Button icon="trash" danger onClick={remove}>Delete</Button>
+          </Row>
+        )}
         <Row gap={6}>
           <Button onClick={() => tryCall('reorder', { ids: selection, dir: 'up' })}>Bring forward</Button>
           <Button onClick={() => tryCall('reorder', { ids: selection, dir: 'down' })}>Send backward</Button>
