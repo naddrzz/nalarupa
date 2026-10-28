@@ -323,7 +323,7 @@ export function AgentPanel({ tick, running, drawing, mcpUrl, toast, onSent }: { 
             <CookMenu designs={designs} mode={cookMode} set={setCook} />
             {/* An AI Pen can draw on after its run ended: Stop ends it too. */}
             {running || drawing ? (
-              <IconButton icon="stop" title="Stop the agent" testId="agent-stop" color={C.danger} onClick={() => tryCall('agent_stop')} />
+              <IconButton icon="stop" title={drawing && !running ? 'Stop drawing' : 'Stop the agent'} testId="agent-stop" color={C.danger} onClick={() => tryCall('agent_stop')} />
             ) : null}
             <IconButton icon="send" title="Send" testId="agent-send" color={C.accent} onClick={() => send(draft)} />
           </Row>
