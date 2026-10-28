@@ -259,6 +259,8 @@ export function Canvas(props: {
     setCam(next)
   }
   const schedule = () => {
+    // The first frame draws in the commit itself: GPUI may present the new <img> before a timer runs.
+    if (!drawn.current) draw(false)
     if (!pending.current) {
       pending.current = setTimeout(() => {
         pending.current = null
