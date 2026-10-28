@@ -53,6 +53,21 @@ export const shimmerHalves = (pos: number, band: number): [[number, number], [nu
   return [[a, mid - a], [mid, b - mid]]
 }
 
+/** Corner radii [tl, tr, br, bl] as painted under a flip or half turn `m` (a mirrored node has its corners mirrored). */
+export const flipRadii = (r: number[], m: M | null | undefined): number[] => {
+  const [a, b, c, d] = r
+  const [x, y] = [!!m && m[0] < 0, !!m && m[3] < 0]
+  const [tl, tr, br, bl] = x ? [b, a, d, c] : [a, b, c, d]
+  return y ? [bl, br, tr, tl] : [tl, tr, br, bl]
+}
+
+/** SVG path of a box with corner radii [tl, tr, br, bl] (as `cornerRadius`), or of the ellipse inscribed in it. */
+export const outline = (x: number, y: number, w: number, h: number, r: number[] | 'ellipse'): string => {
+  if (r === 'ellipse') return `M${x} ${y + h / 2}A${w / 2} ${h / 2} 0 0 1 ${x + w} ${y + h / 2}A${w / 2} ${h / 2} 0 0 1 ${x} ${y + h / 2}Z`
+  const [a, b, c, d] = r
+  return `M${x + a} ${y}H${x + w - b}A${b} ${b} 0 0 1 ${x + w} ${y + b}V${y + h - c}A${c} ${c} 0 0 1 ${x + w - c} ${y + h}H${x + d}A${d} ${d} 0 0 1 ${x} ${y + h - d}V${y + a}A${a} ${a} 0 0 1 ${x + a} ${y}Z`
+}
+
 /** Where a box is painted (its rotated/flipped corners' bounds). */
 export const painted = (b: Rect & { m?: M | null }): Rect => (b.m ? bounds(corners(b, b.m)) : b)
 
@@ -194,5 +209,6 @@ if (import.meta.main) {
   eq([resizeCursor('e', null), resizeCursor('e', m), resizeCursor('ne', null), resizeCursor('ne', m)], ['ew-resize', 'ns-resize', 'nesw-resize', 'nwse-resize'], 'cursors turn with the box')
   eq(turnAroundCenter(0, 0, 100, 50, 0, 90, false, false), [25, 75], 'turning keeps the center put')
   eq(turnAroundCenter(0, 0, 100, 50, 0, 90, false, false, 10, 20), [15, 105], 'a group turns around its box center, not its origin')
+  eq([flipRadii([1, 2, 3, 4], null), flipRadii([1, 2, 3, 4], [-1, 0, 0, 1, 0, 0]), flipRadii([1, 2, 3, 4], [1, 0, 0, -1, 0, 0]), flipRadii([1, 2, 3, 4], [-1, 0, 0, -1, 0, 0])], [[1, 2, 3, 4], [2, 1, 4, 3], [4, 3, 2, 1], [3, 4, 1, 2]], 'a flip mirrors the corners, a half turn swaps them diagonally')
   console.log('geometry ok')
 }
