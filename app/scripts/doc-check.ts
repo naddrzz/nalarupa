@@ -225,6 +225,7 @@ assert(htmlOf({ fill: grad({ rotation: 60 }) }).includes('data:image/svg+xml,%3C
 assert(htmlOf({ fill: grad({ gradientType: 'radial', rotation: 45, size: { width: 0.3, height: 0.8 } }) }).includes('matrix(0.106066 -0.106066 0.282843 0.282843 0.5 0.5)'), 'html exports a rotated radial gradient as an svg background with the canvas ellipse')
 assert(htmlOf({ fill: '#ff0000', effect: { type: 'blur', radius: 4 } }).includes('filter:blur(2px)'), 'html exports layer blur')
 assert(/padding:12px;background:linear-gradient/.test(htmlOf({ fill: '#ffff00', stroke: grad(), strokeWidth: 12 })), 'html exports a gradient stroke')
+assert(/inset:-3px;border-radius:50%;box-shadow:inset 0 0 0 6px #000000;/.test(htmlOf({ type: 'ellipse', width: 120, height: 80, fill: '#f0c000', stroke: '#000000', strokeWidth: 6 })), 'html draws a centered stroke as one ring, not two abutting shadows with a hairline between them')
 // A bottom fill or stroke with a blend mode blends with the layers beneath the element: an overlay with mix-blend-mode
 // outside any isolated box, not a background (background-blend-mode only blends the element's own layers).
 const blendHtml = htmlOf({ fill: [{ type: 'color', color: '#00ffff', blendMode: 'multiply' }] })

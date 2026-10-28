@@ -673,8 +673,19 @@ impl Html<'_> {
                     }
                     (Some(c), _, Some(v)) => {
                         if let Some(w) = num(v).filter(|w| *w > 0.0) {
+                            let align = n.s("strokeAlignment");
+                            // A centered stroke as an inner and an outer shadow leaves a hairline of the fill where their anti-aliased
+                            // edges meet on the outline; one ring half outside the box has a single edge per side. A clipping frame
+                            // would cut the outer half off, and a stack of strokes needs the shadows to keep its order.
+                            if strokes.len() == 1 && !matches!(align, Some("inner" | "inside" | "outer" | "outside")) && !(n.ty == "frame" && n.b("clip")) {
+                                let half = w / 2.0;
+                                // The outline's offset curve: each rounded corner grows by half the width.
+                                let radius = if n.ty == "ellipse" { "50%".to_string() } else { crate::svg::radii(n).map(|r| format!("{}px", if r > 0.0 { r + half } else { 0.0 })).join(" ") };
+                                let _ = writeln!(under, "<div style=\"position:absolute;z-index:-1;pointer-events:none;inset:{}px;border-radius:{radius};box-shadow:inset 0 0 0 {w}px {c};\"></div>", -half);
+                                continue;
+                            }
                             // The first box-shadow is the topmost, so each stroke goes in front of the ones below it.
-                            let own = match n.s("strokeAlignment") {
+                            let own = match align {
                                 Some("inner" | "inside") => vec![format!("inset 0 0 0 {w}px {c}")],
                                 Some("outer" | "outside") => vec![format!("0 0 0 {w}px {c}")],
                                 _ => vec![format!("inset 0 0 0 {}px {c}", w / 2.0), format!("0 0 0 {}px {c}", w / 2.0)],
@@ -1020,6 +1031,30 @@ mod tests {
 
     /// The canvas casts a drop shadow from the outline with the stroke's outer part, so the shadow spreads by that reach
     /// (an offset smaller than the stroke would hide under the stroke ring otherwise); inner shadows and inner strokes do not.
+    /// A centered stroke is one ring half outside the box: an inner and an outer shadow meeting on the outline
+    /// leave a hairline of the fill (and the page) through its middle wherever the outline is anti-aliased.
+    #[test]
+    fn centered_stroke_is_a_single_ring() {
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        e.load_template("empty");
+        let mut html = |extra: serde_json::Value| {
+            let mut n = json!({"type": "rectangle", "width": 120, "height": 80, "fill": "#f0c000", "stroke": "#000000", "strokeWidth": 6});
+            n.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            let id = e.insert_root(n).unwrap();
+            super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap()
+        };
+        let ring = "box-shadow:inset 0 0 0 6px #000000;";
+        let h = html(json!({"type": "ellipse"}));
+        assert!(h.contains(&format!("inset:-3px;border-radius:50%;{ring}")) && !h.contains("box-shadow:inset 0 0 0 3px"), "{h}");
+        let h = html(json!({"cornerRadius": 30}));
+        assert!(h.contains(&format!("border-radius:33px 33px 33px 33px;{ring}")), "{h}");
+        let h = html(json!({"rotation": -30}));
+        assert!(h.contains(&format!("border-radius:0px 0px 0px 0px;{ring}")) && !h.contains("0 0 0 3px"), "{h}");
+        // Inner and outer strokes are one edge already.
+        assert!(html(json!({"strokeAlignment": "outer"})).contains("box-shadow:0 0 0 6px #000000;"));
+    }
+
     #[test]
     fn drop_shadow_is_cast_from_the_stroked_outline() {
         let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
@@ -1034,7 +1069,7 @@ mod tests {
         let h = html("outer", json!(20), drop.clone());
         assert!(h.contains("box-shadow:0 0 0 20px #000000,12px 12px 0px 20px #ff0000;"), "{h}");
         let h = html("center", json!(20), drop.clone());
-        assert!(h.contains("box-shadow:inset 0 0 0 10px #000000,0 0 0 10px #000000,12px 12px 0px 10px #ff0000;"), "{h}");
+        assert!(h.contains("box-shadow:12px 12px 0px 10px #ff0000;") && h.contains("inset:-10px;border-radius:0px 0px 0px 0px;box-shadow:inset 0 0 0 20px #000000;"), "{h}");
         // The widest side reaches furthest.
         let h = html("outer", json!({"top": 2, "right": 8, "bottom": 4, "left": 6}), drop.clone());
         assert!(h.contains("12px 12px 0px 8px #ff0000"), "{h}");
@@ -1126,7 +1161,8 @@ mod tests {
             assert!(!style(name).contains("box-shadow"), "{name}: {}", style(name));
         }
         let s = style("stroke");
-        assert!(s.contains("box-shadow:inset 0 0 0 2px #ff0000,0 0 0 2px #ff0000;") && !s.contains("#0000ff"), "{s}");
+        assert!(!s.contains("box-shadow") && !s.contains("#0000ff"), "{s}");
+        assert!(h.contains("inset:-2px;border-radius:0px 0px 0px 0px;box-shadow:inset 0 0 0 4px #ff0000;"), "{h}");
         assert!(style("filled").contains("box-shadow:20px 20px 0px #0000ff;"), "{}", style("filled"));
         assert!(style("box").contains("box-shadow:20px 20px 0px #0000ff;"), "{}", style("box"));
     }
