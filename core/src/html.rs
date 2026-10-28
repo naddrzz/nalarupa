@@ -97,13 +97,38 @@ pub fn html_document(e: &mut Engine, ids: &[String], opts: &Value) -> Result<Str
         let fam = fonts[i].0.clone();
         let weights: Vec<String> = fonts.iter().filter(|f| f.0 == fam).map(|f| f.1.to_string()).collect();
         i += weights.len();
-        link += &format!("<link rel=\"stylesheet\" href=\"https://fonts.googleapis.com/css2?family={}:wght@{}&display=swap\">
-", fam.replace(' ', "+"), weights.join(";"));
+        if let Some(q) = font_query(&fam) {
+            link += &format!("<link rel=\"stylesheet\" href=\"https://fonts.googleapis.com/css2?family={q}:wght@{}&display=swap\">
+", weights.join(";"));
+        }
     }
     Ok(format!(
         "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{}</title>\n{link}\n<style>*{{box-sizing:border-box;margin:0;padding:0}}body{{display:flex;flex-direction:column;align-items:center;gap:40px;padding:40px 0;background:#f4f4f5}}</style>\n</head>\n<body>\n{body}</body>\n</html>\n",
         esc(&e.title())
     ))
+}
+
+/// A family name as the `family=` query value of a Google Fonts URL; `None` when it holds characters
+/// a font name cannot have (it would only break out of the attribute or the query).
+fn font_query(fam: &str) -> Option<String> {
+    if fam.is_empty() || !fam.chars().all(|c| c.is_alphanumeric() || matches!(c, ' ' | '-' | '_' | '.')) {
+        return None;
+    }
+    let mut q = String::new();
+    for c in fam.chars() {
+        match c {
+            ' ' => q.push('+'),
+            c if c.is_ascii() => q.push(c),
+            c => c.encode_utf8(&mut [0; 4]).bytes().for_each(|b| q += &format!("%{b:02X}")),
+        }
+    }
+    Some(q)
+}
+
+/// `s` as the inside of a single-quoted CSS string (before HTML-escaping it for the `style` attribute).
+/// A raw line break ends a CSS string (the declaration is dropped), so those become hex escapes.
+fn css_str(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('\'', "\\'").replace('\n', "\\a ").replace('\r', "\\d ").replace('\x0c', "\\c ")
 }
 
 struct Html<'a> {
@@ -268,7 +293,7 @@ fn image_layer(o: &serde_json::Map<String, Value>) -> Option<(String, f64)> {
         Some("fill") => "cover",
         _ => "100% 100%",
     };
-    Some((format!("url('{}') center/{size} no-repeat", esc(url)), o.get("opacity").and_then(num).unwrap_or(1.0).clamp(0.0, 1.0)))
+    Some((format!("url('{}') center/{size} no-repeat", esc(&css_str(url))), o.get("opacity").and_then(num).unwrap_or(1.0).clamp(0.0, 1.0)))
 }
 
 /// A mesh gradient or shader paint of the `n.w`×`n.h` box as a PNG background layer: CSS has no such paint, so it is
@@ -754,7 +779,7 @@ impl Html<'_> {
     fn text_css(&mut self, n: &RNode, css: &mut String) {
         let st = crate::text::TextStyle::of(n);
         self.families.push((st.family.clone(), st.weight));
-        let _ = write!(css, "font-family:'{}',sans-serif;font-size:{}px;font-weight:{};", esc(&st.family), st.size, st.weight);
+        let _ = write!(css, "font-family:'{}',sans-serif;font-size:{}px;font-weight:{};", esc(&css_str(&st.family)), st.size, st.weight);
         if st.italic {
             css.push_str("font-style:italic;");
         }
@@ -1392,6 +1417,28 @@ mod tests {
         let id = e.insert_root(json!({"type": "text", "content": "IMG", "fontSize": 60, "opacity": 0.5, "fill": {"type": "image", "url": "pic.png", "mode": "fill", "opacity": 0.5}})).unwrap();
         let h = super::html_document(&mut e, &[id], &json!({"includeHtmlScaffold": false})).unwrap();
         assert!(h.contains("opacity:0.5;") && h.contains("color:transparent;opacity:0.25;"), "{h}");
+    }
+
+    /// A font family or image url cannot break out of the `<link href>` or a quoted CSS string.
+    #[test]
+    fn html_font_and_url_are_escaped() {
+        let mut e = Engine::new(std::env::temp_dir().join("nalarupa-test"));
+        e.offline();
+        e.load_template("empty");
+        let evil = "X\"><script>alert(1)</script><x y=\"";
+        let id = e.insert_root(json!({"type": "frame", "width": 300, "height": 200, "layout": "none", "children": [
+            {"type": "text", "content": "hi", "fontSize": 12, "fontFamily": evil},
+            {"type": "text", "content": "hi", "fontSize": 12, "fontFamily": "A'B\\C"},
+            {"type": "text", "content": "hi", "fontSize": 12, "fontFamily": "Noto Sans"},
+            {"type": "text", "content": "hi", "fontSize": 12, "fontFamily": "L\nM\rN"},
+            {"type": "rectangle", "y": 50, "width": 50, "height": 50, "fill": {"type": "image", "url": "a.png');position:fixed;/*\\", "mode": "fill"}},
+        ]})).unwrap();
+        let h = super::html_document(&mut e, &[id], &json!({})).unwrap();
+        assert!(!h.contains("<script"), "{h}");
+        assert!(h.contains("family=Noto+Sans:wght@") && !h.contains("family=X") && !h.contains("family=A"), "{h}");
+        assert!(h.contains("font-family:'A\\&apos;B\\\\C',sans-serif;"), "{h}");
+        assert!(h.contains("font-family:'L\\a M\\d N',sans-serif;"), "{h}");
+        assert!(h.contains("url('a.png\\&apos;);position:fixed;/*\\\\')"), "{h}");
     }
 
     /// A text stroke reaches the SVG and HTML exports (it was dropped before).
