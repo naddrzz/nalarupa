@@ -101,10 +101,11 @@ export function App() {
   }, [state.title, state.dirty])
 
   useEffect(() => {
-    // Drop selected ids that no longer exist (undo, agent deletes). A hidden layer has no render box but is still in the document.
+    // Drop selected ids that no longer exist (undo, agent deletes). A hidden layer (or a hidden instance's child) has no
+    // render box but still exists.
     if (!selection.length) return
     const drawn = new Set((tryCall<Box[]>('boxes', { ids: selection }) ?? []).map((b) => b.id))
-    const kept = selection.filter((id) => drawn.has(id) || tryCall('node', { id })?.node)
+    const kept = selection.filter((id) => drawn.has(id) || tryCall('node', { id })?.exists)
     if (kept.length !== selection.length) setSelection(kept)
   }, [state.version])
 

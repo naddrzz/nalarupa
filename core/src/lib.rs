@@ -175,7 +175,9 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
                 json!({"bx": bx, "by": by, "rotation": rotation, "flipX": flip_x, "flipY": flip_y})
             });
             let flat = e.renderer.find(id).map(rect);
-            Ok(json!({"node": raw, "box": flat, "local": local, "parent": parent, "parentLayout": parent_layout,
+            let empty = serde_json::Map::new();
+            let exists = raw.is_some() || crate::resolve::Resolver::new(&e.doc.root, &e.libs, &empty).has_path(id);
+            Ok(json!({"node": raw, "exists": exists, "box": flat, "local": local, "parent": parent, "parentLayout": parent_layout,
                       "variables": e.doc.root.get("variables").cloned().unwrap_or(json!({}))}))
         }
         "select" => {
