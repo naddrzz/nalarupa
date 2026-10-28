@@ -39,3 +39,17 @@ AI design editor: a Rust core (`core/`, a cdylib loaded through `bun:ffi`) and a
 - Match each file's line endings when patching by string; the repo mixes CRLF and LF.
 
 <!-- /bmad:context -->
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in this repo's GitHub Issues (`gh` CLI). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five default triage labels (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.

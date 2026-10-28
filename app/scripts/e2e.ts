@@ -596,6 +596,45 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
   await sleep(300)
   if (await app.getByTestId('chat-history').count()) throw new Error('the history button did not close the dropdown')
 
+  // A long transcript scrolls from the keyboard: it is a Tab stop that takes PageUp/Up/Home/End, and Shift+Tab walks back
+  // through cards above the viewport (the list builds only the rows on screen).
+  const longId = `e2elong${Date.now().toString(36)}`
+  const longFile = join(sessions, `${longId}.json`)
+  const rounds = Array.from({ length: 30 }, (_, i) => [
+    { type: 'agent', kind: 'user', agent, text: `Long chat message ${i}` },
+    { type: 'agent', kind: 'start', agent },
+    { type: 'agent', kind: 'text_delta', agent, text: `Reply ${i}: some text that wraps onto a second line in the narrow chat panel.` },
+    { type: 'agent', kind: 'message_end', agent },
+    { type: 'agent', kind: 'tool_done', id: `t${i}`, name: 'execute', input: { input: 'return 1' }, output: 'ok', images: [], error: false, agent },
+    { type: 'agent', kind: 'done', agent, durationMs: 5000, usage: {}, stopped: false },
+  ]).flat()
+  writeFileSync(longFile, JSON.stringify({ version: 1, id: longId, title: 'E2E long chat', updatedAt: Date.now(), agent, messages: [], session: null, events: rounds }))
+  await app.getByTestId('agent-history').click()
+  await app.getByTestId(`chat-${longId}`).click()
+  const yOf = async (text: string) => (await app!.getByText(text).bounds().catch(() => null))?.y ?? null // null while the row is not built
+  await until(async () => (await yOf('Long chat message 29')) !== null, 'the long chat to open at its tail')
+  const tailY = (await yOf('Long chat message 29'))!
+  for (let i = 0; i < 40 && !(await app.getByTestId('agent-transcript-focus').count()); i++) {
+    await app.call('keystrokes', { keys: 'tab' })
+    await sleep(150)
+  }
+  if (!(await app.getByTestId('agent-transcript-focus').count())) throw new Error('Tab never reached the chat transcript')
+  await app.call('keystrokes', { keys: 'pageup' })
+  await until(async () => ((await yOf('Long chat message 29')) ?? Infinity) > tailY + 100, 'PageUp to scroll the transcript up')
+  await app.call('keystrokes', { keys: 'home' })
+  await until(async () => (await yOf('Long chat message 0')) !== null, 'Home to scroll the transcript to its first message')
+  await app.call('keystrokes', { keys: 'end' })
+  await until(async () => Math.abs(((await yOf('Long chat message 29')) ?? -1e9) - tailY) < 2, 'End to scroll the transcript back to its tail')
+  // Each round has two cards (tool, usage): 24 Shift+Tabs from the composer reach about 12 rounds up.
+  await app.getByTestId('agent-input').click()
+  for (let i = 0; i < 24; i++) {
+    await app.call('keystrokes', { keys: 'shift-tab' })
+    await sleep(150)
+  }
+  await until(async () => (await yOf('Long chat message 20')) !== null, 'Shift+Tab through the cards to bring earlier messages into view')
+  await app.getByTestId('agent-new').click()
+  rmSync(longFile)
+
   // An error says how to recover and stays until dismissed: a listed chat whose file vanished.
   const lostId = `e2elost${Date.now().toString(36)}`
   const lostFile = join(sessions, `${lostId}.json`)
@@ -687,6 +726,13 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
     await until(async () => !!(await app!.getByText('Agent •').count()), 'the Agent tab to show the running dot')
     if ((await tabs()) !== idleTabs) throw new Error(`the Design/Agent tabs moved while the agent ran: ${idleTabs} -> ${await tabs()}`)
     await until(async () => (await app!.getByText('make the title bigger').count()) > 0, 'the composer draft to survive the Design tab and be sent')
+    // While it runs, a template pick from Home is refused at once: no "Save changes first?" prompt for a switch that cannot happen.
+    await app.getByTestId('agent-stop').waitFor()
+    await app.getByTestId('home').click()
+    await app.getByTestId('template-empty').click()
+    await app.getByText('Stop the agent before opening another document.').waitFor({ timeoutMs: 10000 })
+    if (await app.getByTestId('unsaved-prompt').count()) throw new Error('Home asked to save changes before refusing a switch while the agent runs')
+    await app.getByTestId('home-back').click()
     await until(async () => !(await app!.getByTestId('agent-stop').count()), 'the stand-in agent to finish', 20000)
   }
   // "1×" also appears in the agent cook button, so click the narrowest match: the segment.
