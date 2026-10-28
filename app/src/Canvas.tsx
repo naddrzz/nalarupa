@@ -1371,7 +1371,7 @@ export function Canvas(props: {
         if (key === 'alt') setMeasured(null)
       }}
       style={{
-        position: 'relative', width: w, height: h, overflow: 'hidden', flexShrink: 0, userSelect: 'none', background: CANVAS_BG_CSS,
+        position: 'relative', width: w, height: h, overflow: 'hidden', flexShrink: 0, userSelect: 'none', backgroundColor: CANVAS_BG_CSS,
         cursor: panning ? 'grabbing' : tool === 'hand' || spaceDown ? 'grab' : tool === 'move' ? cursor : 'crosshair',
       }}
     >
