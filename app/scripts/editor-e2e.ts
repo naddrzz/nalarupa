@@ -250,6 +250,44 @@ try {
   await shot('03-marquee')
   assert(await app.getByText('2 layers selected').count(), 'marquee selects both rectangles')
 
+  // Up/Down and scrubbing a "Mixed" field step each layer from its own value (they used to start from 0 and
+  // give every layer the same number); one undo step restores them.
+  const fresh = (await ports()).filter((p) => !portsBefore.has(p))
+  assert(fresh.length === 1, `expected one new MCP port, found ${fresh.join(', ') || 'none'}`)
+  const port = fresh[0]
+  const xw = async () => {
+    const res: any = await (await mcpCall(port, { method: 'tools/call', params: { name: 'execute', arguments: { input: 'Get(undefined, n => { if (n.name === "Rectangle") Print(JSON.stringify([n.x, n.width])) })' } } })).json()
+    return String(res.result?.content?.[0]?.text ?? '').split('\n').filter((l) => l.startsWith('[')).sort().join(' ')
+  }
+  // The rectangles start the same size: widen the right one so W is mixed too (put back below).
+  const widen = (w: number) => mcpCall(port, { method: 'tools/call', params: { name: 'execute', arguments: { input: `Get(n => n.name === "Rectangle" && n.x > 300 ? n.id : undefined).filter(Boolean).forEach(id => Update(id, { width: ${w} }))` } } })
+  await widen(250)
+  await sleep(500)
+  const xw0 = await xw()
+  const [[ax, aw], [bx, bw]] = xw0.split(' ').map((l) => JSON.parse(l) as number[])
+  assert(aw !== bw && ax !== bx, `the two rectangles differ in X and W (${xw0})`)
+  const wField = await app.getByTestId('inspector-w').bounds()
+  await app.mouse.click({ x: wField.x + wField.width - 10, y: wField.y + wField.height / 2 })
+  await app.call('keystrokes', { keys: 'up' })
+  const wUp = JSON.stringify([[ax, aw + 1], [bx, bw + 1]].sort())
+  assert(await until(async () => JSON.stringify((await xw()).split(' ').map((l) => JSON.parse(l)).sort()) === wUp), `Up on a mixed W adds 1 to each layer's own width (${await xw()}, from ${xw0})`)
+  await app.call('keystrokes', { keys: 'shift-down' })
+  const wDown = JSON.stringify([[ax, aw - 9], [bx, bw - 9]].sort())
+  assert(await until(async () => JSON.stringify((await xw()).split(' ').map((l) => JSON.parse(l)).sort()) === wDown), `Shift+Down on a mixed W subtracts 10 from the steps so far (${await xw()})`)
+  await canvas.press('ctrl-z')
+  assert(await until(async () => (await xw()) === xw0, 5000), `one undo step restores both widths (${await xw()})`)
+  // Scrub the X label 40 px (2 px per step): both layers move 20 and keep their offset.
+  const xs = await app.getByTestId('inspector-x-scrub').center()
+  await app.mouse.down(xs)
+  for (let i = 1; i <= 10; i++) await app.mouse.move({ x: xs.x + i * 4, y: xs.y }, { pressedButton: 0 })
+  await app.mouse.up({ x: xs.x + 40, y: xs.y })
+  const xScrub = JSON.stringify([[ax + 20, aw], [bx + 20, bw]].sort())
+  assert(await until(async () => JSON.stringify((await xw()).split(' ').map((l) => JSON.parse(l)).sort()) === xScrub), `scrubbing a mixed X moves each layer by the same amount (${await xw()}, from ${xw0})`)
+  await canvas.press('ctrl-z')
+  assert(await until(async () => (await xw()) === xw0, 5000), `one undo step reverts the scrub (${await xw()})`)
+  await widen(aw)
+  await sleep(300)
+
   // Shift+H / Shift+V mirror every selected layer in place; one undo step reverts the whole flip.
   const boxes = async () => JSON.stringify((await app.getByTestId('selection-box').all()).map((n: any) => n.bounds))
   const still = async (a: string) => until(async () => (await boxes()) === a)
@@ -476,9 +514,6 @@ try {
   await canvas.press('ctrl-z')
   await sleep(300)
   // No width, no stroke: each stroke field fills in the other's placeholder default, in one undo step.
-  const fresh = (await ports()).filter((p) => !portsBefore.has(p))
-  assert(fresh.length === 1, `expected one new MCP port, found ${fresh.join(', ') || 'none'}`)
-  const port = fresh[0]
   const stroked = async () => {
     const res: any = await (await mcpCall(port, { method: 'tools/call', params: { name: 'execute', arguments: { input: 'Get(undefined, n => { if (n.name === "Rectangle") Print(JSON.stringify({ stroke: n.stroke ?? "", strokeWidth: n.strokeWidth ?? "" })) })' } } })).json()
     return String(res.result?.content?.[0]?.text ?? '').split('\n').filter((l) => l.startsWith('{')).pop() ?? ''
@@ -504,6 +539,29 @@ try {
   await sleep(700)
   assert(await until(async () => !(await app.getByText('500').count())), 'an opacity above 100 no longer shows the typed 500')
   assert(await until(async () => !(await app.getByText('-4').count())), 'a negative radius no longer shows the typed -4')
+
+  // Tab through the Inspector scrolls the focused control into view: the last Export button (HTML) ends up on screen
+  // with its ring; Shift+Tab walks back to the name field.
+  const nameY0 = (await app.getByTestId('inspector-name').bounds())!.y
+  let tabs = 0
+  while (!(await count('export-html-focus')) && tabs < 60) {
+    await app.call('keystrokes', { keys: 'tab' })
+    tabs++
+    await sleep(120)
+  }
+  assert(await until(async () => !!(await count('export-html-focus'))), `Tab reaches the HTML export button (${tabs} presses)`)
+  const windowBottom = c.y + c.height
+  assert(await until(async () => {
+    const b = await app.getByTestId('export-html').bounds()
+    return !!b && b.y + b.height + 3 <= windowBottom
+  }), 'Tab scrolls the focused HTML export button, ring included, above the window bottom')
+  assert((await app.getByTestId('inspector-name').bounds())!.y < nameY0, 'Tab scrolled the Inspector')
+  for (let i = 0; i < tabs; i++) {
+    await app.call('keystrokes', { keys: 'shift-tab' })
+    // Leaving a text field backwards retries for up to ~1 s (the back stop in app.tsx); a press in between would walk from the wrong stop.
+    await sleep(1200)
+  }
+  assert((await app.getByTestId('inspector-name').bounds())!.y >= c.y + 3, 'Shift+Tab back to the name field keeps it, ring included, below the panel top')
 
   // Handle centers (canvas px), tl, tr, br, bl. Each sits 12 px in at radius 0 and slides toward the middle
   // (80 px for a 180×160 box) as the radius grows: inset = 12 + radius·68/80.
@@ -553,6 +611,29 @@ try {
   await app.mouse.click(await app.getByTestId('frame-label').center())
   assert(await until(async () => !!(await app.getByTestId('inspector-name').count())), 'pressing the title of a frame with children selects it')
   await sleep(500)
+
+  // Arrow keys on several layers of an auto layout move them as a block: relative order kept, one undo step per press.
+  const layoutOrder = async () => {
+    const res: any = await (await mcpCall(port, { method: 'tools/call', params: { name: 'execute', arguments: { input: 'Print(JSON.stringify(Get(undefined, n => n.type === "rectangle" || n.type === "ellipse" ? n.id : undefined).filter(Boolean)))' } } })).json()
+    return String(res.result?.content?.[0]?.text ?? '').split('\n').filter((l) => l.startsWith('[')).pop() ?? ''
+  }
+  const o0 = await layoutOrder()
+  assert(JSON.parse(o0 || '[]').length === 3, `the layout has three layers (${o0})`)
+  const rects = await app.getByTestId('layers').getByText('Rectangle').all()
+  const rowMid = (n: (typeof rects)[number]) => ({ x: n.bounds!.x + n.bounds!.width / 2, y: n.bounds!.y + n.bounds!.height / 2 })
+  await app.mouse.click(rowMid(rects[0]))
+  await app.mouse.click(rowMid(rects[1]), { modifiers: 'ctrl' })
+  assert(await until(async () => (await app.getByText('2 layers selected').count()) > 0), 'two layout children are selected')
+  await canvas.press('alt-right')
+  assert(await until(async () => (await layoutOrder()) !== o0), 'Alt+Right moves the two selected layers behind the third')
+  const o1: string[] = JSON.parse(await layoutOrder())
+  await canvas.press('alt-left')
+  assert(await until(async () => (await layoutOrder()) !== JSON.stringify(o1)), 'Alt+Left moves them back to the front')
+  assert((await layoutOrder()) === JSON.stringify([o1[1], o1[2], o1[0]]), `the selected layers keep their relative order as a block (${o1} → ${await layoutOrder()})`)
+  await canvas.press('ctrl-z')
+  assert(await until(async () => (await layoutOrder()) === JSON.stringify(o1)), `one undo step reverts one arrow key press (${await layoutOrder()})`)
+  await canvas.press('ctrl-z')
+  assert(await until(async () => (await layoutOrder()) === o0), 'a second undo step reverts the first press')
 
   // Pen tool (vector editing): click = corner, drag = curve handles, clicking the first point closes.
   await canvas.press('escape')
@@ -634,6 +715,16 @@ try {
   await app.getByTestId('layers').getByText('Path').click()
   await sleep(300)
   assert(await count('size-label'), 'clicking a Layers row selects it')
+  // Ctrl+Enter presents from a focused Layers row or toolbar button, and does not toggle the row's selection.
+  for (const [what, id] of [['Layers row', ''], ['toolbar button', 'tool-rectangle']] as const) {
+    if (id) await app.getByTestId(id).click()
+    await sleep(300)
+    await app.call('keystrokes', { keys: 'ctrl-enter' })
+    assert(await until(async () => !!(await count('presentation'))), `Ctrl+Enter presents from a focused ${what}`)
+    await app.call('keystrokes', { keys: 'escape' })
+    assert(await until(async () => !(await count('presentation'))), `Escape leaves the presentation (${what})`)
+    if (!id) assert(await count('size-label'), 'Ctrl+Enter on a Layers row keeps the layer selected')
+  }
   await app.call('keystrokes', { keys: 'escape' })
   assert(await until(async () => !(await count('size-label'))), 'Escape clears the selection from a Layers row')
 
@@ -878,6 +969,54 @@ try {
   await app.mouse.drag(at(300, 400), at(380, 450), { steps: 5 })
   await app.call('keyUp', { key: 'space' })
   assert(await until(async () => { const p = await boxPos(); return p[0] - panFrom[0] === 80 && p[1] - panFrom[1] === 50 }), `Space+drag pans after a tool is picked with its toolbar button (${panFrom} → ${await boxPos()})`)
+  await canvas.press('escape')
+
+  // A line is drawn from its stroke alone and a note from fixed colors: the Inspector offers a line its stroke fields and no Fill, a note no Fill.
+  await mcpCall(port, { method: 'tools/call', params: { name: 'execute', arguments: { input: 'Insert(document, {type:"line", name:"Inspect line", x:0, y:0, width:120, height:0, stroke:"#FF0000", strokeWidth:6}); Insert(document, {type:"note", name:"Inspect note", x:0, y:40, width:120, height:60, content:"hi"}); Insert(document, {type:"prompt", name:"Inspect prompt", x:0, y:120, width:120, height:60, content:"hi"}); Insert(document, {type:"context", name:"Inspect context", x:0, y:200, width:120, height:60, content:"hi"}); Insert(document, {type:"rectangle", name:"Inspect rect", x:0, y:280, width:120, height:60, fill:"#00FF00"})' } } })
+  await app.getByTestId('layers').getByText('Inspect line').waitFor({ timeoutMs: 6000 })
+  await app.getByTestId('layers').getByText('Inspect line').click()
+  assert(await until(async () => (await count('inspector-stroke')) > 0 && (await count('inspector-stroke-width')) > 0), 'a line shows its stroke color and width')
+  assert(!(await count('inspector-fill')), 'a line has no Fill field')
+  assert(!(await count('inspector-radius')) && !(await count('inspector-radii')), 'a line has no corner radius')
+  await app.getByTestId('layers').getByText('Inspect note').click()
+  assert(await until(async () => !(await count('inspector-stroke'))), 'a note has no stroke fields')
+  assert(!(await count('inspector-fill')), 'a note has no Fill field')
+  for (const name of ['prompt', 'context']) {
+    await app.getByTestId('layers').getByText(`Inspect ${name}`).click()
+    await sleep(500)
+    assert(!(await count('inspector-fill')), `a ${name} layer has no Fill field`)
+  }
+  // Mixed selections: Fill is hidden only when every selected layer ignores it.
+  await app.getByTestId('layers').getByText('Inspect line').click()
+  await app.getByTestId('layers').getByText('Inspect note').click({ modifiers: 'ctrl' })
+  assert(await until(async () => (await app.getByText('2 layers selected').count()) > 0), 'ctrl-click adds the note to the line selection')
+  assert(!(await count('inspector-fill')), 'a line and a note together have no Fill field')
+  await app.getByTestId('layers').getByText('Inspect rect').click({ modifiers: 'ctrl' })
+  assert(await until(async () => (await count('inspector-fill')) > 0), 'a line, a note and a rectangle together keep the Fill field')
+
+  // Alt-hover measures to where a flipped layer is painted: its outline sits on the layer and the distance runs to
+  // its painted edge (the unflipped box lies 100 further right, in empty space).
+  await mcpCall(port, { method: 'tools/call', params: { name: 'execute', arguments: { input: 'const f = Insert(document, {type:"frame", name:"Measure frame", layout:"none", x:4000, y:0, width:700, height:900, fill:"#FFFFFF"}); Insert(f, {type:"rectangle", name:"Measure A", x:100, y:760, width:100, height:60, fill:"#FF0000"}); Insert(f, {type:"rectangle", name:"Measure B", x:500, y:760, width:100, height:60, fill:"#0000FF", flipX:true})' } } })
+  const measureRow = app.getByTestId('layers').getByText('Measure frame')
+  await measureRow.waitFor({ timeoutMs: 6000 })
+  await measureRow.click()
+  await canvas.press('shift-2')
+  const fr = await measureRow.bounds()
+  await app.mouse.click({ x: fr.x - 32, y: fr.y + fr.height / 2 }) // its chevron: show the children
+  await app.getByTestId('layers').getByText('Measure B').waitFor({ timeoutMs: 6000 })
+  const frameBox = await app.getByTestId('selection-box').bounds()
+  await app.getByTestId('layers').getByText('Measure B').click()
+  // One selection-box shows for any single layer, so wait on its bounds: B's box is narrower than the frame's, A's lies left of B's.
+  assert(await until(async () => (await count('selection-box')) === 1 && (await app.getByTestId('selection-box').bounds()).width < frameBox.width / 2), 'Measure B is selected')
+  const flipped = await app.getByTestId('selection-box').bounds()
+  await app.getByTestId('layers').getByText('Measure A').click()
+  assert(await until(async () => (await count('selection-box')) === 1 && (await app.getByTestId('selection-box').bounds()).x < flipped.x - 2), 'Measure A is selected')
+  await app.mouse.move({ x: flipped.x + flipped.width / 2, y: flipped.y + flipped.height / 2 }, { modifiers: 'alt' })
+  assert(await until(async () => (await count('measure-target')) === 1), 'Alt+hover outlines the hovered flipped layer')
+  const target = await app.getByTestId('measure-target').bounds()
+  assert(Math.abs(target.x - flipped.x) <= 2 && Math.abs(target.width - flipped.width) <= 2, `the Alt outline sits on the painted flipped layer (${target.x},${target.width} vs ${flipped.x},${flipped.width})`)
+  assert(await app.getByTestId('measure-line').getByText('200').count(), 'Alt+hover measures to the painted edge of a flipped layer (200, not 300)')
+
   await canvas.press('escape')
   await shot('10-final')
   console.log('editor-e2e ok — screenshots in', out)

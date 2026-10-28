@@ -4,9 +4,9 @@
 // Positions are kept in document units and projected with the camera every frame.
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { tryCall, type Box } from './core'
-import { FADE_DELAY, FADE_DUR, FADE_IN, GONE, PILL_MS, PRESENCE, cursorFaded, needsFrame, profileOf, store, type CursorState } from './agents'
+import { FADE_IN, GONE, PILL_MS, PRESENCE, cursorFaded, cursorOpacity, easeOutCubic, needsFrame, profileOf, store, takeActivity, wakeCursor } from './agents'
 import { ICONS } from './icons'
-import { painted, shimmerHalves, turned, type M, type Rect } from './geometry'
+import { painted, pointIn, shimmerHalves, turned, type M, type Rect } from './geometry'
 import { SvgOverlay } from './ui'
 import { C, FONT, REDUCED_MOTION } from './theme'
 import type { Cam } from './Canvas'
@@ -21,7 +21,6 @@ const RELEASE = 300
 const SCAN_DELAY = 40
 const PEN_DECAY = 40         // the AI Pen follows its points much faster than agent cursors
 
-const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3)
 const easeOutBack = (t: number, s = 2) => 1 + (s + 1) * Math.pow(t - 1, 3) + s * Math.pow(t - 1, 2)
 // Under reduced motion cursors and the pen jump to their target, glows and pills hold still, and only
 // opacity changes (fades) remain.
@@ -50,9 +49,10 @@ const ARROW = 'M4.037 4.688a.495.495 0 0 1 .651-.651l16 6.5a.5.5 0 0 1-.063.947l
 const ARROW_FILL = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="${ARROW}" fill="#000"/></svg>`
 const ARROW_OUTLINE = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="${ARROW}" fill="#000" stroke="#000" stroke-width="3" stroke-linejoin="round"/></svg>`
 
-/** Point inside a box, biased toward the middle (average of two uniforms). */
+/** Point on a node as painted (turned or flipped included), biased toward the middle (average of two uniforms). */
 function pickTarget(b: Box) {
-  return { x: b.x + (b.w * (Math.random() + Math.random())) / 2, y: b.y + (b.h * (Math.random() + Math.random())) / 2 }
+  const [x, y] = pointIn(b, (Math.random() + Math.random()) / 2, (Math.random() + Math.random()) / 2)
+  return { x, y }
 }
 
 /** Move an agent's cursor toward a node; "kept" when it was already visible (flash waits for it). */
@@ -67,21 +67,12 @@ function moveToBounds(agent: string, b: Box, now: number): 'spawned' | 'kept' {
   c.profile = profileOf(agent)
   c.tx = t.x
   c.ty = t.y
-  c.lastActivity = now
+  wakeCursor(agent, c, now)
   if (faded) {
     c.x = t.x
     c.y = t.y
-    c.appearAt = now
   }
   return faded ? 'spawned' : 'kept'
-}
-
-function cursorOpacity(c: CursorState, now: number, running: boolean) {
-  const sa = now - c.appearAt
-  const si = running ? 0 : now - c.lastActivity
-  if (sa < FADE_IN) return easeOutCubic(sa / FADE_IN)
-  if (si > FADE_DELAY) return Math.max(0, 1 - easeOutCubic((si - FADE_DELAY) / FADE_DUR))
-  return 1
 }
 
 export function AgentLayer({ cam, w, h, version, chatOpen }: { cam: Cam; w: number; h: number; version: number; chatOpen: boolean }) {
@@ -97,7 +88,16 @@ export function AgentLayer({ cam, w, h, version, chatOpen }: { cam: Cam; w: numb
   useEffect(() => {
     const ids = [...new Set(store.flashes.map((f) => f.nodeId))]
     if (!ids.length) return
-    for (const b of tryCall<Box[]>('boxes', { ids }) ?? []) boxes.current.set(b.id, b)
+    const found = tryCall<Box[]>('boxes', { ids })
+    if (!found) return
+    for (const b of found) boxes.current.set(b.id, b)
+    // A node that is gone (deleted, or its insert undone) takes its flash with it.
+    const gone = new Set(ids.filter((id) => !found.some((b) => b.id === id)))
+    if (gone.size) {
+      for (const id of gone) boxes.current.delete(id)
+      store.flashes = store.flashes.filter((f) => !gone.has(f.nodeId))
+      setFrame((f) => (f + 1) % 1_000_000) // nothing else may be animating: repaint once so the outline goes
+    }
   }, [version])
 
   // 60 fps while anything animates; idle otherwise (under reduced motion only while a fade is due).
@@ -114,7 +114,7 @@ export function AgentLayer({ cam, w, h, version, chatOpen }: { cam: Cam; w: numb
 
   // New agent activity → flashes + cursor travel to the touched nodes.
   if (store.activity.length) {
-    const batch = store.activity.splice(0)
+    const batch = takeActivity(now)
     const ids = [...new Set(batch.flatMap((a) => a.ids.slice(-40)))]
     const found = new Map((tryCall<Box[]>('boxes', { ids }) ?? []).map((b) => [b.id, b]))
     for (const a of batch) {

@@ -3,7 +3,7 @@
 // usage rows, queued prompts, parallel agents.
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { call, tryCall } from './core'
-import { barAgents, changing, imageSrc, lastContentId, profileOf, resetChat, restoreChat, rowTickMs, spinning, store, type Author, type ChatItem } from './agents'
+import { barAgents, changing, imageSrc, lastContentId, profileOf, resetChat, restoreChat, rowTickMs, runVerb, spinning, store, type Author, type ChatItem } from './agents'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import * as SelectPrimitive from '@gpuix/react/select'
 import { C, FONT, INDICATOR_TICK_MS, MONO, REDUCED_MOTION, ellipsisAt, ellipsisPadAt, pulseAt } from './theme'
@@ -54,6 +54,11 @@ function toolLabel(name: string, running: boolean) {
   return short.charAt(0).toUpperCase() + short.slice(1)
 }
 
+/** What a refused or failed call reads as: its running label, "Designing failed" / "Could not open document". */
+function failedLabel(name: string) {
+  return name === 'open_document' ? 'Could not open document' : `${toolLabel(name, true)} failed`
+}
+
 function duration(ms: number) {
   const s = Math.max(1, Math.round(ms / 1000))
   return s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`
@@ -88,6 +93,10 @@ function visibleText(it: Extract<ChatItem, { kind: 'assistant' }>, isLast: boole
 
 // The panel unmounts while the Design tab is open; what the user set up in it (draft, agent options, open cards) lives here.
 const kept = new Map<string, unknown>()
+// The mounted panel's draft setter: a pending tab cleanup must reach the panel that is on screen, not the one it started in.
+let liveSetDraft: (d: string) => void = () => {}
+// The draft a Tab-out cleanup restores: still `typed` (the tabbed value) until the cleanup runs or typing goes on.
+let tabCleanup: { typed: string; clean: string } | null = null
 function useKept<T>(key: string, init: () => T) {
   const [v, set] = useState<T>(() => {
     if (!kept.has(key)) kept.set(key, init())
@@ -101,15 +110,27 @@ function useKept<T>(key: string, init: () => T) {
   return [v, setKept] as const
 }
 
+/** `next` without the single Tab that GPUIX's textarea inserts when Tab (or Shift+Tab) moves focus out of it,
+ *  or `next` itself when it differs from `prev` by anything else. */
+function withoutTabKey(prev: string, next: string) {
+  if (next.length !== prev.length + 1) return next
+  let i = 0
+  while (i < prev.length && prev[i] === next[i]) i++
+  return next[i] === '\t' && next.slice(i + 1) === prev.slice(i) ? prev : next
+}
+
 export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: number; running: boolean; mcpUrl: string; toast: Toast; onSent?: () => void }) {
   const [draft, setDraft] = useKept('draft', () => '')
+  liveSetDraft = setDraft
   const input = useFieldRing()
+  const tabbing = useRef(false)
   const [settings, setSettings] = useKept('settings', () => false)
   const [parallel, setParallel] = useKept('parallel', () => '1')
   const [mode, setMode] = useKept<'split' | 'side'>('mode', () => 'split')
   const [open, setOpen] = useKept<Set<number>>('open', () => new Set())
   const [planOpen, setPlanOpen] = useKept('planOpen', () => true)
   const [, setChatVersion] = useState(0)
+  const [backendRev, setBackendRev] = useState(0)
   const [picks] = useKept('picks', () => SUGGESTIONS.slice().sort(() => Math.random() - 0.5).slice(0, 6))
   // "Let it cook" settings (design count, iterate mode) persist in the app settings.
   const saved = useMemo(() => tryCall<Record<string, unknown>>('settings_get') ?? {}, [])
@@ -123,13 +144,22 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
   }
   const items = store.items
   const lastId = lastContentId(items)
+  const renderer = useGpuixRequired()
+  const listEl = useRef<PublicInstance | null>(null)
+  const pinNext = useRef<number | null>(null) // id of the last row at the last send, while the list still waits for its echo
 
+  const spent = useRef<string | null>(null) // the text just sent, until the panel re-renders: a second submit in the same frame still holds it
+  useEffect(() => { spent.current = null })
   const send = (text: string) => {
     const t = text.trim()
-    if (!t) return
+    if (!t || t === spent.current) return
+    const lastRow = items[items.length - 1]?.id ?? -1 // read before the call: the echo may be pushed while it runs
     if (tryCall('agent_send', { text: t, parallel: Number(parallel), mode, designs, iterate: cookMode }) !== null) {
       setDraft('')
+      spent.current = t
+      pinNext.current = lastRow
       onSent?.()
+      input.release() // onSent moves the keys to the canvas, so the composer is no longer focused
     } else toast('Unable to start the agent. Check the backend in Agent settings and try again.', true)
   }
   // The core refuses while an agent runs ("Stop the agent before …"): keep the chat and say why.
@@ -156,6 +186,15 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
     const last = items[items.length - 1]
     return !!last && ((last.kind === 'tool' && !last.running) || (last.kind === 'assistant' && !last.streaming) || last.kind === 'user')
   })()
+  // `followTail` only follows while the list is already at its end, so a message sent from further up re-pins it: once the echo (or queued row) joins the list, scroll to the last row.
+  const rows = items.length + (planning ? 1 : 0)
+  useEffect(() => {
+    if (pinNext.current === null || !listEl.current || !rows) return
+    // A poll batch can append rows after the echo, so look for it among the rows added since the send (ids only grow).
+    if (items.some((i) => i.id > pinNext.current! && (i.kind === 'user' || i.kind === 'queued'))) pinNext.current = null
+    // One past the last row is the list's at-end anchor: unlike the last row's top, it stays at the end when that row grows (an expanded tool result).
+    renderer.scrollToItem?.(listEl.current.id, rows)
+  }, [rows, renderer, items])
   const todos = store.todos
   const doneTodos = todos.filter((t) => t.status === 'completed').length
 
@@ -168,7 +207,7 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
         <IconButton icon="plus" title="New agent" testId="agent-new" onClick={newChat} />
         <IconButton icon="settings" title="Agent settings" testId="agent-settings" active={settings} onClick={() => setSettings((s) => !s)} />
       </div>
-      {settings ? <AgentSettings mcpUrl={mcpUrl} toast={toast} /> : null}
+      {settings ? <AgentSettings mcpUrl={mcpUrl} toast={toast} onBackend={() => setBackendRev((n) => n + 1)} /> : null}
       {agents.length > 1 && (running || agents.some((a) => a.parent)) ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 14, paddingRight: 8, paddingTop: 5, paddingBottom: 6, borderBottomWidth: 1, borderColor: C.border, backgroundColor: C.panel2 }}>
           <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8, height: 24 }}>
@@ -198,7 +237,7 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
           <T size={11} color={C.ghost}>Each agent gets a cursor on the canvas; what it writes appears while it writes it. Set Agents above 1× to split the work across several agents.</T>
         </div>
       ) : (
-        <virtual-list estimatedItemHeight={44} followTail alignment="bottom" style={{ flexGrow: 1, minHeight: 0, paddingTop: 8, paddingBottom: 8 }}>
+        <virtual-list ref={listEl} estimatedItemHeight={44} followTail alignment="bottom" style={{ flexGrow: 1, minHeight: 0, paddingTop: 8, paddingBottom: 8 }}>
           {items.map((m) => (
             <div key={m.id} style={{ paddingLeft: 12, paddingRight: 12 }}>
               {/* Items are mutated in place, so `tick` (the store version) is what re-renders one; only the live ones take it (a finished row never changes; `isLast` and the row's own ticks cover the rest). */}
@@ -235,7 +274,7 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
 
       <div style={{ padding: 10, borderTopWidth: 1, borderColor: C.border, display: 'flex', flexDirection: 'column', gap: 8 }}>
         <div style={{ position: 'relative', borderRadius: 10, borderWidth: 1, borderColor: C.border, backgroundColor: C.panel2, padding: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {input.ring ? <FocusRing radius={10} /> : null}
+          {input.ring ? <FocusRing radius={10} testId="agent-input-ring" /> : null}
           <div onMouseDown={input.onMouseDown}>
             {input.back}
             <textarea
@@ -248,7 +287,26 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
               placeholder={running ? 'Queue a follow-up…' : 'Design anything…'}
               minRows={2}
               maxRows={8}
-              onChange={(e) => setDraft(e.value ?? '')}
+              onKeyDown={(e) => { tabbing.current = e.key === 'tab' }}
+              onChange={(e) => {
+                const typed = e.value ?? ''
+                setDraft(typed)
+                // The box drops the tab (and shows its placeholder again) only when the value it is given changes
+                // in a later frame than the tab itself, so the clean draft follows after a pause, unless typing went on.
+                // Only the Tab key counts: a pasted tab is the user's text. A second Tab-out before the pause ends
+                // restores the draft the first one started from.
+                const tabbed = tabbing.current
+                tabbing.current = false
+                if (!tabbed) { tabCleanup = null; return }
+                const clean = tabCleanup?.typed === draft ? tabCleanup.clean : withoutTabKey(draft, typed)
+                if (clean === typed) return
+                const mine = tabCleanup = { typed, clean }
+                setTimeout(() => {
+                  if (tabCleanup !== mine) return
+                  tabCleanup = null
+                  if (kept.get('draft') === typed) liveSetDraft(clean)
+                }, 100)
+              }}
               onSubmit={(e) => send(e.value ?? draft)}
               theme={{ caret: C.accent }}
               style={{ fontSize: 13, color: C.text, fontFamily: FONT, width: '100%' }}
@@ -260,7 +318,7 @@ export function AgentPanel({ tick, running, mcpUrl, toast, onSent }: { tick: num
           </Row>
           {parallel !== '1' ? <Segmented label="How agents share the work" value={mode} onChange={setMode} options={[{ value: 'split', label: 'Split' }, { value: 'side', label: 'Side by side' }]} /> : null}
           <Row gap={6}>
-            <ModelPicker settingsOpen={settings} toast={toast} />
+            <ModelPicker settingsOpen={settings} backendRev={backendRev} toast={toast} />
             <div style={{ flexGrow: 1 }} />
             <CookMenu designs={designs} mode={cookMode} set={setCook} />
             {running ? (
@@ -407,6 +465,7 @@ function ChatHistory({ running, toast, changed }: { running: boolean; toast: Toa
   const close = () => {
     setList(null)
     setConfirm(false)
+    setArmed(null)
   }
   // Core refusals ("Stop the agent before …") are shown as toasts.
   const act = <R,>(cmd: string, args: Record<string, unknown> = {}): R | null => {
@@ -577,16 +636,16 @@ const FAST_MODELS = ['claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8']
 
 /** Model picker plus the Fast toggle, which shows only where the model has a fast mode. Claude Code
  *  also offers "Default", which leaves the CLI on its own configured model. */
-function ModelPicker({ settingsOpen, toast }: { settingsOpen: boolean; toast: Toast }) {
-  // Re-read when the settings panel closes: the backend may have changed.
-  const s = useMemo(() => tryCall<Record<string, unknown>>('settings_get') ?? {}, [settingsOpen])
+function ModelPicker({ settingsOpen, backendRev, toast }: { settingsOpen: boolean; backendRev: number; toast: Toast }) {
+  // Re-read when the settings panel closes or switches backend: the backend decides the default model.
+  const s = useMemo(() => tryCall<Record<string, unknown>>('settings_get') ?? {}, [settingsOpen, backendRev])
   const cli = s.backend === 'claude-code'
   const items = cli ? [{ value: 'default', label: 'Default' }, ...MODELS] : MODELS
   const stored = typeof s.agent_model === 'string' ? s.agent_model : null
   const current = stored ?? (cli ? 'default' : 'claude-opus-5-5')
   const [model, setModel] = useState(current)
   const [fast, setFast] = useState(s.agent_fast === true)
-  useEffect(() => setModel(current), [current])
+  useEffect(() => setModel(current), [s, current])
   const { ref: triggerRef, on: focused, clear } = useRing()
   // Arrow keys move the menu's highlight, which is only a 1.1:1 background shift: ring it while the
   // keyboard drives the menu, not while the mouse does.
@@ -662,6 +721,9 @@ function Planning() {
   return <T size={12} color={C.ghost}>{`Planning next moves${dots()}`}</T>
 }
 
+// <markdown> ignores style.color and style.fontSize: its text comes from the theme, so a thought is dimmed here.
+const THOUGHT_THEME = { text: C.muted, metrics: { mdTextSize: 12, mdLineHeight: 18 } }
+
 const Item = memo(function Item({ m, isLast, expanded, toggle }: { m: ChatItem; isLast: boolean; expanded: boolean; toggle: (id: number) => void; tick: number }) {
   const typing = m.kind === 'assistant' && isLast && (revealed.get(m.id) ?? 0) < m.text.split(/(\s+)/).length
   const ms = rowTickMs(typing, spinning(m), REDUCED_MOTION, INDICATOR_TICK_MS)
@@ -692,21 +754,27 @@ const Item = memo(function Item({ m, isLast, expanded, toggle }: { m: ChatItem; 
       const label = live ? `Thinking${dots()}` : `Thought for ${duration((m.endedAt ?? 0) - m.startedAt)}`
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingTop: 4, paddingBottom: 4 }}>
+          {m.header ? <AgentHeader agentId={m.agent.id} by={m.by} /> : null}
           <Pressable label={label} expanded={expanded} onClick={() => toggle(m.id)} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 24, borderRadius: 4 }}>
             <Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={11} color={C.ghost} />
             <T size={12} color={C.ghost}>{label}</T>
           </Pressable>
-          {expanded && m.text.trim() ? <markdown source={m.text} style={{ fontSize: 12, color: C.muted, fontFamily: FONT }} /> : null}
+          {expanded && m.text.trim() ? (
+            <div style={{ borderLeftWidth: 2, borderColor: C.border, paddingLeft: 10, marginLeft: 5, marginBottom: 6 }}>
+              <markdown source={m.text} theme={THOUGHT_THEME} style={{ fontFamily: FONT }} />
+            </div>
+          ) : null}
         </div>
       )
     }
     case 'tool': {
-      if (m.name === 'TodoWrite') return <div style={{ height: 0 }} />
+      if (m.name === 'TodoWrite') return m.header ? <AgentHeader agentId={m.agent.id} by={m.by} /> : <div style={{ height: 0 }} />
       const label = toolLabel(m.name, m.running)
       const now = performance.now() // one sample, so the dots and their pad always add up to three
       const src = m.name === 'execute' && typeof m.input?.input === 'string' ? (m.input.input as string) : null
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 3, paddingBottom: 3 }}>
+          {m.header ? <AgentHeader agentId={m.agent.id} by={m.by} /> : null}
           <Pressable label={m.running ? `${label}, running` : `${label}, ${m.error ? 'failed' : 'done'}`} expanded={expanded} onClick={() => toggle(m.id)} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 24, borderRadius: 4 }}>
             <div style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: m.agent.color, opacity: m.running && !REDUCED_MOTION ? pulseAt(now) : 1 }} />
             {m.running ? (
@@ -747,9 +815,9 @@ const Item = memo(function Item({ m, isLast, expanded, toggle }: { m: ChatItem; 
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingTop: 6, paddingBottom: 8 }}>
           {m.stopped ? <T size={11} color={C.ghost} style={{ fontStyle: 'italic' }}>Agent stopped by user.</T> : null}
-          <Pressable label={`${m.agent.name} designed for ${duration(m.durationMs)}. Show usage`} expanded={expanded} onClick={() => toggle(m.id)} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 24, borderRadius: 4 }}>
+          <Pressable label={`${m.agent.name} ${runVerb(m)} ${duration(m.durationMs)}. Show usage`} expanded={expanded} onClick={() => toggle(m.id)} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 24, borderRadius: 4 }}>
             <div style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: m.agent.color }} />
-            <T size={11} color={C.ghost}>{`${m.agent.name} designed for ${duration(m.durationMs)}`}</T>
+            <T size={11} color={C.ghost}>{`${m.agent.name} ${runVerb(m)} ${duration(m.durationMs)}`}</T>
           </Pressable>
           {expanded ? rows.filter(([, v]) => v !== undefined && v !== null).map(([k, v]) => (
             <Row key={k}>
@@ -773,7 +841,7 @@ const Item = memo(function Item({ m, isLast, expanded, toggle }: { m: ChatItem; 
       return (
         <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, paddingTop: 3, paddingBottom: 3 }}>
           <Icon name="plug" size={11} color={C.ghost} />
-          <T size={11} color={C.ghost}>{`External agent · ${toolLabel(m.text, false)}`}</T>
+          <T size={11} color={C.ghost}>{`External agent · ${m.error ? failedLabel(m.text) : toolLabel(m.text, false)}`}</T>
         </div>
       )
     case 'permission':
@@ -820,7 +888,7 @@ function PermissionCard({ m }: { m: Extract<ChatItem, { kind: 'permission' }> })
   )
 }
 
-function AgentSettings({ mcpUrl, toast }: { mcpUrl: string; toast: Toast }) {
+function AgentSettings({ mcpUrl, toast, onBackend }: { mcpUrl: string; toast: Toast; onBackend: () => void }) {
   const s = useMemo(() => tryCall<Record<string, string>>('settings_get') ?? {}, [])
   const [backend, setBackend] = useState(s.backend ?? 'claude-code')
   const [hasKey, setHasKey] = useState(!!s.anthropic_api_key)
@@ -838,7 +906,7 @@ function AgentSettings({ mcpUrl, toast }: { mcpUrl: string; toast: Toast }) {
       <Segmented
         label="Agent backend"
         value={backend}
-        onChange={(v) => { if (set('agent_backend', v)) setBackend(v) }}
+        onChange={(v) => { if (set('agent_backend', v)) { setBackend(v); onBackend() } }}
         options={[{ value: 'api', label: 'Claude API' }, { value: 'claude-code', label: 'Claude Code CLI', testId: 'backend-claude-code' }]}
       />
       {backend === 'api' ? (

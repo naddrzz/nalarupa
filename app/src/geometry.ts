@@ -56,6 +56,9 @@ export const shimmerHalves = (pos: number, band: number): [[number, number], [nu
 /** Where a box is painted (its rotated/flipped corners' bounds). */
 export const painted = (b: Rect & { m?: M | null }): Rect => (b.m ? bounds(corners(b, b.m)) : b)
 
+/** The point at fractions (u, v) of a node's own box, placed where the node is painted. */
+export const pointIn = (b: Rect & { m?: M | null }, u: number, v: number): Pt => apply(b.m, b.x + b.w * u, b.y + b.h * v)
+
 export const unionRect = (rs: Rect[]): Rect | null => {
   if (!rs.length) return null
   const x = Math.min(...rs.map((r) => r.x)), y = Math.min(...rs.map((r) => r.y))
