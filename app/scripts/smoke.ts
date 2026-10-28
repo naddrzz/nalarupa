@@ -95,6 +95,36 @@ assert(!call('state').animating, 'presented slide settled after ~0.6 s')
 assert(lit() >= before, 'presented slide keeps its existing content')
 assert(greens() > greenBefore, 'presented slide shows its inserted content')
 call('undo')
+// An insert into a centered card that grows moves the card and its children: the children glide with the card,
+// not with a doubled offset (they used to jump 34 px the wrong way, then fly back through the old spot).
+{
+  const run = (input: string) => {
+    const o = call('tool', { name: 'execute', args: { input } })
+    assert(!o.error, `execute works: ${o.text}`)
+  }
+  const redTop = (f: Uint8Array) => {
+    for (let i = 0; i < f.length; i += 4) if (f[i] > 200 && f[i + 1] < 40 && f[i + 2] < 40) return (i / 4 / 640) | 0
+    return -1
+  }
+  const grab = () => new Uint8Array(renderPixels(640, 400, 0, 3000, 1, 0x1c1c1f, undefined, true)!)
+  run(`Insert(document, {type:"frame", name:"GlideRoot", x:0, y:3000, width:400, height:340, layout:"vertical", justifyContent:"center", alignItems:"center", fill:"#000000"})
+card = Insert(Get(n => n.name === "GlideRoot" ? n.id : undefined)[0], {type:"frame", name:"Card", layout:"vertical", gap:8, padding:10, fill:"#222222"})
+Insert(card, {type:"rectangle", name:"R", width:100, height:40, fill:"#ff0000"})`)
+  grab()
+  await Bun.sleep(800)
+  grab()
+  await Bun.sleep(700)
+  call('poll')
+  const from = redTop(grab())
+  run(`Insert(Get(n => n.name === "Card" ? n.id : undefined)[0], {type:"rectangle", name:"N", width:100, height:60, fill:"#00ff00"})`)
+  const tops = [redTop(grab())]
+  for (const t0 = performance.now(); performance.now() - t0 < 700; await Bun.sleep(30)) tops.push(redTop(grab()))
+  const to = tops[tops.length - 1]
+  assert(from > 0 && to < from, `the card's child moves up when the card grows (${from} -> ${to})`)
+  assert(tops.every((t) => t >= to && t <= from), `the card's child glides between its old and new spot, not past them (${from} -> ${to}: ${tops})`)
+  assert(tops.every((t, i) => i === 0 || t <= tops[i - 1]), `the card's child moves one way (${tops})`)
+  run(`Delete(Get(n => n.name === "GlideRoot" ? n.id : undefined)[0])`)
+}
 // Reduced motion (an OS preference the app passes in): agent inserts appear in place.
 call('reduce_motion', { on: true })
 call('tool', { name: 'execute', args: { input: 'Insert("sld01", {type:"rectangle", name:"Still", width:100, height:100, fill:"#0000ff"})' } })
