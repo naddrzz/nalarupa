@@ -474,6 +474,51 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
       await until(async () => rows(await grab()) === idle, `the empty composer to show its placeholder after ${keys}`)
     }
   }
+  // At the minimum window height, Agent settings opened over the plan shrinks and scrolls instead of pushing the
+  // composer (Stop, Send) out of the window (#448). Sway only: the window can be resized there.
+  if (sock) {
+    const swaymsg = (...args: string[]) => Bun.$`swaymsg -s ${join(dir!, sock)} ${args}`.quiet()
+    type Win = { type: string; rect: { width: number; height: number }; nodes?: Win[]; floating_nodes?: Win[] }
+    const windowOf = (n: Win): Win | undefined => n.type === 'floating_con' ? n : [...(n.nodes ?? []), ...(n.floating_nodes ?? [])].map(windowOf).find(Boolean)
+    const size = windowOf(JSON.parse(await Bun.$`swaymsg -s ${join(dir!, sock)} -t get_tree`.text()))!.rect
+    await swaymsg('[app_id=".*"]', 'resize', 'set', '1100', '680')
+    await until(async () => (await app!.getByTestId('canvas').bounds()).y + (await app!.getByTestId('canvas').bounds()).height <= 680, 'the window to shrink to 680 px')
+    await app.getByTestId('agent-settings').click()
+    await app.getByTestId('agent-settings-panel').waitFor()
+    const bottom = async (id: string) => { const b = await app!.getByTestId(id).bounds(); return b.y + b.height }
+    const windowBottom = async () => bottom('canvas')
+    await until(async () => (await bottom('agent-send')) <= (await windowBottom()), 'Send to stay in the 680 px window with Agent settings and the plan open')
+    const top = async (id: string) => (await app!.getByTestId(id).bounds()).y
+    if ((await bottom('plan-toggle')) > (await top('agent-composer'))) throw new Error('the Plan toggle left its place above the composer')
+    // A control is in view when it lies inside the settings panel's viewport (the panel's bounds move with its
+    // scroll offset, so add the offset back); a control scrolled out of sight has no bounds at all.
+    const panel = app.getByTestId('agent-settings-panel')
+    const panelId = (await panel.element()).id
+    const inView = async (id: string) => {
+      const p = await panel.bounds()
+      const off = ((await app!.call('getScrollOffset', { elementId: panelId })) as { offset: [number, number] | null }).offset?.[1] ?? 0
+      const c = await app!.getByTestId(id).bounds().catch(() => undefined)
+      return !!c && c.y >= p.y - off && c.y + c.height <= p.y - off + p.height
+    }
+    if (await inView('mcp-codex')) throw new Error('the MCP install buttons fit in the short settings panel (the check needs them out of view)')
+    // Tab to the last row, the Codex install button, scrolls the panel to show it.
+    await app.getByTestId('backend-claude-code').click()
+    for (let i = 0; i < 30 && !(await app.getByTestId('mcp-codex-focus').count()); i++) {
+      await app.call('keystrokes', { keys: 'tab' })
+      await sleep(150)
+    }
+    await until(async () => !!(await app!.getByTestId('mcp-codex-focus').count()), 'Tab to reach the Codex install button')
+    await until(() => inView('mcp-codex'), 'Tab to scroll Agent settings to the focused Codex install button')
+    // The wheel scrolls the panel there too.
+    await app.call('scrollTo', { elementId: panelId, x: 0, y: 0 })
+    await until(async () => !(await inView('mcp-codex')), 'Agent settings to scroll back to its top')
+    await until(async () => { await panel.wheel(0, -400); return inView('mcp-codex') }, 'the wheel to scroll Agent settings to the MCP install buttons')
+    await shot('08b-settings-min-height')
+    await app.getByTestId('agent-settings').click()
+    await until(async () => !(await app!.getByTestId('agent-settings-panel').count()), 'Agent settings to close')
+    await swaymsg('[app_id=".*"]', 'resize', 'set', String(size.width), String(size.height))
+    await until(async () => (await windowBottom()) > 680, 'the window to grow back')
+  }
 
   // Shift+Tab leaves a text field backwards (GPUIX registers a field's focus handle twice, so GPUI's own
   // walk lands on the field again): from the composer it reaches the Plan toggle above it, which Enter

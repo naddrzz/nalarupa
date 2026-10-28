@@ -136,7 +136,7 @@ const FocusScope = createContext<Set<number> | null>(null)
 
 /** A scrolling panel (`overflowY: 'scroll'` in `style`) that scrolls to show the control Tab just focused, ring included.
  *  GPUI does not scroll on focus, and `scrollIntoView` only brings the container's direct child into view. */
-export function ScrollToFocus({ style, children }: { style: Record<string, unknown>; children: ReactNode }) {
+export function ScrollToFocus({ style, testId, children }: { style: Record<string, unknown>; testId?: string; children: ReactNode }) {
   const renderer = useGpuixRequired()
   const ref = useRef<PublicInstance>(null)
   const [scope] = useState(() => new Set<number>())
@@ -155,7 +155,7 @@ export function ScrollToFocus({ style, children }: { style: Record<string, unkno
   }, [focus])
   return (
     <FocusScope.Provider value={scope}>
-      <div ref={ref} style={style}>{children}</div>
+      <div ref={ref} testId={testId} style={style}>{children}</div>
     </FocusScope.Provider>
   )
 }
