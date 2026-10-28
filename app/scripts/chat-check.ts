@@ -1,6 +1,6 @@
 // Saved chat history through the core (no window): `bun scripts/chat-check.ts`
 // The chat list, loading, deleting and clearing the Agent panel's history menu relies on.
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { randomBytes } from 'node:crypto'
 import { delimiter, join } from 'node:path'
@@ -25,11 +25,13 @@ if (!process.argv.includes('--child')) {
   // A stand-in `claude` that runs long and prints nothing: a running agent without a login (a shell script, so not on Windows).
   // When `replay.txt` exists next to it, it prints those lines first (`sleep <s>` pauses) and exits.
   // Like the real CLI it reads the whole prompt from stdin before it answers (exiting first would break the core's pipe write).
+  // When `err.bin` exists, it reads the prompt, writes those bytes to stderr and fails.
   // When `stale.flag` exists, it fails a `--resume` of the id saved below like the real CLI does for a session it has lost.
   const bin = join(data, 'bin')
   mkdirSync(bin)
   const stale = '{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["No conversation found with session ID: 11111111-2222-3333-4444-555555555555"]}'
-  const stub = '#!/bin/bash\nf="$(dirname "$0")/replay.txt"\n' +
+  const stub = '#!/bin/bash\necho $$ > "$(dirname "$0")/claude.pid"\nf="$(dirname "$0")/replay.txt"\n' +
+    'if [ -f "$(dirname "$0")/err.bin" ]; then cat >/dev/null; cat "$(dirname "$0")/err.bin" >&2; exit 1; fi\n' +
     'if [ -f "$f" ] || [ -f "$(dirname "$0")/stale.flag" ]; then cat >/dev/null; fi\n' +
     `if [ -f "$(dirname "$0")/stale.flag" ]; then case " $* " in *" --resume 11111111-2222-3333-4444-555555555555 "*) echo '${stale}'; exit 1;; esac; fi\n` +
     'if [ -f "$f" ]; then while IFS= read -r l; do case "$l" in sleep*) sleep "${l#sleep }";; *) printf \'%s\\n\' "$l";; esac; done < "$f"; exit 0; fi\nexec sleep 60\n'
@@ -122,6 +124,19 @@ if (!windows) {
     call('agent_stop')
   }
   await until(() => !call('state').agentRunning, 'the agent stops')
+  // A file that cannot be removed (read-only folder; skipped as root, which ignores it) must leave the chat as it was.
+  if (process.getuid?.() !== 0) {
+    await until(() => existsSync(join(sessions, `${run}.json`)), 'the stopped chat is saved')
+    chmodSync(sessions, 0o555)
+    try {
+      throws(() => call('chat_delete', { id: run }), /denied|permission/i, 'deleting a chat whose file cannot be removed')
+      assert(list().current === run && ids() === run, 'a failed delete keeps the current chat and the history')
+      throws(() => call('chat_clear'), /denied|permission/i, 'clearing when a file cannot be removed')
+      assert(list().current === run, 'a failed clear keeps the current chat')
+    } finally {
+      chmodSync(sessions, 0o755)
+    }
+  }
 }
 
 // Saving a long chat full of screenshots must not stall the engine: a worker times a cheap core call (it needs the
@@ -191,6 +206,38 @@ if (!windows) {
   assert(call('chat_clear') === true, 'the chat is cleared again')
 }
 
+// Output that is not UTF-8 (a localized shell message in the OEM code page) is decoded lossily: a bad stdout line is
+// skipped like any non-JSON line instead of cutting the reply, and a bad stderr still names the cause.
+if (!windows) {
+  call('chat_clear')
+  call('settings_set', { key: 'agent_backend', value: 'claude-code' })
+  const delta = (t: string) => JSON.stringify({ type: 'stream_event', session_id: 's', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: t } } })
+  const bin = (name: string) => join(data, 'bin', name)
+  const send = async () => {
+    call('poll')
+    call('agent_send', { text: 'go' })
+    const evs: any[] = []
+    for (let i = 0; i < 100; i++) { await sleep(100); evs.push(...(call('poll').events ?? []).filter((e: any) => e.type === 'agent')); if (i > 3 && !call('state').agentRunning) break }
+    return evs
+  }
+  const bad = Buffer.concat([Buffer.from(delta('before') + '\n'), Buffer.from([0xff, 0xfe]), Buffer.from(' not utf8\n')])
+  writeFileSync(bin('replay.txt'), Buffer.concat([bad, Buffer.from(delta('AFTER') + '\n')]))
+  let evs = await send()
+  const text = () => evs.filter((e) => e.kind === 'text_delta').map((e) => e.text).join('|')
+  assert(text() === 'before|AFTER' && !evs.some((e) => e.kind === 'error'), `a non-UTF-8 stdout line is skipped and the reply goes on: ${text()} ${JSON.stringify(evs.filter((e) => e.kind === 'error'))}`)
+  // With enough output after it that the CLI is still writing when a reader gives up (SIGPIPE).
+  writeFileSync(bin('replay.txt'), Buffer.concat([bad, Buffer.from(Array.from({ length: 2000 }, (_, i) => delta(`more${i}`)).join('\n') + '\n' + delta('LAST') + '\n')]))
+  evs = await send()
+  assert(text().endsWith('|LAST') && !evs.some((e) => e.kind === 'error'), `a long reply after the bad line arrives whole: ...${text().slice(-30)} ${JSON.stringify(evs.filter((e) => e.kind === 'error'))}`)
+  rmSync(bin('replay.txt'))
+  writeFileSync(bin('err.bin'), Buffer.concat([Buffer.from('Fehler: Datei nicht gefunden '), Buffer.from([0xe4, 0xf6, 0xfc]), Buffer.from('\n')]))
+  evs = await send()
+  const errs = evs.filter((e) => e.kind === 'error').map((e) => e.text)
+  assert(errs.length === 1 && errs[0].startsWith('claude exited with exit status: 1: Fehler: Datei nicht gefunden \uFFFD'), `a non-UTF-8 stderr still gives the cause: ${JSON.stringify(errs)}`)
+  rmSync(bin('err.bin'))
+  assert(call('chat_clear') === true, 'the chat is cleared again')
+}
+
 // A saved session the CLI can no longer resume is dropped: the message runs again in a new session, with a
 // note, and later messages do not resume the stale id.
 if (!windows) {
@@ -214,6 +261,23 @@ if (!windows) {
   assert(JSON.parse(readFileSync(join(sessions, 'stale1.json'), 'utf8')).session === 'fresh', 'the saved chat keeps the new session id')
   rmSync(join(data, 'bin', 'stale.flag'))
   rmSync(join(data, 'bin', 'replay.txt'))
+  assert(call('chat_clear') === true, 'the chat is cleared again')
+}
+
+// Quitting the app stops its agents: `chat_flush` (what app.tsx calls on exit) kills the running `claude` child,
+// since nothing outlives the process to do it.
+if (!windows) {
+  call('chat_clear')
+  const pidFile = join(data, 'bin', 'claude.pid')
+  rmSync(pidFile, { force: true })
+  call('agent_send', { text: 'Design a pricing page' })
+  await until(() => call('state').agentRunning && existsSync(pidFile) && readFileSync(pidFile, 'utf8').trim() !== '', 'the agent starts the CLI')
+  const pid = Number(readFileSync(pidFile, 'utf8').trim())
+  const alive = () => { try { return process.kill(pid, 0) } catch { return false } }
+  assert(alive(), 'the CLI runs before quitting')
+  call('chat_flush')
+  assert(!alive(), 'quitting leaves no claude CLI running')
+  assert(!call('state').agentRunning, 'quitting ends the run')
   assert(call('chat_clear') === true, 'the chat is cleared again')
 }
 

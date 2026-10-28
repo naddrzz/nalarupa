@@ -123,6 +123,25 @@ export function useRing<T extends PublicInstance>(forwarded?: Ref<T>) {
   return { ref, el, on, clear: () => setKeyboardFocus(null) }
 }
 
+/** Scroll the container that gets `ref` (an `overflowY: 'scroll'` panel) to show the control Tab just focused, ring
+ *  included. GPUI does not scroll on focus, and `scrollIntoView` only brings the container's direct child into view. */
+export function useScrollToFocus() {
+  const renderer = useGpuixRequired()
+  const ref = useRef<PublicInstance>(null)
+  const focus = useKeyboardFocusId()
+  useEffect(() => {
+    const [box, at, off] = ref.current && focus !== null
+      ? [renderer.getElementBounds?.(ref.current.id), renderer.getElementBounds?.(focus), renderer.getScrollOffset?.(ref.current.id)]
+      : []
+    // Focus in another panel is none of this container's business.
+    if (!box || !at || !off || at.x < box.x || at.x + at.width > box.x + box.width) return
+    const ring = 3
+    const dy = at.y - ring < box.y ? box.y - (at.y - ring) : Math.min(0, box.y + box.height - (at.y + at.height + ring))
+    if (dy) renderer.scrollTo?.(ref.current!.id, off[0], Math.min(0, off[1] + dy))
+  }, [focus])
+  return ref
+}
+
 // GPUIX tracks a text field's focus handle on two nested divs, so GPUI's tab-stop list holds the field
 // twice and `focusPrevious` from it lands on the field again: Shift+Tab never leaves. Each field keeps a
 // `back` stop (a focusable div that is no tab stop) right before it; focusing that and walking back from
@@ -150,13 +169,16 @@ export function useFieldRing(onFocus?: Handler, onBlur?: Handler) {
     backStops.set(field, stop.current.id)
     return () => void backStops.delete(field)
   })
+  // Leave the id alone when it already names another element: Tab sets it before the blur arrives.
+  const release = () => { setFocus(false); if (el.current?.id === keyboardFocusId) setKeyboardFocus(null) }
   return {
     ref,
     back: <div ref={stop} onKeyDown={noKey} style={{ position: 'absolute', width: 0, height: 0 }} />,
     ring: focus || on,
     onFocus: (e: EventPayload) => { setFocus(true); onFocus?.(e) },
-    // Leave the id alone when it already names another element: Tab sets it before the blur arrives.
-    onBlur: (e: EventPayload) => { setFocus(false); if (el.current?.id === keyboardFocusId) setKeyboardFocus(null); onBlur?.(e) },
+    onBlur: (e: EventPayload) => { release(); onBlur?.(e) },
+    /** Drop the ring after focus was moved away from code (`focusElement`): the field gets no blur event then. */
+    release,
     onMouseDown: () => void setTimeout(() => setKeyboardFocus(renderer.getFocusedElementId?.() ?? null), 30),
   }
 }
@@ -198,13 +220,14 @@ export const IconButton = forwardRef<PublicInstance, {
   )
 })
 
-export function Button({ children, onClick, primary, icon, testId, grow, danger }: {
-  children: ReactNode; onClick?: () => void; primary?: boolean; icon?: IconName; testId?: string; grow?: boolean; danger?: boolean
+export function Button({ children, onClick, primary, icon, testId, focusTestId, grow, danger }: {
+  children: ReactNode; onClick?: () => void; primary?: boolean; icon?: IconName; testId?: string; focusTestId?: string; grow?: boolean; danger?: boolean
 }) {
   const fg = primary ? '#16110F' : danger ? C.danger : C.text
   return (
     <Pressable
       testId={testId}
+      focusTestId={focusTestId}
       onClick={onClick}
       style={{
         display: 'flex', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
@@ -320,8 +343,10 @@ function scrubMove(e: EventPayload) {
  * Number field: drag the label to scrub, Up/Down ±step (Shift ×10), Enter/blur
  * commits. `onCommit` gets a coalescing key: one focus session or one scrub = one undo step.
  */
-export function NumField({ label, name = label, value, mixed, onCommit, step = 1, min, max, testId, width }: {
-  label: string; value: number; mixed?: boolean; onCommit: (v: number, coalesce: string) => void; step?: number; min?: number; max?: number; testId?: string; width?: number
+export function NumField({ label, name = label, value, mixed, onCommit, onStep, step = 1, min, max, testId, width }: {
+  label: string; value: number; mixed?: boolean; onCommit: (v: number, coalesce: string) => void
+  /** Up/Down and scrub on a mixed field send the total change since the gesture began, so each value can move from its own start (a typed number still goes through `onCommit`). */
+  onStep?: (delta: number, coalesce: string) => void; step?: number; min?: number; max?: number; testId?: string; width?: number
   /** Accessible name when the visible label is a letter or symbol ("W", "↻"). */
   name?: string
 }) {
@@ -333,6 +358,7 @@ export function NumField({ label, name = label, value, mixed, onCommit, step = 1
   latest.current = draft
   useEffect(() => setDraft(shown), [shown])
   const session = useRef<string | null>(null)
+  const stepped = useRef(0)
   const key = () => (session.current ??= `field:${testId ?? label}:${++gesture}`)
   const commit = (v: number, k = key()) => {
     if (!Number.isFinite(v)) return setDraft(shown)
@@ -357,7 +383,8 @@ export function NumField({ label, name = label, value, mixed, onCommit, step = 1
         onMouseDown={(e) => {
           const base = mixed ? 0 : Number(latest.current) || 0
           const k = `scrub:${testId ?? label}:${++gesture}`
-          scrub = { x: e.x ?? 0, at: e.x ?? 0, last: 0, apply: (steps) => commit(Math.round((base + steps * step) * 100) / 100, k) }
+          stepped.current = 0
+          scrub = { x: e.x ?? 0, at: e.x ?? 0, last: 0, apply: (steps) => mixed && onStep ? onStep(Math.round(steps * step * 100) / 100, k) : commit(Math.round((base + steps * step) * 100) / 100, k) }
         }}
         onMouseMove={scrubMove}
         onMouseUp={() => { scrub = null }}
@@ -375,12 +402,18 @@ export function NumField({ label, name = label, value, mixed, onCommit, step = 1
         onBlur={() => {
           typed()
           session.current = null
+          stepped.current = 0
         }}
         onKeyDown={(e) => {
           const k = (e.key ?? '').toLowerCase()
           if (k !== 'up' && k !== 'down') return
+          const delta = (k === 'up' ? 1 : -1) * step * (e.modifiers?.shift ? 10 : 1)
+          if (mixed && onStep) {
+            stepped.current = Math.round((stepped.current + delta) * 100) / 100
+            return onStep(stepped.current, key())
+          }
           const base = Number(latest.current) || 0
-          commit(Math.round((base + (k === 'up' ? 1 : -1) * step * (e.modifiers?.shift ? 10 : 1)) * 100) / 100)
+          commit(Math.round((base + delta) * 100) / 100)
         }}
         theme={{ caret: C.accent }}
       />
@@ -461,7 +494,7 @@ export function Segmented<V extends string>({ value, options, onChange, label }:
           selected={o.value === value}
           onClick={() => onChange(o.value)}
           style={{
-            flexGrow: 1, height: 24, borderRadius: 5, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            flexGrow: 1, flexBasis: 0, height: 24, borderRadius: 5, display: 'flex', alignItems: 'center', justifyContent: 'center',
             paddingLeft: 6, paddingRight: 6,
             backgroundColor: o.value === value ? C.raised : undefined,
             hover: { backgroundColor: C.raised },

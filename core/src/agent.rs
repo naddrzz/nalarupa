@@ -68,6 +68,8 @@ pub struct AgentState {
     queue_opts: (usize, String, usize, String),
     /// Parallel agent setting of the current turn: (count, mode "split" | "side").
     pub parallel: (usize, String),
+    /// Children started in the current turn; `parallel.0 - 1` is all a turn may start.
+    spawned: usize,
     /// The conversation being saved to `<data_dir>/sessions/<id>.json`; None until the first prompt.
     pub chat: Option<Chat>,
     /// Permission requests waiting for the user's answer (request id → asking agent, the waiting MCP call).
@@ -151,14 +153,16 @@ impl AgentState {
         // Ids count up for the whole process, not per conversation: the script globals of an
         // earlier conversation's main agent stay keyed by its id. The fixed-width suffix keeps two counts from spelling one id.
         static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
-        let n = self.profiles.len();
         let used: Vec<&str> = self.profiles.iter().map(|p| p.name.as_str()).collect();
         let pick = (crate::doc::random_u64() as usize) % NAMES.len();
         // Names stay unique within a conversation: once all are taken, count up ("Surya 2").
         let name = (0..NAMES.len()).map(|i| NAMES[(pick + i) % NAMES.len()].to_string()).find(|n| !used.contains(&n.as_str())).unwrap_or_else(|| {
             (2..).map(|k| format!("{} {k}", NAMES[pick])).find(|n| !used.contains(&n.as_str())).unwrap_or_default()
         });
-        let p = Profile { id: format!("ag{}{:03x}", NEXT_ID.fetch_add(1, Ordering::Relaxed), crate::doc::random_u64() & 0xfff), name, color: COLORS[(pick + n * 5) % COLORS.len()].to_string(), parent };
+        // Colors tell agents apart on the canvas and in the chat: start at a random one, take the next not yet used.
+        let start = (crate::doc::random_u64() as usize) % COLORS.len();
+        let color = (0..COLORS.len()).map(|i| COLORS[(start + i) % COLORS.len()]).find(|c| !self.profiles.iter().any(|p| p.color == *c)).unwrap_or(COLORS[start]);
+        let p = Profile { id: format!("ag{}{:03x}", NEXT_ID.fetch_add(1, Ordering::Relaxed), crate::doc::random_u64() & 0xfff), name, color: color.to_string(), parent };
         self.profiles.push(p.clone());
         p
     }
@@ -266,6 +270,7 @@ fn start_turn(shown: &str, prompt: String, resume: bool) {
             }
         };
         e.agent.cancel = Arc::new(AtomicBool::new(false));
+        e.agent.spawned = 0;
         main
     };
     emit(&main, "user", json!({"text": shown}));
@@ -296,9 +301,15 @@ fn wrap_parallel(prompt: &str) -> String {
     )
 }
 
-fn start_thread(p: Profile, prompt: String, child: Option<String>) {
+/// False when a child was not started because Stop already ran: checked under the lock that registers it,
+/// so a Stop cannot land between the check and the child counting as active. Its profile is dropped again.
+fn start_thread(p: Profile, prompt: String, child: Option<String>) -> bool {
     {
         let mut e = engine();
+        if child.is_some() && e.agent.cancel.load(Ordering::SeqCst) {
+            e.agent.profiles.retain(|q| q.id != p.id);
+            return false;
+        }
         e.agent.active += 1;
         e.agent.running = true;
     }
@@ -374,6 +385,7 @@ fn start_thread(p: Profile, prompt: String, child: Option<String>) {
             None => {}
         }
     });
+    true
 }
 
 /// The run is over: frames still flagged `placeholder` (Stop, an error or a dead process came before the
@@ -627,8 +639,24 @@ fn flush_chat_saves() -> Option<String> {
     s.2.clone()
 }
 
-/// `chat_flush`: called as the app exits, since the writer is a detached thread the process does not wait for.
+/// How long `shutdown` waits for the stopped agents to end (their `claude` children are killed by a watcher thread that polls).
+const SHUTDOWN_WAIT: Duration = Duration::from_secs(3);
+
+/// `chat_flush`: called as the app exits. Stops the agents first and waits until their `claude` children are killed,
+/// since nothing outlives the process to do it (no run may go on without its canvas), then saves the chat:
+/// the writer is a detached thread the process does not wait for.
 pub fn shutdown() -> Result<(), String> {
+    stop();
+    let deadline = Instant::now() + SHUTDOWN_WAIT;
+    // `running` outlasts `active` across a queued or iteration handoff, until the next thread has started.
+    while Instant::now() < deadline {
+        let e = engine();
+        if e.agent.active == 0 && !e.agent.running {
+            break;
+        }
+        drop(e);
+        std::thread::sleep(Duration::from_millis(20));
+    }
     flush_chat_saves().map_or(Ok(()), Err)
 }
 
@@ -693,48 +721,64 @@ pub fn load_chat(id: &str) -> Result<Value, String> {
 }
 
 /// `chat_delete`: remove a saved chat. Removing the current one starts a new conversation.
+/// The file goes first: when it cannot be removed the conversation stays as it was.
 pub fn delete_chat(id: &str) -> Result<(), String> {
     let _ops = chat_ops();
     let path = {
-        let mut e = engine();
+        let e = engine();
         let path = chat_path(&e.data_dir, id)?;
-        if e.agent.chat.as_ref().is_some_and(|c| c.id == id) {
-            if e.agent.running {
-                return Err("Stop the agent before removing the running chat.".into());
-            }
-            e.agent.clear();
+        if e.agent.running && e.agent.chat.as_ref().is_some_and(|c| c.id == id) {
+            return Err("Stop the agent before removing the running chat.".into());
         }
         path
     };
-    // Flushed after the lock drops: the chat is no longer current, so no later snapshot can bring the file back.
+    // Flushed first: a queued snapshot of this chat would bring the file back after the removal.
     flush_chat_saves();
     match std::fs::remove_file(path) {
-        Err(err) if err.kind() != std::io::ErrorKind::NotFound => Err(err.to_string()),
-        _ => Ok(()),
+        Err(err) if err.kind() != std::io::ErrorKind::NotFound => return Err(err.to_string()),
+        _ => {}
     }
+    // A prompt sent meanwhile keeps the chat: its next save writes the file again.
+    let mut e = engine();
+    if !e.agent.running && e.agent.chat.as_ref().is_some_and(|c| c.id == id) {
+        e.agent.clear();
+    }
+    Ok(())
 }
 
 /// `chat_clear`: delete every saved chat but a running one. True when the current chat went too.
+/// The current chat's files go last, so a failed removal leaves it listed and current.
 pub fn clear_chats() -> Result<bool, String> {
     let _ops = chat_ops();
-    let (dir, running, keep) = {
-        let mut e = engine();
-        let running = e.agent.running;
+    let (dir, running, current) = {
+        let e = engine();
         // Both the file and the temp file its writer renames over it: removing the temp file fails the next save.
-        let keep = running.then(|| e.agent.chat.as_ref().map(|c| [format!("{}.json", c.id), format!("{}.json.tmp", c.id)])).flatten();
-        if !running {
-            e.agent.clear();
-        }
-        (e.data_dir.clone(), running, keep)
+        let current = e.agent.chat.as_ref().map(|c| [format!("{}.json", c.id), format!("{}.json.tmp", c.id)]);
+        (e.data_dir.clone(), e.agent.running, current)
     };
-    // Flushed after the lock drops: only a running chat can still queue snapshots, and its file is kept.
+    // Flushed before the removal: only a running chat can still queue snapshots, and its file is kept.
     flush_chat_saves();
+    let mut last = Vec::new();
     for entry in std::fs::read_dir(dir.join("sessions")).into_iter().flatten().flatten() {
-        if !keep.as_ref().is_some_and(|k| k.iter().any(|f| entry.file_name().to_str() == Some(f.as_str()))) {
+        if current.as_ref().is_some_and(|k| k.iter().any(|f| entry.file_name().to_str() == Some(f.as_str()))) {
+            last.push(entry.path());
+        } else {
             std::fs::remove_file(entry.path()).map_err(|err| err.to_string())?;
         }
     }
-    Ok(!running)
+    if !running {
+        // The temp file before the file: a failure in between still leaves the chat listed.
+        last.sort_by_key(|path| !path.to_string_lossy().ends_with(".json.tmp"));
+        for path in last {
+            std::fs::remove_file(path).map_err(|err| err.to_string())?;
+        }
+    }
+    let mut e = engine();
+    let cleared = !running && !e.agent.running;
+    if cleared {
+        e.agent.clear();
+    }
+    Ok(cleared)
 }
 
 /// `spawn_agents`: start child agents that each design inside their container nodes.
@@ -746,25 +790,56 @@ pub fn spawn_children(parent: &str, config: &Value) -> crate::engine::ToolOut {
     if entries.len() > MAX_CHILDREN {
         return crate::engine::ToolOut::err(format!("at most {MAX_CHILDREN} agents can be spawned at once"));
     }
-    let mut started = Vec::new();
-    for entry in entries {
-        let ids: Vec<String> = entry["containerNodes"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).collect();
-        if ids.is_empty() {
-            return crate::engine::ToolOut::err("each spawn_agents entry needs at least one container node id");
+    // Checked, reserved and read under one lock: concurrent calls cannot both spend the same remaining slot.
+    let (plans, vars, total, side) = {
+        let mut e = engine();
+        if !e.agent.profile(parent).is_some_and(|p| p.parent.is_none()) {
+            return crate::engine::ToolOut::err("only the main agent can spawn agents; do the work yourself");
         }
-        let (child, context, total) = {
-            let mut e = engine();
+        let left = (e.agent.parallel.0.saturating_sub(1)).saturating_sub(e.agent.spawned);
+        if entries.len() > left {
+            return crate::engine::ToolOut::err(format!(
+                "{left} more designer{} can be started this turn, but {} were requested; spawn at most {left} and do the rest yourself",
+                if left == 1 { "" } else { "s" },
+                entries.len()
+            ));
+        }
+        let mut all_ids = Vec::new();
+        for entry in entries {
+            let ids: Vec<String> = entry["containerNodes"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).collect();
+            if ids.is_empty() {
+                return crate::engine::ToolOut::err("each spawn_agents entry needs at least one container node id");
+            }
             if let Some(missing) = ids.iter().find(|id| e.doc.find(id).is_none()) {
                 return crate::engine::ToolOut::err(format!("container node not found: {missing}"));
             }
-            let child = e.agent.new_profile(Some(parent.to_string()));
-            let nodes: Vec<Value> = ids.iter().filter_map(|id| e.doc.find(id).cloned()).collect();
+            all_ids.push(ids);
+        }
+        e.agent.spawned += entries.len();
+        // Only cloned here: serializing a large document would hold the engine mutex against render and poll.
+        let vars = e.doc.variables();
+        let plans: Vec<(Profile, Vec<String>, Vec<Value>)> = all_ids
+            .into_iter()
+            .map(|ids| {
+                let child = e.agent.new_profile(Some(parent.to_string()));
+                let nodes: Vec<Value> = ids.iter().filter_map(|id| e.doc.find(id).cloned()).collect();
+                (child, ids, nodes)
+            })
+            .collect();
+        (plans, vars, e.agent.parallel.0, e.agent.parallel.1 == "side")
+    };
+    let vars = truncate(&vars.to_string(), 4000);
+    let plans: Vec<_> = plans
+        .into_iter()
+        .map(|(child, ids, nodes)| {
             let context = truncate(&serde_json::to_string(&nodes).unwrap_or_default(), 12000);
-            let vars = truncate(&e.doc.variables().to_string(), 4000);
-            (child, format!("{context}\n\nDocument variables: {vars}"), e.agent.parallel.0)
-        };
+            (child, ids, format!("{context}\n\nDocument variables: {vars}"))
+        })
+        .collect();
+    let mut started = Vec::new();
+    for (entry, (child, ids, context)) in entries.iter().zip(plans) {
         let task = entry["prompt"].as_str().unwrap_or("").trim().to_string();
-        let prompt = if engine().agent.parallel.1 == "side" || task.is_empty() {
+        let prompt = if side || task.is_empty() {
             let k = started.len() + 2;
             format!(
                 "You are designer {k} of {total} working side by side on the same brief; each designer has their own frame.\n\
@@ -779,8 +854,13 @@ pub fn spawn_children(parent: &str, config: &Value) -> crate::engine::ToolOut {
                 ids.iter().map(|i| format!("`{i}`")).collect::<Vec<_>>().join(", ")
             )
         };
-        started.push(format!("{} → {}", child.name, ids.join(", ")));
-        start_thread(child, prompt, Some(parent.to_string()));
+        let label = format!("{} → {}", child.name, ids.join(", "));
+        if start_thread(child, prompt, Some(parent.to_string())) {
+            started.push(label);
+        }
+    }
+    if started.is_empty() {
+        return crate::engine::ToolOut::err("Stopped before the designers started; nothing was spawned.");
     }
     crate::engine::ToolOut::ok(format!(
         "Started {} designers: {}. They are working in their containers now. Continue with your own part; do not verify or edit their work.",
@@ -1095,9 +1175,10 @@ fn run_claude_code(p: &Profile, prompt: &str, child: bool, model: Option<String>
         })
     };
     let err_reader = std::thread::spawn(move || {
-        let mut err = String::new();
-        let _ = std::io::Read::read_to_string(&mut stderr, &mut err);
-        err
+        // Bytes, not `read_to_string`: a localized shell message in the OEM code page is not UTF-8 and would be dropped whole.
+        let mut err = Vec::new();
+        let _ = std::io::Read::read_to_end(&mut stderr, &mut err);
+        String::from_utf8_lossy(&err).into_owned()
     });
 
     // Per streamed message: content index → (tool id, tool name, partial input JSON).
@@ -1108,9 +1189,10 @@ fn run_claude_code(p: &Profile, prompt: &str, child: bool, model: Option<String>
     let mut reported = false;
     let mut textless_error = false;
     let mut stale = false;
-    for line in BufReader::new(stdout).lines() {
+    // Split on bytes: `lines()` stops at the first line that is not UTF-8, which cut the reply and left the CLI on a closed pipe.
+    for line in BufReader::new(stdout).split(b'\n') {
         let Ok(line) = line else { break };
-        let Ok(ev) = serde_json::from_str::<Value>(&line) else { continue };
+        let Ok(ev) = serde_json::from_str::<Value>(&String::from_utf8_lossy(&line)) else { continue };
         if !child {
             if let Some(id) = ev["session_id"].as_str() {
                 engine().agent.session = Some(id.to_string());
@@ -1342,6 +1424,17 @@ mod tests {
         assert!(a.profiles.is_empty(), "a new conversation forgets the old agents");
         let fresh = a.new_profile(None);
         assert!(!old.contains(&fresh.id), "a new conversation's agent never takes an old id (its script globals are kept)");
+    }
+
+    #[test]
+    fn profile_colors_are_distinct_within_a_conversation() {
+        for _ in 0..200 {
+            let mut a = AgentState::default();
+            let mut colors: Vec<String> = (0..COLORS.len()).map(|_| a.new_profile(None).color).collect();
+            colors.sort();
+            colors.dedup();
+            assert_eq!(colors.len(), COLORS.len(), "agents of one conversation never share a color");
+        }
     }
 
     #[test]
