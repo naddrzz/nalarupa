@@ -38,7 +38,7 @@ fn run(args: &[String]) -> Result<(), String> {
         "svg" => {
             let mut e = engine();
             e.open(Path::new(arg(2)?))?;
-            let (svg, _) = e.ctx().node_svg(arg(3)?).ok_or("node not found")?;
+            let svg = e.ctx().export_svg(arg(3)?).ok_or("node not found")?;
             std::fs::write(arg(4)?, svg).map_err(|e| e.to_string())
         }
         "html" => {

@@ -9,10 +9,49 @@ use serde_json::Value;
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 
+/// Where exports go when no path is given, and the only place a script's `Export` may write:
+/// the document's folder, or the data folder `exports` for an unsaved document.
+fn export_base(e: &Engine) -> PathBuf {
+    e.doc.dir().unwrap_or_else(|| e.data_dir.join("exports"))
+}
+
 fn out_path(e: &Engine, out: &str, default_name: &str) -> PathBuf {
-    let base = e.doc.dir().unwrap_or_else(|| e.data_dir.join("exports"));
+    let base = export_base(e);
     let p = if out.is_empty() { base.join(default_name) } else { PathBuf::from(out) };
     if p.is_absolute() { p } else { base.join(p) }
+}
+
+/// A script (the agent's `execute`) exports without a permission card, so it gets the file tools' rule:
+/// inside the document's folder, never the open document itself, and a PDF / HTML file must be named like one
+/// so it cannot replace some other file (another document, a dotfile) in that folder.
+pub fn check_script_export(e: &Engine, format: &str, out: &str) -> Result<(), String> {
+    let base = export_base(e);
+    // The default destination is checked too: a link at its place could point anywhere.
+    let default = match format {
+        "pdf" => format!("{}.pdf", e.title()),
+        "html-css" | "html-tailwind" | "html" => "export.html".into(),
+        _ => "exports".into(),
+    };
+    let file = out_path(e, out, &default);
+    let hidden = file.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.'));
+    let ext = |want: &[&str]| !hidden && file.extension().and_then(|x| x.to_str()).is_some_and(|x| want.iter().any(|w| x.eq_ignore_ascii_case(w)));
+    let named = match format {
+        "pdf" => ext(&["pdf"]),
+        "html-css" | "html-tailwind" | "html" => ext(&["html", "htm"]),
+        _ => !hidden,
+    };
+    if !named {
+        return Err(format!("'{}' is not a {format} file name; use a .{} path that does not start with a dot", file.display(), if format == "pdf" { "pdf" } else { "html" }));
+    }
+    if !crate::agent::path_allowed(&file, "Write", Some(&base), e.doc.path.as_deref(), None) {
+        return Err(format!("Export writes only inside {} and never over the open document; ask the user to export elsewhere", base.display()));
+    }
+    Ok(())
+}
+
+/// A node id as a file name: anything but letters, digits, `-` and `_` (a separator, `..`) becomes `_`.
+fn file_stem(id: &str) -> String {
+    id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect()
 }
 
 /// An export whose rasterizing, encoding and writing still have to run. `plan` builds it under the
@@ -61,10 +100,10 @@ pub fn plan(e: &mut Engine, ids: &[String], format: &str, out: &str, opts: &Valu
             let scale = opts["scale"].as_f64().unwrap_or(2.0);
             let quality = opts["quality"].as_f64().unwrap_or(90.0).clamp(1.0, 100.0) as u8;
             for id in ids {
-                let file = dir.join(format!("{}.{format}", id.replace('/', "_")));
+                let file = dir.join(format!("{}.{format}", file_stem(id)));
                 let output = if format == "svg" {
                     let mut cx = e.ctx();
-                    Output::Bytes(cx.node_svg(id).ok_or_else(|| cx.missing(id))?.0.into_bytes())
+                    Output::Bytes(cx.export_svg(id).ok_or_else(|| cx.missing(id))?.into_bytes())
                 } else {
                     let scale = scale.clamp(0.05, 8.0);
                     Output::Image(e.ctx().node_tree_at(id, scale)?, format.to_string(), scale, quality)

@@ -895,7 +895,8 @@ fn finish(e: &mut Engine, prep: Prepared, result: Result<Map<String, Value>, Str
     }
     let mut exports = Vec::new();
     for (ids, format, out, opts) in ex.exports {
-        match crate::html::plan(e, &ids, &format, &out, &opts) {
+        // Checked before the job is planned, so nothing is written for a refused path.
+        match crate::html::check_script_export(e, &format, &out).and_then(|()| crate::html::plan(e, &ids, &format, &out, &opts)) {
             Ok(job) => exports.push(job),
             Err(err) => text += &format!("\nExport failed: {err}\n"),
         }
@@ -1732,7 +1733,7 @@ mod tests {
         let mut e = engine();
         let out = execute(&mut e, &json!({"input": r##"
             root = Insert(document, {type:"frame", name:"Root", width:300, height:300, layout:"none"});
-            for (let i = 0; i < 300; i++) Insert(root, {type:"rectangle", name:"r"+i, x:i, y:0, width:10, height:10});
+            for (let i = 0; i < 300; i++) Insert(root, {type:"rectangle", name:"r"+i, x:i*20, y:0, width:10, height:10});
         "##}));
         assert!(!out.error, "{}", out.text);
         assert_eq!(crate::render::MAX_SLIDES, 32);
@@ -1748,6 +1749,43 @@ mod tests {
         "##}));
         assert!(!out.error, "{}", out.text);
         assert_eq!(e.renderer.slides.len(), 1, "the card carries its children along");
+    }
+
+    /// `Copy` and inserts past the slide cap appear in place; a sliding node under one of them
+    /// would hide it until the slide ends, so that node appears in place too.
+    #[test]
+    fn slide_does_not_cover_a_later_node_that_appears_in_place() {
+        let mut e = engine();
+        let out = execute(&mut e, &json!({"input": r##"
+            root = Insert(document, {type:"frame", name:"Root", width:640, height:400, layout:"none"});
+            src = Insert(root, {type:"rectangle", name:"Src", x:1100, y:700, width:100, height:100, fill:"#ffffff"});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        e.sync();
+        e.renderer.slides.clear();
+        let out = execute(&mut e, &json!({"input": r##"
+            root = Get(n => n.name === "Root" ? n.id : undefined)[0];
+            Insert(root, {type:"rectangle", name:"Panel", x:100, y:100, width:300, height:200, fill:"#ff0000"});
+            Insert(root, {type:"rectangle", name:"Apart", x:500, y:20, width:40, height:40, fill:"#ff0000"});
+            Copy(Get(n => n.name === "Src" ? n.id : undefined)[0], root, {x:150, y:150});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        assert_eq!(e.renderer.slides.len(), 2);
+        e.sync();
+        let left: Vec<String> = e.renderer.slides.iter().map(|s| e.doc.find(&s.id).unwrap()["name"].as_str().unwrap().to_string()).collect();
+        assert_eq!(left, ["Apart"], "the panel settles under the copy; the node it does not touch still slides");
+
+        let mut e = engine();
+        let out = execute(&mut e, &json!({"input": r##"
+            root = Insert(document, {type:"frame", name:"Root", width:640, height:400, layout:"none"});
+            Insert(root, {type:"rectangle", name:"Panel", x:100, y:100, width:300, height:200, fill:"#ff0000"});
+            for (let i = 0; i < 31; i++) Insert(root, {type:"rectangle", name:"f"+i, x:i*20, y:0, width:10, height:10});
+            Insert(root, {type:"rectangle", name:"Square", x:150, y:150, width:100, height:100, fill:"#ffffff"});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        assert_eq!(e.renderer.slides.len(), 32);
+        e.sync();
+        assert_eq!(e.renderer.slides.len(), 31, "the panel settles under the square past the cap");
     }
 
     /// A rolled-back script's slides had no node to paint and no clock: `animating` stayed true
@@ -2061,9 +2099,10 @@ card = Insert(root, {type:\"frame\", name:\"Card\", width:100, height:100, layou
     fn script_exports_write_after_the_tool_call() {
         let _serial = global_execute();
         // Rasterizing and encoding inside `tool` held the engine lock for the whole export.
-        let dir = std::env::temp_dir().join("nalarupa-test-script-export");
-        let _ = std::fs::remove_dir_all(&dir);
+        // A script may export only inside the document's folder (here the data folder `exports`).
         let mut e = engine();
+        let dir = e.data_dir.join("exports").join("script-export-after-call");
+        let _ = std::fs::remove_dir_all(&dir);
         let src = format!("c = Insert(document, {{type:\"frame\", width:300, height:200, fill:\"#ff0000\"}})\nExport(c, \"png\", {:?}, {{scale: 1}})", dir.to_str().unwrap());
         let out = e.tool("execute", &json!({"input": src}));
         assert!(!out.error, "{}", out.text);
@@ -2468,5 +2507,50 @@ Insert(document, {type:'frame', name:'C', width:10, height:10})
         assert!(scripts().as_ref().unwrap().slots["back-slot"].next.is_none(), "the stale size no longer waits");
         wait(&|| !busy());
         assert_eq!(call(101.0).unwrap()[0]["width"], 101.0);
+    }
+
+    /// The settled layer composites a semi-transparent parent with its children as one group, which a
+    /// slide painted over the parent's own paint cannot match (47 levels off, then a pop): an insert
+    /// under a node with opacity below 1, at any depth, appears in place instead.
+    #[test]
+    fn insert_under_a_semi_transparent_ancestor_appears_in_place() {
+        let mut e = engine();
+        let out = execute(&mut e, &json!({"input": r##"
+            root = Insert(document, {type:"frame", name:"Root", width:300, height:300, layout:"none"});
+            Insert(root, {type:"frame", name:"Glass", width:200, height:200, layout:"none", opacity:0.5});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        assert_eq!(e.renderer.slides.len(), 1, "the glass frame itself slides into its opaque parent");
+        e.renderer.slides.clear();
+        let out = execute(&mut e, &json!({"input": r##"
+            Insert(Get(n => n.name === "Glass" ? n.id : undefined)[0], {type:"rectangle", name:"a", width:10, height:10});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        assert!(e.renderer.slides.is_empty(), "a child of a semi-transparent frame does not slide");
+        let out = execute(&mut e, &json!({"input": r##"
+            inner = Insert(Get(n => n.name === "Glass" ? n.id : undefined)[0], {type:"frame", name:"Inner", width:100, height:100, layout:"none"});
+            Insert(inner, {type:"rectangle", name:"b", width:10, height:10});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        assert!(e.renderer.slides.is_empty(), "nor does a deeper descendant");
+        let out = execute(&mut e, &json!({"input": r##"
+            Insert(Get(n => n.name === "Root" ? n.id : undefined)[0], {type:"rectangle", name:"c", width:10, height:10});
+        "##}));
+        assert!(!out.error, "{}", out.text);
+        assert_eq!(e.renderer.slides.len(), 1, "an insert under an opaque frame still slides");
+        // Opacity given as a variable counts as its value for the theme active there.
+        e.doc.set_variables(&json!({"dim": {"type": "number", "value": [{"value": 1}, {"value": 0.5, "theme": {"mode": "dark"}}]}}), false).unwrap();
+        for (theme, slides) in [("light", 1), ("dark", 0)] {
+            let out = execute(&mut e, &json!({"input": format!(r##"
+                Insert(Get(n => n.name === "Root" ? n.id : undefined)[0], {{type:"frame", name:"{theme}", width:50, height:50, layout:"none", opacity:"$dim", theme:{{mode:"{theme}"}}}});
+            "##)}));
+            assert!(!out.error, "{}", out.text);
+            e.renderer.slides.clear();
+            let out = execute(&mut e, &json!({"input": format!(r##"
+                Insert(Get(n => n.name === "{theme}" ? n.id : undefined)[0], {{type:"rectangle", width:10, height:10}});
+            "##)}));
+            assert!(!out.error, "{}", out.text);
+            assert_eq!(e.renderer.slides.len(), slides, "{theme}: opacity from a variable");
+        }
     }
 }
