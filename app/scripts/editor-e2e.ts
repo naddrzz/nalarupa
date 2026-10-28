@@ -44,6 +44,15 @@ const val = async (testId: string) => {
   const e = await app.getByTestId(testId).element()
   return String(e.customProps?.value ?? e.text ?? '')
 }
+// The Inspector's inputs cannot be read: ask the document over this app's MCP port. A hidden layer is skipped by a
+// `Get` visit, so read it by id.
+const exec = async (input: string) => {
+  const port = (await ports()).filter((p) => !portsBefore.has(p))[0]
+  const res: any = await (await mcpCall(port, { method: 'tools/call', params: { name: 'execute', arguments: { input } } })).json()
+  return String(res.result?.content?.[0]?.text ?? '')
+}
+const rectId = async () => (await exec('Get(undefined, n => { if (n.name === "Rectangle") Print("id=" + n.id) })')).match(/id=(\S+)/)?.[1] ?? ''
+const xOf = async (id: string) => Number((await exec(`Print("x=" + Get(${JSON.stringify(id)}, {depth: 0}).x)`)).match(/x=(-?[\d.]+)/)?.[1])
 try {
   await app.getByTestId('template-blank').waitFor({ timeoutMs: 30000 })
   await app.getByTestId('template-blank').click()
@@ -173,18 +182,27 @@ try {
   await sleep(300)
   assert((await size()).join() === [rw0, rh0].join(), 'one undo step reverts the flip')
 
-  // A hidden layer has no render box: the Inspector still reports its own size, not 0 × 0. Hiding drops the
-  // selection (no box to select), so pick the layer from the Layers panel again.
+  // A hidden layer has no render box: the Inspector still reports its own size, not 0 × 0. It stays selected
+  // through Hide and further edits (arrow nudge, Inspector field), so Show stays one click away.
   const rectRow = app.getByTestId('layers').getByText('Rectangle')
+  const hid = await rectId()
+  const hx0 = await xOf(hid)
   await app.getByTestId('inspector-visibility').click()
-  assert(await until(async () => !(await count('inspector-visibility'))), 'hiding the layer clears the selection')
-  await rectRow.click()
-  assert(await until(async () => (await app.getByText(`Hidden ${rw0} × ${rh0}`).count()) > 0), `a hidden layer still shows its ${rw0} × ${rh0} size in the Inspector`)
+  assert(await until(async () => (await app.getByText(`Hidden ${rw0} × ${rh0}`).count()) > 0), `hiding keeps the layer selected: the Inspector shows its ${rw0} × ${rh0} size`)
   assert(!(await app.getByText('× 0 ·').count()), 'a hidden layer is not reported as 0 tall')
+  assert((await count('inspector-visibility')) > 0, 'the Inspector offers Show for the hidden layer')
+  await canvas.press('right')
+  assert(await until(async () => (await xOf(hid)) === hx0 + 1), 'an arrow key nudges the selected hidden layer')
+  await app.getByTestId('inspector-x').fill(String(hx0 + 7))
+  await app.getByTestId('inspector-x').press('enter')
+  assert(await until(async () => (await xOf(hid)) === hx0 + 7), 'an Inspector field edit applies to the hidden layer')
+  await sleep(800)
+  assert((await count('inspector-x')) > 0 && (await app.getByText(`Hidden ${rw0} × ${rh0}`).count()) > 0, 'the hidden layer is still selected after the edits')
+  await sleep(1300) // past the canvas hand-back window, so the keys go to the canvas
   await canvas.press('ctrl-z')
-  await sleep(600) // past the double-click window, or the second row click would start a rename
-  await rectRow.click()
-  assert(await until(async () => (await app.getByText(`Rendered ${rw0} × ${rh0}`).count()) > 0), 'one undo step shows the layer again at its rendered size')
+  await canvas.press('ctrl-z')
+  await canvas.press('ctrl-z')
+  assert(await until(async () => (await app.getByText(`Rendered ${rw0} × ${rh0}`).count()) > 0 && (await xOf(hid)) === hx0), 'undoing the edits and the Hide shows the layer again at its rendered size, still selected')
 
   // Deleting from the Inspector unmounts the focused button: the keys go back to the canvas, so Ctrl+Z (sent
   // to whatever has focus, not to the canvas by id) still undoes it.
@@ -197,11 +215,9 @@ try {
   await rectRow.click()
   assert(await until(async () => (await count('inspector-visibility')) > 0), 'the Layers row selects the restored layer')
   await app.getByTestId('inspector-visibility').click()
-  assert(await until(async () => !(await count('inspector-visibility'))), 'the Inspector Hide button hides the layer')
+  assert(await until(async () => (await app.getByText(`Hidden ${rw0} × ${rh0}`).count()) > 0), 'the Inspector Hide button hides the layer')
   await sleep(1200) // past the whole canvas hand-back window (App.tsx)
   await app.call('keystrokes', { keys: 'ctrl-z' })
-  await sleep(600)
-  await rectRow.click()
   assert(await until(async () => (await app.getByText(`Rendered ${rw0} × ${rh0}`).count()) > 0), 'Ctrl+Z works right after the Inspector Hide button unmounted')
 
   await app.getByTestId('tool-rectangle').click()
