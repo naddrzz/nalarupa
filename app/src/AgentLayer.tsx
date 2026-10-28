@@ -203,7 +203,7 @@ export function AgentLayer({ cam, w, h, version, chatOpen }: { cam: Cam; w: numb
       <div key={`f${i}-${f.nodeId}`} style={{ position: 'absolute', left: X, top: Y, width: W, height: H, borderRadius: radius, borderWidth: 2, borderColor: hexAlpha(f.color, alpha), overflow: 'hidden', pointerEvents: 'none' }}>
         {P >= 0 && P < 1 ? (
           <div style={{
-            position: 'absolute', left: 0, top: ctr - H / 2, width: W, height: H,
+            position: 'absolute', left: 0, top: ctr - H / 2, width: W, height: H, pointerEvents: 'none',
             background: { type: 'linear-gradient', angle: 180, stops: [{ color: hexAlpha(f.color, 0), position: 0 }, { color: hexAlpha(f.color, 0.2 * alpha), position: 1 }] },
           }} />
         ) : null}
@@ -238,7 +238,7 @@ export function AgentLayer({ cam, w, h, version, chatOpen }: { cam: Cam; w: numb
       return (
         <div key={`p${n.id}`} style={{ position: 'absolute', left: X, top: Y, width: W, height: H, overflow: 'hidden', backgroundColor: '#00000040', pointerEvents: 'none' }}>
           {shimmerHalves(X + pos, band).map(([left, width], k) => (
-            <div key={k} style={{ position: 'absolute', left: left - X, top: 0, width, height: H, background: { type: 'linear-gradient', angle: 90, stops: k ? [{ color: '#FFFFFF73', position: 0 }, { color: '#FFFFFF00', position: 1 }] : [{ color: '#FFFFFF00', position: 0 }, { color: '#FFFFFF73', position: 1 }] } }} />
+            <div key={k} style={{ position: 'absolute', left: left - X, top: 0, width, height: H, pointerEvents: 'none', background: { type: 'linear-gradient', angle: 90, stops: k ? [{ color: '#FFFFFF73', position: 0 }, { color: '#FFFFFF00', position: 1 }] : [{ color: '#FFFFFF00', position: 0 }, { color: '#FFFFFF73', position: 1 }] } }} />
           ))}
         </div>
       )
@@ -266,24 +266,24 @@ export function AgentLayer({ cam, w, h, version, chatOpen }: { cam: Cam; w: numb
         <div style={{ position: 'absolute', left: X, top: Y, width: W, height: H, pointerEvents: 'none' }}>
           {m ? null : (
             <>
-              <div style={{ position: 'absolute', left: 0, top: 0, width: W, height: H, borderRadius: 5, overflow: 'hidden' }}>
+              <div style={{ position: 'absolute', left: 0, top: 0, width: W, height: H, borderRadius: 5, overflow: 'hidden', pointerEvents: 'none' }}>
                 {blobs.map((bl, k) => (
                   <div key={k} style={{
-                    position: 'absolute', left: bl.cx - r, top: bl.cy - r, width: 2 * r, height: 2 * r, borderRadius: r,
+                    position: 'absolute', left: bl.cx - r, top: bl.cy - r, width: 2 * r, height: 2 * r, borderRadius: r, pointerEvents: 'none',
                     // The glow is 0.5-alpha blobs blurred with sigma 0.2·c; GPUI has no blur filter, so a faint core
                     // with a wide soft shadow gives the same glow.
                     backgroundColor: '#607dff10', boxShadow: { offsetX: 0, offsetY: 0, blurRadius: 0.5 * c, spreadRadius: 0, color: '#607dff38' },
                   }} />
                 ))}
               </div>
-              <div style={{ position: 'absolute', left: 0, top: 0, width: W, height: H, borderRadius: 5, borderWidth: 2, borderColor: PRESENCE }} />
+              <div style={{ position: 'absolute', left: 0, top: 0, width: W, height: H, borderRadius: 5, borderWidth: 2, borderColor: PRESENCE, pointerEvents: 'none' }} />
             </>
           )}
           {n.parent ? null : (
             // A turned node keeps its pill upright, above where it is painted.
-            <div style={{ position: 'absolute', left: 0, top: -18 + wave(now / 200) * 0.6, height: 16, maxWidth: Math.max(60, W), display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 5, overflow: 'hidden' }}>
-              <svg source={ICONS.sparkles} style={{ width: 13, height: 13, color: PRESENCE }} />
-              <text style={{ fontSize: 11, fontWeight: '500', color: PRESENCE, fontFamily: FONT, whiteSpace: 'nowrap' }}>{`Generating: ${n.name}`}</text>
+            <div style={{ position: 'absolute', left: 0, top: -18 + wave(now / 200) * 0.6, height: 16, maxWidth: Math.max(60, W), display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 5, overflow: 'hidden', pointerEvents: 'none' }}>
+              <svg source={ICONS.sparkles} style={{ width: 13, height: 13, color: PRESENCE, pointerEvents: 'none' }} />
+              <text style={{ fontSize: 11, fontWeight: '500', color: PRESENCE, pointerEvents: 'none', fontFamily: FONT, whiteSpace: 'nowrap' }}>{`Generating: ${n.name}`}</text>
             </div>
           )}
         </div>
@@ -324,14 +324,14 @@ export function AgentLayer({ cam, w, h, version, chatOpen }: { cam: Cam; w: numb
     const color = c.profile.color
     cursorEls.push(
       <div key={`c${id}`} testId={`agent-cursor-${id}`} style={{ position: 'absolute', left: px - 4, top: py - 5, width: 200, height: 40, opacity, pointerEvents: 'none' }}>
-        <svg source={ARROW_OUTLINE} style={{ position: 'absolute', left: 0, top: 1, width: 24, height: 24, color: '#00000059' }} />
-        <svg source={ARROW_OUTLINE} style={{ position: 'absolute', left: 0, top: 0, width: 24, height: 24, color: '#FFFFFF' }} />
-        <svg source={ARROW_FILL} style={{ position: 'absolute', left: 0, top: 0, width: 24, height: 24, color }} />
+        <svg source={ARROW_OUTLINE} style={{ position: 'absolute', left: 0, top: 1, width: 24, height: 24, color: '#00000059', pointerEvents: 'none' }} />
+        <svg source={ARROW_OUTLINE} style={{ position: 'absolute', left: 0, top: 0, width: 24, height: 24, color: '#FFFFFF', pointerEvents: 'none' }} />
+        <svg source={ARROW_FILL} style={{ position: 'absolute', left: 0, top: 0, width: 24, height: 24, color, pointerEvents: 'none' }} />
         <div style={{
-          position: 'absolute', left: 18, top: 18, paddingTop: 2, paddingBottom: 2, paddingLeft: 5, paddingRight: 5, borderRadius: 2,
+          position: 'absolute', left: 18, top: 18, paddingTop: 2, paddingBottom: 2, paddingLeft: 5, paddingRight: 5, borderRadius: 2, pointerEvents: 'none',
           backgroundColor: color, boxShadow: { offsetX: 0, offsetY: 1, blurRadius: 3.5, spreadRadius: 0, color: '#00000040' },
         }}>
-          <text style={{ fontSize: 11, fontWeight: '500', color: contrastText(color), fontFamily: FONT, whiteSpace: 'nowrap' }}>{c.profile.name}</text>
+          <text style={{ pointerEvents: 'none', fontSize: 11, fontWeight: '500', color: contrastText(color), fontFamily: FONT, whiteSpace: 'nowrap' }}>{c.profile.name}</text>
         </div>
       </div>,
     )
@@ -347,13 +347,13 @@ export function AgentLayer({ cam, w, h, version, chatOpen }: { cam: Cam; w: numb
     cursorEls.push(
       // lucide "pen-tool" has its nib tip at (2, 2) of 24.
       <div key={`pen${id}`} testId="ai-pen" style={{ position: 'absolute', left: px - 2, top: py - 2, width: 120, height: 44, opacity: easeOutCubic(clamp((now - pen.appearAt) / FADE_IN, 0, 1)), pointerEvents: 'none' }}>
-        <svg source={ICONS.pen} style={{ position: 'absolute', left: 0, top: 1, width: 24, height: 24, color: '#00000080' }} />
-        <svg source={ICONS.pen} style={{ position: 'absolute', left: 0, top: 0, width: 24, height: 24, color: PRESENCE }} />
+        <svg source={ICONS.pen} style={{ position: 'absolute', left: 0, top: 1, width: 24, height: 24, color: '#00000080', pointerEvents: 'none' }} />
+        <svg source={ICONS.pen} style={{ position: 'absolute', left: 0, top: 0, width: 24, height: 24, color: PRESENCE, pointerEvents: 'none' }} />
         <div style={{
-          position: 'absolute', left: 22, top: 22, paddingTop: 2, paddingBottom: 2, paddingLeft: 5, paddingRight: 5, borderRadius: 2,
+          position: 'absolute', left: 22, top: 22, paddingTop: 2, paddingBottom: 2, paddingLeft: 5, paddingRight: 5, borderRadius: 2, pointerEvents: 'none',
           backgroundColor: PRESENCE, boxShadow: { offsetX: 0, offsetY: 1, blurRadius: 3.5, spreadRadius: 0, color: '#00000040' },
         }}>
-          <text style={{ fontSize: 11, fontWeight: '500', color: contrastText(PRESENCE), fontFamily: FONT, whiteSpace: 'nowrap' }}>AI Pen</text>
+          <text style={{ pointerEvents: 'none', fontSize: 11, fontWeight: '500', color: contrastText(PRESENCE), fontFamily: FONT, whiteSpace: 'nowrap' }}>AI Pen</text>
         </div>
       </div>,
     )
@@ -369,20 +369,20 @@ export function AgentLayer({ cam, w, h, version, chatOpen }: { cam: Cam; w: numb
       {flashEls}
       {cursorEls}
       {pills.length ? (
-        <div style={{ position: 'absolute', left: 0, bottom: 16, width: w, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+        <div style={{ position: 'absolute', left: 0, bottom: 16, width: w, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, pointerEvents: 'none' }}>
           {pills.map(([id, p]) => {
             const prof = profileOf(id)
             const msg = p.text.replace(/\s+/g, ' ').trim()
             return (
               <div key={id} style={{
                 display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8, maxWidth: Math.min(512, w - 32),
-                paddingLeft: 12, paddingRight: 12, paddingTop: 6, paddingBottom: 6, borderRadius: 999,
+                paddingLeft: 12, paddingRight: 12, paddingTop: 6, paddingBottom: 6, borderRadius: 999, pointerEvents: 'none',
                 backgroundColor: C.panel, borderWidth: 1, borderColor: C.border,
                 boxShadow: { offsetX: 0, offsetY: 4, blurRadius: 12, spreadRadius: 0, color: '#00000055' },
               }}>
-                <div testId={`agent-pill-dot-${id}`} style={{ width: 8, height: 8, flexShrink: 0, borderRadius: 4, backgroundColor: prof.color, opacity: pulse }} />
-                <text style={{ fontSize: 12, fontWeight: '600', color: prof.color, fontFamily: FONT, whiteSpace: 'nowrap' }}>{prof.name}</text>
-                <text style={{ fontSize: 12, color: C.text, fontFamily: FONT, whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden', flexShrink: 1, minWidth: 0 }}>
+                <div testId={`agent-pill-dot-${id}`} style={{ width: 8, height: 8, flexShrink: 0, borderRadius: 4, backgroundColor: prof.color, opacity: pulse, pointerEvents: 'none' }} />
+                <text style={{ pointerEvents: 'none', fontSize: 12, fontWeight: '600', color: prof.color, fontFamily: FONT, whiteSpace: 'nowrap' }}>{prof.name}</text>
+                <text style={{ pointerEvents: 'none', fontSize: 12, color: C.text, fontFamily: FONT, whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden', flexShrink: 1, minWidth: 0 }}>
                   {msg.length > 140 ? `${msg.slice(0, 140)}…` : msg}
                 </text>
               </div>

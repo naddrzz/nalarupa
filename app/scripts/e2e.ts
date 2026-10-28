@@ -866,6 +866,29 @@ for (let i = 0; i < 149; i++) Insert(f, {type:"rectangle", name:"Chip " + i, x:(
   await until(async () => (await app!.getByTestId('canvas').count()) > 0, 'the new document')
   await sleep(1500) // the old cursor, if kept, shows within a frame or two of the canvas
   if (await app.getByTestId('agent-cursor-external').count()) throw new Error("the previous document's external agent cursor is still on the new canvas")
+  // The agent's cursor is decoration: a press on its arrow or name pill reaches the layer under it. A rectangle fills the new
+  // document's frame, the agent reads it (its cursor lands on it), and a click on the pill selects the rectangle.
+  await mcp('execute', { input: 'const f = Get(undefined, n => n.type === "frame" ? n.id : undefined)[0]; rect = Insert(f, {type:"rectangle", name:"Under cursor", x:0, y:0, width:1440, height:900, fill:"#CCCCCC"})' })
+  const cvBox = (await app.getByTestId('canvas').bounds())!
+  // The cursor lands at a random point of the rectangle and its pill sits down and to the right of that point, so near the
+  // frame's far edges the pill is over empty canvas: such a click selects nothing, and a press the pill swallows would
+  // do the same on every try, so only a run of misses fails.
+  for (let i = 0; i < 3; i++) {
+    let selected = false
+    for (let attempt = 0; attempt < 4 && !selected; attempt++) {
+      await app.mouse.click({ x: cvBox.x + 20, y: cvBox.y + 20 }) // empty canvas: nothing selected
+      await until(async () => (await mcp('get_editor_state', {})).includes('Selection: nothing'), 'the selection cleared')
+      await sleep(2500) // the cursor from the insert fades
+      await mcp('execute', { input: 'Get(rect)' })
+      await until(async () => ((await app!.getByTestId('agent-cursor-external').getByType('text').all())[0]?.bounds?.width ?? 0) > 0, "the external agent's name pill")
+      await sleep(800)
+      const pill = (await app.getByTestId('agent-cursor-external').getByType('text').all())[0].bounds
+      await app.mouse.click({ x: pill.x + pill.width / 2, y: pill.y + pill.height / 2 })
+      await sleep(500)
+      selected = !(await mcp('get_editor_state', {})).includes('Selection: nothing')
+    }
+    if (!selected) throw new Error("a click on the external agent cursor's name pill never selected the layer under it")
+  }
   console.log('e2e ok — screenshots in', out)
 } finally {
   await app?.close()
