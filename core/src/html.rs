@@ -1105,7 +1105,9 @@ mod tests {
         let files = job.run().unwrap();
         let read = |i: usize| std::fs::read_to_string(&files[i]).unwrap();
         assert!(read(0).contains("data:image/png;base64,") && !read(0).contains("nalarupa-embed-"), "the written SVG inlines the image");
-        assert!(!read(1).contains("gone.png") && !read(1).contains("data:image/png"), "a file gone before the write is left out, not linked by its local path");
+        assert!(!read(1).contains("gone.png") && !read(1).contains("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAUA"), "a file gone before the write is left out, not linked by its local path");
+        // An empty href would resolve to the SVG file itself.
+        assert!(files.iter().all(|f| !std::fs::read_to_string(f).unwrap().contains(r#"xlink:href="""#)), "a left-out image never gets an empty href");
         assert!(!read(2).contains("deep.svg") && !read(2).contains("data:image/svg"), "an SVG nested too deep is left out, as when rendering");
         // Only this export's keyed tokens are replaced, not text that merely looks like one.
         let fake = crate::svg::Embedded { tag: "nalarupa-embed-0000000000000001:".into(), hrefs: vec![dir.join("photo.png").display().to_string()] };

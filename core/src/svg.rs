@@ -546,6 +546,10 @@ impl Embedded {
     }
 }
 
+/// The href of an image an SVG export leaves out: a transparent pixel. An empty href would resolve to the SVG
+/// file itself, and a viewer could try to load the document as its own image.
+const LEFT_OUT: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+
 /// `svg` with each token of `embedded` replaced by its file as a `data:` URI, in one pass. Slow (reads and
 /// encodes every file), so it runs without the engine lock. A file that cannot be inlined (unreadable, a gzip
 /// bomb past the cap, or an SVG nested past `MAX_SVG_DEPTH`) is left out.
@@ -561,10 +565,13 @@ pub fn inline_embedded(svg: &str, embedded: &Embedded) -> String {
         let digits = after.bytes().take_while(u8::is_ascii_digit).count();
         match after[..digits].parse::<usize>().ok().and_then(|i| embedded.hrefs.get(i)) {
             // An SVG nested too deep stays unavailable, as when rendering: the image is left out.
-            Some(href) if deep_key(href).is_some() && svg_too_deep(href) => rest = &after[digits..],
+            Some(href) if deep_key(href).is_some() && svg_too_deep(href) => {
+                out.push_str(LEFT_OUT);
+                rest = &after[digits..];
+            }
             Some(href) => {
                 // Not inlinable: left out, never linked by its path on this machine.
-                out.push_str(&data_uri(href).map(|uri| esc(&uri)).unwrap_or_default());
+                out.push_str(&data_uri(href).map(|uri| esc(&uri)).unwrap_or_else(|| LEFT_OUT.to_string()));
                 rest = &after[digits..];
             }
             None => {
