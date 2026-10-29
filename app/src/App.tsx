@@ -406,8 +406,11 @@ export function App() {
           animating={!!state.animating} rootRef={canvasEl}
         />
         <div style={{ width: RIGHT_W, flexShrink: 0, height: '100%', display: 'flex', flexDirection: 'column', backgroundColor: C.panel, borderLeftWidth: 1, borderColor: C.border }}>
-          <div style={{ padding: 10, borderBottomWidth: 1, borderColor: C.border }}>
-            <Segmented value={rightTab} onChange={setRightTab} label="Right panel" options={[{ value: 'design', label: 'Design', testId: 'tab-design' }, { value: 'agent', label: state.agentRunning ? 'Agent •' : 'Agent', name: state.agentRunning ? 'Agent, running' : 'Agent', testId: 'tab-agent' }]} />
+          {/* Padding sits on an inner div: the outer one's bounds are the tab bar's edge (the Inspector starts below it). */}
+          <div testId="right-tabs" style={{ borderBottomWidth: 1, borderColor: C.border }}>
+            <div style={{ padding: 10 }}>
+              <Segmented value={rightTab} onChange={setRightTab} label="Right panel" options={[{ value: 'design', label: 'Design', testId: 'tab-design' }, { value: 'agent', label: state.agentRunning ? 'Agent •' : 'Agent', name: state.agentRunning ? 'Agent, running' : 'Agent', testId: 'tab-agent' }]} />
+            </div>
           </div>
           {rightTab === 'design' ? (
             <Design version={state.version} selection={selection} select={select} toast={toast} />
