@@ -664,9 +664,9 @@ try {
   }
   assert((await app.getByTestId('inspector-name').bounds())!.y >= c.y + 3, 'Shift+Tab back to the name field keeps it, ring included, below the panel top')
   // Tab entering the Inspector from another panel while it is scrolled to its end scrolls back up to the name field.
-  // The Inspector shows from the bottom edge of the Design/Agent tab bar (its padded wrapper, which does not
-  // scroll): measure against that, not the name field's last position, which is already hidden if Shift+Tab
-  // left the Inspector scrolled.
+  // The Inspector shows from the bottom edge of the Design/Agent tab bar (`right-tabs`, the unpadded outer div,
+  // which does not scroll; automation reports a padded div from its content box, so the id must stay on it):
+  // measure against that, not the name field's last position, already hidden if Shift+Tab left the Inspector scrolled.
   const tabBar = (await app.getByTestId('right-tabs').bounds())!
   const panelTop = tabBar.y + tabBar.height
   assert(await until(async () => {
