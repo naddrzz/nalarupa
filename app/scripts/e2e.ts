@@ -511,11 +511,16 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
     const size = windowOf(JSON.parse(await Bun.$`swaymsg -s ${join(dir!, sock)} -t get_tree`.text()))!.rect
     await swaymsg('[app_id=".*"]', 'resize', 'set', '1100', '680')
     await until(async () => (await app!.getByTestId('canvas').bounds()).y + (await app!.getByTestId('canvas').bounds()).height <= 680, 'the window to shrink to 680 px')
+    const gearBefore = (await app.getByTestId('agent-settings').bounds()).y
     await app.getByTestId('agent-settings').click()
     await app.getByTestId('agent-settings-panel').waitFor()
     const bottom = async (id: string) => { const b = await app!.getByTestId(id).bounds(); return b.y + b.height }
     const windowBottom = async () => bottom('canvas')
     await until(async () => (await bottom('agent-send')) <= (await windowBottom()), 'Send to stay in the 680 px window with Agent settings and the plan open')
+    // Here, unlike at the default height, the panel's contents overflow, and the shrink must not reach the 40 px
+    // header: the gear stays where it was (#452).
+    const gearAfter = (await app.getByTestId('agent-settings').bounds()).y
+    if (gearAfter !== gearBefore) throw new Error(`opening Agent settings at the minimum height squashed the header: the gear moved from y=${gearBefore} to y=${gearAfter}`)
     const top = async (id: string) => (await app!.getByTestId(id).bounds()).y
     if ((await bottom('plan-toggle')) > (await top('agent-composer'))) throw new Error('the Plan toggle left its place above the composer')
     // A control is in view when it lies inside the settings panel's viewport (the panel's bounds move with its

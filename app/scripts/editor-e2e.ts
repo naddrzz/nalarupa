@@ -81,6 +81,8 @@ try {
     await app.mouse.click({ x: b.x + b.width / 2, y: b.y + b.height / 2 })
     await app.mouse.move(at(400, 400))
     assert(await until(async () => !(await count('tooltip'))), 'the eye tooltip goes when the pointer leaves')
+    // A hidden layer keeps its eye with the pointer away; wait for that, as the hide lands a frame or more later.
+    assert(await until(async () => !!(await eye()), 5000), 'clicking the eye hides the layer (its eye stays without hover)')
     const h = (await eye())!.bounds!
     await app.mouse.move({ x: h.x + h.width / 2, y: h.y + h.height / 2 })
     assert(await until(async () => (await app.getByTestId('tooltip').getByText('Show').count()) > 0), 'hovering the hidden layer\'s eye shows "Show"')
