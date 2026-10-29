@@ -4,7 +4,7 @@ import { call, tryCall, type Box, type Layer } from './core'
 import type { Mods } from './Canvas'
 import { nodeIcon } from './icons'
 import { C, LEFT_W } from './theme'
-import { FocusRing, forwardKey, Icon, IconButton, Pressable, Segmented, setKeyboardFocus, ShortcutScope, T, useKeyboardFocusId, type Toast } from './ui'
+import { FocusRing, forwardKey, Icon, IconButton, Pressable, Segmented, setKeyboardFocus, ShortcutScope, T, Tip, useKeyboardFocusId, type Toast } from './ui'
 
 // What the panel keeps while Present or Home unmounts the editor; App owns it and clears it when a document opens.
 // `revealed` is the selection the Layers reveal last ran for.
@@ -332,21 +332,23 @@ function Layers({ version, selection, select, focus, hover, onShortcut, saved }:
                   </T>
                 )}
                 {hoverRow === l.id || l.hidden ? (
-                  <div
-                    testId={`layer-eye-${l.id}`}
-                    role="button"
-                    aria-label={`${l.hidden ? 'Show' : 'Hide'} ${l.name}`}
-                    onMouseDown={() => { eyeAt.current = performance.now() }}
-                    onClick={() => tryCall('update', { ids: [l.id], props: { enabled: l.hidden ? null : false } })}
-                    // The row keeps a press for its drag, which loses the click of an unpainted child; the
-                    // painted fill gets its own hitbox. It also takes the hover from the row, so the eye
-                    // holds the row's hover itself to stay mounted until the click.
-                    onMouseEnter={() => setHover(l.id)}
-                    onMouseLeave={() => { if (hoverRef.current === l.id) setHover(null) }}
-                    style={{ width: 22, height: 22, borderRadius: 5, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#00000001', hover: { backgroundColor: C.raised } }}
-                  >
-                    <Icon name={l.hidden ? 'hidden' : 'eye'} size={13} color={C.muted} />
-                  </div>
+                  <Tip text={l.hidden ? 'Show' : 'Hide'}>
+                    <div
+                      testId={`layer-eye-${l.id}`}
+                      role="button"
+                      aria-label={`${l.hidden ? 'Show' : 'Hide'} ${l.name}`}
+                      onMouseDown={() => { eyeAt.current = performance.now() }}
+                      onClick={() => tryCall('update', { ids: [l.id], props: { enabled: l.hidden ? null : false } })}
+                      // The row keeps a press for its drag, which loses the click of an unpainted child; the
+                      // painted fill gets its own hitbox. It also takes the hover from the row, so the eye
+                      // holds the row's hover itself to stay mounted until the click.
+                      onMouseEnter={() => setHover(l.id)}
+                      onMouseLeave={() => { if (hoverRef.current === l.id) setHover(null) }}
+                      style={{ width: 22, height: 22, borderRadius: 5, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#00000001', hover: { backgroundColor: C.raised } }}
+                    >
+                      <Icon name={l.hidden ? 'hidden' : 'eye'} size={13} color={C.muted} />
+                    </div>
+                  </Tip>
                 ) : null}
                 {focusId !== null && rowEls.current.get(l.id)?.id === focusId ? <FocusRing /> : null}
                 {mark === 'before' || mark === 'after' ? (

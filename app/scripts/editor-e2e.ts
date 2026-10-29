@@ -67,6 +67,26 @@ try {
   assert(await until(async () => (await app.getByTestId('tooltip').getByText('Frame (F / A)').count()) > 0), 'hovering the Frame tool shows "Frame (F / A)"')
   await app.mouse.move(at(400, 400))
   assert(await until(async () => !(await count('tooltip'))), 'the tooltip goes when the pointer leaves the button')
+  // The eye on a Layers row is an icon-only button too: hovering it says what a click does.
+  {
+    const row = (await app.getByType('div').all()).find((n) => /^layer-(?!eye-)/.test(n.testId ?? '') && (n.bounds?.width ?? 0) > 0)
+    assert(row, 'a Layers row to hover')
+    await app.mouse.move({ x: row!.bounds!.x + row!.bounds!.width / 2, y: row!.bounds!.y + row!.bounds!.height / 2 })
+    const eye = async () => (await app.getByType('div').all()).find((n) => n.testId?.startsWith('layer-eye-') && (n.bounds?.width ?? 0) > 0)
+    assert(await until(async () => !!(await eye())), 'the eye shows on the hovered row')
+    const b = (await eye())!.bounds!
+    await app.mouse.move({ x: b.x + b.width / 2, y: b.y + b.height / 2 })
+    assert(await until(async () => (await app.getByTestId('tooltip').getByText('Hide').count()) > 0), 'hovering the eye shows "Hide"')
+    await app.mouse.move(at(400, 400))
+    assert(await until(async () => !(await count('tooltip'))), 'the eye tooltip goes when the pointer leaves')
+  }
+  // A button with a shortcut names it too (zoom keys: - and = / +).
+  for (const [id, text] of [['zoom-out', 'Zoom out (-)'], ['zoom-in', 'Zoom in (+)']]) {
+    await app.getByTestId(id).hover()
+    assert(await until(async () => (await app.getByTestId('tooltip').getByText(text).count()) > 0), `hovering ${id} shows "${text}"`)
+    await app.mouse.move(at(400, 400))
+    assert(await until(async () => !(await count('tooltip'))), `the ${id} tooltip goes when the pointer leaves`)
+  }
 
   // A real mouse wheel pans a little. GPUIX reports a notch as 60 px with precise=false; reading that
   // as lines (×40) threw the view ~2400 px per notch and the canvas looked empty. The automation wheel
