@@ -664,18 +664,21 @@ try {
   }
   assert((await app.getByTestId('inspector-name').bounds())!.y >= c.y + 3, 'Shift+Tab back to the name field keeps it, ring included, below the panel top')
   // Tab entering the Inspector from another panel while it is scrolled to its end scrolls back up to the name field.
-  const nameTop = (await app.getByTestId('inspector-name').bounds())!.y
+  // The Inspector shows from the bottom of the Design/Agent tabs: measure against that, not the name field's
+  // last position, which is already hidden if Shift+Tab left the Inspector scrolled.
+  const tabBox = (await app.getByTestId('tab-design').bounds())!
+  const panelTop = tabBox.y + tabBox.height
   assert(await until(async () => {
     await app.getByTestId('inspector-w').wheel(0, -2000)
-    return (await app.getByTestId('inspector-name').bounds())!.y < nameTop - 10
-  }), 'the wheel scrolls the Inspector down')
+    return (await app.getByTestId('inspector-name').bounds())!.y < panelTop
+  }), 'the wheel scrolls the name field above the Inspector top')
   await app.getByTestId('tab-design').click()
   for (let i = 0; i < 4 && !(await count('inspector-name-ring')); i++) {
     await app.call('keystrokes', { keys: 'tab' })
     await sleep(300)
   }
   assert(await until(async () => !!(await count('inspector-name-ring'))), 'Tab from the Design/Agent tabs reaches the name field')
-  assert(await until(async () => (await app.getByTestId('inspector-name').bounds())!.y >= nameTop - 1),
+  assert(await until(async () => (await app.getByTestId('inspector-name').bounds())!.y - 3 >= panelTop),
     'Tab into the scrolled Inspector scrolls the name field, ring included, back into view')
 
   // Handle centers (canvas px), tl, tr, br, bl. Each sits 12 px in at radius 0 and slides toward the middle
