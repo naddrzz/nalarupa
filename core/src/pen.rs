@@ -478,10 +478,28 @@ mod tests {
         let bin = dir.join("claude");
         std::fs::write(&bin, "#!/bin/sh\nm=\nwhile [ $# -gt 0 ]; do [ \"$1\" = --model ] && m=$2; shift; done\nprintf '{\"type\":\"stream_event\",\"event\":{\"delta\":{\"type\":\"text_delta\",\"text\":\"model=%s\"}}}\\n' \"$m\"\n").unwrap();
         std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // Puts PATH and the two settings back and removes the stand-in, also when an assert panics.
+        struct Restore {
+            path: std::ffi::OsString,
+            saved: [(&'static str, Option<Value>); 2],
+            dir: std::path::PathBuf,
+        }
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                std::env::set_var("PATH", &self.path);
+                let mut e = engine();
+                for (k, v) in &self.saved {
+                    match v {
+                        Some(v) => e.settings.insert(k.to_string(), v.clone()),
+                        None => e.settings.remove(*k),
+                    };
+                }
+                let _ = std::fs::remove_dir_all(&self.dir);
+            }
+        }
         let path = std::env::var_os("PATH").unwrap_or_default();
-        std::env::set_var("PATH", std::env::join_paths(std::iter::once(dir.clone()).chain(std::env::split_paths(&path))).unwrap());
-        let keys = ["agent_backend", "agent_model"];
-        let saved = keys.map(|k| engine().settings.get(k).cloned());
+        let _restore = Restore { saved: ["agent_backend", "agent_model"].map(|k| (k, engine().settings.get(k).cloned())), path: path.clone(), dir: dir.clone() };
+        std::env::set_var("PATH", std::env::join_paths(std::iter::once(dir).chain(std::env::split_paths(&path))).unwrap());
         let draw = |model: Option<&str>| {
             {
                 let mut e = engine();
@@ -500,17 +518,6 @@ mod tests {
         };
         let picked = draw(Some("claude-haiku-5-5"));
         let default = draw(None);
-        std::env::set_var("PATH", path);
-        {
-            let mut e = engine();
-            for (k, v) in keys.into_iter().zip(saved) {
-                match v {
-                    Some(v) => e.settings.insert(k.into(), v),
-                    None => e.settings.remove(k),
-                };
-            }
-        }
-        let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(picked, (Ok(()), "model=claude-haiku-5-5".to_string()), "the picked model reaches the pen's `claude`");
         assert_eq!(default, (Ok(()), "model=".to_string()), "Default passes no --model");
     }
