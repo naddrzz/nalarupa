@@ -77,8 +77,16 @@ try {
     const b = (await eye())!.bounds!
     await app.mouse.move({ x: b.x + b.width / 2, y: b.y + b.height / 2 })
     assert(await until(async () => (await app.getByTestId('tooltip').getByText('Hide').count()) > 0), 'hovering the eye shows "Hide"')
+    // Hidden, the same eye offers Show; a second click restores the layer.
+    await app.mouse.click({ x: b.x + b.width / 2, y: b.y + b.height / 2 })
     await app.mouse.move(at(400, 400))
     assert(await until(async () => !(await count('tooltip'))), 'the eye tooltip goes when the pointer leaves')
+    const h = (await eye())!.bounds!
+    await app.mouse.move({ x: h.x + h.width / 2, y: h.y + h.height / 2 })
+    assert(await until(async () => (await app.getByTestId('tooltip').getByText('Show').count()) > 0), 'hovering the hidden layer\'s eye shows "Show"')
+    await app.mouse.click({ x: h.x + h.width / 2, y: h.y + h.height / 2 })
+    await app.mouse.move(at(400, 400))
+    assert(await until(async () => !(await eye())), 'the layer is shown again (its eye only stays on the hovered row)')
   }
   // A button with a shortcut names it too (zoom keys: - and = / +).
   for (const [id, text] of [['zoom-out', 'Zoom out (-)'], ['zoom-in', 'Zoom in (+)']]) {

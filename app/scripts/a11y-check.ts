@@ -60,7 +60,7 @@ try {
   await app.getByTestId('tab-agent').click()
   await sleep(500)
   const editor = dump('editor-agent', pid)
-  for (const want of ['Zoom in', 'Undo (Ctrl+Z)', 'Let it cook: off', 'Model: Default', 'Send', '2 agents', 'Chat history', 'Message the design agent', 'Design canvas']) {
+  for (const want of ['Zoom in (+)', 'Undo (Ctrl+Z)', 'Let it cook: off', 'Model: Default', 'Send', '2 agents', 'Chat history', 'Message the design agent', 'Design canvas']) {
     if (!editor.some(([, , label]) => label === want)) failures.push(`editor: no control named "${want}"`)
   }
   // Inspector: a selected frame shows its fields; every one needs a name.
