@@ -548,7 +548,7 @@ impl Embedded {
 
 /// The href of an image an SVG export leaves out: a transparent pixel. An empty href would resolve to the SVG
 /// file itself, and a viewer could try to load the document as its own image.
-const LEFT_OUT: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+const LEFT_OUT: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=";
 
 /// `svg` with each token of `embedded` replaced by its file as a `data:` URI, in one pass. Slow (reads and
 /// encodes every file), so it runs without the engine lock. A file that cannot be inlined (unreadable, a gzip
@@ -2342,6 +2342,15 @@ mod tests {
         let (svg, _) = e.ctx().node_svg(&id).unwrap();
         assert!(svg.contains("stroke-dasharray"), "a missing icon keeps its dashed box: {svg}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An image an SVG export leaves out paints nothing: its stand-in pixel is fully transparent.
+    #[test]
+    fn left_out_image_is_a_transparent_pixel() {
+        let b64 = LEFT_OUT.strip_prefix("data:image/png;base64,").unwrap();
+        let px = tiny_skia::Pixmap::decode_png(&base64::engine::general_purpose::STANDARD.decode(b64).unwrap()).unwrap();
+        assert_eq!((px.width(), px.height()), (1, 1));
+        assert_eq!(px.pixel(0, 0).unwrap().alpha(), 0, "the left-out stand-in must not paint");
     }
 
     /// Web images are cached with an extension sniffed from their bytes (resvg decodes by
