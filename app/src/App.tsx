@@ -385,13 +385,13 @@ export function App() {
         <IconButton icon="undo" title="Undo (Ctrl+Z)" testId="undo" onClick={() => tryCall('undo')} />
         <IconButton icon="redo" title="Redo (Ctrl+Shift+Z)" testId="redo" onClick={() => tryCall('redo')} />
         <div style={{ flexGrow: 1 }} />
-        <IconButton icon="minus" title="Zoom out" onClick={() => zoomBy(0.8)} />
+        <IconButton icon="minus" title="Zoom out (-)" testId="zoom-out" onClick={() => zoomBy(0.8)} />
         <Tip text="Zoom to fit (Shift+1)">
           <Pressable testId="zoom-level" label={`Zoom ${Math.round(cam.zoom * 100)}%. Fit to screen`} onClick={() => fitTo()} style={{ width: 52, height: 28, borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', hover: { backgroundColor: C.raised } }}>
             <T size={12} color={C.muted}>{`${Math.round(cam.zoom * 100)}%`}</T>
           </Pressable>
         </Tip>
-        <IconButton icon="plus" title="Zoom in" onClick={() => zoomBy(1.25)} />
+        <IconButton icon="plus" title="Zoom in (+)" testId="zoom-in" onClick={() => zoomBy(1.25)} />
         <IconButton icon="maximize" title="Zoom to fit (Shift+1)" testId="fit" onClick={() => fitTo()} />
         <div style={{ width: 1, height: 20, backgroundColor: C.border, marginLeft: 6, marginRight: 6 }} />
         <IconButton icon="play" title="Present (Ctrl+Enter)" testId="present" onClick={() => present()} />
