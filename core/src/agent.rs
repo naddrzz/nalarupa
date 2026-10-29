@@ -417,12 +417,13 @@ pub fn note_flagged(e: &mut Engine, agent: &str, before: &Value) {
 
 /// The run is over: frames its agents flagged `placeholder` that are still flagged (Stop, an error or a dead
 /// process came before the call that clears it) stop showing as "Generating"; an external agent's frames keep
-/// their flag. Silent and out of the undo history, like the AI Pen's own finish.
+/// their flag. Silent and out of the undo history, like the AI Pen's own finish. A frame undone during the run
+/// is cleared in history only, so a redo does not bring it back flagged.
 fn clear_generating(e: &mut Engine) {
     let flagged = std::mem::take(&mut e.agent.flagged);
     let off = json!({"placeholder": false}).as_object().cloned().unwrap_or_default();
     for id in flagged {
-        if e.doc.find(&id).is_some_and(|n| n["placeholder"] == true) && !e.agent.pens.iter().any(|(p, _)| *p == id) {
+        if e.doc.find(&id).is_none_or(|n| n["placeholder"] == true) && !e.agent.pens.iter().any(|(p, _)| *p == id) {
             e.apply_generated(&id, &off, true);
         }
     }
@@ -1729,6 +1730,32 @@ mod tests {
         e.agent.pens.retain(|(p, _)| *p != drawing);
         e.agent.profiles.retain(|p| p.id != "agT");
         e.doc.root = old;
+    }
+
+    /// The whole run undone while it still ran: the frame its first Insert flagged is gone when the run ends,
+    /// and a later redo must not bring it back "Generating" with no agent running.
+    #[test]
+    fn redo_after_the_run_does_not_restore_generating() {
+        // Its own engine: the undo history it leaves behind never meets the shared engine's tests.
+        let _busy = agent_busy();
+        let mut e = Engine::new(std::env::temp_dir().join(format!("nalarupa-test-redo-generating-{}", std::process::id())));
+        e.offline();
+        e.load_template("empty");
+        e.agent.profiles.push(Profile { id: "agR".into(), name: "R".into(), color: "#000000".into(), parent: None });
+        e.agent.running = true;
+        let out = e.tool("execute", &json!({"input": "Insert(document, {type:'frame', width:100, height:100, placeholder:true, name:'Undone'})", "__agent": "agR"}));
+        assert!(!out.error, "{}", out.text);
+        assert!(e.undo());
+        clear_generating(&mut e);
+        e.agent.running = false;
+        assert!(e.redo());
+        let mut flagged = None;
+        crate::doc::walk(e.doc.children(), &mut |n| {
+            if n["name"] == "Undone" {
+                flagged = Some(n["placeholder"] == true);
+            }
+        });
+        assert_eq!(flagged, Some(false), "the redone frame is back, not Generating");
     }
 
     /// Auto-allowed paths: the workspace for file tools, skills for Read; `..` cannot escape.

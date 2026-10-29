@@ -2677,7 +2677,7 @@ Insert(document, {type:'frame', name:'C', width:10, height:10})
     fn live_script_runs_off_the_lock() {
         // `busy()` counts every slot: a screenshot test's sync on the global engine queues runs too.
         let _serial = global_execute();
-        let dir = script_dir("live", &[("slow.js", "/** @schema 2.19 */\nconst s = Date.now(); while (Date.now() - s < 400) {}\nreturn [{type: 'rectangle', width: nalarupa.width, height: 10}];")]);
+        let dir = script_dir("live", &[("slow.js", "/** @schema 2.19 */\nconst s = Date.now(); while (Date.now() - s < 1000) {}\nreturn [{type: 'rectangle', width: nalarupa.width, height: 10}];")]);
         let doc = json!({"version": "2.19", "children": [
             {"type": "frame", "id": "page", "x": 0, "y": 0, "width": 300, "height": 200, "layout": "none", "children": [
                 {"type": "script", "id": "s", "x": 0, "y": 0, "width": 100, "height": 100, "scriptUri": "./slow.js"}]}
@@ -2685,9 +2685,10 @@ Insert(document, {type:'frame', name:'C', width:10, height:10})
         std::fs::write(dir.join("doc.pen"), doc.to_string()).unwrap();
         let mut e = engine();
         e.open(&dir.join("doc.pen")).unwrap();
+        // A run takes 1 s, so the bounds below catch any wait for one while leaving a slow runner room.
         let started = Instant::now();
         e.sync();
-        assert!(started.elapsed() < Duration::from_millis(300), "sync does not wait for the script: {:?}", started.elapsed());
+        assert!(started.elapsed() < Duration::from_millis(700), "sync does not wait for the script: {:?}", started.elapsed());
         assert!(e.renderer.find("s/0").is_none(), "no output yet");
         assert!(busy(), "the run is in the background");
         // A resize meanwhile only queues the newest size and is as quick.
@@ -2696,7 +2697,7 @@ Insert(document, {type:'frame', name:'C', width:10, height:10})
             e.edit(|d| d.update("s", &json!({"width": w}))).unwrap();
             e.sync();
         }
-        assert!(started.elapsed() < Duration::from_millis(300), "resizing does not wait either: {:?}", started.elapsed());
+        assert!(started.elapsed() < Duration::from_millis(700), "resizing does not wait either: {:?}", started.elapsed());
         let until = Instant::now() + Duration::from_secs(10);
         while e.renderer.find("s/0").is_none_or(|f| f.w != 105.0) {
             assert!(Instant::now() < until, "the runs finish and the layer is rebuilt");

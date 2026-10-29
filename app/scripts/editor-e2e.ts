@@ -614,6 +614,8 @@ try {
   // Tab through the Inspector scrolls the focused control into view: the last Export button (HTML) ends up on screen
   // with its ring; Shift+Tab walks back to the name field.
   const nameY0 = (await app.getByTestId('inspector-name').bounds())!.y
+  // Start the walk from the name field: focus left elsewhere by the steps above can sit outside the Inspector.
+  await app.getByTestId('inspector-name').click()
   let tabs = 0
   while (!(await count('export-html-focus')) && tabs < 60) {
     await app.call('keystrokes', { keys: 'tab' })
@@ -677,9 +679,14 @@ try {
 
   // Double-click the artboard's canvas title to rename it in place; one undo step.
   const title = await app.getByTestId('frame-label').center()
-  await app.mouse.click(title)
-  await app.mouse.click(title)
-  await app.getByTestId('frame-rename').waitFor({ timeoutMs: 3000 })
+  const renaming = async () => (await app.getByTestId('frame-rename').count()) > 0
+  // Synthetic clicks carry no clickCount: on a slow runner the pair can miss the 450 ms double-click window, so retry it.
+  assert(await until(async () => {
+    if (await renaming()) return true
+    await app.mouse.click(title)
+    await app.mouse.click(title)
+    return until(renaming, 1000)
+  }, 10000), 'double-clicking the frame title opens its rename field')
   await app.getByTestId('frame-rename').fill('Home')
   await app.getByTestId('frame-rename').press('enter')
   await sleep(400)
