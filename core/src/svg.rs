@@ -517,8 +517,7 @@ fn image_ext(b: &[u8]) -> &'static str {
     }
 }
 
-/// Largest SVGZ image the SVG export decompresses, like the Figma clipboard's archive cap: a small
-/// gzip bomb would otherwise expand without limit.
+/// Largest SVGZ image the SVG export decompresses (a small gzip can expand without limit).
 const MAX_SVGZ_BYTES: usize = 256 << 20;
 
 /// `gz` decompressed; None when it is broken or larger than `MAX_SVGZ_BYTES`.
@@ -547,9 +546,13 @@ impl Embedded {
     }
 }
 
+/// The href of an image an SVG export leaves out: a transparent pixel. An empty href would resolve to the SVG
+/// file itself, and a viewer could try to load the document as its own image.
+const LEFT_OUT: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=";
+
 /// `svg` with each token of `embedded` replaced by its file as a `data:` URI, in one pass. Slow (reads and
-/// encodes every file), so it runs without the engine lock. A file that cannot be inlined (unreadable, or a
-/// gzip bomb past the cap) keeps its file href; an SVG nested past `MAX_SVG_DEPTH` is left out.
+/// encodes every file), so it runs without the engine lock. A file that cannot be inlined (unreadable, a gzip
+/// bomb past the cap, or an SVG nested past `MAX_SVG_DEPTH`) is left out.
 pub fn inline_embedded(svg: &str, embedded: &Embedded) -> String {
     if embedded.hrefs.is_empty() {
         return svg.to_string();
@@ -562,9 +565,13 @@ pub fn inline_embedded(svg: &str, embedded: &Embedded) -> String {
         let digits = after.bytes().take_while(u8::is_ascii_digit).count();
         match after[..digits].parse::<usize>().ok().and_then(|i| embedded.hrefs.get(i)) {
             // An SVG nested too deep stays unavailable, as when rendering: the image is left out.
-            Some(href) if deep_key(href).is_some() && svg_too_deep(href) => rest = &after[digits..],
+            Some(href) if deep_key(href).is_some() && svg_too_deep(href) => {
+                out.push_str(LEFT_OUT);
+                rest = &after[digits..];
+            }
             Some(href) => {
-                out.push_str(&esc(&data_uri(href).unwrap_or_else(|| href.clone())));
+                // Not inlinable: left out, never linked by its path on this machine.
+                out.push_str(&data_uri(href).map(|uri| esc(&uri)).unwrap_or_else(|| LEFT_OUT.to_string()));
                 rest = &after[digits..];
             }
             None => {
@@ -2335,6 +2342,15 @@ mod tests {
         let (svg, _) = e.ctx().node_svg(&id).unwrap();
         assert!(svg.contains("stroke-dasharray"), "a missing icon keeps its dashed box: {svg}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An image an SVG export leaves out paints nothing: its stand-in pixel is fully transparent.
+    #[test]
+    fn left_out_image_is_a_transparent_pixel() {
+        let b64 = LEFT_OUT.strip_prefix("data:image/png;base64,").unwrap();
+        let px = tiny_skia::Pixmap::decode_png(&base64::engine::general_purpose::STANDARD.decode(b64).unwrap()).unwrap();
+        assert_eq!((px.width(), px.height()), (1, 1));
+        assert_eq!(px.pixel(0, 0).unwrap().alpha(), 0, "the left-out stand-in must not paint");
     }
 
     /// Web images are cached with an extension sniffed from their bytes (resvg decodes by
