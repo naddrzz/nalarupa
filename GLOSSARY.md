@@ -54,7 +54,8 @@ Unrelated briefs coming back looking alike, the visible sign of fixation; an eva
 _Avoid_: consistency (that is a virtue within one design), repetition
 
 **Variation axes**:
-The four ways two design directions can differ: framing, layout structure, type pairing, and color logic.
+The four dimensions used to tell design directions apart when varying them: framing, layout structure, type pairing, and
+color logic.
 _Avoid_: style dimensions, variety
 
 **Variation**:
