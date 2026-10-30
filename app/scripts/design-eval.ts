@@ -1,5 +1,5 @@
 // Design agent eval (manual: every run spends model tokens, so it is not in CI).
-//   bun scripts/design-eval.ts run [--backend claude-code|api] [--model id] [--only id,id] [--parallel n --mode side|split] [--out dir]
+//   bun scripts/design-eval.ts run [--backend claude-code|api] [--model id] [--only id,id] [--parallel n [--mode split|side]] [--out dir]
 //   bun scripts/design-eval.ts compare <runA> <runB> [--out page.html]
 //   bun scripts/design-eval.ts summary <run>
 // `run` sends every eval brief through the design agent headlessly and keeps an eval run folder: each brief's
@@ -157,12 +157,15 @@ const totals = (run: Run) => {
   }
 }
 
+/** How the run drove the agent, when not one design by one agent. */
+const setting = (m: Run['meta']) => (m.parallel ? ` · ${m.parallel} designers ${m.mode}` : '')
+
 const summary = (dir: string, run: Run) => {
   const rows = run.briefs.map((r) => `| ${r.id} | ${r.ok ? 'ok' : `**${r.error}**`} | ${r.issues.length} | ${r.failedExecutes} | ${r.repairs} | ${r.executeCalls} | ${r.turns} | ${minutes(r.wallMs)} | ${r.guideChars} |`)
   const t = totals(run)
   const pairs = sameness(dir, run)
   return [
-    `# Eval run ${run.meta.date} (${run.meta.sha}, ${run.meta.backend}${run.meta.model ? `, ${run.meta.model}` : ''})`,
+    `# Eval run ${run.meta.date} (${run.meta.sha}, ${run.meta.backend}${run.meta.model ? `, ${run.meta.model}` : ''})${setting(run.meta)}`,
     '',
     '| Brief | Result | Issues detected | Failed executes | Repair attempts | Executes | Turns | Minutes | Guide chars read |',
     '|---|---|---|---|---|---|---|---|---|',
@@ -182,7 +185,7 @@ const page = (out: string, runs: [string, Run][]) => {
   const esc = (s: string) => s.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`)
   const ts = runs.map(([d, r]) => [d, r, totals(r), sameness(d, r)] as const)
   const keys = Object.keys(ts[0][2]) as (keyof ReturnType<typeof totals>)[]
-  const head = `<tr><th></th>${ts.map(([d, r]) => `<th>${esc(r.meta.date)}<br><small>${esc(r.meta.sha)} · ${esc(r.meta.backend)} · ${esc(relative(dirname(out), d))}</small></th>`).join('')}<th>B − A</th></tr>`
+  const head = `<tr><th></th>${ts.map(([d, r]) => `<th>${esc(r.meta.date)}<br><small>${esc(r.meta.sha)} · ${esc(r.meta.backend)}${esc(setting(r.meta))} · ${esc(relative(dirname(out), d))}</small></th>`).join('')}<th>B − A</th></tr>`
   // Totals are comparable only over the same eval briefs; a subset run against a full one is compared brief by brief.
   const sameBriefs = runs.map(([, r]) => r.briefs.map((b) => b.id).sort().join()).every((ids, _, all) => ids === all[0])
   const delta = (k: (typeof keys)[number]) => {
@@ -224,8 +227,8 @@ const run = async () => {
   const briefs = BRIEFS.filter((b) => !only || only.includes(b.id))
   // Several designers at once: side by side (each its own take) or splitting the work.
   const parallel = Number(flag('parallel') ?? 1)
-  const mode = flag('mode') ?? 'side'
-  if (!(parallel >= 1 && parallel <= 6) || !['side', 'split'].includes(mode)) throw new Error('--parallel is 1-6, --mode side or split')
+  const mode = flag('mode') ?? 'split'
+  if (!Number.isInteger(parallel) || parallel < 1 || parallel > 6 || !['side', 'split'].includes(mode)) throw new Error('--parallel is 1-6, --mode side or split')
   // The fixture and the guide-size reads go through the editor's MCP server.
   const { mcpPort } = call('init')
   if (!mcpPort) throw new Error('the MCP server did not start (no free port in its range)')
@@ -369,6 +372,6 @@ else if (args[0] === 'run') {
 } else if (args[0] === 'summary' && args[1]) {
   console.log(summary(resolve(args[1]), load(resolve(args[1]))))
 } else {
-  console.error('usage: design-eval.ts run [--backend claude-code|api] [--model id] [--only id,id] [--parallel n --mode side|split] [--out dir]\n       design-eval.ts compare <runA> <runB> [--out page.html]\n       design-eval.ts summary <run>')
+  console.error('usage: design-eval.ts run [--backend claude-code|api] [--model id] [--only id,id] [--parallel n [--mode split|side]] [--out dir]\n       design-eval.ts compare <runA> <runB> [--out page.html]\n       design-eval.ts summary <run>')
   process.exit(2)
 }
