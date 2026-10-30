@@ -12,6 +12,7 @@
     "e2e": "bun scripts/e2e.ts",
     "agent-check": "bun scripts/agent-check.ts",
     "model-check": "bun scripts/model-check.ts",
+    "design-eval": "bun scripts/design-eval.ts",
     "a11y-check": "bun scripts/a11y-check.ts",
     "motion-check": "bun scripts/motion-check.ts",
     "window-check": "bun scripts/window-check.ts",
