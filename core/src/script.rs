@@ -948,13 +948,13 @@ fn flex(n: &RNode) -> bool {
 /// Outside auto layout, sibling edges a pixel or two apart are a slip, not a choice. Each pair with a node the call
 /// touched is compared per axis (start, end, centre): one exact match means aligned; otherwise a start or end edge
 /// 0.5–3px off is reported, at most once per node and axis. Neighbours only: the boxes are at most 240px apart on the
-/// other axis. Rotated children (boxes no longer match their edges) and parents past 200 children (the scan is
-/// quadratic) are skipped.
+/// other axis. Rotated or flipped children (their boxes no longer match their edges) and parents past 200 children
+/// (the scan is quadratic) are skipped.
 fn near_misses(n: &RNode, touched: &HashSet<&str>, out: &mut Vec<String>) {
     if n.kids.len() < 2 || n.kids.len() > 200 {
         return;
     }
-    let kids: Vec<&RNode> = n.kids.iter().filter(|k| k.f("rotation").unwrap_or(0.0) == 0.0).collect();
+    let kids: Vec<&RNode> = n.kids.iter().filter(|k| k.f("rotation").unwrap_or(0.0) == 0.0 && !k.b("flipX") && !k.b("flipY")).collect();
     let mut reported: HashSet<(&str, usize)> = HashSet::new();
     for (i, a) in kids.iter().enumerate() {
         for b in &kids[i + 1..] {
@@ -972,7 +972,7 @@ fn near_misses(n: &RNode, touched: &HashSet<&str>, out: &mut Vec<String>) {
                     continue;
                 }
                 // Centres only count as aligned: two unlike sizes with close centres are not a slip.
-                if let Some((edge, d)) = offs[..2].iter().find(|(_, d)| *d < 3.0) {
+                if let Some((edge, d)) = offs[..2].iter().find(|(_, d)| *d <= 3.0) {
                     out.push(format!("\"{}\" ({}) and \"{}\" ({}) nearly align: their {edge} edges are {d:.1}px apart; align them exactly", a.name(), a.id, b.name(), b.id));
                     reported.extend([(a.id.as_str(), axis), (b.id.as_str(), axis)]);
                 }
@@ -2527,6 +2527,9 @@ Insert(card, {type:\"text\", name:\"Title\", content:\"Hi\", fill:\"#111111\"})
         let lines = |name: &str| far.text.lines().filter(|l| l.contains(&format!("\"{name}\"")) && l.contains("nearly align")).count();
         assert_eq!(lines("East"), 0, "edges far apart on the other axis are not compared: {}", far.text);
         assert_eq!(lines("Col1"), 1, "a slipped item is reported once per axis, not once per sibling: {}", far.text);
+        let flips = execute(&mut e, &json!({"input": "m = Insert(document, {type:'frame', name:'Mirror', layout:'none', width:400, height:300, fill:'#FFFFFF'}); Insert(m, {type:'rectangle', name:'Plain', x:100, y:0, width:80, height:40, fill:'#CCCCCC'}); Insert(m, {type:'rectangle', name:'Flipped', x:101.5, y:60, width:80, height:40, flipX:true, fill:'#CCCCCC'}); Insert(m, {type:'rectangle', name:'Three off', x:103, y:120, width:80, height:40, fill:'#CCCCCC'});"}));
+        assert!(!flips.text.lines().any(|l| l.contains("\"Flipped\"") && l.contains("nearly align")), "a flipped box is not where its x says: {}", flips.text);
+        assert!(flips.text.lines().any(|l| l.contains("\"Three off\"") && l.contains("3.0px apart")), "3px off is still a near miss: {}", flips.text);
         let next = execute(&mut e, &json!({"input": "Insert(f, {type:'rectangle', name:'Later', x:400, y:360, width:20, height:20, fill:'#CCCCCC'})"}));
         assert!(!next.text.contains("\"Slipped\""), "pairs the call did not touch are not reported, even in the same frame: {}", next.text);
     }
