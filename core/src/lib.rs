@@ -434,6 +434,12 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             Ok(json!(true))
         }
         "agent_reset" => agent::reset().map(|_| json!(true)),
+        // Whether a font family is usable yet (design-eval fonts waits on this).
+        "font_state" => {
+            let family = req["family"].as_str().ok_or("family required")?;
+            let e = engine();
+            Ok(json!({"available": e.fonts.has_family(family), "loading": e.fonts.loading(family)}))
+        }
         "agent_instructions" => match req["backend"].as_str() {
             Some(b @ ("api" | "claude-code")) => Ok(json!(agent::instructions(b))),
             Some(b) => Err(format!("unknown backend '{b}': api or claude-code")),

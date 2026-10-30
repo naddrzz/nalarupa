@@ -19,7 +19,7 @@
 ```js
 btn = Insert(document, {type: "frame", name: "Button", reusable: true, padding: [10, 16], gap: 8,
   cornerRadius: 8, fill: "$primary", alignItems: "center", x: 0, y: -200})
-btnLabel = Insert(btn, {type: "text", name: "Label", content: "Button", fontFamily: "Inter", fontSize: 14, fontWeight: "600", fill: "#FFFFFF"})
+btnLabel = Insert(btn, {type: "text", name: "Label", content: "Button", fontFamily: "Manrope", fontSize: 14, fontWeight: "600", fill: "#FFFFFF"})
 row = Insert(screenId, {type: "frame", name: "Actions", gap: 12})
 for (const t of ["Save", "Share"]) Insert(row, {type: "ref", ref: btn, name: t, descendants: {[btnLabel]: {content: t}}})
 ```

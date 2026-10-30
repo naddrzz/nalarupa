@@ -141,6 +141,28 @@ pub fn directions(name: &str) -> ToolOut {
 mod tests {
     use super::*;
 
+    fn fonts_in(text: &str) -> Vec<String> {
+        text.split("fontFamily: \"").skip(1).filter_map(|r| r.split('"').next()).map(str::to_string).collect()
+    }
+
+    #[test]
+    fn worked_examples_do_not_all_teach_one_font() {
+        let fonts: Vec<String> = TOPICS.iter().flat_map(|(_, body)| fonts_in(body)).collect();
+        let first = fonts.first().expect("the guide has examples with fonts");
+        assert!(fonts.iter().any(|f| f != first), "every example uses {first}");
+    }
+
+    #[test]
+    fn the_design_topic_offers_type_pairings_and_slides_vary_layouts() {
+        let design = read("design").text;
+        let pairings = design.lines().filter(|l| l.starts_with("- ") && l.contains(" + ")).count();
+        assert!(pairings >= 3, "at least three display + text pairings: {design}");
+        assert!(design.contains("Inter is one option among them"), "{design}");
+        let slides = read("slides").text;
+        assert!(!slides.contains("reuse its structure"), "slides vary their layouts: {slides}");
+        assert!(slides.contains("one design direction"), "{slides}");
+    }
+
     #[test]
     fn styles_are_worked_examples_of_design_directions() {
         let list = directions("");
