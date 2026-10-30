@@ -22,11 +22,17 @@ on:
         options: [minor, patch, major]
         default: minor
       publish:
-        description: Tag the commit and draft a GitHub Release
+        description: Tag the commit and create a draft GitHub Release (publish it yourself)
         type: boolean
         default: false
 
 permissions: { contents: read }
+
+# Publishing runs one at a time, so two pushes to main never pick the same next version; a newer queued run
+# replaces an older waiting one. Pull requests build in their own group and cannot cancel a release.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('release-pr-{0}', github.ref) || 'release-publish' }}
+  cancel-in-progress: false
 
 jobs:
   version:
@@ -42,17 +48,17 @@ jobs:
           BUMP: ${{ github.event_name == 'workflow_dispatch' && inputs.bump || 'minor' }}
           PUBLISH_INPUT: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
         run: |
-          plain='^[0-9]+\.[0-9]+\.[0-9]+$'
-          # A pushed tag is the version; so is a v* tag already on this commit (a re-run, or a hand tag on main).
+          # Canonical x.y.z: numeric parts for the Windows version resource, no leading zeros for Cargo.
+          plain='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          # A pushed tag is the version; so is a canonical v* tag already on this commit (a re-run, or a hand tag).
           if [ "$GITHUB_REF_TYPE" = tag ]; then
             version=${GITHUB_REF_NAME#v}
           else
-            version=$(git tag --points-at HEAD --list 'v*' --sort=-v:refname | head -1)
-            version=${version#v}
+            version=$(git tag --points-at HEAD --list 'v*' --sort=-v:refname | sed 's/^v//' | grep -E "$plain" | head -1 || true)
           fi
-          if [ -z "$version" ]; then
+          if [ "$GITHUB_REF_TYPE" != tag ] && [ -z "$version" ]; then
             # Plain x.y.z only: the Windows installer's version resource needs numeric parts.
-            last=$(git tag --list 'v*' --sort=-v:refname | sed 's/^v//' | grep -E "$plain" | head -1)
+            last=$(git tag --list 'v*' --sort=-v:refname | sed 's/^v//' | grep -E "$plain" | head -1 || true)
             IFS=. read -r major minor patch <<< "${last:-0.0.0}"
             case $BUMP in
               major) version=$((major + 1)).0.0 ;;
@@ -199,7 +205,10 @@ jobs:
       - name: Tag
         run: |
           if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" >/dev/null 2>&1; then
-            echo "$TAG exists"
+            # An existing tag must be this commit: never attach files built here to another commit's release.
+            at=$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq .sha)
+            [ "$at" = "$GITHUB_SHA" ] || { echo "::error::$TAG already points at $at, not this commit $GITHUB_SHA"; exit 1; }
+            echo "$TAG exists on this commit"
           else
             gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$TAG" -f sha="$GITHUB_SHA" >/dev/null
             echo "tagged $GITHUB_SHA as $TAG"

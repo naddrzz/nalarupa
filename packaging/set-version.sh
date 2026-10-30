@@ -3,10 +3,8 @@
 # reports CARGO_PKG_VERSION). release.yml runs it in its own checkout before building; nothing is committed.
 set -e
 v=$1
-case $v in
-  *[!0-9.]*|.*|*.|*..*|'') echo "set-version.sh: '$v' is not plain x.y.z" >&2; exit 1 ;;
-esac
-[ "$(echo "$v" | tr -cd . | wc -c)" -eq 2 ] || { echo "set-version.sh: '$v' is not plain x.y.z" >&2; exit 1; }
+# Canonical x.y.z: Cargo rejects leading zeros (1.02.3), the Windows version resource needs numeric parts.
+echo "$v" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' || { echo "set-version.sh: '$v' is not plain x.y.z" >&2; exit 1; }
 root=$(cd "$(dirname "$0")/.." && pwd)
 # The first `version = ...` in Cargo.toml is the [package] one. perl, not sed: GNU and BSD (macOS) sed differ.
 perl -0pi -e "s/^version = \"[^\"]*\"/version = \"$v\"/m" "$root/core/Cargo.toml"

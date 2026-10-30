@@ -131,7 +131,8 @@ The output goes to `app/dist/`: `nalarupa.exe` with the Nalarupa icon, `nalarupa
 and `nalarupa.ico`. Releases are automatic: pushing to `main` runs `.github/workflows/release.yml`,
 which takes the latest `v*` tag, bumps its minor number, builds and packages all three platforms (`packaging/`),
 then tags the commit and attaches the files to a draft GitHub Release to review and publish. Run the workflow
-by hand to pick a patch, minor or major bump (and whether to publish); pushing a `v*` tag releases that version.
+by hand to pick a patch, minor or major bump, and whether to tag the commit and create the draft release;
+pushing a `v*` tag releases that version.
 
 ### Architecture
 
