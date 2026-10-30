@@ -120,8 +120,7 @@ type BriefResult = {
   id: string; kind: Kind; brief: string; ok: boolean; error?: string; wallMs: number
   turns: number; tokens: { input: number; output: number; cacheRead: number; cacheWrite: number }; costUsd: number
   executeCalls: number; failedExecutes: number; repairs: number; issues: string[]
-  /** Execute calls whose snippet takes a screenshot (the critique pass looks at one per finished section and revision;
-   * an editId repair carries no snippet, so it is not counted). */
+  /** Execute calls that returned a screenshot (the critique pass looks at one per finished section and revision). */
   screenshots?: number
   instructionsChars: number; guideReads: { tool: string; arg: string; chars: number }[]; guideChars: number
   /** Everything the agents said before the first execute, one "name: text" block each (named before it held more). */
@@ -295,8 +294,8 @@ const run = async () => {
           transcript.push(`- \`${e.name}\`${e.error ? ' **failed**' : ''}${e.issues?.length ? `, ${e.issues.length} issues` : ''}`)
           if (isTool(e.name, 'execute')) {
             r.executeCalls++
-            // A failed snippet is rolled back before any screenshot is taken.
-            if (!e.error && String(e.input?.input ?? '').includes('TakeScreenshot')) r.screenshots = (r.screenshots ?? 0) + 1
+            // Calls that came back with a screenshot attached: what the critique pass actually looked at.
+            if (!e.error && e.images?.length) r.screenshots = (r.screenshots ?? 0) + 1
             if (e.error) r.failedExecutes++
             if (e.input?.editId) r.repairs++
             r.issues.push(...(e.issues ?? []))
