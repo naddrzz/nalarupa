@@ -1,9 +1,12 @@
 // Design agent eval (manual: every run spends model tokens, so it is not in CI).
 //   bun scripts/design-eval.ts run [--backend claude-code|api] [--model id] [--only id,id] [--out dir]
 //   bun scripts/design-eval.ts compare <runA> <runB> [--out page.html]
+//   bun scripts/design-eval.ts summary <run>
 // `run` sends every eval brief through the design agent headlessly and keeps an eval run folder: each brief's
-// frames as PNGs, its document, its transcript, and metrics.json + summary.md. `compare` writes one page with
-// two eval runs side by side. Both flag unrelated briefs whose results look alike (sameness is a defect).
+// top-level frames as PNGs, its document, its transcript, and metrics.json + summary.md. `compare` writes one page
+// with two eval runs side by side and B − A for every metric; `summary` reprints a run's summary.md. Both flag
+// unrelated briefs whose results look alike (sameness is a defect): only briefs of one kind are compared, since a
+// phone screen and a page differ by shape alone, and the existing-style brief is meant to look like its fixture.
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join, relative, resolve } from 'node:path'
@@ -55,7 +58,8 @@ for (const [n, t, d] of [["01", "Tell us your plants", "Snap a photo of each one
 const BRIEF_TIMEOUT = 30 * 60_000
 // Web fonts download in the background after a node first asks for them.
 const FONT_WAIT = 8000
-const SAME = 0.93 // similarity at or above which two unrelated briefs count as looking alike
+// Similarity at or above which two unrelated briefs count as looking alike (calibrated on the baseline eval run).
+const SAME = { colour: 0.93, layout: 0.85 }
 const ASPECT: Record<Kind, number> = { page: 0.625, mobile: 2.16, slides: 0.5625, existing: 0.625 }
 
 const args = process.argv.slice(2)
@@ -89,19 +93,35 @@ const thumb = (file: string, kind: Kind): Thumb => {
     }
   return { w, h, px }
 }
-/** 1 = identical colour grids, 0 = opposite. */
-const similarity = (a: Thumb, b: Thumb) => 1 - a.px.reduce((s, v, i) => s + Math.abs(v - b.px[i]), 0) / a.px.length / 255
+/** Colour: 1 = identical colour grids, 0 = opposite. Layout: correlation of the two lightness grids, so the same
+ * structure in another palette still scores high (1 = same structure, 0 = unrelated). */
+const similarity = (a: Thumb, b: Thumb) => {
+  const colour = 1 - a.px.reduce((s, v, i) => s + Math.abs(v - b.px[i]), 0) / a.px.length / 255
+  const light = (t: Thumb) => t.px.filter((_, i) => i % 3 === 0).map((r, i) => (r + t.px[i * 3 + 1] + t.px[i * 3 + 2]) / 3)
+  const [x, y] = [light(a), light(b)]
+  const mean = (v: number[]) => v.reduce((s, n) => s + n, 0) / v.length
+  const [mx, my] = [mean(x), mean(y)]
+  let [xy, xx, yy] = [0, 0, 0]
+  for (let i = 0; i < x.length; i++) {
+    xy += (x[i] - mx) * (y[i] - my)
+    xx += (x[i] - mx) ** 2
+    yy += (y[i] - my) ** 2
+  }
+  return { colour, layout: xx && yy ? Math.max(0, xy / Math.sqrt(xx * yy)) : 0 }
+}
 
 type Shot = { file: string; name: string; w: number; h: number }
-type Result = {
+type BriefResult = {
   id: string; kind: Kind; brief: string; ok: boolean; error?: string; wallMs: number
   turns: number; tokens: { input: number; output: number; cacheRead: number; cacheWrite: number }; costUsd: number
   executeCalls: number; failedExecutes: number; repairs: number; issues: string[]
   instructionsChars: number; guideReads: { tool: string; arg: string; chars: number }[]; guideChars: number
   firstMessage: string; deniedTools: string[]; shots: Shot[]
 }
-type Run = { meta: { sha: string; backend: string; model: string | null; date: string }; briefs: Result[] }
-type Pair = { a: string; b: string; similarity: number }
+type Run = { meta: { sha: string; backend: string; model: string | null; date: string }; briefs: BriefResult[] }
+type Pair = { a: string; b: string; colour: number; layout: number }
+const alike = (p: Pair) => p.colour >= SAME.colour || p.layout >= SAME.layout
+const minutes = (ms: number) => (ms / 60_000).toFixed(1)
 
 const isTool = (name: string, tool: string) => name === tool || name.endsWith(`__${tool}`)
 
@@ -111,12 +131,12 @@ const sameness = (dir: string, run: Run): Pair[] => {
   const pairs: Pair[] = []
   for (let i = 0; i < thumbs.length; i++)
     for (let j = i + 1; j < thumbs.length; j++)
-      if (thumbs[i].r.kind === thumbs[j].r.kind) pairs.push({ a: thumbs[i].r.id, b: thumbs[j].r.id, similarity: similarity(thumbs[i].t, thumbs[j].t) })
-  return pairs.sort((x, y) => y.similarity - x.similarity)
+      if (thumbs[i].r.kind === thumbs[j].r.kind) pairs.push({ a: thumbs[i].r.id, b: thumbs[j].r.id, ...similarity(thumbs[i].t, thumbs[j].t) })
+  return pairs.sort((x, y) => Math.max(y.colour, y.layout) - Math.max(x.colour, x.layout))
 }
 
 const totals = (run: Run) => {
-  const sum = (f: (r: Result) => number) => run.briefs.reduce((s, r) => s + f(r), 0)
+  const sum = (f: (r: BriefResult) => number) => run.briefs.reduce((s, r) => s + f(r), 0)
   return {
     briefs: `${run.briefs.filter((r) => r.ok).length}/${run.briefs.length}`,
     issues: sum((r) => r.issues.length),
@@ -124,7 +144,7 @@ const totals = (run: Run) => {
     repairs: sum((r) => r.repairs),
     executeCalls: sum((r) => r.executeCalls),
     turns: sum((r) => r.turns),
-    minutes: +(sum((r) => r.wallMs) / 60_000).toFixed(1),
+    minutes: +minutes(sum((r) => r.wallMs)),
     costUsd: +sum((r) => r.costUsd).toFixed(2),
     instructionsChars: run.briefs[0]?.instructionsChars ?? 0,
     guideChars: Math.round(sum((r) => r.guideChars) / Math.max(1, run.briefs.length)),
@@ -132,13 +152,13 @@ const totals = (run: Run) => {
 }
 
 const summary = (dir: string, run: Run) => {
-  const rows = run.briefs.map((r) => `| ${r.id} | ${r.ok ? 'ok' : `**${r.error}**`} | ${r.issues.length} | ${r.failedExecutes} | ${r.repairs} | ${r.executeCalls} | ${r.turns} | ${(r.wallMs / 60_000).toFixed(1)} | ${r.guideChars} |`)
+  const rows = run.briefs.map((r) => `| ${r.id} | ${r.ok ? 'ok' : `**${r.error}**`} | ${r.issues.length} | ${r.failedExecutes} | ${r.repairs} | ${r.executeCalls} | ${r.turns} | ${minutes(r.wallMs)} | ${r.guideChars} |`)
   const t = totals(run)
   const pairs = sameness(dir, run)
   return [
     `# Eval run ${run.meta.date} (${run.meta.sha}, ${run.meta.backend}${run.meta.model ? `, ${run.meta.model}` : ''})`,
     '',
-    '| Brief | Result | Issues detected | Failed executes | Repairs | Executes | Turns | Minutes | Guide chars read |',
+    '| Brief | Result | Issues detected | Failed executes | Repair attempts | Executes | Turns | Minutes | Guide chars read |',
     '|---|---|---|---|---|---|---|---|---|',
     ...rows,
     `| **Total** | ${t.briefs} | ${t.issues} | ${t.failedExecutes} | ${t.repairs} | ${t.executeCalls} | ${t.turns} | ${t.minutes} | ${t.guideChars} avg |`,
@@ -147,7 +167,7 @@ const summary = (dir: string, run: Run) => {
     '',
     '## Sameness (unrelated briefs of one kind)',
     '',
-    ...pairs.map((p) => `- ${p.a} / ${p.b}: ${p.similarity.toFixed(3)}${p.similarity >= SAME ? ' **looks alike**' : ''}`),
+    ...pairs.map((p) => `- ${p.a} / ${p.b}: colour ${p.colour.toFixed(3)}, layout ${p.layout.toFixed(3)}${alike(p) ? ' **looks alike**' : ''}`),
     '',
   ].join('\n')
 }
@@ -156,19 +176,26 @@ const page = (out: string, runs: [string, Run][]) => {
   const esc = (s: string) => s.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`)
   const ts = runs.map(([d, r]) => [d, r, totals(r), sameness(d, r)] as const)
   const keys = Object.keys(ts[0][2]) as (keyof ReturnType<typeof totals>)[]
-  const head = `<tr><th></th>${ts.map(([d, r]) => `<th>${esc(r.meta.date)}<br><small>${esc(r.meta.sha)} · ${esc(r.meta.backend)} · ${esc(relative(dirname(out), d))}</small></th>`).join('')}</tr>`
-  const metric = keys.map((k) => `<tr><td>${k}</td>${ts.map(([, , t]) => `<td>${t[k]}</td>`).join('')}</tr>`).join('')
-  const same = `<tr><td>looks alike</td>${ts.map(([, , , p]) => `<td>${p.filter((x) => x.similarity >= SAME).map((x) => `${x.a}/${x.b} ${x.similarity.toFixed(2)}`).join('<br>') || 'none'}</td>`).join('')}</tr>`
+  const head = `<tr><th></th>${ts.map(([d, r]) => `<th>${esc(r.meta.date)}<br><small>${esc(r.meta.sha)} · ${esc(r.meta.backend)} · ${esc(relative(dirname(out), d))}</small></th>`).join('')}<th>B − A</th></tr>`
+  const delta = (k: (typeof keys)[number]) => {
+    const [a, b] = [ts[0][2][k], ts[1][2][k]]
+    return typeof a === 'number' && typeof b === 'number' ? `${b - a > 0 ? '+' : ''}${+(b - a).toFixed(2)}` : ''
+  }
+  const metric = keys.map((k) => `<tr><td>${k}</td>${ts.map(([, , t]) => `<td>${t[k]}</td>`).join('')}<td>${delta(k)}</td></tr>`).join('')
+  const same = `<tr><td>looks alike</td>${ts.map(([, , , p]) => `<td>${p.filter(alike).map((x) => `${x.a}/${x.b} colour ${x.colour.toFixed(2)} layout ${x.layout.toFixed(2)}`).join('<br>') || 'none'}</td>`).join('')}<td></td></tr>`
   const ids = [...new Set(runs.flatMap(([, r]) => r.briefs.map((b) => b.id)))]
   const briefs = ids.map((id) => {
     const cells = ts.map(([d, r]) => {
       const b = r.briefs.find((x) => x.id === id)
       if (!b) return '<td>not run</td>'
-      const imgs = b.shots.map((s) => `<a href="${esc(relative(dirname(out), join(d, s.file)))}"><img src="${esc(relative(dirname(out), join(d, s.file)))}" title="${esc(s.name)}"></a>`).join('')
-      return `<td><p class="m">${b.ok ? '' : `<b>${esc(b.error ?? '')}</b> · `}issues ${b.issues.length} · failed ${b.failedExecutes} · repairs ${b.repairs} · turns ${b.turns} · ${(b.wallMs / 60_000).toFixed(1)} min</p><blockquote>${esc(b.firstMessage || '(no message before the first execute)')}</blockquote><div class="shots">${imgs}</div></td>`
+      const imgs = b.shots.map((s) => [esc(relative(dirname(out), join(d, s.file))), esc(s.name)]).map(([src, name]) => `<a href="${src}"><img src="${src}" title="${name}"></a>`).join('')
+      return `<td><p class="m">${b.ok ? '' : `<b>${esc(b.error ?? '')}</b> · `}issues ${b.issues.length} · failed ${b.failedExecutes} · repair attempts ${b.repairs} · turns ${b.turns} · ${minutes(b.wallMs)} min</p><blockquote>${esc(b.firstMessage || '(no message before the first execute)')}</blockquote><div class="shots">${imgs}</div></td>`
     })
-    const text = runs.map(([, r]) => r.briefs.find((x) => x.id === id)?.brief).find(Boolean) ?? ''
-    return `<h2>${esc(id)}</h2><p>${esc(text)}</p><table class="side"><tr>${cells.join('')}</tr></table>`
+    const [a, b] = runs.map(([, r]) => r.briefs.find((x) => x.id === id))
+    const d = (f: (r: BriefResult) => number) => (a && b ? `${f(b) - f(a) > 0 ? '+' : ''}${+(f(b) - f(a)).toFixed(1)}` : '–')
+    const diff = `<p class="m">B − A: issues ${d((r) => r.issues.length)} · failed ${d((r) => r.failedExecutes)} · repair attempts ${d((r) => r.repairs)} · turns ${d((r) => r.turns)} · minutes ${d((r) => r.wallMs / 60_000)}</p>`
+    const text = (a ?? b)?.brief ?? ''
+    return `<h2>${esc(id)}</h2><p>${esc(text)}</p>${diff}<table class="side"><tr>${cells.join('')}</tr></table>`
   })
   writeFileSync(out, `<!doctype html><meta charset="utf-8"><title>Design eval</title><style>
 body{font:14px/1.45 system-ui,sans-serif;margin:24px;color:#222;background:#fff}table{border-collapse:collapse}td,th{border:1px solid #ddd;padding:6px 10px;vertical-align:top;text-align:left}
@@ -205,7 +232,7 @@ const run = async () => {
       await Bun.sleep(FONT_WAIT)
     }
     const before = new Set(call<any[]>('frames').map((f) => f.id))
-    const r: Result = {
+    const r: BriefResult = {
       id: b.id, kind: b.kind, brief: b.text, ok: true, wallMs: 0, turns: 0, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, costUsd: 0,
       executeCalls: 0, failedExecutes: 0, repairs: 0, issues: [], instructionsChars, guideReads: [], guideChars: 0, firstMessage: '', deniedTools: [], shots: [],
     }
@@ -259,7 +286,7 @@ const run = async () => {
           const u = e.usage ?? {}
           r.turns += Number(u.turns ?? 0)
           r.costUsd += Number(u.costUsd ?? 0)
-          for (const k of Object.keys(r.tokens) as (keyof Result['tokens'])[]) r.tokens[k] += Number(u[k] ?? 0)
+          for (const k of Object.keys(r.tokens) as (keyof BriefResult['tokens'])[]) r.tokens[k] += Number(u[k] ?? 0)
         }
       }
       if (!state.agentRunning && Date.now() - started > 3000) break
@@ -267,6 +294,7 @@ const run = async () => {
         call('agent_stop')
         r.ok = false
         r.error = 'timeout'
+        break
       }
     }
     r.wallMs = Date.now() - started
@@ -274,7 +302,7 @@ const run = async () => {
     const frames = call<any[]>('frames').filter((f) => f.depth === 0 && f.type === 'frame' && !before.has(f.id))
     // Slides keep document order; a page or screen leads with its largest frame.
     if (b.kind !== 'slides') frames.sort((x, y) => y.w * y.h - x.w * x.h)
-    for (const [i, f] of frames.slice(0, 8).entries()) {
+    for (const [i, f] of frames.entries()) {
       const file = join(b.id, `${i + 1}-${String(f.name).replace(/[^\w-]+/g, '_').slice(0, 40)}.png`)
       writeFileSync(join(out, file), Buffer.from(call<string>('png', { id: f.id, scale: Math.min(1, 1600 / f.w) }), 'base64'))
       r.shots.push({ file, name: f.name, w: Math.round(f.w), h: Math.round(f.h) })
@@ -286,7 +314,7 @@ const run = async () => {
     call('save', { path: join(dir, `${b.id}.pen`) })
     writeFileSync(join(dir, 'transcript.md'), transcript.join('\n') + '\n')
     result.briefs.push(r)
-    console.log(`   ${r.ok ? 'ok' : r.error} · issues ${r.issues.length} · failed ${r.failedExecutes} · turns ${r.turns} · ${(r.wallMs / 60_000).toFixed(1)} min`)
+    console.log(`   ${r.ok ? 'ok' : r.error} · issues ${r.issues.length} · failed ${r.failedExecutes} · turns ${r.turns} · ${minutes(r.wallMs)} min`)
   }
   writeFileSync(join(out, 'metrics.json'), JSON.stringify(result, null, 2))
   const md = summary(out, result)
