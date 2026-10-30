@@ -302,8 +302,8 @@ fn wrap_parallel(prompt: &str) -> String {
     if mode == "side" {
         return format!(
             "{prompt}\n\nWork as the coordinator of {n} designers who each design their own take on this task side by side.\n\
-             1. Decide {n} design directions for this brief, one per designer, each differing from the others on at least two of framing, \
-             layout structure, type pairing and color logic. Post them first: Framing / Direction / Why for yours, one Direction line for each other designer.\n\
+             1. Decide {n} design directions for this brief, one per designer, each apart from the others on at least two variation axes \
+             (Designing). Post them first: Framing / Direction / Why for yours, one Direction line for each other designer.\n\
              2. Pick a sensible screen size for the task.\n\
              3. Create {n} empty top-level frames in one row, named \"1. <short title>\" … \"{n}. <short title>\" (not placeholders), using FindEmptySpace.\n\
              4. Call spawn_agents with {} entries: entry k gets containerNodes [frame k+1] and, as its prompt, designer k+1's design direction \
@@ -922,7 +922,7 @@ fn side_directions(entries: &[Value]) -> Result<(), String> {
             return Err("side by side, every spawn_agents entry needs its own design direction as `prompt` (concept · palette · type · signature move)".into());
         }
         if !seen.insert(direction) {
-            return Err("the designers' design directions must differ (on at least two of framing, layout structure, type pairing and color logic); two entries share one".into());
+            return Err("two spawn_agents entries share one design direction; give every designer its own, apart on at least two variation axes".into());
         }
     }
     Ok(())
@@ -1495,13 +1495,20 @@ mod tests {
     }
 
     #[test]
+    fn a_single_designer_gets_the_prompt_unchanged() {
+        let _busy = agent_busy();
+        engine().agent.parallel = (1, "side".into());
+        assert_eq!(wrap_parallel("Landing page for a bakery"), "Landing page for a bakery");
+    }
+
+    #[test]
     fn side_by_side_designers_each_get_their_own_design_direction() {
         let entry = |p: &str| json!({"prompt": p, "containerNodes": ["f2"]});
         let tide = "Tide table · chart white, deep-water ink, buoy red · Barlow Condensed + Source Serif 4 · the tide curve behind the rows";
         let seed = "Seed packet · allotment green, chalk, seed yellow · Bricolage Grotesque + Work Sans · a 'sow by' stamp per section";
         assert!(side_directions(&[entry(tide), entry(seed)]).is_ok());
         assert!(side_directions(&[entry(tide), entry("")]).unwrap_err().contains("design direction"), "every designer needs one");
-        assert!(side_directions(&[entry(tide), entry(&format!(" {tide} "))]).unwrap_err().contains("differ"), "no two designers share one");
+        assert!(side_directions(&[entry(tide), entry(&format!(" {tide} "))]).unwrap_err().contains("share one design direction"), "no two designers share one");
         let a = child_prompt(true, 2, 3, &["f2".into()], "{}", tide);
         let b = child_prompt(true, 3, 3, &["f3".into()], "{}", seed);
         assert!(a.contains(tide) && b.contains(seed) && !a.contains(seed), "each designer's instructions carry its own direction:\n{a}\n{b}");
