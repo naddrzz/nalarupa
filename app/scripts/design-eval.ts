@@ -152,7 +152,8 @@ const totals = (run: Run) => {
     failedExecutes: sum((r) => r.failedExecutes),
     repairs: sum((r) => r.repairs),
     executeCalls: sum((r) => r.executeCalls),
-    screenshots: sum((r) => r.screenshots ?? 0),
+    // Older eval runs did not count screenshots: their total is unknown, not 0.
+    screenshots: run.briefs.every((r) => r.screenshots !== undefined) ? sum((r) => r.screenshots ?? 0) : '–',
     turns: sum((r) => r.turns),
     minutes: +minutes(sum((r) => r.wallMs)),
     costUsd: +sum((r) => r.costUsd).toFixed(2),
@@ -192,7 +193,7 @@ const page = (out: string, runs: [string, Run][]) => {
   const delta = (k: (typeof keys)[number]) => {
     // `briefs` reads "ok/total": compare the ok counts.
     const [a, b] = [ts[0][2][k], ts[1][2][k]].map((v) => (typeof v === 'number' ? v : parseFloat(v)))
-    return sameBriefs ? `${b - a > 0 ? '+' : ''}${+(b - a).toFixed(2)}` : '–'
+    return sameBriefs && !Number.isNaN(a) && !Number.isNaN(b) ? `${b - a > 0 ? '+' : ''}${+(b - a).toFixed(2)}` : '–'
   }
   const metric = keys.map((k) => `<tr><td>${k}</td>${ts.map(([, , t]) => `<td>${t[k]}</td>`).join('')}<td>${delta(k)}</td></tr>`).join('')
   const same = `<tr><td>looks alike</td>${ts.map(([, , , p]) => `<td>${p.filter(alike).map((x) => `${x.a}/${x.b} colour ${x.colour.toFixed(2)} layout ${x.layout.toFixed(2)}`).join('<br>') || 'none'}</td>`).join('')}<td></td></tr>`
@@ -287,7 +288,8 @@ const run = async () => {
           transcript.push(`- \`${e.name}\`${e.error ? ' **failed**' : ''}${e.issues?.length ? `, ${e.issues.length} issues` : ''}`)
           if (isTool(e.name, 'execute')) {
             r.executeCalls++
-            if (String(e.input?.input ?? '').includes('TakeScreenshot')) r.screenshots = (r.screenshots ?? 0) + 1
+            // A failed snippet is rolled back before any screenshot is taken.
+            if (!e.error && String(e.input?.input ?? '').includes('TakeScreenshot')) r.screenshots = (r.screenshots ?? 0) + 1
             if (e.error) r.failedExecutes++
             if (e.input?.editId) r.repairs++
             r.issues.push(...(e.issues ?? []))
