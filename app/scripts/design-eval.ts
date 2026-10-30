@@ -207,6 +207,7 @@ const run = async () => {
   const { call } = await import('../src/core')
   const out = resolve(process.env.EVAL_OUT!)
   const backend = flag('backend') ?? 'claude-code'
+  if (backend !== 'claude-code' && backend !== 'api') throw new Error(`unknown backend '${backend}': claude-code or api`)
   const model = flag('model') ?? null
   const only = flag('only')?.split(',')
   const briefs = BRIEFS.filter((b) => !only || only.includes(b.id))
@@ -226,20 +227,26 @@ const run = async () => {
     mkdirSync(dir, { recursive: true })
     call('agent_reset')
     call('new', { template: 'empty' })
-    if (b.kind === 'existing') {
-      const f = await tool('execute', { input: FIXTURE })
-      if (f.isError) throw new Error(`the existing-style fixture failed: ${f.text}`)
-      await Bun.sleep(FONT_WAIT)
-    }
-    const before = new Set(call<any[]>('frames').map((f) => f.id))
     const r: BriefResult = {
       id: b.id, kind: b.kind, brief: b.text, ok: true, wallMs: 0, turns: 0, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, costUsd: 0,
       executeCalls: 0, failedExecutes: 0, repairs: 0, issues: [], instructionsChars, guideReads: [], guideChars: 0, firstMessage: '', deniedTools: [], shots: [],
     }
+    console.log(`== ${b.id}`)
+    if (b.kind === 'existing') {
+      const f = await tool('execute', { input: FIXTURE })
+      if (f.isError) {
+        // The other briefs' metrics are still worth keeping.
+        Object.assign(r, { ok: false, error: `the existing-style fixture failed: ${f.text.slice(0, 200)}` })
+        result.briefs.push(r)
+        console.log(`   ${r.error}`)
+        continue
+      }
+      await Bun.sleep(FONT_WAIT)
+    }
+    const before = new Set(call<any[]>('frames').map((f) => f.id))
     const transcript: string[] = [`# ${b.id}\n\n> ${b.text}\n`]
     const text = new Map<string, string>()
     let executed = false
-    console.log(`== ${b.id}`)
     call('agent_send', { text: b.text })
     const started = Date.now()
     for (;;) {
@@ -329,7 +336,7 @@ if (process.env.EVAL_OUT) await run()
 else if (args[0] === 'run') {
   // A fresh data folder keeps the eval out of the person's settings and chat history (the core reads
   // NALARUPA_DATA through libc, so it is set for a child process).
-  const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
   const out = resolve(flag('out') ?? join(homedir(), 'nalarupa-eval', stamp))
   mkdirSync(out, { recursive: true })
   const data = mkdtempSync(join(tmpdir(), 'nalarupa-eval-'))
