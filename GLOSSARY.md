@@ -53,6 +53,10 @@ _Avoid_: template look, AI look
 Unrelated briefs coming back looking alike, the visible sign of fixation; an eval run flags it as a defect.
 _Avoid_: consistency (that is a virtue within one design), repetition
 
+**Variation axes**:
+The four ways two design directions can differ: framing, layout structure, type pairing, and color logic.
+_Avoid_: style dimensions, variety
+
 **Variation**:
 One of several alternative designs for the same brief, each following a different design direction.
 _Avoid_: option, version, alternative (as a noun for the design)
