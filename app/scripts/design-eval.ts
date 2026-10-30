@@ -157,12 +157,15 @@ const totals = (run: Run) => {
   }
 }
 
+/** How the run drove the agent, when not one design by one agent. */
+const setting = (m: Run['meta']) => (m.designs ? ` · Let it cook ${m.designs}× ${m.iterate}` : '')
+
 const summary = (dir: string, run: Run) => {
   const rows = run.briefs.map((r) => `| ${r.id} | ${r.ok ? 'ok' : `**${r.error}**`} | ${r.issues.length} | ${r.failedExecutes} | ${r.repairs} | ${r.executeCalls} | ${r.turns} | ${minutes(r.wallMs)} | ${r.guideChars} |`)
   const t = totals(run)
   const pairs = sameness(dir, run)
   return [
-    `# Eval run ${run.meta.date} (${run.meta.sha}, ${run.meta.backend}${run.meta.model ? `, ${run.meta.model}` : ''})`,
+    `# Eval run ${run.meta.date} (${run.meta.sha}, ${run.meta.backend}${run.meta.model ? `, ${run.meta.model}` : ''})${setting(run.meta)}`,
     '',
     '| Brief | Result | Issues detected | Failed executes | Repair attempts | Executes | Turns | Minutes | Guide chars read |',
     '|---|---|---|---|---|---|---|---|---|',
@@ -182,7 +185,7 @@ const page = (out: string, runs: [string, Run][]) => {
   const esc = (s: string) => s.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`)
   const ts = runs.map(([d, r]) => [d, r, totals(r), sameness(d, r)] as const)
   const keys = Object.keys(ts[0][2]) as (keyof ReturnType<typeof totals>)[]
-  const head = `<tr><th></th>${ts.map(([d, r]) => `<th>${esc(r.meta.date)}<br><small>${esc(r.meta.sha)} · ${esc(r.meta.backend)} · ${esc(relative(dirname(out), d))}</small></th>`).join('')}<th>B − A</th></tr>`
+  const head = `<tr><th></th>${ts.map(([d, r]) => `<th>${esc(r.meta.date)}<br><small>${esc(r.meta.sha)} · ${esc(r.meta.backend)}${esc(setting(r.meta))} · ${esc(relative(dirname(out), d))}</small></th>`).join('')}<th>B − A</th></tr>`
   // Totals are comparable only over the same eval briefs; a subset run against a full one is compared brief by brief.
   const sameBriefs = runs.map(([, r]) => r.briefs.map((b) => b.id).sort().join()).every((ids, _, all) => ids === all[0])
   const delta = (k: (typeof keys)[number]) => {
@@ -225,7 +228,7 @@ const run = async () => {
   // Let it cook: n variations of each brief, each a new design direction (style) or a new layout in the same style.
   const designs = Number(flag('designs') ?? 1)
   const iterate = flag('iterate') ?? 'style'
-  if (!(designs >= 1 && designs <= 6) || !['style', 'layout'].includes(iterate)) throw new Error('--designs is 1-6, --iterate style or layout')
+  if (!Number.isInteger(designs) || designs < 1 || designs > 6 || !['style', 'layout'].includes(iterate)) throw new Error('--designs is 1-6, --iterate style or layout')
   // The fixture and the guide-size reads go through the editor's MCP server.
   const { mcpPort } = call('init')
   if (!mcpPort) throw new Error('the MCP server did not start (no free port in its range)')
