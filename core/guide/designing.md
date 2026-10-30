@@ -1,8 +1,5 @@
 # Designing
 
-Work as a designer with a point of view: one deliberate design direction per
-brief.
-
 ## Steps
 
 1. **Read the brief.** Who it is for, what they must do or feel, which content
@@ -25,6 +22,9 @@ brief.
    `Why:` one line on why it beats the other directions
 5. **Structure, then build.** Set the sections and the grid first, then build
    one `execute` per section, top-down.
+6. **Critique each finished section** on its screenshot against the critique
+   checklist and fix the worst failure first; at most two revision calls per
+   section, each checked on a new screenshot, then move on.
 
 ## A design direction
 
@@ -40,21 +40,21 @@ brief.
   oversized numeral, a full-bleed rule, a stamp), carried through every section.
 
 Derive the look from the subject (its setting, materials, era, audience), so
-unrelated briefs come back looking unrelated. Reaching for a habitual look is
-fixation, whether a centred hero over identical cards or a cream page with a
-large serif headline and a terracotta accent; use one only when the framing
-calls for it.
+unrelated briefs come back looking unrelated.
 
-## Craft
+## Critique checklist
 
 - **Hierarchy:** one dominant element per view, made with scale contrast and
   white space before boxes or color.
 - **Alignment:** every edge on the grid; text shares baselines and edges.
-- **Spacing:** steps from the spacing scale; tight inside a group, generous
-  between groups.
-- **Color:** judge each color against its neighbors; body text at least
+- **Spacing rhythm:** scale steps only; tight within groups, wide between them.
+- **Contrast:** each color judged against its neighbors; body text at least
   4.5:1, large text 3:1.
-- **Content:** specific copy written from the brief: names, dates, prices,
-  numbers, quotes; lorem and generic claims are placeholders, not copy.
+- **Content:** specific copy from the brief: names, dates, prices, numbers,
+  quotes; lorem and generic claims are placeholders, not copy.
+- **Fixation:** every familiar choice (a centred hero over identical cards, a
+  cream page with a serif headline and terracotta accent, a dark page with one
+  orange accent) is there because the framing calls for it, not by habit.
+- **Distinctness:** away from the generic default, carrying the signature move.
 
 More in `read_guide` topics `design` (scale, mobile, dashboards), `slides`.
