@@ -1,4 +1,4 @@
-//! Agent-facing documentation (`read_guide`) and style archetypes (`get_style`).
+//! Agent-facing documentation (`read_guide`) and worked examples of design directions (`get_style`).
 
 use crate::engine::ToolOut;
 
@@ -33,85 +33,127 @@ pub fn system_docs() -> String {
     format!("{OVERVIEW}\n\n{DESIGNING}\n\n{}\n\n{}", TOPICS[0].1, TOPICS[1].1)
 }
 
-struct Style {
+/// A worked example of a design direction: how one grows from a brief. Agents learn the reasoning; they do not paste it.
+struct Direction {
     name: &'static str,
-    mood: &'static str,
-    fonts: (&'static str, &'static str),
-    palette: &'static [(&'static str, &'static str)],
-    radius: &'static str,
-    elevation: &'static str,
+    brief: &'static str,
+    framing: &'static str,
+    concept: &'static str,
+    palette: &'static [(&'static str, &'static str, &'static str)],
+    type_: (&'static str, &'static str),
     layout: &'static str,
+    signature: &'static str,
+    why: &'static str,
 }
 
-const STYLES: &[Style] = &[
-    Style {
-        name: "Editorial Serif",
-        mood: "Magazine calm: large serif headlines, generous whitespace, thin rules, photography-led.",
-        fonts: ("Playfair Display", "Inter"),
-        palette: &[("background", "#F7F4EE"), ("surface", "#FFFFFF"), ("text", "#1B1A17"), ("muted", "#6B665E"), ("border", "#E3DDD2"), ("accent", "#B5462B")],
-        radius: "0–4px; mostly square edges",
-        elevation: "none; separate with 1px rules (#E3DDD2)",
-        layout: "Asymmetric 12-column feel: wide text column + narrow caption column. Headlines 64–120px, tight leading 1.05.",
+const DIRECTIONS: &[Direction] = &[
+    Direction {
+        name: "Tide Table",
+        brief: "Site for a harbour town's ferry, with sailings that move with the tide.",
+        framing: "a tide table you can read on the quay, not a tourism page",
+        concept: "the printed tide almanac every harbour office pins up",
+        palette: &[("ground", "chart white", "#F3F6F1"), ("text", "deep-water ink", "#0F2A3D"), ("next sailing", "buoy red", "#D2382B"), ("secondary", "mudflat grey", "#7D857B")],
+        type_: ("Barlow Condensed for times and headings", "Source Serif 4 for notes and prose"),
+        layout: "12 columns with a fixed 160px time column on the left; every row is a sailing; 8px spacing scale, 48px between days.",
+        signature: "the day's tide curve drawn as one thin line running behind the timetable rows",
+        why: "the people using it are standing on the quay checking a time; the almanac is the form they already trust.",
     },
-    Style {
-        name: "Swiss Grid",
-        mood: "International style: strict grid, bold grotesk type, one loud accent, flush-left everything.",
-        fonts: ("Inter Tight", "Inter"),
-        palette: &[("background", "#FFFFFF"), ("surface", "#F2F2F2"), ("text", "#0A0A0A"), ("muted", "#6E6E6E"), ("border", "#0A0A0A"), ("accent", "#E3262B")],
-        radius: "0px",
-        elevation: "none",
-        layout: "Hard columns of equal width (fill_container) with 24px gutters. Oversized numbers and labels in caps with +2 letterSpacing.",
+    Direction {
+        name: "Seed Packet",
+        brief: "Page for a community seed library that lends seeds and asks for some back after harvest.",
+        framing: "a seed packet, not a shop catalogue",
+        concept: "the hand-stamped packets on the library's shelf",
+        palette: &[("ground", "allotment green", "#2F4A2C"), ("text", "chalk", "#EDEBDD"), ("accent", "seed-head yellow", "#F2C230"), ("secondary", "sage", "#9DB08A")],
+        type_: ("Bricolage Grotesque for packet titles", "Work Sans for instructions"),
+        layout: "packet-shaped cards of uneven heights in three columns, each a variety; 4/8 spacing, generous 64px section gaps.",
+        signature: "a rotated 'sow by' date stamp opening every section",
+        why: "lending and returning seeds is the whole idea, and the packet carries both the variety and the promise to give some back.",
     },
-    Style {
-        name: "Soft Bento",
-        mood: "Friendly product UI: rounded tiles of different sizes, pastel surfaces, playful icons.",
-        fonts: ("Plus Jakarta Sans", "Plus Jakarta Sans"),
-        palette: &[("background", "#F4F2FA"), ("surface", "#FFFFFF"), ("text", "#1E1B2E"), ("muted", "#6F6A85"), ("tile-a", "#E7E0FF"), ("tile-b", "#DFF5EA"), ("tile-c", "#FFE9D6"), ("accent", "#6D4AFF")],
-        radius: "20–28px tiles, 12px controls, pills for tags",
-        elevation: "shadow {offset:{x:0,y:8}, blur:24, color:#1E1B2E14}",
-        layout: "Bento grid built from rows of tiles with mixed widths (one 2×, two 1×). 16–20px gaps.",
+    Direction {
+        name: "Running Statement",
+        brief: "Landing page for invoicing software for sole traders.",
+        framing: "a statement you can trust, not a fintech pitch",
+        concept: "the monthly statement the product produces, shown as the page itself",
+        palette: &[("ground", "paper", "#FFFFFF"), ("text", "ink", "#1A1A1A"), ("money in", "ledger green", "#1E6B4A"), ("rules", "rule grey", "#D6D6D6")],
+        type_: ("IBM Plex Mono for every figure and date", "IBM Plex Sans for prose"),
+        layout: "a tabular grid with figures right-aligned on a decimal column; 4px rhythm inside tables, 96px between sections.",
+        signature: "a running balance column that carries on down the whole page, section after section",
+        why: "the audience fears losing track of money; a calm, exact ledger shows the product's character before any claim does.",
     },
-    Style {
-        name: "Midnight Signal",
-        mood: "Dark developer tool: near-black surfaces, neon accent, monospace details, crisp borders.",
-        fonts: ("Geist", "Geist Mono"),
-        palette: &[("background", "#0B0C0F"), ("surface", "#14161B"), ("raised", "#1C1F26"), ("text", "#EDEEF0"), ("muted", "#8B90A0"), ("border", "#262A33"), ("accent", "#3DF2A3"), ("accent-2", "#7C8CFF")],
-        radius: "8–12px",
-        elevation: "1px borders instead of shadows; glow on accent: shadow {blur:24, color:#3DF2A333}",
-        layout: "Dense, aligned panels. Code snippets and metrics in mono. Gradient-free except a subtle radial glow behind the hero.",
+    Direction {
+        name: "Wall Label",
+        brief: "Exhibition page for a small museum's show of one photographer.",
+        framing: "the label beside the work, not a poster for it",
+        concept: "the museum's own wall labels and hanging plan",
+        palette: &[("ground", "gallery wall", "#E9E6E1"), ("text", "black", "#111111"), ("accent", "ultramarine", "#2438C8"), ("secondary", "graphite", "#6B6B6B")],
+        type_: ("Instrument Serif for titles", "Public Sans for labels and prose"),
+        layout: "photographs large and off-centre, captions in a narrow side column; 8px scale, wide margins.",
+        signature: "a label block (title, year, medium) pinned beside every photograph",
+        why: "the photographs are the content; the page should behave like the room they hang in.",
     },
-    Style {
-        name: "Warm Minimal",
-        mood: "Quiet lifestyle brand: warm neutrals, soft sans, lots of air, earthy accent.",
-        fonts: ("DM Sans", "DM Sans"),
-        palette: &[("background", "#FBF8F3"), ("surface", "#F1EBE1"), ("text", "#2B2621"), ("muted", "#857B70"), ("border", "#E6DED2"), ("accent", "#C0703F")],
-        radius: "12–16px images, pill buttons",
-        elevation: "very soft: shadow {offset:{x:0,y:2}, blur:12, color:#2B262110}",
-        layout: "Centered single column for heroes, then alternating image/text rows. Body 17–18px, line height 1.6.",
+    Direction {
+        name: "Pit Wall",
+        brief: "Live dashboard for a sim-racing league's race night.",
+        framing: "the pit wall screen, not a sports news site",
+        concept: "the timing screens race engineers read at a glance",
+        palette: &[("ground", "carbon", "#121417"), ("text", "white", "#F5F5F5"), ("personal best", "timing green", "#3DDC84"), ("fastest overall", "sector purple", "#A855F7"), ("slower", "amber", "#F5B700")],
+        type_: ("Chakra Petch for positions and lap times", "Barlow for labels"),
+        layout: "a dense 24-column grid, one row per driver, columns per sector; 4px spacing inside rows.",
+        signature: "sector bars coloured green, purple and amber as the only visual system",
+        why: "viewers want to see who is fast right now; the colour code racing already uses does that without a legend.",
     },
-    Style {
-        name: "Brutal Mono",
-        mood: "Raw and confident: monospace everything, thick black borders, saturated blocks, no polish.",
-        fonts: ("Space Mono", "Space Mono"),
-        palette: &[("background", "#FFFDF5"), ("block-1", "#FFE14D"), ("block-2", "#FF8FB1"), ("block-3", "#7DF9FF"), ("text", "#000000"), ("border", "#000000")],
-        radius: "0px",
-        elevation: "hard offset shadow {offset:{x:6,y:6}, blur:0, color:#000000}",
-        layout: "Blocky stacked sections with 3px strokes, uppercase labels, oversized buttons.",
+    Direction {
+        name: "Picture Book",
+        brief: "Reading app screen for children aged five to seven.",
+        framing: "a picture book you can tap, not a learning platform",
+        concept: "the spreads of a much-loved picture book",
+        palette: &[("ground", "sky", "#BFE3F5"), ("text", "night ink", "#23305A"), ("highlight", "sunshine", "#FFD23F"), ("accent", "tomato", "#F25C3B")],
+        type_: ("Baloo 2 for titles", "Nunito at 22px or more for reading"),
+        layout: "one big illustration per screen with the text below at reading size; 24px rounded corners, 16/24 spacing.",
+        signature: "a hand-drawn underline that follows the word being read aloud",
+        why: "a child reads one sentence at a time; the page should do one thing and show where they are.",
     },
 ];
 
-pub fn style(name: &str) -> ToolOut {
+/// `get_style`: the worked examples of design directions (no name lists them).
+pub fn directions(name: &str) -> ToolOut {
     let name = name.trim();
     if name.is_empty() {
-        let list: String = STYLES.iter().map(|s| format!("- **{}** — {}\n", s.name, s.mood)).collect();
-        return ToolOut::ok(format!("# Styles\n\nCall get_style with a name to load one.\n\n{list}"));
+        let list: String = DIRECTIONS.iter().map(|s| format!("- **{}**: {}\n", s.name, s.brief)).collect();
+        return ToolOut::ok(format!(
+            "# Design directions: worked examples\n\nEach shows how a design direction grows from one brief. Read one for the reasoning, then compose \
+             your own from your brief; it is a worked example, not a paste target. Call get_style with a name to read one.\n\n{list}"
+        ));
     }
-    let Some(s) = STYLES.iter().find(|s| s.name.eq_ignore_ascii_case(name)) else {
-        return ToolOut::err(format!("unknown style '{name}'; call get_style with no name to list them"));
+    let Some(s) = DIRECTIONS.iter().find(|s| s.name.eq_ignore_ascii_case(name)) else {
+        return ToolOut::err(format!("unknown example '{name}'; call get_style with no name to list them"));
     };
-    let tokens: String = s.palette.iter().map(|(k, v)| format!("  \"{k}\": {{type: \"color\", value: \"{v}\"}},\n")).collect();
+    let palette: String = s.palette.iter().map(|(role, what, hex)| format!("  - {role}: {what} {hex}\n")).collect();
     ToolOut::ok(format!(
-        "# {}\n\n{}\n\n## Typography\n- Display: {}\n- Text: {}\n\n## Shape\n- Radius: {}\n- Elevation: {}\n\n## Layout\n{}\n\n## Tokens (pass to SetVariables)\n```js\nSetVariables({{\n{tokens}  \"font-display\": {{type: \"string\", value: \"{}\"}},\n  \"font-text\": {{type: \"string\", value: \"{}\"}}\n}})\n```\n",
-        s.name, s.mood, s.fonts.0, s.fonts.1, s.radius, s.elevation, s.layout, s.fonts.0, s.fonts.1
+        "# {}\n\n- **Brief:** {}\n- **Framing:** {}\n- **Concept:** {}\n- **Palette** (one job each):\n{palette}\
+         - **Type:** display {}; text {}\n- **Layout and spacing:** {}\n- **Signature move:** {}\n- **Why:** {}\n\n\
+         Your brief is not this one: take the reasoning (subject → framing → direction), not the values.\n",
+        s.name, s.brief, s.framing, s.concept, s.type_.0, s.type_.1, s.layout, s.signature, s.why
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn styles_are_worked_examples_of_design_directions() {
+        let list = directions("");
+        assert!(!list.error && list.text.contains("worked example") && list.text.contains("not a paste target"), "{}", list.text);
+        assert_eq!(list.text.matches("\n- **").count(), DIRECTIONS.len(), "every example is listed");
+        for s in DIRECTIONS {
+            let one = directions(s.name);
+            assert!(!one.error, "{}", s.name);
+            for part in ["Brief", "Framing", "Concept", "Palette", "Type", "Layout and spacing", "Signature move", "Why"] {
+                assert!(one.text.contains(&format!("**{part}")), "{} shows its {part}", s.name);
+            }
+            assert!(!one.text.contains("SetVariables"), "{} offers no tokens to paste", s.name);
+        }
+        assert!(directions("no-such-style").error, "an unknown name is still rejected");
+    }
 }
