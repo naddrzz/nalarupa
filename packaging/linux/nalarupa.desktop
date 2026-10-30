@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Nalarupa
+Comment=AI design editor
+Exec=nalarupa
+Icon=nalarupa
+Terminal=false
+Categories=Graphics;Development;

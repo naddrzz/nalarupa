@@ -1,0 +1,167 @@
+name: release
+# Release builds for Windows (NSIS installer + portable zip), macOS (Apple Silicon .app in a .dmg) and Linux
+# (x64 tarball). A `v*` tag builds all three and attaches them to a draft GitHub Release for the maintainer to
+# publish; a manual run only builds and uploads the artifacts. GPUIX ships its renderer addon for win32-x64,
+# linux-x64-gnu and darwin-arm64 only, so those are the targets.
+on:
+  push:
+    tags: ["v*"]
+  # A change to the packaging builds all three platforms before it merges (nothing is published).
+  pull_request:
+    paths: [".github/workflows/release.yml", "packaging/**", "app/scripts/package.ts"]
+  workflow_dispatch:
+
+permissions: { contents: read }
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      # The tag must match app/package.json, so the installer, the bundle and the release agree on one number.
+      - id: v
+        run: |
+          pkg=$(jq -r .version app/package.json)
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            tag=${GITHUB_REF_NAME#v}
+            [ "$tag" = "$pkg" ] || { echo "::error::tag v$tag does not match app/package.json version $pkg"; exit 1; }
+          fi
+          echo "version=$pkg" >> "$GITHUB_OUTPUT"
+
+  windows:
+    needs: version
+    # windows-2022 lists NSIS 3.10 among its preinstalled tools (actions/runner-images).
+    runs-on: windows-2022
+    timeout-minutes: 60
+    defaults: { run: { shell: bash } }
+    env: { VERSION: "${{ needs.version.outputs.version }}" }
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: core }
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: 1.4.3 }
+      - run: cargo build --release
+        working-directory: core
+      - run: bun install --frozen-lockfile && bun run build
+        working-directory: app
+      # Launch the compiled exe once before shipping it.
+      - run: bun run exe-check
+        working-directory: app
+        timeout-minutes: 10
+      - name: Installer
+        run: |
+          makensis=$(command -v makensis || echo "/c/Program Files (x86)/NSIS/makensis.exe")
+          mkdir -p out
+          "$makensis" -V2 "-DVERSION=$VERSION" "-DDIST=$(cygpath -w "$PWD/app/dist")" \
+            "-DOUT=$(cygpath -w "$PWD/out/Nalarupa-$VERSION-windows-x64-setup.exe")" packaging/windows/installer.nsi
+      - name: Portable zip
+        shell: pwsh
+        run: Compress-Archive -Path app/dist/* -DestinationPath "out/Nalarupa-$env:VERSION-windows-x64-portable.zip"
+      - uses: actions/upload-artifact@v4
+        with: { name: windows, path: out/*, if-no-files-found: error }
+
+  macos:
+    needs: version
+    # Apple Silicon: GPUIX has no darwin-x64 addon.
+    runs-on: macos-14
+    timeout-minutes: 60
+    env: { VERSION: "${{ needs.version.outputs.version }}" }
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: core }
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: 1.4.3 }
+      - run: cargo build --release
+        working-directory: core
+      - run: bun install --frozen-lockfile && bun run build
+        working-directory: app
+      # Launch the compiled binary once before shipping it.
+      - run: bun run exe-check
+        working-directory: app
+        timeout-minutes: 10
+      - name: App bundle
+        run: |
+          app=out/Nalarupa.app
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          # The exe finds the core and the addon next to itself (app/main.ts, app/src/core.ts).
+          cp app/dist/* "$app/Contents/MacOS/"
+          sed "s/@VERSION@/$VERSION/g" packaging/macos/Info.plist > "$app/Contents/Info.plist"
+          set=$(mktemp -d)/Nalarupa.iconset
+          mkdir -p "$set"
+          b=app/assets/brand
+          for s in 16 32 128 256 512; do
+            cp "$b/icon-$s.png" "$set/icon_${s}x${s}.png"
+            cp "$b/icon-$((s * 2)).png" "$set/icon_${s}x${s}@2x.png"
+          done
+          iconutil -c icns "$set" -o "$app/Contents/Resources/Nalarupa.icns"
+          # Ad-hoc signature: arm64 code must be signed to run. Not notarized, so the first open needs
+          # right-click > Open (or System Settings > Privacy & Security > Open Anyway).
+          codesign --force --deep --sign - "$app"
+          codesign --verify --deep --strict "$app"
+      - name: Disk image
+        run: |
+          stage=$(mktemp -d)
+          cp -R out/Nalarupa.app "$stage/"
+          ln -s /Applications "$stage/Applications"
+          hdiutil create -volname "Nalarupa $VERSION" -srcfolder "$stage" -format UDZO -ov "out/Nalarupa-$VERSION-macos-arm64.dmg"
+          rm -rf out/Nalarupa.app
+      - uses: actions/upload-artifact@v4
+        with: { name: macos, path: out/*, if-no-files-found: error }
+
+  linux:
+    needs: version
+    # The oldest maintained runner: its glibc is what the binary needs at minimum, so older is wider.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    env: { VERSION: "${{ needs.version.outputs.version }}" }
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: core }
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: 1.4.3 }
+      - run: cargo build --release
+        working-directory: core
+      - run: bun install --frozen-lockfile && bun run build
+        working-directory: app
+      - name: Tarball
+        run: |
+          name=Nalarupa-$VERSION-linux-x64
+          mkdir -p "out/$name"
+          cp app/dist/* "out/$name/"
+          cp app/assets/brand/icon-256.png "out/$name/nalarupa.png"
+          cp packaging/linux/nalarupa.desktop packaging/linux/install.sh "out/$name/"
+          chmod +x "out/$name/install.sh" "out/$name/nalarupa"
+          tar -C out -czf "out/$name.tar.gz" "$name"
+          rm -rf "out/$name"
+      - uses: actions/upload-artifact@v4
+        with: { name: linux, path: out/*, if-no-files-found: error }
+
+  release:
+    # Only a tag publishes; the release stays a draft until the maintainer reviews and publishes it.
+    if: github.ref_type == 'tag'
+    needs: [version, windows, macos, linux]
+    runs-on: ubuntu-24.04
+    permissions: { contents: write }
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: out, merge-multiple: true }
+      - name: Draft release
+        env: { GH_TOKEN: "${{ github.token }}", VERSION: "${{ needs.version.outputs.version }}" }
+        run: |
+          cat > notes.md <<EOF
+          Nalarupa $VERSION
+
+          - **Windows (x64):** \`Nalarupa-$VERSION-windows-x64-setup.exe\` installs for all users; the portable zip runs from any folder.
+          - **macOS (Apple Silicon):** open the \`.dmg\` and drag Nalarupa to Applications. The app is not notarized: the first time, right-click it and choose Open.
+          - **Linux (x64):** unpack the tarball and run \`./install.sh\` (installs to \`~/.local\`), or run \`./nalarupa\` in place. Needs a Wayland session and Vulkan drivers.
+          EOF
+          gh release create "$GITHUB_REF_NAME" out/* --repo "$GITHUB_REPOSITORY" --draft --title "Nalarupa $VERSION" --notes-file notes.md
