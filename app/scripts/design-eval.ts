@@ -376,6 +376,10 @@ const fonts = async () => {
   }
   call('init')
   call('new', { template: 'empty' })
+  // The get_style worked examples name faces too ("display Barlow Condensed for times; text Nunito at 22px").
+  const tool = (name: string, args: object) => call<{ text: string }>('tool', { name, args }).text
+  for (const [, example] of tool('get_style', {}).matchAll(/^- \*\*(.+?)\*\*:/gm))
+    for (const m of tool('get_style', { name: example }).matchAll(/(?:display|text) ([A-Z][\w ]*?) (?:for|at)\b/g)) names.add(m[1])
   const list = [...names]
   // Using each face in a text starts its download.
   const out = call<{ text: string; error: boolean }>('tool', { name: 'execute', args: { input: `f = Insert(document, {type:"frame", name:"Fonts", layout:"vertical", width:800, fill:"#ffffff"}); ${list.map((n, i) => `Insert(f, {type:"text", name:"F${i}", content:"Aa 0123", fontFamily:${JSON.stringify(n)}, fontSize:24, fill:"#111111"})`).join('; ')}` } })
