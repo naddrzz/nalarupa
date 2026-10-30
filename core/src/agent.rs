@@ -215,7 +215,8 @@ draw on what you already know instead of browsing the web, and let those insight
 the earlier designs. Important: keep the visual style of the first design (fonts, palette, radius, elevation); do not pick a new style.";
 const NEXT_STYLE: &str = "Now design another variation of this page. Work out, as a strong product designer would, what could inspire it and give it more depth; \
 draw on what you already know instead of browsing the web, and let those insights shape the result. Placed next to the earlier designs. Important: give it a new \
-visual direction: call get_style and choose a style archetype that none of the earlier variations used; do not reuse the previous style.";
+design direction that differs from every earlier variation on at least two of framing, layout structure, type pairing and color logic (a recolor \
+is not a variation), and post its Framing / Direction / Why before building.";
 const ITERATING: &str = "Iterating more on the design…";
 
 /// Start a turn. While agents are busy the prompt is queued and sent when they finish.
@@ -1459,6 +1460,14 @@ mod tests {
         // Always loaded: every line costs context on every turn (spec #614: about 60 lines).
         const BUDGET: usize = 60;
         assert!(core.text.lines().count() <= BUDGET, "the design core stays within its {BUDGET}-line budget ({} lines)", core.text.lines().count());
+    }
+
+    #[test]
+    fn a_new_style_variation_differs_on_named_axes() {
+        for axis in ["framing", "layout structure", "type pairing", "color logic"] {
+            assert!(NEXT_STYLE.contains(axis), "Let it cook names the {axis} axis");
+        }
+        assert!(!NEXT_STYLE.contains("archetype"), "{NEXT_STYLE}");
     }
 
     #[test]

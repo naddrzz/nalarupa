@@ -17,8 +17,8 @@ Nalarupa is an infinite-canvas design editor. A document is a tree of nodes
 | `design` | you need taste guidance: type scale, spacing, color, layout |
 | `code` | turning a design into HTML/CSS or a framework component |
 
-`get_style` (no arguments) lists ready-made visual styles you can adopt when
-the user gives no brand direction.
+`get_style` (no arguments) lists worked examples of design directions, each
+grown from a sample brief: read one for the reasoning, then compose your own.
 
 ## Working rules
 

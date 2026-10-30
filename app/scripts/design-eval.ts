@@ -1,5 +1,5 @@
 // Design agent eval (manual: every run spends model tokens, so it is not in CI).
-//   bun scripts/design-eval.ts run [--backend claude-code|api] [--model id] [--only id,id] [--out dir]
+//   bun scripts/design-eval.ts run [--backend claude-code|api] [--model id] [--only id,id] [--designs n --iterate style|layout] [--out dir]
 //   bun scripts/design-eval.ts compare <runA> <runB> [--out page.html]
 //   bun scripts/design-eval.ts summary <run>
 // `run` sends every eval brief through the design agent headlessly and keeps an eval run folder: each brief's
@@ -124,7 +124,7 @@ type BriefResult = {
   /** Everything the agents said before the first execute, one "name: text" block each (named before it held more). */
   firstMessage: string; deniedTools: string[]; shots: Shot[]
 }
-type Run = { meta: { sha: string; backend: string; model: string | null; date: string }; briefs: BriefResult[] }
+type Run = { meta: { sha: string; backend: string; model: string | null; designs?: number; iterate?: string; date: string }; briefs: BriefResult[] }
 type Pair = { a: string; b: string; colour: number; layout: number }
 const alike = (p: Pair) => p.colour >= SAME.colour || p.layout >= SAME.layout
 const minutes = (ms: number) => (ms / 60_000).toFixed(1)
@@ -222,6 +222,10 @@ const run = async () => {
   const unknown = only?.filter((id) => !BRIEFS.some((b) => b.id === id))
   if (unknown?.length) throw new Error(`unknown eval brief '${unknown.join("', '")}': ${BRIEFS.map((b) => b.id).join(', ')}`)
   const briefs = BRIEFS.filter((b) => !only || only.includes(b.id))
+  // Let it cook: n variations of each brief, each a new design direction (style) or a new layout in the same style.
+  const designs = Number(flag('designs') ?? 1)
+  const iterate = flag('iterate') ?? 'style'
+  if (!(designs >= 1 && designs <= 6) || !['style', 'layout'].includes(iterate)) throw new Error('--designs is 1-6, --iterate style or layout')
   // The fixture and the guide-size reads go through the editor's MCP server.
   const { mcpPort } = call('init')
   if (!mcpPort) throw new Error('the MCP server did not start (no free port in its range)')
@@ -233,7 +237,7 @@ const run = async () => {
   call('settings_set', { key: 'agent_backend', value: backend })
   call('settings_set', { key: 'agent_model', value: model })
   const sha = Bun.spawnSync(['git', 'rev-parse', '--short', 'HEAD']).stdout.toString().trim()
-  const result: Run = { meta: { sha, backend, model, date: new Date().toISOString().slice(0, 16).replace('T', ' ') }, briefs: [] }
+  const result: Run = { meta: { sha, backend, model, ...(designs > 1 && { designs, iterate }), date: new Date().toISOString().slice(0, 16).replace('T', ' ') }, briefs: [] }
   const instructionsChars = call<string>('agent_instructions', { backend }).length
   for (const b of briefs) {
     const dir = join(out, b.id)
@@ -260,7 +264,7 @@ const run = async () => {
     const transcript: string[] = [`# ${b.id}\n\n> ${b.text}\n`]
     const text = new Map<string, string>()
     let executed = false
-    call('agent_send', { text: b.text })
+    call('agent_send', { text: b.text, designs, iterate })
     const started = Date.now()
     for (;;) {
       await Bun.sleep(1000)
@@ -365,6 +369,6 @@ else if (args[0] === 'run') {
 } else if (args[0] === 'summary' && args[1]) {
   console.log(summary(resolve(args[1]), load(resolve(args[1]))))
 } else {
-  console.error('usage: design-eval.ts run [--backend claude-code|api] [--model id] [--only id,id] [--out dir]\n       design-eval.ts compare <runA> <runB> [--out page.html]\n       design-eval.ts summary <run>')
+  console.error('usage: design-eval.ts run [--backend claude-code|api] [--model id] [--only id,id] [--designs n --iterate style|layout] [--out dir]\n       design-eval.ts compare <runA> <runB> [--out page.html]\n       design-eval.ts summary <run>')
   process.exit(2)
 }

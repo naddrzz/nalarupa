@@ -1287,7 +1287,7 @@ pub fn tool_specs() -> Value {
          "inputSchema": {"type": "object", "properties": {}}},
         {"name": "read_guide", "description": "Read Nalarupa's design guide. No topic returns the overview and the list of topics (designing, schema, execute, components, slides, design, code).",
          "inputSchema": {"type": "object", "properties": {"topic": {"type": "string", "description": "Guide topic, e.g. 'schema', 'execute', 'slides'"}}}},
-        {"name": "get_style", "description": "Ready-made visual style archetypes (fonts, palette, radius, elevation). No name lists them.",
+        {"name": "get_style", "description": "Worked examples of design directions (framing, concept, palette and type with roles, layout, signature move), each grown from a sample brief: learn the reasoning, then compose your own. No name lists them.",
          "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}}}},
         {"name": "execute", "description": "Run a JavaScript snippet against the canvas (Insert/Update/Copy/Replace/Move/Delete/Get/SetVariables/TakeScreenshot/Export...). All operations in one call are a single undoable transaction; on error everything is rolled back. Read the 'execute' guide first. To fix a failed call, send `editId` with `edits` instead of resending the snippet.",
          "inputSchema": {"type": "object", "properties": {
