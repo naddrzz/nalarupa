@@ -272,7 +272,8 @@ const run = async () => {
           const t = text.get(who)?.trim()
           if (t) {
             transcript.push(`**${who}:** ${t}\n`)
-            if (!executed && !r.firstMessage) r.firstMessage = t
+            // Everything said before the first execute: where a framing and design direction would be.
+            if (!executed) r.firstMessage = [r.firstMessage, t].filter(Boolean).join('\n\n')
           }
           text.delete(who)
         }
