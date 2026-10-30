@@ -38,6 +38,16 @@ assert(!clean.includes('Issues detected'), `a clean call has no issues section:\
 let out = run('Insert(f, {type:"text", name:"Ghost", x:10, y:50, content:"boo", fontFamily:"Inter", fontSize:16})')
 assert(has(out, /text "Ghost" \(\w+\) has no fill and is invisible/), `invisible text: ${out}`)
 
+// Reading text below 12px is reported; a short label may be smaller.
+out = run('Insert(f, {type:"text", name:"Fine print", x:10, y:130, content:"Orders close Thursday at six; collect on Saturday.", fontFamily:"Inter", fontSize:10, fill:"#111111"})')
+assert(has(out, /text "Fine print" \(\w+\): body text at 10px is below 12px/), `small body text: ${out}`)
+out = run('Insert(f, {type:"text", name:"Tag", x:200, y:130, content:"NEW", fontFamily:"Inter", fontSize:10, fill:"#111111"})')
+assert(!has(out, /below 12px/), `a short label may be small: ${out}`)
+
+// Outside auto layout, sibling edges 1–2px apart are reported (here against "T" at x 10).
+out = run('Insert(f, {type:"rectangle", name:"Nudged", x:11.5, y:170, width:40, height:10, fill:"#cccccc"})')
+assert(has(out, /"Nudged" \(\w+\).* nearly align: their left edges are 1\.5px apart|nearly align.*"Nudged"/), `near-miss alignment: ${out}`)
+
 // A layer wider than its fixed parent sticks out.
 out = run('Insert(f, {type:"rectangle", name:"Wide", x:0, y:100, width:500, height:20, fill:"#ff0000"})')
 assert(has(out, /"Wide" \(\w+\) sticks out of its parent/), `sticks out: ${out}`)
