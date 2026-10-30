@@ -58,8 +58,9 @@ for (const [n, t, d] of [["01", "Tell us your plants", "Snap a photo of each one
 const BRIEF_TIMEOUT = 30 * 60_000
 // Web fonts download in the background after a node first asks for them.
 const FONT_WAIT = 8000
-// Similarity at or above which two unrelated briefs count as looking alike (calibrated on the baseline eval run).
-const SAME = { colour: 0.93, layout: 0.85 }
+// Similarity at or above which two unrelated briefs count as looking alike. Set from the first baseline eval run: the
+// pairs a person judged alike scored 0.84–0.95 on colour, the distinct ones 0.74 and below.
+const SAME = { colour: 0.83, layout: 0.85 }
 const ASPECT: Record<Kind, number> = { page: 0.625, mobile: 2.16, slides: 0.5625, existing: 0.625 }
 
 const args = process.argv.slice(2)
