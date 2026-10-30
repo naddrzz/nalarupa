@@ -940,15 +940,19 @@ pub(crate) fn issue_line(warning: &str) -> String {
     format!("- {}\n", warning.replace(['\r', '\n'], " "))
 }
 
-/// The colour behind a node's children: its flat fills painted over `under`, bottom to top. A gradient, image or
-/// shader fill makes it unknown (None), and so do a translucent fill over the bare canvas and a translucent node
-/// (its whole subtree blends with what lies under it).
+/// The colour behind a node's children: its flat fills painted over `under`, bottom to top. A gradient, image,
+/// shader or blended fill makes it unknown (None), and so do a translucent fill over the bare canvas and a translucent
+/// node (its whole subtree blends with what lies under it).
 fn painted(under: Option<[f64; 3]>, n: &RNode) -> Option<[f64; 3]> {
     if n.f("opacity").unwrap_or(1.0) < 1.0 {
         return None;
     }
     let mut bg = under;
     for f in crate::svg::fills(n.p.get("fill")) {
+        // A blended paint's colour depends on what is under it.
+        if crate::svg::blend_mode(f["blendMode"].as_str()).is_some() {
+            return None;
+        }
         let [r, g, b, a] = crate::svg::flat(f)?;
         bg = if a >= 1.0 { Some([r, g, b]) } else { bg.map(|u| [0, 1, 2].map(|i| u[i] + ([r, g, b][i] - u[i]) * a)) };
     }
@@ -1002,14 +1006,19 @@ fn validate(e: &mut Engine, touched: &[String]) -> (Vec<String>, Vec<(String, St
             let few = n.kids.len() <= 200;
             for (i, k) in n.kids.iter().enumerate() {
                 let overlaps = |o: &RNode| o.x < k.x + k.w && k.x < o.x + o.w && o.y < k.y + k.h && k.y < o.y + o.h;
-                let covers = |o: &RNode| o.x <= k.x && o.y <= k.y && k.x + k.w <= o.x + o.w && k.y + k.h <= o.y + o.h;
+                // Only an upright box is its own outline (an ellipse or path covers less than its box).
+                let boxy = |o: &RNode| matches!(o.ty.as_str(), "rectangle" | "frame") && o.f("rotation").unwrap_or(0.0) == 0.0 && !o.b("flipX") && !o.b("flipY");
+                let covers = |o: &RNode| boxy(o) && o.x <= k.x && o.y <= k.y && k.x + k.w <= o.x + o.w && k.y + k.h <= o.y + o.h;
                 // The topmost earlier sibling under k decides: a childless one that covers k is its background;
                 // any other overlap (a photo, an edge running across k) leaves it unknown.
-                let under = match n.kids[..i].iter().rev().find(|o| o.ty != "text" && overlaps(o)) {
-                    _ if !few => None,
-                    None => fill,
-                    Some(o) if o.kids.is_empty() && covers(o) => painted(None, o),
-                    Some(_) => None,
+                let under = if !few {
+                    None
+                } else {
+                    match n.kids[..i].iter().rev().find(|o| o.ty != "text" && overlaps(o)) {
+                        None => fill,
+                        Some(o) if o.kids.is_empty() && covers(o) => painted(None, o),
+                        Some(_) => None,
+                    }
                 };
                 stack.push((k, Some(n), under));
             }
@@ -1050,7 +1059,8 @@ fn validate(e: &mut Engine, touched: &[String]) -> (Vec<String>, Vec<(String, St
             }
             if n.ty == "text" {
                 let st = crate::text::TextStyle::of(n);
-                let shown = !crate::svg::fills(n.p.get("fill")).is_empty() && !n.s("content").unwrap_or("").trim().is_empty();
+                let painted_ink = crate::svg::fills(n.p.get("fill")).iter().any(|f| crate::svg::flat(f).is_none_or(|c| c[3] > 0.0));
+                let shown = painted_ink && !n.s("content").unwrap_or("").trim().is_empty();
                 if let (true, Some(bg), Some(ink)) = (shown, behind, painted(behind, n)) {
                     // WCAG AA: large text is 24px, or 18.66px (14pt) bold.
                     let need = if st.size >= 24.0 || (st.size >= 18.66 && st.weight >= 700) { 3.0 } else { 4.5 };
@@ -2528,6 +2538,11 @@ Insert(card, {type:\"text\", name:\"Title\", content:\"Hi\", fill:\"#111111\"})
         assert!(!flagged("Half on shade"), "text across a sibling's edge has an unknown background: {}", card.text);
         let next = execute(&mut e, &json!({"input": "Insert(dark, {type:'text', name:'Late', content:'Added later', fill:'#F4EFE6', fontSize:16})"}));
         assert!(!next.text.contains("\"Ink\""), "nodes the call did not touch are not reported, even in the same frame: {}", next.text);
+        let odd = execute(&mut e, &json!({"input": "o = Insert(document, {type:'frame', name:'Odd', layout:'none', width:300, height:300, fill:'#FFFFFF'}); Insert(o, {type:'ellipse', name:'Disc', x:0, y:0, width:300, height:100, fill:'#111111'}); Insert(o, {type:'text', name:'Corner', x:2, y:2, content:'In the corner', fill:'#EEEEEE', fontSize:16}); Insert(o, {type:'rectangle', name:'Multiply', x:0, y:150, width:300, height:100, fill:{type:'color', color:'#111111', blendMode:'multiply'}}); Insert(o, {type:'text', name:'On multiply', x:20, y:170, content:'Blended under', fill:'#FFFFFF', fontSize:16}); Insert(o, {type:'text', name:'Clear', x:20, y:270, content:'Not painted', fill:'#00000000', fontSize:16});"}));
+        let flagged = |name: &str| odd.text.lines().any(|l| l.contains(&format!("\"{name}\"")) && l.contains("contrast"));
+        assert!(!flagged("Corner"), "an ellipse's box is not its outline: {}", odd.text);
+        assert!(!flagged("On multiply"), "a blended paint depends on what is under it: {}", odd.text);
+        assert!(!flagged("Clear"), "transparent text is not judged: {}", odd.text);
         let veil = execute(&mut e, &json!({"input": "v = Insert(document, {type:'frame', name:'Veil', layout:'vertical', opacity:0.4, width:200, height:100, fill:'#000000'}); Insert(v, {type:'text', name:'Under veil', content:'Seen through', fill:'#222222', fontSize:16});"}));
         assert!(!veil.text.contains("contrast"), "a translucent ancestor leaves the background unknown: {}", veil.text);
     }
