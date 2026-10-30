@@ -434,6 +434,11 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             Ok(json!(true))
         }
         "agent_reset" => agent::reset().map(|_| json!(true)),
+        "agent_instructions" => match req["backend"].as_str() {
+            Some(b @ ("api" | "claude-code")) => Ok(json!(agent::instructions(b))),
+            Some(b) => Err(format!("unknown backend '{b}': api or claude-code")),
+            None => Ok(json!(agent::instructions(&agent::backend()))),
+        },
         "agent_permission" => agent::answer_permission(req["id"].as_str().ok_or("id required")?, req["answer"].as_str().ok_or("answer required: allow, deny or auto")?).map(|_| json!(true)),
         "chat_list" => Ok(agent::chats()),
         "chat_load" => agent::load_chat(req["id"].as_str().ok_or("id required")?),

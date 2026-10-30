@@ -125,7 +125,7 @@ impl ToolOut {
             return;
         }
         let head = "## Issues detected (fix them in the next call)\n";
-        let bullets: String = missing.iter().map(|w| format!("- {w}\n")).collect();
+        let bullets: String = missing.iter().map(|w| crate::script::issue_line(w)).collect();
         match self.text.find(head) {
             Some(at) => {
                 let mut end = at + head.len();

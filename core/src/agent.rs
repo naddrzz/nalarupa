@@ -194,6 +194,15 @@ const SYSTEM_INTRO: &str = "You are a design agent inside Nalarupa, an infinite-
 Keep chat replies short: one sentence on what you are about to build, build it in visible steps (one execute per section), then summarize in one or two sentences. \
 The guide below is the source of truth for the document format and the execute API.\n\n";
 
+/// The system instructions a main agent gets on `backend` ("api" or "claude-code").
+pub fn instructions(backend: &str) -> String {
+    if backend == "claude-code" {
+        format!("{SYSTEM_INTRO}Your canvas tools are the `mcp__nalarupa__*` MCP tools. Read the guide with read_guide before your first execute.")
+    } else {
+        format!("{SYSTEM_INTRO}{}", crate::guide::system_docs())
+    }
+}
+
 /// "Let it cook" (iteration mode): with more than one design the agent keeps going after a
 /// design is done, one variation per finished turn.
 pub const MAX_DESIGNS: usize = 6;
@@ -954,7 +963,7 @@ fn run_api(p: &Profile, prompt: &str, child: bool, model: Option<String>) -> Res
 
     let modern = ["claude-opus-5-5", "claude-fable-5", "claude-sonnet-5-5"].iter().any(|m| model.starts_with(m));
     let client = crate::claude::Client::new(key);
-    let system = json!([{"type": "text", "text": format!("{SYSTEM_INTRO}{}", crate::guide::system_docs()), "cache_control": {"type": "ephemeral"}}]);
+    let system = json!([{"type": "text", "text": instructions("api"), "cache_control": {"type": "ephemeral"}}]);
     let tools = api_tools(child);
     let mut usage = json!({"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "turns": 0});
 
@@ -1050,7 +1059,7 @@ fn run_api(p: &Profile, prompt: &str, child: bool, model: Option<String>) -> Res
             };
             // Outside the engine lock (the guard above is a temporary): screenshots rasterize here.
             let out = out.finish();
-            emit(p, "tool_done", json!({"id": id, "name": name, "input": b["input"], "output": truncate(&out.text, 6000), "images": out.images.iter().take(3).collect::<Vec<_>>(), "error": out.error}));
+            emit(p, "tool_done", tool_done_event(id, name, &b["input"], &out.text, &out.images, out.error));
             let mut parts = vec![json!({"type": "text", "text": out.text})];
             for img in &out.images {
                 parts.push(json!({"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": img}}));
@@ -1071,6 +1080,15 @@ fn run_api(p: &Profile, prompt: &str, child: bool, model: Option<String>) -> Res
 /// The tool call the output limit cut off. Only the last block can be unfinished; earlier calls completed.
 fn cut_off_call<'a>(stop: &str, blocks: &'a [Value]) -> Option<&'a Value> {
     blocks.last().filter(|b| stop == "max_tokens" && b["type"] == "tool_use")
+}
+
+/// A finished tool call for the chat. The output is cut for the UI; `issues` keeps every "Issues detected" line.
+fn tool_done_event(id: &str, name: &str, input: &Value, text: &str, images: &[String], error: bool) -> Value {
+    let issues: Vec<&str> = text
+        .split_once("\n## Issues detected")
+        .map(|(_, rest)| rest.lines().skip(1).map_while(|l| l.strip_prefix("- ")).collect())
+        .unwrap_or_default();
+    json!({"id": id, "name": name, "input": input, "output": truncate(text, 6000), "images": images.iter().take(3).collect::<Vec<_>>(), "error": error, "issues": issues})
 }
 
 fn truncate(s: &str, n: usize) -> String {
@@ -1170,7 +1188,7 @@ fn run_claude_code(p: &Profile, prompt: &str, child: bool, model: Option<String>
         .args(["--disallowedTools", "Task,Agent,AskUserQuestion"])
         .args(["--permission-prompt-tool", &format!("mcp__nalarupa__{PERMISSION_TOOL}")])
         .arg("--append-system-prompt")
-        .arg(format!("{SYSTEM_INTRO}Your canvas tools are the `mcp__nalarupa__*` MCP tools. Read the guide with read_guide before your first execute."))
+        .arg(instructions("claude-code"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -1293,7 +1311,7 @@ fn run_claude_code(p: &Profile, prompt: &str, child: bool, model: Option<String>
                     let (name, input) = inputs.remove(&id).unwrap_or_default();
                     engine().stream_end(&id);
                     let (text, images) = tool_result_parts(&b["content"]);
-                    emit(p, "tool_done", json!({"id": id, "name": name, "input": input, "output": truncate(&text, 6000), "images": images, "error": b["is_error"] == true}));
+                    emit(p, "tool_done", tool_done_event(&id, &name, &input, &text, &images, b["is_error"] == true));
                 }
             }
             Some("result") => {
@@ -1409,6 +1427,25 @@ mod tests {
         // Byte 4 is inside the second 3-byte char; a plain `String::truncate(4)` would panic.
         assert_eq!(truncate("日本語", 4), "日…");
         assert_eq!(truncate("日本語", 9), "日本語");
+    }
+
+    #[test]
+    fn tool_done_lists_every_detected_issue_even_past_the_output_cut() {
+        let names: String = (0..400).map(|i| format!("\"Node {i}\": \"n{i:05}\"\n")).collect();
+        let text = format!("OK\n\n## Created nodes by name\n{names}\n## Issues detected (fix them in the next call)\n- Text \"A\" has no fill\n- \"Card\" is outside its parent\n");
+        let ev = tool_done_event("t1", "execute", &json!({}), &text, &[], false);
+        assert!(ev["output"].as_str().unwrap().len() < text.len(), "the output is cut");
+        assert_eq!(ev["issues"], json!(["Text \"A\" has no fill", "\"Card\" is outside its parent"]));
+        assert_eq!(tool_done_event("t2", "execute", &json!({}), "OK\n", &[], false)["issues"], json!([]));
+    }
+
+    #[test]
+    fn each_backend_gets_its_instructions() {
+        let api = instructions("api");
+        let cli = instructions("claude-code");
+        assert!(api.starts_with(SYSTEM_INTRO) && cli.starts_with(SYSTEM_INTRO));
+        assert!(api.contains(&crate::guide::read("execute").text), "the API backend carries the execute guide");
+        assert!(cli.contains("read_guide") && !cli.contains(&crate::guide::read("execute").text), "Claude Code reads the guide through the tool");
     }
 
     #[test]

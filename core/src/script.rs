@@ -884,7 +884,7 @@ fn finish(e: &mut Engine, prep: Prepared, result: Result<Map<String, Value>, Str
     if !warnings.is_empty() {
         text += "\n## Issues detected (fix them in the next call)\n";
         for w in warnings {
-            text += &format!("- {w}\n");
+            text += &issue_line(&w);
         }
     }
     // Only the trees are built under the engine lock; `ToolOut::finish` rasterizes screenshots and writes exports.
@@ -932,6 +932,12 @@ pub fn shot_tree(e: &mut Engine, id: &str) -> Result<(resvg::usvg::Tree, f64, Ve
 /// The node a screenshot of `id` draws: `document` is the first top-level node.
 pub fn shot_target(doc: &crate::doc::Doc, id: &str) -> String {
     if id == "document" { doc.children().first().and_then(|n| n["id"].as_str()).unwrap_or("").to_string() } else { id.to_string() }
+}
+
+/// One bullet of the "Issues detected" list. One line per warning: a node name may hold a line break, and readers
+/// (the agent, `tool_done` events) stop at the first line that is not a bullet.
+pub(crate) fn issue_line(warning: &str) -> String {
+    format!("- {}\n", warning.replace(['\r', '\n'], " "))
 }
 
 /// Layout and content checks on nodes touched by this call, plus the icons still downloading (their
@@ -2426,6 +2432,15 @@ Insert(card, {type:\"text\", name:\"Title\", content:\"Hi\", fill:\"#111111\"})
         let r = execute(&mut e, &json!({"input": "f = Insert(document, {type:'frame', layout:'vertical', width:100, height:50}); Insert(f, {type:'text', name:'Ghost', content:'hi', x:5});"}));
         assert!(r.text.contains("has no fill"), "{}", r.text);
         assert!(r.text.contains("x/y are ignored"), "{}", r.text);
+    }
+
+    #[test]
+    fn each_warning_is_one_line() {
+        let mut e = engine();
+        let r = execute(&mut e, &json!({"input": "f = Insert(document, {type:'frame', layout:'vertical', width:100, height:50}); Insert(f, {type:'text', name:'Two\\nlines', content:'hi'}); Insert(f, {type:'text', name:'After', content:'hi'});"}));
+        let issues = r.text.split_once("## Issues detected").map(|(_, rest)| rest).unwrap_or_default();
+        assert!(issues.lines().skip(1).all(|l| l.starts_with("- ")), "{}", r.text);
+        assert!(issues.contains("\"After\""), "{}", r.text);
     }
 
     #[test]

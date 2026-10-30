@@ -230,6 +230,12 @@ cd app && bun run a11y-check && bun run motion-check && bun run window-check
   sure animations stop under *reduced motion*; `window-check` makes sure the window fits the screen and its
   frame carries the Nalarupa icon (`bun run window-check dist/nalarupa.exe` for the built exe).
 - `exe-check` runs the built binary; `model-check` runs two real agent turns.
+- `design-eval` measures the design agent: `bun run design-eval run` sends eight fixed eval briefs (pages, mobile
+  screens, slide decks, and one document with an existing style) through the agent and keeps the eval run (PNGs,
+  documents, transcripts, `metrics.json`, `summary.md`; by default in `~/nalarupa-eval/`), and
+  `bun run design-eval compare <runA> <runB>` puts two eval runs side by side and flags unrelated briefs that look
+  alike. It uses the Claude Code backend unless given `--backend api`. It spends model tokens, so it runs by hand,
+  not in CI: once before a change to the agent's instructions and once after.
 - On a Linux server without a display, prefix each windowed check (`e2e`, `editor-e2e`, `file-e2e`) with
   `bash scripts/wl-run.sh` from `app/`, e.g. `cd app && bash scripts/wl-run.sh bun run file-e2e`, to run the window under a headless
   Wayland compositor (needs `sway`, `grim`, `mesa-vulkan-drivers`). CI does this on GitHub-hosted Ubuntu, and also runs the Windows-only checks on a Windows runner.
