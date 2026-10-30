@@ -212,10 +212,10 @@ for a broad product idea that is the main screen people land on first, the one t
 later iterations explore other directions for exactly this scope.";
 const NEXT_LAYOUT: &str = "Now design another variation of this page. Work out, as a strong product designer would, what could inspire it and give it more depth; \
 draw on what you already know instead of browsing the web, and let those insights shape the result. Make it a clearly different layout, placed next to \
-the earlier designs. Important: keep the visual style of the first design (fonts, palette, radius, elevation); do not pick a new style.";
+the earlier designs. Important: keep the first design's design direction (palette, type, spacing, signature move) and change only the layout.";
 const NEXT_STYLE: &str = "Now design another variation of this page. Work out, as a strong product designer would, what could inspire it and give it more depth; \
 draw on what you already know instead of browsing the web, and let those insights shape the result. Placed next to the earlier designs. Important: give it a new \
-visual direction: call get_style and choose a style archetype that none of the earlier variations used; do not reuse the previous style.";
+design direction, apart from every earlier variation on at least two of the variation axes (Designing); a recolor is not a variation.";
 const ITERATING: &str = "Iterating more on the design…";
 
 /// Start a turn. While agents are busy the prompt is queued and sent when they finish.
@@ -302,10 +302,13 @@ fn wrap_parallel(prompt: &str) -> String {
     if mode == "side" {
         return format!(
             "{prompt}\n\nWork as the coordinator of {n} designers who each design their own take on this task side by side.\n\
-             1. Pick a sensible screen size for the task.\n\
-             2. Create {n} empty top-level frames in one row, named \"1. <short title>\" … \"{n}. <short title>\" (not placeholders), using FindEmptySpace.\n\
-             3. Call spawn_agents with {} entries: entry k gets containerNodes [frame k+1] and an empty prompt.\n\
-             4. Then design your own take inside frame 1. Do not touch the other frames.",
+             1. Decide {n} design directions for this brief, one per designer, each apart from the others on at least two variation axes \
+             (Designing). Post them first: Framing / Direction / Why for yours, one Direction line for each other designer.\n\
+             2. Pick a sensible screen size for the task.\n\
+             3. Create {n} empty top-level frames in one row, named \"1. <short title>\" … \"{n}. <short title>\" (not placeholders), using FindEmptySpace.\n\
+             4. Call spawn_agents with {} entries: entry k gets containerNodes [frame k+1] and, as its prompt, designer k+1's design direction \
+             (concept · palette · type · signature move).\n\
+             5. Then design your own direction inside frame 1. Do not touch the other frames.",
             n - 1
         );
     }
@@ -854,6 +857,11 @@ pub fn spawn_children(parent: &str, config: &Value) -> crate::engine::ToolOut {
                 entries.len()
             ));
         }
+        if e.agent.parallel.1 == "side" {
+            if let Err(why) = side_directions(entries) {
+                return crate::engine::ToolOut::err(why);
+            }
+        }
         let mut all_ids = Vec::new();
         for entry in entries {
             let ids: Vec<String> = entry["containerNodes"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).collect();
@@ -889,21 +897,7 @@ pub fn spawn_children(parent: &str, config: &Value) -> crate::engine::ToolOut {
     let mut started = Vec::new();
     for (entry, (child, ids, context)) in entries.iter().zip(plans) {
         let task = entry["prompt"].as_str().unwrap_or("").trim().to_string();
-        let prompt = if side || task.is_empty() {
-            let k = started.len() + 2;
-            format!(
-                "You are designer {k} of {total} working side by side on the same brief; each designer has their own frame.\n\
-                 Design your own take inside the frame `{}` only. Prefix the frame's name with \"{k}.\" if it is not already, \
-                 never edit nodes outside it, and do not look at the other frames.\n\nThe frame (already read for you, no need to Get it again):\n{context}",
-                ids[0]
-            )
-        } else {
-            format!(
-                "Design the following task inside the node(s) {}. Only edit inside them.\nTask: {task}\n\n\
-                 The containers as they are now (already read for you, no need to Get them again):\n{context}",
-                ids.iter().map(|i| format!("`{i}`")).collect::<Vec<_>>().join(", ")
-            )
-        };
+        let prompt = child_prompt(side, started.len() + 2, total, &ids, &context, &task);
         let label = format!("{} → {}", child.name, ids.join(", "));
         if start_thread(child, prompt, Some(parent.to_string())) {
             started.push(label);
@@ -917,6 +911,45 @@ pub fn spawn_children(parent: &str, config: &Value) -> crate::engine::ToolOut {
         started.len(),
         started.join("; ")
     ))
+}
+
+/// Side by side, the lead hands every designer a design direction of its own: none missing, no two the same.
+fn side_directions(entries: &[Value]) -> Result<(), String> {
+    let mut seen = std::collections::HashSet::new();
+    for entry in entries {
+        let direction = entry["prompt"].as_str().unwrap_or("").trim().to_lowercase();
+        if direction.is_empty() {
+            return Err("side by side, every spawn_agents entry needs its own design direction as `prompt` (concept · palette · type · signature move)".into());
+        }
+        if !seen.insert(direction) {
+            return Err("two spawn_agents entries share one design direction; give every designer its own, apart on at least two variation axes".into());
+        }
+    }
+    Ok(())
+}
+
+/// The instructions a spawned designer `k` of `total` gets: side by side, its own frame and the design direction the lead
+/// gave it; otherwise its share of the split work.
+fn child_prompt(side: bool, k: usize, total: usize, ids: &[String], context: &str, task: &str) -> String {
+    if side || task.is_empty() {
+        let direction = if side && !task.is_empty() {
+            format!("\n\nYour design direction, from the lead: {task}\nBuild this direction; post it as your Framing / Direction / Why before building.")
+        } else {
+            String::new()
+        };
+        format!(
+            "You are designer {k} of {total} working side by side on the same brief; each designer has their own frame.\n\
+             Design your own take inside the frame `{}` only. Prefix the frame's name with \"{k}.\" if it is not already, \
+             never edit nodes outside it, and do not look at the other frames.{direction}\n\nThe frame (already read for you, no need to Get it again):\n{context}",
+            ids[0]
+        )
+    } else {
+        format!(
+            "Design the following task inside the node(s) {}. Only edit inside them.\nTask: {task}\n\n\
+             The containers as they are now (already read for you, no need to Get them again):\n{context}",
+            ids.iter().map(|i| format!("`{i}`")).collect::<Vec<_>>().join(", ")
+        )
+    }
 }
 
 fn api_tools(child: bool) -> Value {
@@ -942,7 +975,7 @@ fn api_tools(child: bool) -> Value {
 }
 
 pub fn spawn_spec() -> Value {
-    json!({"name": "spawn_agents", "description": "Start parallel designer agents. Each entry gets a self-contained task and the ids of existing container frames it may edit. Create the containers first. Returns immediately.",
+    json!({"name": "spawn_agents", "description": "Start parallel designer agents. Each entry gets a self-contained task (side by side: that designer's own design direction) and the ids of existing container frames it may edit. Create the containers first. Returns immediately.",
            "input_schema": {"type": "object", "properties": {"config": {"type": "array", "items": {"type": "object", "properties": {
                "prompt": {"type": "string"}, "containerNodes": {"type": "array", "items": {"type": "string"}}}, "required": ["prompt", "containerNodes"]}}},
            "required": ["config"]}})
@@ -1459,6 +1492,47 @@ mod tests {
         // Always loaded: every line costs context on every turn (spec #614: about 60 lines).
         const BUDGET: usize = 60;
         assert!(core.text.lines().count() <= BUDGET, "the design core stays within its {BUDGET}-line budget ({} lines)", core.text.lines().count());
+    }
+
+    #[test]
+    fn a_new_style_variation_differs_on_named_axes() {
+        let core = crate::guide::read("designing").text;
+        for axis in ["framing", "layout structure", "type pairing", "color logic"] {
+            assert!(core.contains(axis), "the design core names the {axis} axis once, for every prompt to point at");
+        }
+        assert!(NEXT_STYLE.contains("variation axes") && !NEXT_STYLE.contains("archetype"), "{NEXT_STYLE}");
+        assert!(NEXT_LAYOUT.contains("design direction") && !NEXT_LAYOUT.contains("style"), "{NEXT_LAYOUT}");
+    }
+
+    #[test]
+    fn the_design_core_carries_the_critique_pass() {
+        let core = crate::guide::read("designing").text;
+        assert!(core.contains("Critique each finished section") && core.contains("screenshot") && core.contains("two revision"), "{core}");
+        for quality in ["Hierarchy", "Alignment", "Spacing rhythm", "Contrast", "Content", "Fixation", "Distinctness"] {
+            assert!(core.contains(&format!("**{quality}:**")), "the critique checklist names {quality}");
+        }
+    }
+
+    #[test]
+    fn a_single_designer_gets_the_prompt_unchanged() {
+        let _busy = agent_busy();
+        engine().agent.parallel = (1, "side".into());
+        assert_eq!(wrap_parallel("Landing page for a bakery"), "Landing page for a bakery");
+    }
+
+    #[test]
+    fn side_by_side_designers_each_get_their_own_design_direction() {
+        let entry = |p: &str| json!({"prompt": p, "containerNodes": ["f2"]});
+        let tide = "Tide table · chart white, deep-water ink, buoy red · Barlow Condensed + Source Serif 4 · the tide curve behind the rows";
+        let seed = "Seed packet · allotment green, chalk, seed yellow · Bricolage Grotesque + Work Sans · a 'sow by' stamp per section";
+        assert!(side_directions(&[entry(tide), entry(seed)]).is_ok());
+        assert!(side_directions(&[entry(tide), entry("")]).unwrap_err().contains("design direction"), "every designer needs one");
+        assert!(side_directions(&[entry(tide), entry(&format!(" {tide} "))]).unwrap_err().contains("share one design direction"), "no two designers share one");
+        let a = child_prompt(true, 2, 3, &["f2".into()], "{}", tide);
+        let b = child_prompt(true, 3, 3, &["f3".into()], "{}", seed);
+        assert!(a.contains(tide) && b.contains(seed) && !a.contains(seed), "each designer's instructions carry its own direction:\n{a}\n{b}");
+        let alone = child_prompt(false, 2, 2, &["f2".into()], "{}", "Build the footer");
+        assert!(alone.contains("Task: Build the footer") && !alone.contains("design direction"), "a split task is unchanged:\n{alone}");
     }
 
     #[test]
