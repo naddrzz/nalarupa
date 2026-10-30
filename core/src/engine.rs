@@ -1285,7 +1285,7 @@ pub fn tool_specs() -> Value {
     json!([
         {"name": "get_editor_state", "description": "Summary of the open Nalarupa document: path, selection, top-level frames, components, variables. Call this first.",
          "inputSchema": {"type": "object", "properties": {}}},
-        {"name": "read_guide", "description": "Read Nalarupa's design guide. No topic returns the overview and the list of topics (schema, execute, components, slides, design, code).",
+        {"name": "read_guide", "description": "Read Nalarupa's design guide. No topic returns the overview and the list of topics (designing, schema, execute, components, slides, design, code).",
          "inputSchema": {"type": "object", "properties": {"topic": {"type": "string", "description": "Guide topic, e.g. 'schema', 'execute', 'slides'"}}}},
         {"name": "get_style", "description": "Ready-made visual style archetypes (fonts, palette, radius, elevation). No name lists them.",
          "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}}}},

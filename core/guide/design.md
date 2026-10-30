@@ -12,13 +12,12 @@ Deeper notes for the design direction in `designing`.
 ## Spacing
 
 - Use a 4/8px rhythm: 4, 8, 12, 16, 24, 32, 48, 64, 96, 128.
-- Group with proximity: smaller gaps inside a group, larger between groups.
 - Generous outer padding on screens: 64–120px desktop, 20–24px mobile.
 
 ## Color
 
-- Name the palette's roles as variables (background, surface, border, text,
-  muted, accent) so every screen draws from the same set.
+- Gradients, shadows and big radii each earn their place in the direction;
+  use them on purpose, not as decoration.
 - Dark themes: avoid pure black/white; use #0E0F12-ish backgrounds and
   #F2F2F2-ish text.
 - Light/dark: define themed variables

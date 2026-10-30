@@ -9,7 +9,7 @@ Nalarupa is an infinite-canvas design editor. A document is a tree of nodes
 
 | topic | read it when |
 | --- | --- |
-| `designing` | before any new design — the process and the design direction |
+| `designing` | before any new design — the process and the design direction (the built-in agent has it already) |
 | `schema` | always, before the first `execute` — node types and properties |
 | `execute` | always, before the first `execute` — the JavaScript API |
 | `components` | the design repeats UI (buttons, cards, rows, nav items) |
@@ -22,8 +22,9 @@ the user gives no brand direction.
 
 ## Working rules
 
-1. Start with `get_editor_state`. It lists the selection, top-level frames,
-   components and variables. Reuse what exists before creating anything.
+1. Know the document first: `get_editor_state` (the built-in agent gets it in
+   its prompt). It lists the selection, top-level frames, components and
+   variables. Reuse what exists before creating anything.
 2. Do exactly what was asked. Technical requests (rename, move, delete, recolor)
    need no redesign.
 3. The user may edit while you work. If a node you remember is gone or changed,
