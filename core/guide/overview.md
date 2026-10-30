@@ -22,8 +22,8 @@ the user gives no brand direction.
 
 ## Working rules
 
-1. Know the document first: `get_editor_state` (the built-in agent gets it in
-   its prompt). It lists the selection, top-level frames, components and
+1. Know the document first: `get_editor_state`; the main built-in agent gets it
+   in its prompt. It lists the selection, top-level frames, components and
    variables. Reuse what exists before creating anything.
 2. Do exactly what was asked. Technical requests (rename, move, delete, recolor)
    need no redesign.

@@ -16,9 +16,10 @@ brief.
    screens), the direction is that style, extended with the same variables,
    components, type and spacing; a new direction is for a blank canvas, or
    when the user asks for a new look or variations.
-4. **Post it** as your first chat message, before any tool call (the brief and
-   the editor state are already in your prompt), so the user can redirect you
-   before anything is built:
+4. **Post it** before you build, so the user can redirect you: as your first
+   chat message, before any tool call, when your prompt holds the editor
+   state; otherwise, or to read an existing style you extend, after read-only
+   looks (`get_editor_state`, `Get` on a finished screen, `GetVariables`):
    `Framing:` the line from step 2
    `Direction:` concept · palette · type · signature move
    `Why:` one line on why it beats the other directions
@@ -36,8 +37,7 @@ brief.
 - **Layout and spacing:** a grid chosen for this content (a timetable, a
   ledger, a poster, an index) and one spacing scale used everywhere.
 - **Signature move:** the one memorable element that carries the concept (an
-  oversized numeral, a full-bleed rule, a stamp, a cropped photo), carried
-  through every section.
+  oversized numeral, a full-bleed rule, a stamp), carried through every section.
 
 Derive the look from the subject (its setting, materials, era, audience), so
 unrelated briefs come back looking unrelated. Reaching for a habitual look is

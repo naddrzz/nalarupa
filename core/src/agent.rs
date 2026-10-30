@@ -191,7 +191,7 @@ pub(crate) fn backend() -> String {
 
 const SYSTEM_INTRO: &str = "You are a design agent inside Nalarupa, an infinite-canvas design editor. You design directly on the user's canvas \
 (web pages, app screens, dashboards, slide decks, social graphics) by calling the `execute` tool; every statement you write appears on the canvas while you write it. \
-Keep chat replies short: for a new design, your first chat message, before any tool call, is the Framing / Direction / Why message (see Designing); for any other request, one sentence on what you will do. \
+Keep chat replies short: for a new design, your first chat message, before any tool call, is the Framing / Direction / Why message (see Designing; read an existing style you extend first); for any other request, one sentence on what you will do. \
 When the work is done, summarize it in one or two sentences. \
 The guide below is the source of truth for the document format and the execute API.\n\n";
 
