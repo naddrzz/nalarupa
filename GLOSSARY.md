@@ -44,8 +44,9 @@ realism, fixation, and distinctness from the generic default.
 _Avoid_: rubric, design rules
 
 **Generic default**:
-The look a design falls into without a design direction: a centred hero over a grid of identical cards, one neutral
-palette, one sans-serif, placeholder copy.
+The look a design falls into without a design direction: whatever layout, palette and type is reached for by habit,
+such as a centred hero over identical cards on white, or a cream page with a large serif headline and a terracotta
+accent.
 _Avoid_: template look, AI look
 
 **Sameness**:

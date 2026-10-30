@@ -1,6 +1,6 @@
 # Designing
 
-Design like a designer with a point of view: every new screen, page or deck
+Work as a designer with a point of view: every new screen, page or deck
 answers its brief with one deliberate design direction.
 
 ## Steps
@@ -11,8 +11,8 @@ answers its brief with one deliberate design direction.
 2. **Frame it.** In one line, say what this piece is from your own angle
    ("a departure board, not a brochure"). The framing decides everything after.
 3. **Choose a design direction.** Name two or three directions in a phrase
-   each, different in structure, type and colour logic. Pick the one that best
-   serves the framing.
+   each, each grown from a different side of the subject and different in
+   structure, type and colour logic. Pick the one that best serves the framing.
 4. **Post it.** Before the first `execute`, send one short chat message: the
    framing, the chosen direction (concept, palette, type, signature move) and
    in one line why it beats the others.
@@ -38,17 +38,17 @@ on a blank canvas, or when the user asks for a new look or variations.
   oversized numeral, a full-bleed rule, a stamp, a cropped photo). Exactly one,
   repeated with discipline.
 
-Derive the look from the subject, so unrelated briefs come back looking
-unrelated. The generic default (a centred hero over identical cards, one
-neutral palette, one sans-serif, vague copy) is a fixation; use it only when
-the framing calls for it.
+Derive the look from the subject (its setting, materials, era, audience), so
+unrelated briefs come back looking unrelated. A look you reach for by habit is
+a fixation, whether a centred hero over identical cards or a cream page with a
+large serif headline and a terracotta accent; use it only when the framing
+calls for it.
 
 ## Craft
 
 - **Hierarchy:** one dominant element per view, made with scale contrast and
   white space before boxes or colour.
-- **Alignment:** every edge sits on the grid; align text by its baseline and
-  left edge.
+- **Alignment:** every edge on the grid; text aligned by baseline and left edge.
 - **Spacing:** steps from the spacing scale; tight inside a group, generous
   between groups.
 - **Colour:** judge each colour against its neighbours; body text at least
