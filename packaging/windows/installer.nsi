@@ -35,7 +35,9 @@ VIAddVersionKey "LegalCopyright" "Copyright (c) 2026 naddrzz (MIT License)"
 !define MUI_ICON "${DIST}\nalarupa.ico"
 !define MUI_UNICON "${DIST}\nalarupa.ico"
 !define MUI_ABORTWARNING
-!define MUI_FINISHPAGE_RUN "$INSTDIR\nalarupa.exe"
+; "Run Nalarupa" goes through Explorer, so the editor does not inherit the installer's administrator rights.
+!define MUI_FINISHPAGE_RUN
+!define MUI_FINISHPAGE_RUN_FUNCTION LaunchUnelevated
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
@@ -45,7 +47,13 @@ VIAddVersionKey "LegalCopyright" "Copyright (c) 2026 naddrzz (MIT License)"
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "English"
 
+Function LaunchUnelevated
+  Exec '"$WINDIR\explorer.exe" "$INSTDIR\nalarupa.exe"'
+FunctionEnd
+
 Section "Install"
+  ; Per-machine install: shortcuts go to the all-users Start menu and desktop.
+  SetShellVarContext all
   SetOutPath "$INSTDIR"
   ; The exe loads the core and the GPUI addon from its own folder (app/main.ts, app/src/core.ts).
   File "${DIST}\*.*"
@@ -66,13 +74,15 @@ Section "Install"
 SectionEnd
 
 Section "Uninstall"
+  SetShellVarContext all
   ; Only what the installer wrote: the user's documents and app data (%LOCALAPPDATA%\Nalarupa) stay.
-  Delete "$INSTDIR\nalarupa.exe"
-  Delete "$INSTDIR\*.dll"
-  Delete "$INSTDIR\*.node"
-  Delete "$INSTDIR\nalarupa.ico"
-  Delete "$INSTDIR\uninstall.exe"
-  RMDir "$INSTDIR"
+  ; Files still in use (Nalarupa open) are removed at the next restart.
+  Delete /REBOOTOK "$INSTDIR\nalarupa.exe"
+  Delete /REBOOTOK "$INSTDIR\*.dll"
+  Delete /REBOOTOK "$INSTDIR\*.node"
+  Delete /REBOOTOK "$INSTDIR\nalarupa.ico"
+  Delete /REBOOTOK "$INSTDIR\uninstall.exe"
+  RMDir /REBOOTOK "$INSTDIR"
   Delete "$SMPROGRAMS\${NAME}.lnk"
   Delete "$DESKTOP\${NAME}.lnk"
   DeleteRegKey HKLM "${UNINST_KEY}"

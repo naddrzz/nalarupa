@@ -25,6 +25,8 @@ jobs:
       - id: v
         run: |
           pkg=$(jq -r .version app/package.json)
+          # Plain x.y.z only: the Windows installer's version resource needs numeric parts.
+          [[ $pkg =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::app/package.json version '$pkg' is not plain x.y.z"; exit 1; }
           if [ "$GITHUB_REF_TYPE" = tag ]; then
             tag=${GITHUB_REF_NAME#v}
             [ "$tag" = "$pkg" ] || { echo "::error::tag v$tag does not match app/package.json version $pkg"; exit 1; }

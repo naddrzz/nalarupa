@@ -88,18 +88,23 @@ The logo combines a wayang *gunungan* that doubles as a pen nib (the pen tool), 
 
 ## Installation
 
-**Windows 10/11 x64**
+Download the files for your system from [Releases](https://github.com/naddrzz/nalarupa/releases/latest)
+(`<version>` is the release number, e.g. `0.1.0`).
 
-1. Download `nalarupa-windows-x64.zip` from [Releases](https://github.com/naddrzz/nalarupa/releases/latest).
-2. Extract it to any folder (for example `%LOCALAPPDATA%\Programs\Nalarupa`). Keep the four files together:
-   `nalarupa.exe`, `nalarupa_core.dll`, `gpuix-native.win32-x64-msvc.node`, `nalarupa.ico`.
-3. Run `nalarupa.exe`.
+**Windows 10/11 x64:** run `Nalarupa-<version>-windows-x64-setup.exe`. It installs for all users, with Start menu
+and desktop shortcuts and an uninstaller. Or extract `Nalarupa-<version>-windows-x64-portable.zip` to any folder,
+keeping its files together, and run `nalarupa.exe`.
+
+**macOS (Apple Silicon):** open `Nalarupa-<version>-macos-arm64.dmg` and drag Nalarupa to Applications. The app is
+not notarized: the first time, right-click it and choose Open.
+
+**Linux x64:** unpack `Nalarupa-<version>-linux-x64.tar.gz` and run `./install.sh` (it installs into `~/.local`;
+`./install.sh --uninstall` removes it), or run `./nalarupa` in place. It needs a Wayland session and Vulkan drivers.
 
 For the AI agents, install and sign in to [Claude Code](https://claude.com/claude-code) (`claude` on your
 PATH), or enter an Anthropic API key in the agent settings. App data (settings, chat history, font cache)
-lives in `%LOCALAPPDATA%\Nalarupa`.
-
-macOS and Linux can run from source (see below); release binaries are Windows-only for now.
+lives in `%LOCALAPPDATA%\Nalarupa` on Windows, `~/Library/Application Support/Nalarupa` on macOS and
+`~/.local/share/Nalarupa` on Linux.
 
 ## Development
 
@@ -122,7 +127,8 @@ cd app && bun run build
 ```
 
 The output goes to `app/dist/`: `nalarupa.exe` with the Nalarupa icon, `nalarupa_core.dll`, the GPUI addon,
-and `nalarupa.ico`. For a release, zip those four files.
+and `nalarupa.ico`. A `v*` tag runs `.github/workflows/release.yml`, which packages this for each platform
+(`packaging/`) and attaches it to a draft GitHub Release.
 
 ### Architecture
 
