@@ -191,13 +191,14 @@ pub(crate) fn backend() -> String {
 
 const SYSTEM_INTRO: &str = "You are a design agent inside Nalarupa, an infinite-canvas design editor. You design directly on the user's canvas \
 (web pages, app screens, dashboards, slide decks, social graphics) by calling the `execute` tool; every statement you write appears on the canvas while you write it. \
-Keep chat replies short: one sentence on what you are about to build, build it in visible steps (one execute per section), then summarize in one or two sentences. \
+Keep chat replies short: for a new design, your first chat message, before any tool call, is the Framing / Direction / Why message (see Designing; read an existing style you extend first); for any other request, one sentence on what you will do. \
+When the work is done, summarize it in one or two sentences. \
 The guide below is the source of truth for the document format and the execute API.\n\n";
 
 /// The system instructions a main agent gets on `backend` ("api" or "claude-code").
 pub fn instructions(backend: &str) -> String {
     if backend == "claude-code" {
-        format!("{SYSTEM_INTRO}Your canvas tools are the `mcp__nalarupa__*` MCP tools. Read the guide with read_guide before your first execute.")
+        format!("{SYSTEM_INTRO}Your canvas tools are the `mcp__nalarupa__*` MCP tools. Read the guide with read_guide before your first execute. Once the Framing / Direction / Why message is posted, track steps 5 onward in your todo list.\n\n{}", crate::guide::DESIGNING)
     } else {
         format!("{SYSTEM_INTRO}{}", crate::guide::system_docs())
     }
@@ -1446,6 +1447,18 @@ mod tests {
         assert!(api.starts_with(SYSTEM_INTRO) && cli.starts_with(SYSTEM_INTRO));
         assert!(api.contains(&crate::guide::read("execute").text), "the API backend carries the execute guide");
         assert!(cli.contains("read_guide") && !cli.contains(&crate::guide::read("execute").text), "Claude Code reads the guide through the tool");
+    }
+
+    #[test]
+    fn both_backends_always_get_the_design_core() {
+        let core = crate::guide::read("designing");
+        assert!(!core.error, "the design core is a guide topic");
+        for backend in ["api", "claude-code"] {
+            assert!(instructions(backend).contains(&core.text), "{backend} instructions carry the design core");
+        }
+        // Always loaded: every line costs context on every turn (spec #614: about 60 lines).
+        const BUDGET: usize = 60;
+        assert!(core.text.lines().count() <= BUDGET, "the design core stays within its {BUDGET}-line budget ({} lines)", core.text.lines().count());
     }
 
     #[test]
