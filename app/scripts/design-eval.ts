@@ -359,14 +359,14 @@ const fonts = async () => {
   }
   call('init')
   call('new', { template: 'empty' })
-  const ex = (input: string) => call<any>('tool', { name: 'execute', args: { input } }).text as string
   const list = [...names]
-  ex(`f = Insert(document, {type:"frame", name:"Fonts", layout:"vertical", width:800, fill:"#ffffff"}); ${list.map((n, i) => `Insert(f, {type:"text", name:"F${i}", content:"Aa 0123", fontFamily:${JSON.stringify(n)}, fontSize:24, fill:"#111111"})`).join('; ')}`)
-  await Bun.sleep(15_000)
-  // Touching each text again re-runs the font check once the downloads have had their time.
-  const out = ex(list.map((_, i) => `Update(Get(f).children[${i}].id, {fontSize: 25})`).join('; '))
-  const missing = list.filter((n) => out.includes(`font family '${n}' is not available`))
-  console.log(missing.length ? `missing: ${missing.join(', ')}` : `all ${list.length} faces load: ${list.join(', ')}`)
+  // Using each face in a text starts its download.
+  const out = call<{ text: string; error: boolean }>('tool', { name: 'execute', args: { input: `f = Insert(document, {type:"frame", name:"Fonts", layout:"vertical", width:800, fill:"#ffffff"}); ${list.map((n, i) => `Insert(f, {type:"text", name:"F${i}", content:"Aa 0123", fontFamily:${JSON.stringify(n)}, fontSize:24, fill:"#111111"})`).join('; ')}` } })
+  if (out.error) throw new Error(out.text)
+  const state = (family: string) => call<{ available: boolean; loading: boolean }>('font_state', { family })
+  for (let t = 0; t < 60 && list.some((n) => state(n).loading); t++) await Bun.sleep(1000)
+  const missing = list.filter((n) => !state(n).available)
+  console.log(missing.length ? `missing or still loading after 60 s: ${missing.join(', ')}` : `all ${list.length} faces load: ${list.join(', ')}`)
   process.exit(missing.length ? 1 : 0)
 }
 
