@@ -1462,6 +1462,15 @@ mod tests {
     }
 
     #[test]
+    fn the_design_core_carries_the_critique_pass() {
+        let core = crate::guide::read("designing").text;
+        assert!(core.contains("Critique") && core.contains("TakeScreenshot") && core.contains("two revision"), "{core}");
+        for quality in ["Hierarchy", "Alignment", "Spacing rhythm", "Contrast", "Content", "Fixation", "Distinctness"] {
+            assert!(core.contains(&format!("**{quality}:**")), "the critique checklist names {quality}");
+        }
+    }
+
+    #[test]
     fn only_the_last_tool_call_of_a_max_tokens_reply_is_cut_off() {
         let call = |id: &str| json!({"type": "tool_use", "id": id, "name": "execute", "input": {}});
         let blocks = [call("toolu_a"), call("toolu_b")];

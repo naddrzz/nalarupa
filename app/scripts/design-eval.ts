@@ -120,6 +120,8 @@ type BriefResult = {
   id: string; kind: Kind; brief: string; ok: boolean; error?: string; wallMs: number
   turns: number; tokens: { input: number; output: number; cacheRead: number; cacheWrite: number }; costUsd: number
   executeCalls: number; failedExecutes: number; repairs: number; issues: string[]
+  /** Execute calls that ended with a TakeScreenshot (the critique pass looks at one per finished section). */
+  screenshots?: number
   instructionsChars: number; guideReads: { tool: string; arg: string; chars: number }[]; guideChars: number
   /** Everything the agents said before the first execute, one "name: text" block each (named before it held more). */
   firstMessage: string; deniedTools: string[]; shots: Shot[]
@@ -149,6 +151,7 @@ const totals = (run: Run) => {
     failedExecutes: sum((r) => r.failedExecutes),
     repairs: sum((r) => r.repairs),
     executeCalls: sum((r) => r.executeCalls),
+    screenshots: sum((r) => r.screenshots ?? 0),
     turns: sum((r) => r.turns),
     minutes: +minutes(sum((r) => r.wallMs)),
     costUsd: +sum((r) => r.costUsd).toFixed(2),
@@ -158,16 +161,16 @@ const totals = (run: Run) => {
 }
 
 const summary = (dir: string, run: Run) => {
-  const rows = run.briefs.map((r) => `| ${r.id} | ${r.ok ? 'ok' : `**${r.error}**`} | ${r.issues.length} | ${r.failedExecutes} | ${r.repairs} | ${r.executeCalls} | ${r.turns} | ${minutes(r.wallMs)} | ${r.guideChars} |`)
+  const rows = run.briefs.map((r) => `| ${r.id} | ${r.ok ? 'ok' : `**${r.error}**`} | ${r.issues.length} | ${r.failedExecutes} | ${r.repairs} | ${r.executeCalls} | ${r.screenshots ?? '–'} | ${r.turns} | ${minutes(r.wallMs)} | ${r.guideChars} |`)
   const t = totals(run)
   const pairs = sameness(dir, run)
   return [
     `# Eval run ${run.meta.date} (${run.meta.sha}, ${run.meta.backend}${run.meta.model ? `, ${run.meta.model}` : ''})`,
     '',
-    '| Brief | Result | Issues detected | Failed executes | Repair attempts | Executes | Turns | Minutes | Guide chars read |',
-    '|---|---|---|---|---|---|---|---|---|',
+    '| Brief | Result | Issues detected | Failed executes | Repair attempts | Executes | Screenshots | Turns | Minutes | Guide chars read |',
+    '|---|---|---|---|---|---|---|---|---|---|',
     ...rows,
-    `| **Total** | ${t.briefs} | ${t.issues} | ${t.failedExecutes} | ${t.repairs} | ${t.executeCalls} | ${t.turns} | ${t.minutes} | ${t.guideChars} avg |`,
+    `| **Total** | ${t.briefs} | ${t.issues} | ${t.failedExecutes} | ${t.repairs} | ${t.executeCalls} | ${t.screenshots} | ${t.turns} | ${t.minutes} | ${t.guideChars} avg |`,
     '',
     `Always-loaded instructions: ${t.instructionsChars} chars. Cost: $${t.costUsd}.`,
     '',
@@ -242,7 +245,7 @@ const run = async () => {
     call('new', { template: 'empty' })
     const r: BriefResult = {
       id: b.id, kind: b.kind, brief: b.text, ok: true, wallMs: 0, turns: 0, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, costUsd: 0,
-      executeCalls: 0, failedExecutes: 0, repairs: 0, issues: [], instructionsChars, guideReads: [], guideChars: 0, firstMessage: '', deniedTools: [], shots: [],
+      executeCalls: 0, failedExecutes: 0, repairs: 0, issues: [], screenshots: 0, instructionsChars, guideReads: [], guideChars: 0, firstMessage: '', deniedTools: [], shots: [],
     }
     console.log(`== ${b.id}`)
     if (b.kind === 'existing') {
@@ -283,6 +286,7 @@ const run = async () => {
           transcript.push(`- \`${e.name}\`${e.error ? ' **failed**' : ''}${e.issues?.length ? `, ${e.issues.length} issues` : ''}`)
           if (isTool(e.name, 'execute')) {
             r.executeCalls++
+            if (String(e.input?.input ?? '').includes('TakeScreenshot')) r.screenshots = (r.screenshots ?? 0) + 1
             if (e.error) r.failedExecutes++
             if (e.input?.editId) r.repairs++
             r.issues.push(...(e.issues ?? []))
