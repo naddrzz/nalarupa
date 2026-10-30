@@ -1,0 +1,60 @@
+# Designing
+
+Design like a designer with a point of view: every new screen, page or deck
+answers its brief with one deliberate design direction.
+
+## Steps
+
+1. **Read the brief.** Who it is for, what they must do or feel, which content
+   is fixed. Take facts from the brief and the document; where you invent,
+   invent specifically.
+2. **Frame it.** In one line, say what this piece is from your own angle
+   ("a departure board, not a brochure"). The framing decides everything after.
+3. **Choose a design direction.** Name two or three directions in a phrase
+   each, different in structure, type and colour logic. Pick the one that best
+   serves the framing.
+4. **Post it.** Before the first `execute`, send one short chat message: the
+   framing, the chosen direction (concept, palette, type, signature move) and
+   in one line why it beats the others.
+5. **Structure, then build.** Set the sections and the grid first, then build
+   one `execute` per section, top-down.
+
+**Existing style.** When the document already has a style (variables,
+components, finished screens), step 3 is: read that style and extend it with
+the same variables, components, type and spacing. Choose a new direction only
+on a blank canvas, or when the user asks for a new look or variations.
+
+## A design direction
+
+- **Concept:** one sentence drawn from the subject: its materials, places,
+  rituals, data, voice.
+- **Palette:** 3–5 colours, each with one job (ground, text, accent…), stored
+  as variables.
+- **Type:** a display face and a text face (or one family), each with one job,
+  on a scale with clear steps. Choose faces that fit the concept.
+- **Layout and spacing:** a grid chosen for this content (a timetable, a
+  ledger, a poster, an index) and one spacing scale used everywhere.
+- **Signature move:** the one memorable element that carries the concept (an
+  oversized numeral, a full-bleed rule, a stamp, a cropped photo). Exactly one,
+  repeated with discipline.
+
+Derive the look from the subject, so unrelated briefs come back looking
+unrelated. The generic default (a centred hero over identical cards, one
+neutral palette, one sans-serif, vague copy) is a fixation; use it only when
+the framing calls for it.
+
+## Craft
+
+- **Hierarchy:** one dominant element per view, made with scale contrast and
+  white space before boxes or colour.
+- **Alignment:** every edge sits on the grid; align text by its baseline and
+  left edge.
+- **Spacing:** steps from the spacing scale; tight inside a group, generous
+  between groups.
+- **Colour:** judge each colour against its neighbours; body text at least
+  4.5:1, large text 3:1.
+- **Content:** specific copy written from the brief: names, dates, prices,
+  numbers, quotes. Each headline says something only this subject could say.
+
+Deeper notes: `read_guide` topics `design` (type scale, mobile, dashboards,
+theming), `slides` and `components`.

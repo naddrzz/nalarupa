@@ -9,7 +9,11 @@ const TOPICS: &[(&str, &str)] = &[
     ("slides", include_str!("../guide/slides.md")),
     ("design", include_str!("../guide/design.md")),
     ("code", include_str!("../guide/code.md")),
+    ("designing", DESIGNING),
 ];
+
+/// The design core: the process and the design direction. Every built-in agent always gets it (`agent::instructions`).
+pub const DESIGNING: &str = include_str!("../guide/designing.md");
 
 pub const OVERVIEW: &str = include_str!("../guide/overview.md");
 
@@ -24,9 +28,9 @@ pub fn read(topic: &str) -> ToolOut {
     }
 }
 
-/// Core instructions every built-in agent session gets (overview + schema + execute).
+/// Core instructions every API agent session gets (overview + design core + schema + execute).
 pub fn system_docs() -> String {
-    format!("{OVERVIEW}\n\n{}\n\n{}", TOPICS[0].1, TOPICS[1].1)
+    format!("{OVERVIEW}\n\n{DESIGNING}\n\n{}\n\n{}", TOPICS[0].1, TOPICS[1].1)
 }
 
 struct Style {

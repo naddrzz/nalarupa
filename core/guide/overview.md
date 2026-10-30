@@ -9,6 +9,7 @@ Nalarupa is an infinite-canvas design editor. A document is a tree of nodes
 
 | topic | read it when |
 | --- | --- |
+| `designing` | before any new design — the process and the design direction |
 | `schema` | always, before the first `execute` — node types and properties |
 | `execute` | always, before the first `execute` — the JavaScript API |
 | `components` | the design repeats UI (buttons, cards, rows, nav items) |
@@ -52,11 +53,8 @@ the user gives no brand direction.
 - Not CSS: no margins, no percentages, no `calc`, no wrapping flex rows.
   Grids are rows of frames.
 
-## Style
+## Assets
 
-- Prefer typography, spacing and a restrained palette over decoration.
-- Avoid boxing every element in a card; containers need a purpose.
-- Use gradients, shadows and big radii sparingly and on purpose.
 - Any Google Font works (`fontFamily`). Icons come from lucide (default),
   feather, Material Symbols (Outlined/Rounded/Sharp) and phosphor.
 - Don't hand-draw logos or illustrations from paths. Use icons, shapes,

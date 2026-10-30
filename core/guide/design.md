@@ -1,8 +1,9 @@
 # Design guidance
 
+Deeper notes for the design direction in `designing`.
+
 ## Type
 
-- Pick one display face and one text face (or one family in several weights).
 - Scale (desktop): 12 · 14 · 16 · 20 · 24 · 32 · 48 · 64 · 96. Mobile tops out
   around 34 for titles, 16–17 body.
 - Line height: 1.1–1.2 for headlines, 1.4–1.6 for body (`lineHeight`).
@@ -16,9 +17,8 @@
 
 ## Color
 
-- Start from neutrals (background, surface, border, text, muted text), add one
-  accent, optionally one secondary. Store them as variables.
-- Text contrast: body ≥ 4.5:1 against its background, large text ≥ 3:1.
+- Name the palette's roles as variables (background, surface, border, text,
+  muted, accent) so every screen draws from the same set.
 - Dark themes: avoid pure black/white; use #0E0F12-ish backgrounds and
   #F2F2F2-ish text.
 - Light/dark: define themed variables
@@ -32,7 +32,6 @@
   `alignItems: "center"` on the screen frame.
 - Make each section distinct: vary alignment, density and scale between
   sections instead of repeating the same grid of cards.
-- Real content beats lorem ipsum: write plausible copy and data.
 
 ## Mobile
 
