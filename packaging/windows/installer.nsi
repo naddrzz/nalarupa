@@ -78,8 +78,9 @@ Section "Uninstall"
   ; Only what the installer wrote: the user's documents and app data (%LOCALAPPDATA%\Nalarupa) stay.
   ; Files still in use (Nalarupa open) are removed at the next restart.
   Delete /REBOOTOK "$INSTDIR\nalarupa.exe"
-  Delete /REBOOTOK "$INSTDIR\*.dll"
-  Delete /REBOOTOK "$INSTDIR\*.node"
+  ; By name: the folder is the user's choice, and other DLLs or addons in it are not ours.
+  Delete /REBOOTOK "$INSTDIR\nalarupa_core.dll"
+  Delete /REBOOTOK "$INSTDIR\gpuix-native.win32-x64-msvc.node"
   Delete /REBOOTOK "$INSTDIR\nalarupa.ico"
   Delete /REBOOTOK "$INSTDIR\uninstall.exe"
   RMDir /REBOOTOK "$INSTDIR"

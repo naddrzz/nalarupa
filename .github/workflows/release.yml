@@ -164,7 +164,12 @@ jobs:
           Nalarupa $VERSION
 
           - **Windows (x64):** \`Nalarupa-$VERSION-windows-x64-setup.exe\` installs for all users; the portable zip runs from any folder.
-          - **macOS (Apple Silicon):** open the \`.dmg\` and drag Nalarupa to Applications. The app is not notarized: the first time, right-click it and choose Open.
+          - **macOS 13+ (Apple Silicon):** open the \`.dmg\` and drag Nalarupa to Applications. The app is not notarized: the first time, right-click it and choose Open.
           - **Linux (x64):** unpack the tarball and run \`./install.sh\` (installs to \`~/.local\`), or run \`./nalarupa\` in place. Needs a Wayland session and Vulkan drivers.
           EOF
-          gh release create "$GITHUB_REF_NAME" out/* --repo "$GITHUB_REPOSITORY" --draft --title "Nalarupa $VERSION" --notes-file notes.md
+          # A re-run of the same tag refreshes the existing release's files instead of failing on a second create.
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" out/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" out/* --repo "$GITHUB_REPOSITORY" --draft --title "Nalarupa $VERSION" --notes-file notes.md
+          fi

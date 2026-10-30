@@ -95,7 +95,7 @@ Download the files for your system from [Releases](https://github.com/naddrzz/na
 and desktop shortcuts and an uninstaller. Or extract `Nalarupa-<version>-windows-x64-portable.zip` to any folder,
 keeping its files together, and run `nalarupa.exe`.
 
-**macOS (Apple Silicon):** open `Nalarupa-<version>-macos-arm64.dmg` and drag Nalarupa to Applications. The app is
+**macOS 13+ (Apple Silicon):** open `Nalarupa-<version>-macos-arm64.dmg` and drag Nalarupa to Applications. The app is
 not notarized: the first time, right-click it and choose Open.
 
 **Linux x64:** unpack `Nalarupa-<version>-linux-x64.tar.gz`, `cd Nalarupa-<version>-linux-x64`, and run
