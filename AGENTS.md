@@ -42,7 +42,7 @@ AI design editor: a Rust core (`core/`, a cdylib loaded through `bun:ffi`) and a
 
 ## Changing the design agent
 
-Measure every change to `core/guide/*.md` or the agent's instructions with an eval run before and after (`bun run design-eval`, README Checks).
+Measure a change to what the design agent is told (`core/guide/*.md`, its instructions in `core/src/agent.rs`) with an eval run before and after: `cd app && bun run design-eval run`, then `bun run design-eval compare <before> <after>` (README Checks).
 
 ## Agent skills
 
