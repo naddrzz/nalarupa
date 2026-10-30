@@ -1,28 +1,28 @@
 # Designing
 
-Work as a designer with a point of view: every new screen, page or deck
-answers its brief with one deliberate design direction.
+Work as a designer with a point of view: one deliberate design direction per
+brief.
 
 ## Steps
 
 1. **Read the brief.** Who it is for, what they must do or feel, which content
-   is fixed. Take facts from the brief and the document; where you invent,
-   invent specifically.
+   is fixed, what the document already holds.
 2. **Frame it.** In one line, say what this piece is from your own angle
    ("a departure board, not a brochure"). The framing decides everything after.
 3. **Choose a design direction.** Name two or three directions in a phrase
    each, each grown from a different side of the subject and different in
    structure, type and colour logic. Pick the one that best serves the framing.
-4. **Post it.** Before the first `execute`, send one short chat message: the
-   framing, the chosen direction (concept, palette, type, signature move) and
-   in one line why it beats the others.
+4. **Post it.** Your first chat message after reading, before any `execute`:
+   `Framing:` the line from step 2
+   `Direction:` concept · palette · type · signature move
+   `Why:` one line on why it beats the other directions
 5. **Structure, then build.** Set the sections and the grid first, then build
    one `execute` per section, top-down.
 
 **Existing style.** When the document already has a style (variables,
-components, finished screens), step 3 is: read that style and extend it with
-the same variables, components, type and spacing. Choose a new direction only
-on a blank canvas, or when the user asks for a new look or variations.
+components, finished screens), the direction is that style, extended with the
+same variables, components, type and spacing. A new direction is for a blank
+canvas, or when the user asks for a new look or variations.
 
 ## A design direction
 
