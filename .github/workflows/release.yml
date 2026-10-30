@@ -1,15 +1,30 @@
 name: release
 # Release builds for Windows (NSIS installer + portable zip), macOS (Apple Silicon .app in a .dmg) and Linux
-# (x64 tarball). A `v*` tag builds all three and attaches them to a draft GitHub Release for the maintainer to
-# publish; a manual run only builds and uploads the artifacts. GPUIX ships its renderer addon for win32-x64,
-# linux-x64-gnu and darwin-arm64 only, so those are the targets.
+# (x64 tarball). GPUIX ships its renderer addon for win32-x64, linux-x64-gnu and darwin-arm64 only, so those are
+# the targets.
+#
+# Versions are automatic: a push to main (main moves only for a release) takes the latest v* tag, bumps its minor
+# number, stamps it into the build (packaging/set-version.sh), builds all three, then tags the commit and attaches
+# the files to a draft GitHub Release for the maintainer to publish. A manual run picks the bump (patch, minor or
+# major) and whether to publish. A tag pushed by hand releases that version. Pull requests that touch the
+# packaging only build.
 on:
   push:
+    branches: [main]
     tags: ["v*"]
-  # A change to the packaging builds all three platforms before it merges (nothing is published).
   pull_request:
     paths: [".github/workflows/release.yml", "packaging/**", "app/scripts/package.ts"]
   workflow_dispatch:
+    inputs:
+      bump:
+        description: Version part to bump from the latest v* tag
+        type: choice
+        options: [minor, patch, major]
+        default: minor
+      publish:
+        description: Tag the commit and draft a GitHub Release
+        type: boolean
+        default: false
 
 permissions: { contents: read }
 
@@ -18,20 +33,40 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.v.outputs.version }}
+      publish: ${{ steps.v.outputs.publish }}
     steps:
       - uses: actions/checkout@v4
-        with: { persist-credentials: false }
-      # The tag must match app/package.json, so the installer, the bundle and the release agree on one number.
+        with: { persist-credentials: false, fetch-depth: 0 }
       - id: v
+        env:
+          BUMP: ${{ github.event_name == 'workflow_dispatch' && inputs.bump || 'minor' }}
+          PUBLISH_INPUT: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
         run: |
-          pkg=$(jq -r .version app/package.json)
-          # Plain x.y.z only: the Windows installer's version resource needs numeric parts.
-          [[ $pkg =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::app/package.json version '$pkg' is not plain x.y.z"; exit 1; }
+          plain='^[0-9]+\.[0-9]+\.[0-9]+$'
+          # A pushed tag is the version; so is a v* tag already on this commit (a re-run, or a hand tag on main).
           if [ "$GITHUB_REF_TYPE" = tag ]; then
-            tag=${GITHUB_REF_NAME#v}
-            [ "$tag" = "$pkg" ] || { echo "::error::tag v$tag does not match app/package.json version $pkg"; exit 1; }
+            version=${GITHUB_REF_NAME#v}
+          else
+            version=$(git tag --points-at HEAD --list 'v*' --sort=-v:refname | head -1)
+            version=${version#v}
           fi
-          echo "version=$pkg" >> "$GITHUB_OUTPUT"
+          if [ -z "$version" ]; then
+            # Plain x.y.z only: the Windows installer's version resource needs numeric parts.
+            last=$(git tag --list 'v*' --sort=-v:refname | sed 's/^v//' | grep -E "$plain" | head -1)
+            IFS=. read -r major minor patch <<< "${last:-0.0.0}"
+            case $BUMP in
+              major) version=$((major + 1)).0.0 ;;
+              minor) version=$major.$((minor + 1)).0 ;;
+              patch) version=$major.$minor.$((patch + 1)) ;;
+            esac
+            echo "latest tag v${last:-none}, $BUMP bump"
+          fi
+          [[ $version =~ $plain ]] || { echo "::error::version '$version' is not plain x.y.z"; exit 1; }
+          publish=false
+          if [ "$GITHUB_EVENT_NAME" = push ] || [ "$PUBLISH_INPUT" = true ]; then publish=true; fi
+          echo "Version $version (publish: $publish)" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
 
   windows:
     needs: version
@@ -47,6 +82,7 @@ jobs:
         with: { workspaces: core }
       - uses: oven-sh/setup-bun@v2
         with: { bun-version: 1.4.3 }
+      - run: sh packaging/set-version.sh "$VERSION"
       - run: cargo build --release
         working-directory: core
       - run: bun install --frozen-lockfile && bun run build
@@ -80,6 +116,7 @@ jobs:
         with: { workspaces: core }
       - uses: oven-sh/setup-bun@v2
         with: { bun-version: 1.4.3 }
+      - run: sh packaging/set-version.sh "$VERSION"
       - run: cargo build --release
         working-directory: core
       - run: bun install --frozen-lockfile && bun run build
@@ -130,6 +167,7 @@ jobs:
         with: { workspaces: core }
       - uses: oven-sh/setup-bun@v2
         with: { bun-version: 1.4.3 }
+      - run: sh packaging/set-version.sh "$VERSION"
       - run: cargo build --release
         working-directory: core
       - run: bun install --frozen-lockfile && bun run build
@@ -148,28 +186,36 @@ jobs:
         with: { name: linux, path: out/*, if-no-files-found: error }
 
   release:
-    # Only a pushed tag publishes (a manual run on a tag only builds); the release stays a draft until the
-    # maintainer reviews and publishes it.
-    if: github.event_name == 'push' && github.ref_type == 'tag'
+    # Builds passed: now tag the commit (unless it is a pushed tag already) and draft the release.
+    if: needs.version.outputs.publish == 'true'
     needs: [version, windows, macos, linux]
     runs-on: ubuntu-24.04
     permissions: { contents: write }
+    env: { GH_TOKEN: "${{ github.token }}", VERSION: "${{ needs.version.outputs.version }}", TAG: "v${{ needs.version.outputs.version }}" }
     steps:
       - uses: actions/download-artifact@v4
         with: { path: out, merge-multiple: true }
+      # A tag pushed with the workflow token starts no new workflow run, so this does not release twice.
+      - name: Tag
+        run: |
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" >/dev/null 2>&1; then
+            echo "$TAG exists"
+          else
+            gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$TAG" -f sha="$GITHUB_SHA" >/dev/null
+            echo "tagged $GITHUB_SHA as $TAG"
+          fi
       - name: Draft release
-        env: { GH_TOKEN: "${{ github.token }}", VERSION: "${{ needs.version.outputs.version }}" }
         run: |
           cat > notes.md <<EOF
           Nalarupa $VERSION
 
           - **Windows (x64):** \`Nalarupa-$VERSION-windows-x64-setup.exe\` installs for all users; the portable zip runs from any folder.
           - **macOS 13+ (Apple Silicon):** open the \`.dmg\` and drag Nalarupa to Applications. The app is not notarized: the first time, right-click it and choose Open.
-          - **Linux (x64):** unpack the tarball and run \`./install.sh\` (installs to \`~/.local\`), or run \`./nalarupa\` in place. Needs a Wayland session and Vulkan drivers.
+          - **Linux (x64):** unpack the tarball, \`cd\` into its folder and run \`./install.sh\` (installs to \`~/.local\`), or run \`./nalarupa\` in place. Needs a Wayland session and Vulkan drivers.
           EOF
-          # A re-run of the same tag refreshes the existing release's files instead of failing on a second create.
-          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" out/* --repo "$GITHUB_REPOSITORY" --clobber
+          # A re-run of the same version refreshes the existing release's files instead of failing on a second create.
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" out/* --repo "$GITHUB_REPOSITORY" --clobber
           else
-            gh release create "$GITHUB_REF_NAME" out/* --repo "$GITHUB_REPOSITORY" --draft --title "Nalarupa $VERSION" --notes-file notes.md
+            gh release create "$TAG" out/* --repo "$GITHUB_REPOSITORY" --draft --title "Nalarupa $VERSION" --notes-file notes.md --generate-notes
           fi
