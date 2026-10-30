@@ -38,6 +38,12 @@ assert(!clean.includes('Issues detected'), `a clean call has no issues section:\
 let out = run('Insert(f, {type:"text", name:"Ghost", x:10, y:50, content:"boo", fontFamily:"Inter", fontSize:16})')
 assert(has(out, /text "Ghost" \(\w+\) has no fill and is invisible/), `invisible text: ${out}`)
 
+// Text below WCAG AA contrast against what it sits on is reported; large text needs 3:1, body text 4.5:1.
+out = run('Insert(f, {type:"text", name:"Faint", x:10, y:130, content:"Opening hours", fontFamily:"Inter", fontSize:16, fill:"#aaaaaa"})')
+assert(has(out, /text "Faint" \(\w+\): contrast 2\.3:1 against its background #FFFFFF is below WCAG AA \(4\.5:1\)/), `low contrast: ${out}`)
+out = run('Insert(f, {type:"text", name:"Big grey", x:10, y:150, content:"Hours", fontFamily:"Inter", fontSize:28, fill:"#949494"})')
+assert(!has(out, /contrast/), `large text at 3:1 passes: ${out}`)
+
 // A layer wider than its fixed parent sticks out.
 out = run('Insert(f, {type:"rectangle", name:"Wide", x:0, y:100, width:500, height:20, fill:"#ff0000"})')
 assert(has(out, /"Wide" \(\w+\) sticks out of its parent/), `sticks out: ${out}`)
