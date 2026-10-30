@@ -884,7 +884,8 @@ fn finish(e: &mut Engine, prep: Prepared, result: Result<Map<String, Value>, Str
     if !warnings.is_empty() {
         text += "\n## Issues detected (fix them in the next call)\n";
         for w in warnings {
-            text += &format!("- {w}\n");
+            // One line per warning: a node name may hold a line break, and readers stop at the first non-bullet line.
+            text += &format!("- {}\n", w.replace(['\r', '\n'], " "));
         }
     }
     // Only the trees are built under the engine lock; `ToolOut::finish` rasterizes screenshots and writes exports.
@@ -2426,6 +2427,15 @@ Insert(card, {type:\"text\", name:\"Title\", content:\"Hi\", fill:\"#111111\"})
         let r = execute(&mut e, &json!({"input": "f = Insert(document, {type:'frame', layout:'vertical', width:100, height:50}); Insert(f, {type:'text', name:'Ghost', content:'hi', x:5});"}));
         assert!(r.text.contains("has no fill"), "{}", r.text);
         assert!(r.text.contains("x/y are ignored"), "{}", r.text);
+    }
+
+    #[test]
+    fn each_warning_is_one_line() {
+        let mut e = engine();
+        let r = execute(&mut e, &json!({"input": "f = Insert(document, {type:'frame', layout:'vertical', width:100, height:50}); Insert(f, {type:'text', name:'Two\\nlines', content:'hi'}); Insert(f, {type:'text', name:'After', content:'hi'});"}));
+        let issues = r.text.split_once("## Issues detected").map(|(_, rest)| rest).unwrap_or_default();
+        assert!(issues.lines().skip(1).all(|l| l.starts_with("- ")), "{}", r.text);
+        assert!(issues.contains("\"After\""), "{}", r.text);
     }
 
     #[test]

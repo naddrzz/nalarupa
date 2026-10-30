@@ -178,9 +178,12 @@ const page = (out: string, runs: [string, Run][]) => {
   const ts = runs.map(([d, r]) => [d, r, totals(r), sameness(d, r)] as const)
   const keys = Object.keys(ts[0][2]) as (keyof ReturnType<typeof totals>)[]
   const head = `<tr><th></th>${ts.map(([d, r]) => `<th>${esc(r.meta.date)}<br><small>${esc(r.meta.sha)} · ${esc(r.meta.backend)} · ${esc(relative(dirname(out), d))}</small></th>`).join('')}<th>B − A</th></tr>`
+  // Totals are comparable only over the same eval briefs; a subset run against a full one is compared brief by brief.
+  const sameBriefs = runs.map(([, r]) => r.briefs.map((b) => b.id).sort().join()).every((ids, _, all) => ids === all[0])
   const delta = (k: (typeof keys)[number]) => {
-    const [a, b] = [ts[0][2][k], ts[1][2][k]]
-    return typeof a === 'number' && typeof b === 'number' ? `${b - a > 0 ? '+' : ''}${+(b - a).toFixed(2)}` : ''
+    // `briefs` reads "ok/total": compare the ok counts.
+    const [a, b] = [ts[0][2][k], ts[1][2][k]].map((v) => (typeof v === 'number' ? v : parseFloat(v)))
+    return sameBriefs ? `${b - a > 0 ? '+' : ''}${+(b - a).toFixed(2)}` : '–'
   }
   const metric = keys.map((k) => `<tr><td>${k}</td>${ts.map(([, , t]) => `<td>${t[k]}</td>`).join('')}<td>${delta(k)}</td></tr>`).join('')
   const same = `<tr><td>looks alike</td>${ts.map(([, , , p]) => `<td>${p.filter(alike).map((x) => `${x.a}/${x.b} colour ${x.colour.toFixed(2)} layout ${x.layout.toFixed(2)}`).join('<br>') || 'none'}</td>`).join('')}<td></td></tr>`
@@ -211,8 +214,12 @@ const run = async () => {
   if (backend !== 'claude-code' && backend !== 'api') throw new Error(`unknown backend '${backend}': claude-code or api`)
   const model = flag('model') ?? null
   const only = flag('only')?.split(',')
+  const unknown = only?.filter((id) => !BRIEFS.some((b) => b.id === id))
+  if (unknown?.length) throw new Error(`unknown eval brief '${unknown.join("', '")}': ${BRIEFS.map((b) => b.id).join(', ')}`)
   const briefs = BRIEFS.filter((b) => !only || only.includes(b.id))
+  // The fixture and the guide-size reads go through the editor's MCP server.
   const { mcpPort } = call('init')
+  if (!mcpPort) throw new Error('the MCP server did not start (no free port in its range)')
   const tool = async (name: string, a: object) => {
     const r = await fetch(`http://127.0.0.1:${mcpPort}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: a } }) })
     const res = (await r.json()).result
