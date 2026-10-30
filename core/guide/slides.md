@@ -22,7 +22,7 @@ Slides tab's PDF button) writes the whole deck as one multi-page PDF.
   not a topic label ("Churn").
 - Body text ≥ 28px, titles ≥ 56px, cover/statement titles 96–160px.
 - At most two font families. Keep ≥ 120px from the slide edges.
-- 2–3 colors plus neutrals. Use the accent for the one thing to notice.
+- The direction's palette; the accent marks the one thing to notice.
 - Open with a strong cover and close with a single memorable statement or
   call to action.
 
@@ -30,7 +30,7 @@ Slides tab's PDF button) writes the whole deck as one multi-page PDF.
 
 | pattern | structure |
 | --- | --- |
-| Cover | vertical, `justifyContent: "end"`, kicker + huge title + subtitle |
+| Cover | the title and the deck's signature move at full scale, composed for this deck (a giant figure, a full-bleed image, a centred title over a pattern) |
 | Statement | one centered sentence, nothing else |
 | Split | horizontal: text column (`fill_container`) + visual block |
 | Three points | title + horizontal row of 3 `fill_container` columns |
@@ -40,5 +40,7 @@ Slides tab's PDF button) writes the whole deck as one multi-page PDF.
 | Quote | large quote text + attribution |
 | Closing | statement or CTA + contact line |
 
-Build the first slide fully, screenshot it, then reuse its structure with
-`Copy` for the rest of the deck so spacing stays consistent.
+Keep one design direction for the whole deck: the same tokens, type, margins
+and signature move on every slide. Give each slide the pattern its idea needs,
+so the layouts vary; two slides in a row with the same pattern is the most.
+Build the cover fully and critique it before the rest.

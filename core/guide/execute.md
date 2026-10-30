@@ -102,11 +102,11 @@ Returning `undefined` collects nothing.
 ```js
 pos = FindEmptySpace({width: 1440, height: 900, padding: 120})
 page = Insert(document, {type: "frame", name: "Landing", x: pos.x, y: pos.y, width: 1440, layout: "vertical",
-  fill: "#FAFAF7", clip: true, placeholder: true})
+  fill: "#F3F6F1", clip: true, placeholder: true})
 nav = Insert(page, {type: "frame", name: "Nav", width: "fill_container", padding: [24, 64], justifyContent: "space_between", alignItems: "center"})
-Insert(nav, {type: "text", name: "Logo", content: "Acme", fontFamily: "Inter", fontSize: 20, fontWeight: "700", fill: "#111111"})
+Insert(nav, {type: "text", name: "Logo", content: "Harbour Line", fontFamily: "Archivo Black", fontSize: 20, fill: "#0F2A3D"})
 links = Insert(nav, {type: "frame", name: "Links", gap: 32})
-for (const l of ["Product", "Pricing", "Docs"]) Insert(links, {type: "text", name: l, content: l, fontFamily: "Inter", fontSize: 15, fill: "#444444"})
+for (const l of ["Sailings", "Tides", "Fares"]) Insert(links, {type: "text", name: l, content: l, fontFamily: "Archivo", fontSize: 15, fill: "#3B4A55"})
 TakeScreenshot([nav])
 ```
 

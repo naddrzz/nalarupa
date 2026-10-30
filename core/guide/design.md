@@ -4,6 +4,18 @@ Deeper notes for the design direction in `designing`.
 
 ## Type
 
+- Pairings (display + text, all from Google Fonts); the default sans-serif
+  (Inter) is one option, not the default:
+- Fraunces + Work Sans: warm editorial, food, craft
+- Barlow Condensed + Barlow: signage, timetables, transport
+- IBM Plex Mono + IBM Plex Sans: ledgers, data, developer tools
+- Instrument Serif + Public Sans: galleries, culture, quiet luxury
+- Bricolage Grotesque + Manrope: friendly products, communities
+- Space Grotesk + Space Mono: technical, science, hardware
+- Playfair Display + Source Sans 3: classic print, finance, law
+- Archivo Black + Archivo: posters, sport, loud campaigns
+- Baloo 2 + Nunito: children, play, learning
+- Inter + Inter: neutral product UI where the content is the design
 - Scale (desktop): 12 · 14 · 16 · 20 · 24 · 32 · 48 · 64 · 96. Mobile tops out
   around 34 for titles, 16–17 body.
 - Line height: 1.1–1.2 for headlines, 1.4–1.6 for body (`lineHeight`).
