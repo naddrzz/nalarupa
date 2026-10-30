@@ -51,6 +51,14 @@ assert(issues(out).filter((l) => /"Nudged" \(\w+\) nearly align: their left edge
 out = run('Insert(f, {type:"rectangle", name:"Offset", x:18, y:186, width:40, height:10, fill:"#cccccc"})')
 assert(!has(out, /"Offset"/), `8px apart is not a near miss: ${out}`)
 
+// Text below WCAG AA contrast against what it sits on is reported; large text needs 3:1, body text 4.5:1.
+out = run('Insert(f, {type:"text", name:"Faint", x:200, y:60, content:"Open daily", fontFamily:"Inter", fontSize:16, fill:"#aaaaaa"})')
+assert(has(out, /text "Faint" \(\w+\): contrast 2\.32:1 against its background #ffffff is below WCAG AA \(4\.5:1\)/), `low contrast: ${out}`)
+out = run('Insert(f, {type:"text", name:"Big grey", x:200, y:150, content:"Hours", fontFamily:"Inter", fontSize:28, fill:"#949494"})')
+assert(!has(out, /contrast/), `large text at 3:1 passes: ${out}`)
+out = run('night = Insert(document, {type:"frame", name:"Night", x:0, y:600, width:300, height:100, layout:"vertical", fill:"#111111"}); wrap = Insert(night, {type:"frame", name:"Wrap", layout:"vertical"}); Insert(wrap, {type:"text", name:"Soot", content:"Hard to see", fontFamily:"Inter", fontSize:16, fill:"#333333"})')
+assert(has(out, /text "Soot" \(\w+\): contrast 1\.\d\d:1 against its background #111111/), `the background is found through a transparent frame: ${out}`)
+
 // A layer wider than its fixed parent sticks out.
 out = run('Insert(f, {type:"rectangle", name:"Wide", x:0, y:100, width:500, height:20, fill:"#ff0000"})')
 assert(has(out, /"Wide" \(\w+\) sticks out of its parent/), `sticks out: ${out}`)

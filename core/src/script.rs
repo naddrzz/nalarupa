@@ -940,6 +940,35 @@ pub(crate) fn issue_line(warning: &str) -> String {
     format!("- {}\n", warning.replace(['\r', '\n'], " "))
 }
 
+/// The colour behind a node's children: its flat fills painted over `under`, bottom to top. A gradient, image,
+/// shader or blended fill makes it unknown (None), and so do a translucent fill over the bare canvas and a translucent
+/// node (its whole subtree blends with what lies under it).
+fn painted(under: Option<[f64; 3]>, n: &RNode) -> Option<[f64; 3]> {
+    if n.f("opacity").unwrap_or(1.0) < 1.0 {
+        return None;
+    }
+    let mut bg = under;
+    for f in crate::svg::fills(n.p.get("fill")) {
+        // A blended paint's colour depends on what is under it.
+        if crate::svg::blend_mode(f["blendMode"].as_str()).is_some() {
+            return None;
+        }
+        let [r, g, b, a] = crate::svg::flat(f)?;
+        bg = if a >= 1.0 { Some([r, g, b]) } else { bg.map(|u| [0, 1, 2].map(|i| u[i] + ([r, g, b][i] - u[i]) * a)) };
+    }
+    bg
+}
+
+/// WCAG contrast ratio of two sRGB colours (1 to 21).
+fn contrast(a: [f64; 3], b: [f64; 3]) -> f64 {
+    let lum = |c: [f64; 3]| {
+        let l = |v: f64| if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
+        0.2126 * l(c[0]) + 0.7152 * l(c[1]) + 0.0722 * l(c[2])
+    };
+    let (x, y) = (lum(a), lum(b));
+    (x.max(y) + 0.05) / (x.min(y) + 0.05)
+}
+
 /// Whether a node places its children by auto layout (a frame without `layout: "none"`).
 fn flex(n: &RNode) -> bool {
     n.ty == "frame" && n.s("layout") != Some("none")
@@ -1010,10 +1039,29 @@ fn validate(e: &mut Engine, touched: &[String]) -> (Vec<String>, Vec<(String, St
     let mut icons = Vec::new();
     for t in tops {
         let Some(root) = e.ctx().laid_out(t) else { continue };
-        let mut stack = vec![(&root, None::<&RNode>)];
-        while let Some((n, parent)) = stack.pop() {
-            for k in &n.kids {
-                stack.push((k, Some(n)));
+        // Each node travels with the colour painted behind it (None: the canvas, or unknown).
+        let mut stack = vec![(&root, None::<&RNode>, None::<[f64; 3]>)];
+        while let Some((n, parent, behind)) = stack.pop() {
+            let fill = painted(behind, n);
+            // The sibling scan is quadratic: past 200 children every background is left unknown.
+            let few = n.kids.len() <= 200;
+            for (i, k) in n.kids.iter().enumerate() {
+                let overlaps = |o: &RNode| o.x < k.x + k.w && k.x < o.x + o.w && o.y < k.y + k.h && k.y < o.y + o.h;
+                // Only an upright box is its own outline (an ellipse or path covers less than its box).
+                let boxy = |o: &RNode| matches!(o.ty.as_str(), "rectangle" | "frame") && o.f("rotation").unwrap_or(0.0) == 0.0 && !o.b("flipX") && !o.b("flipY");
+                let covers = |o: &RNode| boxy(o) && o.x <= k.x && o.y <= k.y && k.x + k.w <= o.x + o.w && k.y + k.h <= o.y + o.h;
+                // The topmost earlier sibling under k decides: a childless one that covers k is its background;
+                // any other overlap (a photo, an edge running across k) leaves it unknown.
+                let under = if !few {
+                    None
+                } else {
+                    match n.kids[..i].iter().rev().find(|o| o.ty != "text" && overlaps(o)) {
+                        None => fill,
+                        Some(o) if o.kids.is_empty() && covers(o) => painted(None, o),
+                        Some(_) => None,
+                    }
+                };
+                stack.push((k, Some(n), under));
             }
             if !flex(n) {
                 near_misses(n, &touched, &mut out);
@@ -1055,6 +1103,18 @@ fn validate(e: &mut Engine, touched: &[String]) -> (Vec<String>, Vec<(String, St
             }
             if n.ty == "text" {
                 let st = crate::text::TextStyle::of(n);
+                let painted_ink = crate::svg::fills(n.p.get("fill")).iter().any(|f| crate::svg::flat(f).is_none_or(|c| c[3] > 0.0));
+                let shown = painted_ink && !n.s("content").unwrap_or("").trim().is_empty();
+                if let (true, Some(bg), Some(ink)) = (shown, behind, painted(behind, n)) {
+                    // WCAG AA: large text is 24px, or 18.66px (14pt) bold.
+                    let need = if st.size >= 24.0 || (st.size >= 18.66 && st.weight >= 700) { 3.0 } else { 4.5 };
+                    let ratio = contrast(ink, bg);
+                    if ratio < need {
+                        // Cut, not rounded: 4.48 must not read as 4.5.
+                        let cut = (ratio * 100.0).floor() / 100.0;
+                        out.push(format!("text {label}: contrast {cut:.2}:1 against its background {} is below WCAG AA ({need}:1); change the text or background colour", crate::svg::hex([bg[0], bg[1], bg[2], 1.0])));
+                    }
+                }
                 // Reading text, not a label: short strings (badges, captions, metadata) may be smaller.
                 if st.size < 12.0 && n.s("content").unwrap_or("").chars().count() >= 40 {
                     out.push(format!("text {label}: body text at {}px is below 12px; set reading text at 12px or more", st.size));
@@ -2489,6 +2549,50 @@ Insert(card, {type:\"text\", name:\"Title\", content:\"Hi\", fill:\"#111111\"})
         let issues = r.text.split_once("## Issues detected").map(|(_, rest)| rest).unwrap_or_default();
         assert!(issues.lines().skip(1).all(|l| l.starts_with("- ")), "{}", r.text);
         assert!(issues.contains("\"After\""), "{}", r.text);
+    }
+
+    #[test]
+    fn low_text_contrast_is_reported() {
+        let mut e = engine();
+        let text = |name: &str, fill: &str, size: u32, weight: &str| format!("Insert(f, {{type:'text', name:'{name}', content:'Quarterly revenue', fill:'{fill}', fontSize:{size}, fontWeight:'{weight}'}});");
+        let src = format!(
+            "f = Insert(document, {{type:'frame', name:'Page', layout:'vertical', width:600, height:400, fill:'#FFFFFF'}}); {}{}{}{}{}",
+            text("Faint", "#999999", 16, "400"),
+            text("Body", "#767676", 16, "400"),
+            text("Large", "#949494", 32, "400"),
+            text("Bold", "#949494", 19, "700"),
+            text("Small grey", "#949494", 16, "400"),
+        );
+        let r = execute(&mut e, &json!({"input": src}));
+        let flagged = |name: &str| r.text.lines().any(|l| l.contains(&format!("\"{name}\"")) && l.contains("contrast"));
+        assert!(flagged("Faint"), "#999 on white is 2.8:1: {}", r.text);
+        assert!(r.text.contains("contrast 2.84:1"), "the ratio is cut, never rounded up to the threshold: {}", r.text);
+        assert!(!flagged("Body"), "#767676 on white is 4.5:1: {}", r.text);
+        assert!(!flagged("Large"), "large text needs 3:1: {}", r.text);
+        assert!(!flagged("Bold"), "19px bold counts as large: {}", r.text);
+        assert!(flagged("Small grey"), "the same grey at 16px regular needs 4.5:1: {}", r.text);
+    }
+
+    #[test]
+    fn text_contrast_is_judged_against_the_nearest_painted_ancestor() {
+        let mut e = engine();
+        let r = execute(&mut e, &json!({"input": "dark = Insert(document, {type:'frame', name:'Dark', layout:'vertical', width:400, height:200, fill:'#111111'}); inner = Insert(dark, {type:'frame', name:'Inner', layout:'vertical'}); Insert(inner, {type:'text', name:'Ink', content:'Hidden in the dark', fill:'#333333', fontSize:16}); Insert(inner, {type:'text', name:'Paper', content:'Easy to read', fill:'#F4EFE6', fontSize:16});"}));
+        assert!(r.text.lines().any(|l| l.contains("\"Ink\"") && l.contains("contrast")), "{}", r.text);
+        assert!(!r.text.lines().any(|l| l.contains("\"Paper\"") && l.contains("contrast")), "{}", r.text);
+        let card = execute(&mut e, &json!({"input": "c = Insert(document, {type:'frame', name:'Card', layout:'none', width:300, height:200, fill:'#FFFFFF'}); Insert(c, {type:'rectangle', name:'Shade', x:0, y:0, width:300, height:120, fill:{color:'#1F2A1C'}}); Insert(c, {type:'text', name:'On shade', x:20, y:20, content:'Over a sibling', fill:'#FFFFFF', fontSize:16}); Insert(c, {type:'text', name:'Lost on shade', x:20, y:60, content:'Dark on dark', fill:'#333333', fontSize:16}); Insert(c, {type:'text', name:'Half on shade', x:20, y:110, content:'Across the edge', fill:'#333333', fontSize:16});"}));
+        let flagged = |name: &str| card.text.lines().any(|l| l.contains(&format!("\"{name}\"")) && l.contains("contrast"));
+        assert!(!flagged("On shade"), "white on a solid sibling that covers it is judged against that sibling: {}", card.text);
+        assert!(flagged("Lost on shade"), "an untyped fill object is a colour: {}", card.text);
+        assert!(!flagged("Half on shade"), "text across a sibling's edge has an unknown background: {}", card.text);
+        let next = execute(&mut e, &json!({"input": "Insert(dark, {type:'text', name:'Late', content:'Added later', fill:'#F4EFE6', fontSize:16})"}));
+        assert!(!next.text.contains("\"Ink\""), "nodes the call did not touch are not reported, even in the same frame: {}", next.text);
+        let odd = execute(&mut e, &json!({"input": "o = Insert(document, {type:'frame', name:'Odd', layout:'none', width:300, height:300, fill:'#FFFFFF'}); Insert(o, {type:'ellipse', name:'Disc', x:0, y:0, width:300, height:100, fill:'#111111'}); Insert(o, {type:'text', name:'Corner', x:2, y:2, content:'In the corner', fill:'#EEEEEE', fontSize:16}); Insert(o, {type:'rectangle', name:'Multiply', x:0, y:150, width:300, height:100, fill:{type:'color', color:'#111111', blendMode:'multiply'}}); Insert(o, {type:'text', name:'On multiply', x:20, y:170, content:'Blended under', fill:'#FFFFFF', fontSize:16}); Insert(o, {type:'text', name:'Clear', x:20, y:270, content:'Not painted', fill:'#00000000', fontSize:16});"}));
+        let flagged = |name: &str| odd.text.lines().any(|l| l.contains(&format!("\"{name}\"")) && l.contains("contrast"));
+        assert!(!flagged("Corner"), "an ellipse's box is not its outline: {}", odd.text);
+        assert!(!flagged("On multiply"), "a blended paint depends on what is under it: {}", odd.text);
+        assert!(!flagged("Clear"), "transparent text is not judged: {}", odd.text);
+        let veil = execute(&mut e, &json!({"input": "v = Insert(document, {type:'frame', name:'Veil', layout:'vertical', opacity:0.4, width:200, height:100, fill:'#000000'}); Insert(v, {type:'text', name:'Under veil', content:'Seen through', fill:'#222222', fontSize:16});"}));
+        assert!(!veil.text.contains("contrast"), "a translucent ancestor leaves the background unknown: {}", veil.text);
     }
 
     #[test]
