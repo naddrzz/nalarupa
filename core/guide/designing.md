@@ -12,8 +12,8 @@ brief.
 3. **Choose a design direction.** Name two or three directions in a phrase
    each, each grown from a different side of the subject and different in
    structure, type and colour logic. Pick the one that best serves the framing.
-4. **Post it** as chat text the user sees, before any `execute`, so they can
-   redirect you before anything is built:
+4. **Post it** as your first chat message, before any tool call, so the user
+   can redirect you before anything is built:
    `Framing:` the line from step 2
    `Direction:` concept · palette · type · signature move
    `Why:` one line on why it beats the other directions

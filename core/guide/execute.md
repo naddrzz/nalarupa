@@ -1,8 +1,5 @@
 # The `execute` tool
 
-Before the first `execute` of a new design, post the Framing / Direction / Why
-message as chat text (Designing, step 4).
-
 `execute({input})` runs a JavaScript snippet (ES2022) against the open
 document. All operations in one call form a single transaction and a single
 undo step: if anything throws, the whole call is rolled back.
