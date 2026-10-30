@@ -646,7 +646,7 @@ pub(crate) fn rgba(s: &str) -> Option<[f64; 4]> {
     rgba8(s).map(|c| c.map(|v| v as f64 / 255.0))
 }
 
-fn hex(c: [f64; 4]) -> String {
+pub(crate) fn hex(c: [f64; 4]) -> String {
     let b = |v: f64| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
     format!("#{:02x}{:02x}{:02x}", b(c[0]), b(c[1]), b(c[2]))
 }
@@ -1856,6 +1856,17 @@ pub(crate) fn decode_image(path: &str) -> Option<tiny_skia::Pixmap> {
     let mut pm = tiny_skia::Pixmap::new(b.width().round() as u32, b.height().round() as u32)?;
     resvg::render(&tree, tiny_skia::Transform::identity(), &mut pm.as_mut());
     Some(pm)
+}
+
+/// A fill as one flat colour, read as `paints` reads it: a colour fill (an object without `type` is one) gives its
+/// RGBA, transparent when unparseable; a gradient, image, mesh or shader gives None.
+pub fn flat(f: &Value) -> Option<[f64; 4]> {
+    let c = match f {
+        Value::String(s) => s.as_str(),
+        Value::Object(o) if o.get("type").and_then(Value::as_str).unwrap_or("color") == "color" => o.get("color").and_then(Value::as_str).unwrap_or(""),
+        _ => return None,
+    };
+    Some(rgba(c).unwrap_or_default())
 }
 
 /// Enabled fills from a `fill`/`stroke` value (single fill or array).
