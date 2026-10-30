@@ -1464,7 +1464,7 @@ mod tests {
     #[test]
     fn the_design_core_carries_the_critique_pass() {
         let core = crate::guide::read("designing").text;
-        assert!(core.contains("Critique") && core.contains("TakeScreenshot") && core.contains("two revision"), "{core}");
+        assert!(core.contains("Critique each finished section") && core.contains("screenshot") && core.contains("two revision"), "{core}");
         for quality in ["Hierarchy", "Alignment", "Spacing rhythm", "Contrast", "Content", "Fixation", "Distinctness"] {
             assert!(core.contains(&format!("**{quality}:**")), "the critique checklist names {quality}");
         }

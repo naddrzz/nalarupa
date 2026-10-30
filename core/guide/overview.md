@@ -32,8 +32,8 @@ the user gives no brand direction.
 4. Build in visible steps: one `execute` per section (header, hero, list...).
    Users want to see progress quickly.
 5. After each section, check it: use `Get` with a visitor to look for
-   `ctx.problems` (clipped content), then run the critique pass (`designing`,
-   step 6) on its screenshot.
+   `ctx.problems` (clipped content), then run the critique pass (`designing`) on
+   its screenshot.
 6. Fix problems in place with `Update`. Never delete a finished screen to
    start over.
 

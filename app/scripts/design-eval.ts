@@ -120,7 +120,8 @@ type BriefResult = {
   id: string; kind: Kind; brief: string; ok: boolean; error?: string; wallMs: number
   turns: number; tokens: { input: number; output: number; cacheRead: number; cacheWrite: number }; costUsd: number
   executeCalls: number; failedExecutes: number; repairs: number; issues: string[]
-  /** Execute calls that ended with a TakeScreenshot (the critique pass looks at one per finished section). */
+  /** Execute calls whose snippet takes a screenshot (the critique pass looks at one per finished section and revision;
+   * an editId repair carries no snippet, so it is not counted). */
   screenshots?: number
   instructionsChars: number; guideReads: { tool: string; arg: string; chars: number }[]; guideChars: number
   /** Everything the agents said before the first execute, one "name: text" block each (named before it held more). */

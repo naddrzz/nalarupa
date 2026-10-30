@@ -47,8 +47,7 @@ unrelated briefs come back looking unrelated.
 - **Hierarchy:** one dominant element per view, made with scale contrast and
   white space before boxes or color.
 - **Alignment:** every edge on the grid; text shares baselines and edges.
-- **Spacing rhythm:** steps from the spacing scale; tight inside a group,
-  generous between groups.
+- **Spacing rhythm:** scale steps only; tight within groups, wide between them.
 - **Contrast:** each color judged against its neighbors; body text at least
   4.5:1, large text 3:1.
 - **Content:** specific copy from the brief: names, dates, prices, numbers,
