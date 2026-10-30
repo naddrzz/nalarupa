@@ -12,7 +12,8 @@ brief.
 3. **Choose a design direction.** Name two or three directions in a phrase
    each, each grown from a different side of the subject and different in
    structure, type and colour logic. Pick the one that best serves the framing.
-4. **Post it.** Your first chat message after reading, before any `execute`:
+4. **Post it** as chat text the user sees, before any `execute`, so they can
+   redirect you before anything is built:
    `Framing:` the line from step 2
    `Direction:` concept · palette · type · signature move
    `Why:` one line on why it beats the other directions
@@ -56,5 +57,4 @@ calls for it.
 - **Content:** specific copy written from the brief: names, dates, prices,
   numbers, quotes. Each headline says something only this subject could say.
 
-Deeper notes: `read_guide` topics `design` (type scale, mobile, dashboards,
-theming), `slides` and `components`.
+More in `read_guide` topics `design` (scale, mobile, dashboards), `slides`.
