@@ -969,6 +969,47 @@ fn contrast(a: [f64; 3], b: [f64; 3]) -> f64 {
     (x.max(y) + 0.05) / (x.min(y) + 0.05)
 }
 
+/// Whether a node places its children by auto layout (a frame without `layout: "none"`).
+fn flex(n: &RNode) -> bool {
+    n.ty == "frame" && n.s("layout") != Some("none")
+}
+
+/// Outside auto layout, sibling edges a pixel or two apart are a slip, not a choice. Each pair with a node the call
+/// touched is compared per axis (start, end, centre): one exact match means aligned; otherwise a start or end edge
+/// 0.5–3px off is reported, at most once per node and axis. Neighbours only: the boxes are at most 240px apart on the
+/// other axis. Rotated or flipped children (their boxes no longer match their edges) and parents past 200 children
+/// (the scan is quadratic) are skipped.
+fn near_misses(n: &RNode, touched: &HashSet<&str>, out: &mut Vec<String>) {
+    if n.kids.len() < 2 || n.kids.len() > 200 {
+        return;
+    }
+    let kids: Vec<&RNode> = n.kids.iter().filter(|k| k.f("rotation").unwrap_or(0.0) == 0.0 && !k.b("flipX") && !k.b("flipY")).collect();
+    let mut reported: HashSet<(&str, usize)> = HashSet::new();
+    for (i, a) in kids.iter().enumerate() {
+        for b in &kids[i + 1..] {
+            if !touched.contains(a.id.as_str()) && !touched.contains(b.id.as_str()) {
+                continue;
+            }
+            let gap = |p: f64, pl: f64, q: f64, ql: f64| (q - (p + pl)).max(p - (q + ql)).max(0.0);
+            let axes = [
+                (gap(a.y, a.h, b.y, b.h), [("left", a.x, b.x), ("right", a.x + a.w, b.x + b.w), ("centre", a.x + a.w / 2.0, b.x + b.w / 2.0)]),
+                (gap(a.x, a.w, b.x, b.w), [("top", a.y, b.y), ("bottom", a.y + a.h, b.y + b.h), ("middle", a.y + a.h / 2.0, b.y + b.h / 2.0)]),
+            ];
+            for (axis, (apart, edges)) in axes.into_iter().enumerate() {
+                let offs = edges.map(|(edge, p, q)| (edge, (p - q).abs()));
+                if apart > 240.0 || offs.iter().any(|(_, d)| *d <= 0.5) || reported.contains(&(a.id.as_str(), axis)) || reported.contains(&(b.id.as_str(), axis)) {
+                    continue;
+                }
+                // Centres only count as aligned: two unlike sizes with close centres are not a slip.
+                if let Some((edge, d)) = offs[..2].iter().find(|(_, d)| *d <= 3.0) {
+                    out.push(format!("\"{}\" ({}) and \"{}\" ({}) nearly align: their {edge} edges are {d:.1}px apart; align them exactly", a.name(), a.id, b.name(), b.id));
+                    reported.extend([(a.id.as_str(), axis), (b.id.as_str(), axis)]);
+                }
+            }
+        }
+    }
+}
+
 /// Layout and content checks on nodes touched by this call, plus the icons still downloading (their
 /// "not found" warning, library, name, weight): whether they exist is only known once `ToolOut::finish` waits.
 fn validate(e: &mut Engine, touched: &[String]) -> (Vec<String>, Vec<(String, String, String, u32)>) {
@@ -1022,6 +1063,9 @@ fn validate(e: &mut Engine, touched: &[String]) -> (Vec<String>, Vec<(String, St
                 };
                 stack.push((k, Some(n), under));
             }
+            if !flex(n) {
+                near_misses(n, &touched, &mut out);
+            }
             if !touched.contains(n.id.as_str()) && !parent.is_some_and(|p| touched.contains(p.id.as_str())) {
                 continue;
             }
@@ -1032,7 +1076,7 @@ fn validate(e: &mut Engine, touched: &[String]) -> (Vec<String>, Vec<(String, St
             if let Some(p) = n.problem {
                 out.push(format!("{label} sticks out of its parent ({p}); resize the parent or use fill_container/fit_content"));
             }
-            let parent_layout = parent.map(|p| p.ty == "frame" && p.s("layout") != Some("none")).unwrap_or(false);
+            let parent_layout = parent.is_some_and(flex);
             let absolute = n.s("layoutPosition") == Some("absolute");
             let has_xy = if n.inst.is_some() { own_xy.contains(&n.id) } else { n.p.contains_key("x") || n.p.contains_key("y") };
             if parent_layout && !absolute && has_xy && touched.contains(n.id.as_str()) {
@@ -1070,6 +1114,10 @@ fn validate(e: &mut Engine, touched: &[String]) -> (Vec<String>, Vec<(String, St
                         let cut = (ratio * 100.0).floor() / 100.0;
                         out.push(format!("text {label}: contrast {cut:.2}:1 against its background {} is below WCAG AA ({need}:1); change the text or background colour", crate::svg::hex([bg[0], bg[1], bg[2], 1.0])));
                     }
+                }
+                // Reading text, not a label: short strings (badges, captions, metadata) may be smaller.
+                if st.size < 12.0 && n.s("content").unwrap_or("").chars().count() >= 40 {
+                    out.push(format!("text {label}: body text at {}px is below 12px; set reading text at 12px or more", st.size));
                 }
                 e.fonts.ensure(&st);
                 if !e.fonts.has_family(&st.family) && !e.fonts.loading(&st.family) {
@@ -2545,6 +2593,49 @@ Insert(card, {type:\"text\", name:\"Title\", content:\"Hi\", fill:\"#111111\"})
         assert!(!flagged("Clear"), "transparent text is not judged: {}", odd.text);
         let veil = execute(&mut e, &json!({"input": "v = Insert(document, {type:'frame', name:'Veil', layout:'vertical', opacity:0.4, width:200, height:100, fill:'#000000'}); Insert(v, {type:'text', name:'Under veil', content:'Seen through', fill:'#222222', fontSize:16});"}));
         assert!(!veil.text.contains("contrast"), "a translucent ancestor leaves the background unknown: {}", veil.text);
+    }
+
+    #[test]
+    fn small_body_text_is_reported_but_short_labels_are_not() {
+        let mut e = engine();
+        let r = execute(&mut e, &json!({"input": "f = Insert(document, {type:'frame', name:'Page', layout:'vertical', width:600, height:300, fill:'#FFFFFF'}); Insert(f, {type:'text', name:'Fine print', content:'Pre-orders close on Thursday at six; collect them on Saturday morning.', fill:'#111111', fontSize:11}); Insert(f, {type:'text', name:'Badge', content:'NEW', fill:'#111111', fontSize:10}); Insert(f, {type:'text', name:'Body', content:'Pre-orders close on Thursday at six; collect them on Saturday morning.', fill:'#111111', fontSize:12});"}));
+        let flagged = |name: &str| r.text.lines().any(|l| l.contains(&format!("\"{name}\"")) && l.contains("below 12px"));
+        assert!(flagged("Fine print"), "{}", r.text);
+        assert!(!flagged("Badge"), "{}", r.text);
+        assert!(!flagged("Body"), "{}", r.text);
+    }
+
+    #[test]
+    fn near_miss_alignment_is_reported_outside_auto_layout() {
+        let mut e = engine();
+        let rect = |name: &str, x: f64, y: f64| format!("Insert(f, {{type:'rectangle', name:'{name}', x:{x}, y:{y}, width:100, height:40, fill:'#CCCCCC'}});");
+        let src = format!(
+            "f = Insert(document, {{type:'frame', name:'Free', layout:'none', width:600, height:400, fill:'#FFFFFF'}}); {}{}{}{}",
+            rect("A", 40.0, 20.0),
+            rect("Slipped", 41.5, 80.0),
+            rect("Exact", 40.0, 140.0),
+            rect("Apart", 48.0, 200.0),
+        );
+        let r = execute(&mut e, &json!({"input": src}));
+        let near = |a: &str, b: &str| r.text.lines().any(|l| l.contains(&format!("\"{a}\"")) && l.contains(&format!("\"{b}\"")) && l.contains("nearly align"));
+        assert!(near("A", "Slipped"), "1.5px off: {}", r.text);
+        assert!(!near("A", "Exact"), "equal edges: {}", r.text);
+        assert!(!near("A", "Apart") && !near("Exact", "Apart"), "8px apart is a choice: {}", r.text);
+        let tops = execute(&mut e, &json!({"input": "Insert(f, {type:'rectangle', name:'Tall', x:300, y:20, width:60, height:40, fill:'#CCCCCC'}); Insert(f, {type:'rectangle', name:'Short', x:420, y:20, width:60, height:38, fill:'#CCCCCC'});"}));
+        assert!(!tops.text.lines().any(|l| l.contains("\"Short\"") && l.contains("nearly align")), "top-aligned items of different heights are aligned: {}", tops.text);
+        let centres = execute(&mut e, &json!({"input": "Insert(f, {type:'rectangle', name:'Band', x:0, y:300, width:500, height:20, fill:'#CCCCCC'}); Insert(f, {type:'rectangle', name:'Dot', x:240, y:340, width:24, height:24, fill:'#CCCCCC'});"}));
+        assert!(!centres.text.lines().any(|l| l.contains("\"Dot\"") && l.contains("nearly align")), "centres of unlike sizes are not edges: {}", centres.text);
+        let flow = execute(&mut e, &json!({"input": "g = Insert(document, {type:'frame', name:'Flow', layout:'vertical', gap:7, width:300, height:200, fill:'#FFFFFF'}); Insert(g, {type:'rectangle', name:'R1', width:100, height:20, fill:'#CCCCCC'}); Insert(g, {type:'rectangle', name:'R2', width:101, height:20, fill:'#CCCCCC'});"}));
+        assert!(!flow.text.contains("nearly align"), "auto layout places its children: {}", flow.text);
+        let far = execute(&mut e, &json!({"input": "w = Insert(document, {type:'frame', name:'Wide', layout:'none', width:2000, height:1200, fill:'#FFFFFF'}); Insert(w, {type:'rectangle', name:'West', x:0, y:800, width:100, height:40, fill:'#CCCCCC'}); Insert(w, {type:'rectangle', name:'East', x:1800, y:801.5, width:100, height:40, fill:'#CCCCCC'}); Insert(w, {type:'rectangle', name:'Col1', x:0, y:200, width:100, height:40, fill:'#CCCCCC'}); Insert(w, {type:'rectangle', name:'Col2', x:1.5, y:260, width:100, height:40, fill:'#CCCCCC'}); Insert(w, {type:'rectangle', name:'Col3', x:1.5, y:320, width:100, height:40, fill:'#CCCCCC'});"}));
+        let lines = |name: &str| far.text.lines().filter(|l| l.contains(&format!("\"{name}\"")) && l.contains("nearly align")).count();
+        assert_eq!(lines("East"), 0, "edges far apart on the other axis are not compared: {}", far.text);
+        assert_eq!(lines("Col1"), 1, "a slipped item is reported once per axis, not once per sibling: {}", far.text);
+        let flips = execute(&mut e, &json!({"input": "m = Insert(document, {type:'frame', name:'Mirror', layout:'none', width:400, height:300, fill:'#FFFFFF'}); Insert(m, {type:'rectangle', name:'Plain', x:100, y:0, width:80, height:40, fill:'#CCCCCC'}); Insert(m, {type:'rectangle', name:'Flipped', x:101.5, y:60, width:80, height:40, flipX:true, fill:'#CCCCCC'}); Insert(m, {type:'rectangle', name:'Three off', x:103, y:120, width:80, height:40, fill:'#CCCCCC'});"}));
+        assert!(!flips.text.lines().any(|l| l.contains("\"Flipped\"") && l.contains("nearly align")), "a flipped box is not where its x says: {}", flips.text);
+        assert!(flips.text.lines().any(|l| l.contains("\"Three off\"") && l.contains("3.0px apart")), "3px off is still a near miss: {}", flips.text);
+        let next = execute(&mut e, &json!({"input": "Insert(f, {type:'rectangle', name:'Later', x:400, y:360, width:20, height:20, fill:'#CCCCCC'})"}));
+        assert!(!next.text.contains("\"Slipped\""), "pairs the call did not touch are not reported, even in the same frame: {}", next.text);
     }
 
     #[test]
