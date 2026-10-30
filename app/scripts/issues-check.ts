@@ -38,6 +38,19 @@ assert(!clean.includes('Issues detected'), `a clean call has no issues section:\
 let out = run('Insert(f, {type:"text", name:"Ghost", x:10, y:50, content:"boo", fontFamily:"Inter", fontSize:16})')
 assert(has(out, /text "Ghost" \(\w+\) has no fill and is invisible/), `invisible text: ${out}`)
 
+// Reading text below 12px is reported; a short label may be smaller.
+out = run('Insert(f, {type:"text", name:"Fine print", x:10, y:130, content:"Orders close Thursday at six; collect on Saturday.", fontFamily:"Inter", fontSize:10, fill:"#111111"})')
+assert(has(out, /text "Fine print" \(\w+\): body text at 10px is below 12px/), `small body text: ${out}`)
+out = run('Insert(f, {type:"text", name:"Tag", x:200, y:130, content:"NEW", fontFamily:"Inter", fontSize:10, fill:"#111111"})')
+assert(!has(out, /below 12px/), `a short label may be small: ${out}`)
+
+// Outside auto layout, sibling edges 1–2px apart are reported (here against the column of text at x 10), once per axis;
+// edges 8px apart are a choice, and auto layout places its own children.
+out = run('Insert(f, {type:"rectangle", name:"Nudged", x:11.5, y:170, width:40, height:10, fill:"#cccccc"})')
+assert(issues(out).filter((l) => /"Nudged" \(\w+\) nearly align: their left edges are 1\.5px apart/.test(l)).length === 1, `near-miss alignment: ${out}`)
+out = run('Insert(f, {type:"rectangle", name:"Offset", x:18, y:186, width:40, height:10, fill:"#cccccc"})')
+assert(!has(out, /"Offset"/), `8px apart is not a near miss: ${out}`)
+
 // A layer wider than its fixed parent sticks out.
 out = run('Insert(f, {type:"rectangle", name:"Wide", x:0, y:100, width:500, height:20, fill:"#ff0000"})')
 assert(has(out, /"Wide" \(\w+\) sticks out of its parent/), `sticks out: ${out}`)
@@ -47,6 +60,8 @@ out = run('col = Insert(document, {type:"frame", name:"Col", x:400, y:0, width:2
 assert(has(out, /"Flow" \(\w+\): x\/y are ignored inside a flex layout parent/), `x/y in flex: ${out}`)
 out = run('Insert(col, {type:"rectangle", name:"Pinned", x:5, y:5, width:20, height:20, layoutPosition:"absolute", fill:"#0000ff"})')
 assert(!has(out, /Pinned/), `an absolute child in a flex parent is fine: ${out}`)
+out = run('Insert(col, {type:"rectangle", name:"Stacked", width:51, height:20, fill:"#00ff00"})')
+assert(!has(out, /nearly align/), `auto layout children are never near misses: ${out}`)
 
 // An instance's x/y come from its component, not the snippet: no warning unless the instance sets its own.
 out = run(`comp = Insert(document, {type:"frame", name:"Btn", reusable:true, x:300, y:400, padding:8, fill:"#0000ff", width:100, height:40})
