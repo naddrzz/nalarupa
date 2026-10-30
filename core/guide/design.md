@@ -4,8 +4,10 @@ Deeper notes for the design direction in `designing`.
 
 ## Type
 
-- Pairings (display + text, all from Google Fonts); the default sans-serif
-  (Inter) is one option, not the default:
+Pairings to start from (display + text, all from Google Fonts), each with the
+subjects it suits; Inter is one option among them, and a face found in the
+subject itself beats any list.
+
 - Fraunces + Work Sans: warm editorial, food, craft
 - Barlow Condensed + Barlow: signage, timetables, transport
 - IBM Plex Mono + IBM Plex Sans: ledgers, data, developer tools

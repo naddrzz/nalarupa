@@ -37,10 +37,12 @@ Slides tab's PDF button) writes the whole deck as one multi-page PDF.
 | Big number | giant figure + one line of context |
 | Timeline | horizontal row of step frames joined by thin rectangles |
 | Chart | title + bar chart built from frames (`alignItems: "end"`) |
+| Comparison | two columns with the same structure, the difference marked in the accent |
+| Image-led | one full-bleed image with the title set on it |
 | Quote | large quote text + attribution |
 | Closing | statement or CTA + contact line |
 
 Keep one design direction for the whole deck: the same tokens, type, margins
 and signature move on every slide. Give each slide the pattern its idea needs,
-so the layouts vary; two slides in a row with the same pattern is the most.
-Build the cover fully and critique it before the rest.
+so the layouts vary; at most two slides in a row share a pattern. Build the
+cover fully and check its screenshot before the rest.

@@ -2,12 +2,13 @@
 //   bun scripts/design-eval.ts run [--backend claude-code|api] [--model id] [--only id,id] [--out dir]
 //   bun scripts/design-eval.ts compare <runA> <runB> [--out page.html]
 //   bun scripts/design-eval.ts summary <run>
+//   bun scripts/design-eval.ts fonts        (every face the guide names loads; no model involved)
 // `run` sends every eval brief through the design agent headlessly and keeps an eval run folder: each brief's
 // top-level frames as PNGs, its document, its transcript, and metrics.json + summary.md. `compare` writes one page
 // with two eval runs side by side and B − A for every metric; `summary` reprints a run's summary.md. Both flag
 // unrelated briefs whose results look alike (sameness is a defect): only briefs of one kind are compared, since a
 // phone screen and a page differ by shape alone, and the existing-style brief is meant to look like its fixture.
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join, relative, resolve } from 'node:path'
 import { decodePng } from './png'
@@ -346,7 +347,31 @@ const run = async () => {
 
 const load = (dir: string): Run => JSON.parse(readFileSync(join(dir, 'metrics.json'), 'utf8'))
 
+/** Every face the guide names (its pairings and its examples) loads from the web. */
+const fonts = async () => {
+  const { call } = await import('../src/core')
+  const guide = join(import.meta.dir, '../../core/guide')
+  const names = new Set<string>()
+  for (const f of readdirSync(guide)) {
+    const md = readFileSync(join(guide, f), 'utf8')
+    for (const m of md.matchAll(/fontFamily: "([^"]+)"/g)) names.add(m[1])
+    for (const m of md.matchAll(/^- ([A-Z][\w ]+?) \+ ([A-Z][\w ]+?):/gm)) names.add(m[1]).add(m[2])
+  }
+  call('init')
+  call('new', { template: 'empty' })
+  const ex = (input: string) => call<any>('tool', { name: 'execute', args: { input } }).text as string
+  const list = [...names]
+  ex(`f = Insert(document, {type:"frame", name:"Fonts", layout:"vertical", width:800, fill:"#ffffff"}); ${list.map((n, i) => `Insert(f, {type:"text", name:"F${i}", content:"Aa 0123", fontFamily:${JSON.stringify(n)}, fontSize:24, fill:"#111111"})`).join('; ')}`)
+  await Bun.sleep(15_000)
+  // Touching each text again re-runs the font check once the downloads have had their time.
+  const out = ex(list.map((_, i) => `Update(Get(f).children[${i}].id, {fontSize: 25})`).join('; '))
+  const missing = list.filter((n) => out.includes(`font family '${n}' is not available`))
+  console.log(missing.length ? `missing: ${missing.join(', ')}` : `all ${list.length} faces load: ${list.join(', ')}`)
+  process.exit(missing.length ? 1 : 0)
+}
+
 if (process.env.EVAL_OUT) await run()
+else if (process.env.EVAL_FONTS) await fonts()
 else if (args[0] === 'run') {
   // A fresh data folder keeps the eval out of the person's settings and chat history (the core reads
   // NALARUPA_DATA through libc, so it is set for a child process).
@@ -362,9 +387,14 @@ else if (args[0] === 'run') {
   const out = resolve(flag('out') ?? join(dirs[1], 'compare.html'))
   page(out, dirs.map((d) => [d, load(d)] as [string, Run]))
   console.log(out)
+} else if (args[0] === 'fonts') {
+  const data = mkdtempSync(join(tmpdir(), 'nalarupa-fonts-'))
+  const child = Bun.spawnSync([process.execPath, import.meta.path, 'fonts'], { env: { ...process.env, NALARUPA_DATA: data, EVAL_FONTS: '1' }, stdio: ['inherit', 'inherit', 'inherit'] })
+  rmSync(data, { recursive: true, force: true })
+  process.exit(child.exitCode ?? 1)
 } else if (args[0] === 'summary' && args[1]) {
   console.log(summary(resolve(args[1]), load(resolve(args[1]))))
 } else {
-  console.error('usage: design-eval.ts run [--backend claude-code|api] [--model id] [--only id,id] [--out dir]\n       design-eval.ts compare <runA> <runB> [--out page.html]\n       design-eval.ts summary <run>')
+  console.error('usage: design-eval.ts run [--backend claude-code|api] [--model id] [--only id,id] [--out dir]\n       design-eval.ts compare <runA> <runB> [--out page.html]\n       design-eval.ts summary <run>\n       design-eval.ts fonts')
   process.exit(2)
 }

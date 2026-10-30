@@ -136,7 +136,7 @@ mod tests {
         let design = read("design").text;
         let pairings = design.lines().filter(|l| l.starts_with("- ") && l.contains(" + ")).count();
         assert!(pairings >= 3, "at least three display + text pairings: {design}");
-        assert!(design.contains("one option, not the default"), "{design}");
+        assert!(design.contains("Inter is one option among them"), "{design}");
         let slides = read("slides").text;
         assert!(!slides.contains("reuse its structure"), "slides vary their layouts: {slides}");
         assert!(slides.contains("one design direction"), "{slides}");
