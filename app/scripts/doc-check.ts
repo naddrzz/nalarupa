@@ -500,7 +500,8 @@ if (process.platform !== 'win32') {
   call('select', { ids: rects })
   const sel = call('tool', { name: 'get_editor_state', args: {} }).text as string
   assert(sel.length < 20000 && /\.\.\. \+1960 others/.test(sel), `the selection list is capped (${sel.length} bytes)`)
-  const brief = 'lorem ipsum '.repeat(12000)
+  // A marker no instruction text contains: the system prompt itself is an argument.
+  const brief = 'quokka orbit '.repeat(12000)
   const bin = join(data, 'bin')
   rmSync(join(bin, 'stdin.txt'), { force: true })
   rmSync(join(bin, 'args.txt'), { force: true })
@@ -509,7 +510,7 @@ if (process.platform !== 'win32') {
     const sent = join(bin, 'stdin.txt')
     await until(() => existsSync(sent) && readFileSync(sent, 'utf8').includes(brief), 'the whole prompt reaches the CLI on stdin')
     await until(() => existsSync(join(bin, 'args.txt')), 'the CLI started')
-    assert(!readFileSync(join(bin, 'args.txt'), 'utf8').includes('lorem'), 'the prompt is not an argument')
+    assert(!readFileSync(join(bin, 'args.txt'), 'utf8').includes('quokka'), 'the prompt is not an argument')
     assert(call('state').agentRunning, 'a long prompt starts the run')
   } finally {
     call('agent_stop')
