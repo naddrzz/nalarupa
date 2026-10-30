@@ -13,10 +13,22 @@ _Avoid_: bot, assistant, AI designer
 What a person asks the design agent to make, with the purpose, audience and content it implies.
 _Avoid_: prompt (when meaning the request's substance), spec
 
+**Framing**:
+The design agent's own opinionated angle on a brief, stated in a line, which the design direction then serves.
+_Avoid_: summary, interpretation, brief restatement
+
 **Design direction**:
-The one deliberate visual idea a design follows: a concept stated in a sentence, its palette, its type pairing and
-its layout idea.
+The one deliberate visual idea a design follows: a concept stated in a sentence and the small discipline that
+carries it (palette and type with a role for each, layout and spacing system, and one signature move).
 _Avoid_: theme, style preset, archetype, vibe
+
+**Signature move**:
+The one deliberate, memorable element of a design direction that makes the design recognisable.
+_Avoid_: hero element, wow factor, gimmick
+
+**Fixation**:
+Falling back on familiar defaults or seen examples instead of answering the brief.
+_Avoid_: laziness, being generic (as a cause)
 
 **Existing style**:
 The visual language a document already has (its variables, components, and finished frames) that new work extends.
@@ -28,7 +40,7 @@ _Avoid_: self-review, QA, polish pass
 
 **Critique checklist**:
 The short fixed list of qualities a critique pass checks: hierarchy, alignment, spacing rhythm, contrast, content
-realism, and distinctness from the generic default.
+realism, fixation, and distinctness from the generic default.
 _Avoid_: rubric, design rules
 
 **Generic default**:
