@@ -98,13 +98,14 @@ keeping its files together, and run `nalarupa.exe`.
 **macOS (Apple Silicon):** open `Nalarupa-<version>-macos-arm64.dmg` and drag Nalarupa to Applications. The app is
 not notarized: the first time, right-click it and choose Open.
 
-**Linux x64:** unpack `Nalarupa-<version>-linux-x64.tar.gz` and run `./install.sh` (it installs into `~/.local`;
-`./install.sh --uninstall` removes it), or run `./nalarupa` in place. It needs a Wayland session and Vulkan drivers.
+**Linux x64:** unpack `Nalarupa-<version>-linux-x64.tar.gz`, `cd Nalarupa-<version>-linux-x64`, and run
+`./install.sh` (it installs into `~/.local`; `./install.sh --uninstall` removes it), or run `./nalarupa` in place.
+It needs a Wayland session and Vulkan drivers.
 
 For the AI agents, install and sign in to [Claude Code](https://claude.com/claude-code) (`claude` on your
 PATH), or enter an Anthropic API key in the agent settings. App data (settings, chat history, font cache)
 lives in `%LOCALAPPDATA%\Nalarupa` on Windows, `~/Library/Application Support/Nalarupa` on macOS and
-`~/.local/share/Nalarupa` on Linux.
+`${XDG_DATA_HOME:-~/.local/share}/Nalarupa` on Linux.
 
 ## Development
 

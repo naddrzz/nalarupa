@@ -19,6 +19,13 @@ remove_ours() {
   fi
 }
 
+# The app folder must be a real directory: through a link, install would write into, and uninstall delete from,
+# whatever it points at.
+if [ -L "$lib" ]; then
+  echo "install.sh: $lib is a symbolic link; remove it and run again." >&2
+  exit 1
+fi
+
 if [ "$1" = "--uninstall" ]; then
   if [ -d "$lib" ]; then
     rm -f "$lib/nalarupa" "$lib/libnalarupa_core.so" "$lib"/gpuix-native.*.node

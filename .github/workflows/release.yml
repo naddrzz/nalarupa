@@ -148,8 +148,9 @@ jobs:
         with: { name: linux, path: out/*, if-no-files-found: error }
 
   release:
-    # Only a tag publishes; the release stays a draft until the maintainer reviews and publishes it.
-    if: github.ref_type == 'tag'
+    # Only a pushed tag publishes (a manual run on a tag only builds); the release stays a draft until the
+    # maintainer reviews and publishes it.
+    if: github.event_name == 'push' && github.ref_type == 'tag'
     needs: [version, windows, macos, linux]
     runs-on: ubuntu-24.04
     permissions: { contents: write }
