@@ -212,11 +212,10 @@ for a broad product idea that is the main screen people land on first, the one t
 later iterations explore other directions for exactly this scope.";
 const NEXT_LAYOUT: &str = "Now design another variation of this page. Work out, as a strong product designer would, what could inspire it and give it more depth; \
 draw on what you already know instead of browsing the web, and let those insights shape the result. Make it a clearly different layout, placed next to \
-the earlier designs. Important: keep the visual style of the first design (fonts, palette, radius, elevation); do not pick a new style.";
+the earlier designs. Important: keep the first design's design direction (palette, type, spacing, signature move) and change only the layout.";
 const NEXT_STYLE: &str = "Now design another variation of this page. Work out, as a strong product designer would, what could inspire it and give it more depth; \
 draw on what you already know instead of browsing the web, and let those insights shape the result. Placed next to the earlier designs. Important: give it a new \
-design direction that differs from every earlier variation on at least two of framing, layout structure, type pairing and color logic (a recolor \
-is not a variation), and post its Framing / Direction / Why before building.";
+design direction, apart from every earlier variation on at least two of the variation axes (Designing); a recolor is not a variation.";
 const ITERATING: &str = "Iterating more on the design…";
 
 /// Start a turn. While agents are busy the prompt is queued and sent when they finish.
@@ -1464,10 +1463,12 @@ mod tests {
 
     #[test]
     fn a_new_style_variation_differs_on_named_axes() {
+        let core = crate::guide::read("designing").text;
         for axis in ["framing", "layout structure", "type pairing", "color logic"] {
-            assert!(NEXT_STYLE.contains(axis), "Let it cook names the {axis} axis");
+            assert!(core.contains(axis), "the design core names the {axis} axis once, for every prompt to point at");
         }
-        assert!(!NEXT_STYLE.contains("archetype"), "{NEXT_STYLE}");
+        assert!(NEXT_STYLE.contains("variation axes") && !NEXT_STYLE.contains("archetype"), "{NEXT_STYLE}");
+        assert!(NEXT_LAYOUT.contains("design direction") && !NEXT_LAYOUT.contains("style"), "{NEXT_LAYOUT}");
     }
 
     #[test]

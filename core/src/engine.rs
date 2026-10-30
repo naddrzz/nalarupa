@@ -1147,7 +1147,7 @@ impl Engine {
         match name {
             "get_editor_state" => ToolOut::ok(self.editor_state()),
             "read_guide" => crate::guide::read(args["topic"].as_str().unwrap_or("")),
-            "get_style" => crate::guide::style(args["name"].as_str().unwrap_or("")),
+            "get_style" => crate::guide::directions(args["name"].as_str().unwrap_or("")),
             "execute" if self.executing => ToolOut::err("Another execute call is still running."),
             "execute" => {
                 let call = self.begin_execute(args);
@@ -1287,7 +1287,7 @@ pub fn tool_specs() -> Value {
          "inputSchema": {"type": "object", "properties": {}}},
         {"name": "read_guide", "description": "Read Nalarupa's design guide. No topic returns the overview and the list of topics (designing, schema, execute, components, slides, design, code).",
          "inputSchema": {"type": "object", "properties": {"topic": {"type": "string", "description": "Guide topic, e.g. 'schema', 'execute', 'slides'"}}}},
-        {"name": "get_style", "description": "Worked examples of design directions (framing, concept, palette and type with roles, layout, signature move), each grown from a sample brief: learn the reasoning, then compose your own. No name lists them.",
+        {"name": "get_style", "description": "Worked examples of design directions (framing, concept, palette and type with roles, layout, signature move), each grown from a sample brief. No name lists them.",
          "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}}}},
         {"name": "execute", "description": "Run a JavaScript snippet against the canvas (Insert/Update/Copy/Replace/Move/Delete/Get/SetVariables/TakeScreenshot/Export...). All operations in one call are a single undoable transaction; on error everything is rolled back. Read the 'execute' guide first. To fix a failed call, send `editId` with `edits` instead of resending the snippet.",
          "inputSchema": {"type": "object", "properties": {

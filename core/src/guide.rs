@@ -34,7 +34,7 @@ pub fn system_docs() -> String {
 }
 
 /// A worked example of a design direction: how one grows from a brief. Agents learn the reasoning; they do not paste it.
-struct Style {
+struct Direction {
     name: &'static str,
     brief: &'static str,
     framing: &'static str,
@@ -46,8 +46,8 @@ struct Style {
     why: &'static str,
 }
 
-const STYLES: &[Style] = &[
-    Style {
+const DIRECTIONS: &[Direction] = &[
+    Direction {
         name: "Tide Table",
         brief: "Site for a harbour town's ferry, with sailings that move with the tide.",
         framing: "a tide table you can read on the quay, not a tourism page",
@@ -58,7 +58,7 @@ const STYLES: &[Style] = &[
         signature: "the day's tide curve drawn as one thin line running behind the timetable rows",
         why: "the people using it are standing on the quay checking a time; the almanac is the form they already trust.",
     },
-    Style {
+    Direction {
         name: "Seed Packet",
         brief: "Page for a community seed library that lends seeds and asks for some back after harvest.",
         framing: "a seed packet, not a shop catalogue",
@@ -69,7 +69,7 @@ const STYLES: &[Style] = &[
         signature: "a rotated 'sow by' date stamp opening every section",
         why: "lending and returning seeds is the whole idea, and the packet carries both the variety and the promise to give some back.",
     },
-    Style {
+    Direction {
         name: "Running Statement",
         brief: "Landing page for invoicing software for sole traders.",
         framing: "a statement you can trust, not a fintech pitch",
@@ -80,7 +80,7 @@ const STYLES: &[Style] = &[
         signature: "a running balance column that carries on down the whole page, section after section",
         why: "the audience fears losing track of money; a calm, exact ledger shows the product's character before any claim does.",
     },
-    Style {
+    Direction {
         name: "Wall Label",
         brief: "Exhibition page for a small museum's show of one photographer.",
         framing: "the label beside the work, not a poster for it",
@@ -91,7 +91,7 @@ const STYLES: &[Style] = &[
         signature: "a label block (title, year, medium) pinned beside every photograph",
         why: "the photographs are the content; the page should behave like the room they hang in.",
     },
-    Style {
+    Direction {
         name: "Pit Wall",
         brief: "Live dashboard for a sim-racing league's race night.",
         framing: "the pit wall screen, not a sports news site",
@@ -102,7 +102,7 @@ const STYLES: &[Style] = &[
         signature: "sector bars coloured green, purple and amber as the only visual system",
         why: "viewers want to see who is fast right now; the colour code racing already uses does that without a legend.",
     },
-    Style {
+    Direction {
         name: "Picture Book",
         brief: "Reading app screen for children aged five to seven.",
         framing: "a picture book you can tap, not a learning platform",
@@ -115,21 +115,22 @@ const STYLES: &[Style] = &[
     },
 ];
 
-pub fn style(name: &str) -> ToolOut {
+/// `get_style`: the worked examples of design directions (no name lists them).
+pub fn directions(name: &str) -> ToolOut {
     let name = name.trim();
     if name.is_empty() {
-        let list: String = STYLES.iter().map(|s| format!("- **{}**: {}\n", s.name, s.brief)).collect();
+        let list: String = DIRECTIONS.iter().map(|s| format!("- **{}**: {}\n", s.name, s.brief)).collect();
         return ToolOut::ok(format!(
             "# Design directions: worked examples\n\nEach shows how a design direction grows from one brief. Read one for the reasoning, then compose \
              your own from your brief; it is a worked example, not a paste target. Call get_style with a name to read one.\n\n{list}"
         ));
     }
-    let Some(s) = STYLES.iter().find(|s| s.name.eq_ignore_ascii_case(name)) else {
-        return ToolOut::err(format!("unknown style '{name}'; call get_style with no name to list them"));
+    let Some(s) = DIRECTIONS.iter().find(|s| s.name.eq_ignore_ascii_case(name)) else {
+        return ToolOut::err(format!("unknown example '{name}'; call get_style with no name to list them"));
     };
     let palette: String = s.palette.iter().map(|(role, what, hex)| format!("  - {role}: {what} {hex}\n")).collect();
     ToolOut::ok(format!(
-        "# {} (worked example, not a paste target)\n\n- **Brief:** {}\n- **Framing:** {}\n- **Concept:** {}\n- **Palette** (one job each):\n{palette}\
+        "# {}\n\n- **Brief:** {}\n- **Framing:** {}\n- **Concept:** {}\n- **Palette** (one job each):\n{palette}\
          - **Type:** display {}; text {}\n- **Layout and spacing:** {}\n- **Signature move:** {}\n- **Why:** {}\n\n\
          Your brief is not this one: take the reasoning (subject → framing → direction), not the values.\n",
         s.name, s.brief, s.framing, s.concept, s.type_.0, s.type_.1, s.layout, s.signature, s.why
@@ -142,17 +143,17 @@ mod tests {
 
     #[test]
     fn styles_are_worked_examples_of_design_directions() {
-        let list = style("");
+        let list = directions("");
         assert!(!list.error && list.text.contains("worked example") && list.text.contains("not a paste target"), "{}", list.text);
-        assert_eq!(list.text.matches("\n- **").count(), STYLES.len(), "every example is listed");
-        for s in STYLES {
-            let one = style(s.name);
+        assert_eq!(list.text.matches("\n- **").count(), DIRECTIONS.len(), "every example is listed");
+        for s in DIRECTIONS {
+            let one = directions(s.name);
             assert!(!one.error, "{}", s.name);
             for part in ["Brief", "Framing", "Concept", "Palette", "Type", "Layout and spacing", "Signature move", "Why"] {
                 assert!(one.text.contains(&format!("**{part}")), "{} shows its {part}", s.name);
             }
             assert!(!one.text.contains("SetVariables"), "{} offers no tokens to paste", s.name);
         }
-        assert!(style("no-such-style").error, "an unknown name is still rejected");
+        assert!(directions("no-such-style").error, "an unknown name is still rejected");
     }
 }
