@@ -121,6 +121,7 @@ type BriefResult = {
   turns: number; tokens: { input: number; output: number; cacheRead: number; cacheWrite: number }; costUsd: number
   executeCalls: number; failedExecutes: number; repairs: number; issues: string[]
   instructionsChars: number; guideReads: { tool: string; arg: string; chars: number }[]; guideChars: number
+  /** Everything the agents said before the first execute, one "name: text" block each (named before it held more). */
   firstMessage: string; deniedTools: string[]; shots: Shot[]
 }
 type Run = { meta: { sha: string; backend: string; model: string | null; date: string }; briefs: BriefResult[] }
@@ -273,7 +274,7 @@ const run = async () => {
           if (t) {
             transcript.push(`**${who}:** ${t}\n`)
             // Everything said before the first execute: where a framing and design direction would be.
-            if (!executed) r.firstMessage = [r.firstMessage, t].filter(Boolean).join('\n\n')
+            if (!executed) r.firstMessage = [r.firstMessage, `${who}: ${t}`].filter(Boolean).join('\n\n')
           }
           text.delete(who)
         }
