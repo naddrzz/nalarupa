@@ -940,6 +940,47 @@ pub(crate) fn issue_line(warning: &str) -> String {
     format!("- {}\n", warning.replace(['\r', '\n'], " "))
 }
 
+/// Whether a node places its children by auto layout (a frame without `layout: "none"`).
+fn flex(n: &RNode) -> bool {
+    n.ty == "frame" && n.s("layout") != Some("none")
+}
+
+/// Outside auto layout, sibling edges a pixel or two apart are a slip, not a choice. Each pair with a node the call
+/// touched is compared per axis (start, end, centre): one exact match means aligned; otherwise a start or end edge
+/// 0.5–3px off is reported, at most once per node and axis. Neighbours only: the boxes are at most 240px apart on the
+/// other axis. Rotated children (boxes no longer match their edges) and parents past 200 children (the scan is
+/// quadratic) are skipped.
+fn near_misses(n: &RNode, touched: &HashSet<&str>, out: &mut Vec<String>) {
+    if n.kids.len() < 2 || n.kids.len() > 200 {
+        return;
+    }
+    let kids: Vec<&RNode> = n.kids.iter().filter(|k| k.f("rotation").unwrap_or(0.0) == 0.0).collect();
+    let mut reported: HashSet<(&str, usize)> = HashSet::new();
+    for (i, a) in kids.iter().enumerate() {
+        for b in &kids[i + 1..] {
+            if !touched.contains(a.id.as_str()) && !touched.contains(b.id.as_str()) {
+                continue;
+            }
+            let gap = |p: f64, pl: f64, q: f64, ql: f64| (q - (p + pl)).max(p - (q + ql)).max(0.0);
+            let axes = [
+                (gap(a.y, a.h, b.y, b.h), [("left", a.x, b.x), ("right", a.x + a.w, b.x + b.w), ("centre", a.x + a.w / 2.0, b.x + b.w / 2.0)]),
+                (gap(a.x, a.w, b.x, b.w), [("top", a.y, b.y), ("bottom", a.y + a.h, b.y + b.h), ("middle", a.y + a.h / 2.0, b.y + b.h / 2.0)]),
+            ];
+            for (axis, (apart, edges)) in axes.into_iter().enumerate() {
+                let offs = edges.map(|(edge, p, q)| (edge, (p - q).abs()));
+                if apart > 240.0 || offs.iter().any(|(_, d)| *d <= 0.5) || reported.contains(&(a.id.as_str(), axis)) || reported.contains(&(b.id.as_str(), axis)) {
+                    continue;
+                }
+                // Centres only count as aligned: two unlike sizes with close centres are not a slip.
+                if let Some((edge, d)) = offs[..2].iter().find(|(_, d)| *d < 3.0) {
+                    out.push(format!("\"{}\" ({}) and \"{}\" ({}) nearly align: their {edge} edges are {d:.1}px apart; align them exactly", a.name(), a.id, b.name(), b.id));
+                    reported.extend([(a.id.as_str(), axis), (b.id.as_str(), axis)]);
+                }
+            }
+        }
+    }
+}
+
 /// Layout and content checks on nodes touched by this call, plus the icons still downloading (their
 /// "not found" warning, library, name, weight): whether they exist is only known once `ToolOut::finish` waits.
 fn validate(e: &mut Engine, touched: &[String]) -> (Vec<String>, Vec<(String, String, String, u32)>) {
@@ -974,32 +1015,8 @@ fn validate(e: &mut Engine, touched: &[String]) -> (Vec<String>, Vec<(String, St
             for k in &n.kids {
                 stack.push((k, Some(n)));
             }
-            // Outside auto layout, sibling edges a pixel or two apart are a slip, not a choice.
-            if n.kids.len() > 1 && n.kids.len() <= 200 && !(n.ty == "frame" && n.s("layout") != Some("none")) {
-                let free = |k: &&RNode| n.ty == "group" || k.f("rotation").unwrap_or(0.0) == 0.0;
-                let kids: Vec<&RNode> = n.kids.iter().filter(free).collect();
-                for (i, a) in kids.iter().enumerate() {
-                    for b in &kids[i + 1..] {
-                        if !touched.contains(a.id.as_str()) && !touched.contains(b.id.as_str()) {
-                            continue;
-                        }
-                        // Per axis: start, end, centre. One exact match means the pair is aligned on that axis.
-                        let axes = [
-                            [("left", a.x, b.x), ("right", a.x + a.w, b.x + b.w), ("centre", a.x + a.w / 2.0, b.x + b.w / 2.0)],
-                            [("top", a.y, b.y), ("bottom", a.y + a.h, b.y + b.h), ("middle", a.y + a.h / 2.0, b.y + b.h / 2.0)],
-                        ];
-                        for axis in axes {
-                            let gaps = axis.map(|(edge, p, q)| (edge, (p - q).abs()));
-                            if gaps.iter().any(|(_, d)| *d <= 0.5) {
-                                continue;
-                            }
-                            // Centres only count as aligned: two unlike sizes with close centres are not a slip.
-                            if let Some((edge, d)) = gaps[..2].iter().find(|(_, d)| *d < 3.0) {
-                                out.push(format!("\"{}\" ({}) and \"{}\" ({}) nearly align: their {edge} edges are {d:.1}px apart; align them exactly", a.name(), a.id, b.name(), b.id));
-                            }
-                        }
-                    }
-                }
+            if !flex(n) {
+                near_misses(n, &touched, &mut out);
             }
             if !touched.contains(n.id.as_str()) && !parent.is_some_and(|p| touched.contains(p.id.as_str())) {
                 continue;
@@ -1011,7 +1028,7 @@ fn validate(e: &mut Engine, touched: &[String]) -> (Vec<String>, Vec<(String, St
             if let Some(p) = n.problem {
                 out.push(format!("{label} sticks out of its parent ({p}); resize the parent or use fill_container/fit_content"));
             }
-            let parent_layout = parent.map(|p| p.ty == "frame" && p.s("layout") != Some("none")).unwrap_or(false);
+            let parent_layout = parent.is_some_and(flex);
             let absolute = n.s("layoutPosition") == Some("absolute");
             let has_xy = if n.inst.is_some() { own_xy.contains(&n.id) } else { n.p.contains_key("x") || n.p.contains_key("y") };
             if parent_layout && !absolute && has_xy && touched.contains(n.id.as_str()) {
@@ -2506,8 +2523,12 @@ Insert(card, {type:\"text\", name:\"Title\", content:\"Hi\", fill:\"#111111\"})
         assert!(!centres.text.lines().any(|l| l.contains("\"Dot\"") && l.contains("nearly align")), "centres of unlike sizes are not edges: {}", centres.text);
         let flow = execute(&mut e, &json!({"input": "g = Insert(document, {type:'frame', name:'Flow', layout:'vertical', gap:7, width:300, height:200, fill:'#FFFFFF'}); Insert(g, {type:'rectangle', name:'R1', width:100, height:20, fill:'#CCCCCC'}); Insert(g, {type:'rectangle', name:'R2', width:101, height:20, fill:'#CCCCCC'});"}));
         assert!(!flow.text.contains("nearly align"), "auto layout places its children: {}", flow.text);
-        let next = execute(&mut e, &json!({"input": "Insert(document, {type:'frame', name:'Other', width:10, height:10})"}));
-        assert!(!next.text.contains("nearly align"), "nodes the call did not touch are not reported: {}", next.text);
+        let far = execute(&mut e, &json!({"input": "w = Insert(document, {type:'frame', name:'Wide', layout:'none', width:2000, height:1200, fill:'#FFFFFF'}); Insert(w, {type:'rectangle', name:'West', x:0, y:800, width:100, height:40, fill:'#CCCCCC'}); Insert(w, {type:'rectangle', name:'East', x:1800, y:801.5, width:100, height:40, fill:'#CCCCCC'}); Insert(w, {type:'rectangle', name:'Col1', x:0, y:200, width:100, height:40, fill:'#CCCCCC'}); Insert(w, {type:'rectangle', name:'Col2', x:1.5, y:260, width:100, height:40, fill:'#CCCCCC'}); Insert(w, {type:'rectangle', name:'Col3', x:1.5, y:320, width:100, height:40, fill:'#CCCCCC'});"}));
+        let lines = |name: &str| far.text.lines().filter(|l| l.contains(&format!("\"{name}\"")) && l.contains("nearly align")).count();
+        assert_eq!(lines("East"), 0, "edges far apart on the other axis are not compared: {}", far.text);
+        assert_eq!(lines("Col1"), 1, "a slipped item is reported once per axis, not once per sibling: {}", far.text);
+        let next = execute(&mut e, &json!({"input": "Insert(f, {type:'rectangle', name:'Later', x:400, y:360, width:20, height:20, fill:'#CCCCCC'})"}));
+        assert!(!next.text.contains("\"Slipped\""), "pairs the call did not touch are not reported, even in the same frame: {}", next.text);
     }
 
     #[test]
