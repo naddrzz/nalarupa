@@ -66,7 +66,11 @@ const ASPECT: Record<Kind, number> = { page: 0.625, mobile: 2.16, slides: 0.5625
 const args = process.argv.slice(2)
 const flag = (name: string) => {
   const i = args.indexOf(`--${name}`)
-  return i >= 0 ? args[i + 1] : undefined
+  if (i < 0) return undefined
+  // A flag without its value would otherwise fall back to a default, such as running every brief.
+  const v = args[i + 1]
+  if (!v || v.startsWith('--')) throw new Error(`--${name} needs a value`)
+  return v
 }
 
 /** One grid of colours sampled over a frame's first screen, for comparing how alike two results look. */

@@ -884,8 +884,7 @@ fn finish(e: &mut Engine, prep: Prepared, result: Result<Map<String, Value>, Str
     if !warnings.is_empty() {
         text += "\n## Issues detected (fix them in the next call)\n";
         for w in warnings {
-            // One line per warning: a node name may hold a line break, and readers stop at the first non-bullet line.
-            text += &format!("- {}\n", w.replace(['\r', '\n'], " "));
+            text += &issue_line(&w);
         }
     }
     // Only the trees are built under the engine lock; `ToolOut::finish` rasterizes screenshots and writes exports.
@@ -933,6 +932,12 @@ pub fn shot_tree(e: &mut Engine, id: &str) -> Result<(resvg::usvg::Tree, f64, Ve
 /// The node a screenshot of `id` draws: `document` is the first top-level node.
 pub fn shot_target(doc: &crate::doc::Doc, id: &str) -> String {
     if id == "document" { doc.children().first().and_then(|n| n["id"].as_str()).unwrap_or("").to_string() } else { id.to_string() }
+}
+
+/// One bullet of the "Issues detected" list. One line per warning: a node name may hold a line break, and readers
+/// (the agent, `tool_done` events) stop at the first line that is not a bullet.
+pub(crate) fn issue_line(warning: &str) -> String {
+    format!("- {}\n", warning.replace(['\r', '\n'], " "))
 }
 
 /// Layout and content checks on nodes touched by this call, plus the icons still downloading (their
