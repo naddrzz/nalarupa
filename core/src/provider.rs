@@ -30,15 +30,16 @@ pub fn current(e: &Engine) -> Result<Box<dyn Provider>, String> {
     Ok(Box::new(crate::claude::Client::at(key, e.setting("anthropic_base_url").as_deref())))
 }
 
-/// The model a run uses: the chosen one (`agent_model`), or with a provider, the chosen one when the provider offers
-/// it, else the provider's first model. `None` leaves the choice to the backend (Claude Code's own default).
+/// The model a run uses. Claude backends: the chosen one (`agent_model`). A provider: its own choice
+/// (`provider_model`, kept apart so a provider's model ids never reach a Claude backend) when the provider lists it,
+/// else its first model. `None` leaves the choice to the backend (Claude Code's own default).
 pub fn model(e: &Engine, backend: &str) -> Result<Option<String>, String> {
     let chosen = e.setting("agent_model");
     match backend {
         "provider" => {
             let list = e.settings.get("providers").cloned().unwrap_or(Value::Null);
             let p = active(&list, e.setting("agent_provider").as_deref()).ok_or("No provider is set up. Add one in Agent settings (gear icon).")?;
-            pick_model(p, chosen.as_deref()).map(Some).ok_or_else(|| format!("Provider \"{}\" lists no models. Add a model id in Agent settings.", name(p)))
+            pick_model(p, e.setting("provider_model").as_deref()).map(Some).ok_or_else(|| format!("Provider \"{}\" lists no models. Add a model id in Agent settings.", name(p)))
         }
         "claude-code" => Ok(chosen),
         _ => Ok(Some(chosen.unwrap_or_else(|| crate::agent::DEFAULT_MODEL.into()))),
@@ -48,7 +49,7 @@ pub fn model(e: &Engine, backend: &str) -> Result<Option<String>, String> {
 /// How a saved key reads back: never the key itself.
 const MASK: &str = "••••••••";
 /// The wire formats a provider can speak.
-const FORMATS: [&str; 3] = ["anthropic", "chat", "responses"];
+const FORMATS: [&str; 2] = ["anthropic", "chat"];
 
 fn name(p: &Value) -> &str {
     p["name"].as_str().filter(|n| !n.is_empty()).unwrap_or("Provider")
@@ -88,7 +89,7 @@ pub fn save(list: &mut Value, mut p: Value) -> Result<String, String> {
     }
     let format = p["format"].as_str().unwrap_or("");
     if !FORMATS.contains(&format) {
-        return Err(format!("Unknown format \"{format}\": choose anthropic, chat or responses."));
+        return Err(format!("Unknown format \"{format}\": choose anthropic or chat."));
     }
     let all = list.as_array_mut().expect("an array");
     let id = p["id"].as_str().filter(|i| !i.is_empty()).map(str::to_string).unwrap_or_else(|| format!("p{:08x}", crate::doc::random_u64() & 0xffff_ffff));

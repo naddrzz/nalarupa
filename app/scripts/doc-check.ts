@@ -486,13 +486,37 @@ assert(!('anthropic_base_url' in call('settings_get')), 'the base URL clears')
     assert(listed.length === 1 && listed[0].id === id && listed[0].api_key === '••••••••' && listed[0].models.join() === 'qwen3,llama', `the provider is saved with its key masked: ${JSON.stringify(listed)}`)
     // The UI saves back what it read: the mask must keep the real key.
     call('provider_save', { provider: { ...listed[0], name: 'Local server' } })
-    const tried = call<{ ok: boolean; model: string; reply: string }>('provider_test', { id })
+    // The test runs in the background and reports as an event.
+    const tested = async () => {
+      for (let i = 0; i < 100; i++) {
+        const ev = call<{ events: any[] }>('poll').events.find((e) => e.type === 'provider_test')
+        if (ev) return ev
+        await new Promise((r) => setTimeout(r, 100))
+      }
+      throw new Error('doc-check failed: no provider_test event')
+    }
+    assert(call('provider_test', { id }) === true, 'the provider test starts')
+    const tried = await tested()
     assert(tried.ok && tried.model === 'qwen3' && tried.reply === 'OK', `the provider answers with the kept key: ${JSON.stringify(tried)}`)
     call('settings_set', { key: 'agent_backend', value: 'provider' })
     call('settings_set', { key: 'agent_provider', value: id })
     assert(call<Record<string, unknown>>('settings_get').backend === 'provider', 'the provider backend can be chosen')
+    // A real agent turn on the provider: it starts on the provider's first model and gets the provider's reply.
+    call('new', { template: 'empty' })
+    call('agent_send', { text: 'Say OK' })
+    const seen: any[] = []
+    for (let i = 0; i < 100 && !seen.some((e) => e.kind === 'done'); i++) {
+      seen.push(...call<{ events: any[] }>('poll').events.filter((e) => e.type === 'agent'))
+      await new Promise((r) => setTimeout(r, 100))
+    }
+    const start = seen.find((e) => e.kind === 'start')
+    assert(start?.backend === 'provider' && start?.model === 'qwen3', `the agent runs on the provider and its model: ${JSON.stringify(start)}`)
+    assert(seen.some((e) => e.kind === 'text_delta' && e.text === 'OK') && !seen.some((e) => e.kind === 'error'), `the provider's reply reaches the chat: ${JSON.stringify(seen.filter((e) => e.kind !== 'text_delta').slice(-3))}`)
+    call('agent_reset')
     call('provider_save', { provider: { ...listed[0], api_key: 'sk-wrong' } })
-    throws(() => call('provider_test', { id }), /rejected this key/, 'a wrong key reads as the provider rejecting it')
+    call('provider_test', { id })
+    const rejected = await tested()
+    assert(!rejected.ok && /rejected this key/.test(rejected.error), `a wrong key reads as the provider rejecting it: ${JSON.stringify(rejected)}`)
     throws(() => call('provider_save', { provider: { name: 'No URL', format: 'chat' } }), /base URL/, 'a provider needs a base URL')
     call('provider_remove', { id })
     assert(call<Record<string, any>>('settings_get').providers.length === 0, 'the provider is removed')

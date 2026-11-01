@@ -735,7 +735,7 @@ function ModelPicker({ settingsOpen, backendRev, toast }: { settingsOpen: boolea
     ? ((s.providers as ProviderConfig[] | undefined) ?? []).find((p) => p.id === s.agent_provider) ?? (s.providers as ProviderConfig[] | undefined)?.[0]
     : undefined
   const items = provider ? provider.models.map((m) => ({ value: m, label: m })) : cli ? [{ value: 'default', label: 'Default' }, ...MODELS] : MODELS
-  const stored = typeof s.agent_model === 'string' ? s.agent_model : null
+  const stored = typeof (provider ? s.provider_model : s.agent_model) === 'string' ? ((provider ? s.provider_model : s.agent_model) as string) : null
   const current = provider ? (stored && provider.models.includes(stored) ? stored : provider.models[0] ?? '') : stored ?? (cli ? 'default' : 'claude-opus-5-5')
   const [model, setModel] = useState(current)
   const [fast, setFast] = useState(s.agent_fast === true)
@@ -745,7 +745,9 @@ function ModelPicker({ settingsOpen, backendRev, toast }: { settingsOpen: boolea
   // keyboard drives the menu, not while the mouse does.
   const [keys, setKeys] = useState(false)
   const pick = (v: string) => {
-    if (saveSetting(toast, 'agent_model', v === 'default' ? null : v)) setModel(v)
+    // A provider's model ids are kept apart, so they never reach a Claude backend.
+    const key = provider ? 'provider_model' : 'agent_model'
+    if (saveSetting(toast, key, v === 'default' ? null : v)) setModel(v)
   }
   const label = items.find((m) => m.value === model)?.label ?? model
   return (
@@ -1016,7 +1018,10 @@ const FORMATS = [
 function ProviderSettings({ toast, onChange }: { toast: Toast; onChange: () => void }) {
   const read = () => {
     const s = tryCall<Record<string, any>>('settings_get') ?? {}
-    return { list: (s.providers ?? []) as ProviderConfig[], active: (s.agent_provider as string | undefined) ?? s.providers?.[0]?.id }
+    const list = (s.providers ?? []) as ProviderConfig[]
+    // Like the core: a removed or unknown choice falls back to the first provider.
+    const chosen = list.find((p) => p.id === s.agent_provider) ?? list[0]
+    return { list, active: chosen?.id }
   }
   const [{ list, active }, setState] = useState(read)
   const [draft, setDraft] = useState<ProviderConfig | null>(null)
@@ -1035,10 +1040,21 @@ function ProviderSettings({ toast, onChange }: { toast: Toast; onChange: () => v
       refresh()
     } catch (e) { fail(e) }
   }
+  // The test runs in the core's background; its result comes back as a `provider_test` event.
+  const [testing, setTesting] = useState(false)
+  const [testedAt] = useState(store.providerTestAt)
+  const at = store.providerTestAt
+  useEffect(() => {
+    const r = store.providerTest
+    if (at <= testedAt || !r || !testing) return
+    setTesting(false)
+    if (r.ok) toast(`${r.model} answered: ${r.reply || '(empty reply)'}`)
+    else toast(r.error ?? 'The provider did not answer', true)
+  }, [at])
   const test = (id: string) => {
     try {
-      const r = call<{ model: string; reply: string }>('provider_test', { id })
-      toast(`${r.model} answered: ${r.reply || '(empty reply)'}`)
+      call('provider_test', { id })
+      setTesting(true)
     } catch (e) { fail(e) }
   }
   const remove = (id: string) => {
@@ -1084,7 +1100,7 @@ function ProviderSettings({ toast, onChange }: { toast: Toast; onChange: () => v
         <Row gap={6}>
           <Button testId="provider-add" onClick={() => edit({ name: '', format: 'chat', base_url: '', models: [], vision: true })}>Add provider</Button>
           {active ? <Button testId="provider-edit" onClick={() => edit(list.find((p) => p.id === active) ?? null)}>Edit</Button> : null}
-          {active ? <Button testId="provider-test" onClick={() => test(active)}>Test</Button> : null}
+          {active ? <Button testId="provider-test" onClick={() => test(active)}>{testing ? 'Testing…' : 'Test'}</Button> : null}
         </Row>
       )}
       <T size={11} color={C.ghost}>Pick the model below the chat box.</T>
