@@ -46,6 +46,18 @@ pub fn model(e: &Engine, backend: &str) -> Result<Option<String>, String> {
     }
 }
 
+/// `<base><path>`, keeping a query the base carries (`…/v1?tenant=a` → `…/v1/chat/completions?tenant=a`) and dropping
+/// a fragment.
+pub fn endpoint(base: &str, path: &str) -> String {
+    let b = base.trim();
+    let b = b.split('#').next().unwrap_or(b);
+    match b.split_once('?') {
+        Some((root, q)) if !q.is_empty() => format!("{}{path}?{q}", root.trim_end_matches('/')),
+        Some((root, _)) => format!("{}{path}", root.trim_end_matches('/')),
+        None => format!("{}{path}", b.trim_end_matches('/')),
+    }
+}
+
 /// How a saved key reads back: never the key itself.
 const MASK: &str = "••••••••";
 /// The wire formats a provider can speak.
