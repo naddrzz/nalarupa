@@ -22,7 +22,20 @@ if (!process.env.NALARUPA_CHECK_CHILD) {
   // A stand-in `claude` that records its stdin and arguments, then runs long and prints nothing: a running agent without a login.
   const bin = join(data, 'bin')
   mkdirSync(bin)
-  writeFileSync(join(bin, 'claude'), '#!/bin/sh\ncat > "$(dirname "$0")/stdin.txt"\nprintf \'%s\\n\' "$@" > "$(dirname "$0")/args.txt"\nexec sleep 60\n', { mode: 0o755 })
+  // Its `auth` commands keep a signed-in flag file: status prints JSON (exit 1 when signed out), login signs in after a
+  // second, as the browser flow would, and logout signs out.
+  const auth = [
+    'd="$(dirname "$0")"',
+    'if [ "$1" = auth ]; then',
+    '  case "$2" in',
+    '    status) [ -f "$d/signed-in" ] || { echo \'{"loggedIn": false, "authMethod": "none"}\'; exit 1; }; echo \'{"loggedIn": true, "authMethod": "claude.ai", "email": "person@example.com", "subscriptionType": "pro"}\' ;;',
+    '    login) sleep 1; touch "$d/signed-in" ;;',
+    '    logout) rm -f "$d/signed-in" ;;',
+    '  esac',
+    '  exit 0',
+    'fi',
+  ].join('\n')
+  writeFileSync(join(bin, 'claude'), `#!/bin/sh\n${auth}\ncat > "$(dirname "$0")/stdin.txt"\nprintf '%s\\n' "$@" > "$(dirname "$0")/args.txt"\nexec sleep 60\n`, { mode: 0o755 })
   const PATH = `${bin}${delimiter}${process.env.PATH ?? ''}`
   // A blank ANTHROPIC_API_KEY (common in CI) must count as no key; a real one selects the API backend.
   const spawn = (child: string, key: string) => Bun.spawnSync([process.execPath, import.meta.path], { env: { ...process.env, PATH, NALARUPA_DATA: data, NALARUPA_CHECK_CHILD: child, ANTHROPIC_API_KEY: key }, stdio: ['inherit', 'inherit', 'inherit'] })
@@ -488,6 +501,25 @@ assert(!('anthropic_base_url' in call('settings_get')), 'the base URL clears')
   } finally {
     server.kill()
   }
+// Claude Code's own account: its state, its own sign-in (the stand-in finishes after a second, then the core reports
+// the new state as an event) and its sign-out. Nalarupa never sees the credentials. (The stand-in is a shell script.)
+if (process.platform !== 'win32') {
+  const until = async (fn: () => boolean, msg: string) => {
+    for (let i = 0; i < 100 && !fn(); i++) await new Promise((r) => setTimeout(r, 100))
+    assert(fn(), msg)
+  }
+  type Auth = { installed: boolean; signedIn: boolean; method: string | null; account: string | null; plan: string | null }
+  const before = call<Auth>('claude_auth_status')
+  assert(before.installed && !before.signedIn && before.method === null, `a signed-out CLI: ${JSON.stringify(before)}`)
+  assert(call('claude_auth_login') === true, 'sign-in starts')
+  let event: Auth | undefined
+  await until(() => {
+    event ??= call<{ events: any[] }>('poll').events.find((e) => e.type === 'claude_auth')?.state
+    return !!event
+  }, 'the core reports the sign-in when the CLI flow ends')
+  assert(event!.signedIn && event!.method === 'claude.ai' && event!.plan === 'pro', `signed in through the CLI: ${JSON.stringify(event)}`)
+  const out = call<Auth>('claude_auth_logout')
+  assert(out.installed && !out.signedIn, `signed out: ${JSON.stringify(out)}`)
 }
 
 // While an agent runs, a new conversation and a document switch are both refused: the run keeps its chat and

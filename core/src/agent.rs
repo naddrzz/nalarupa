@@ -354,7 +354,7 @@ fn start_thread(p: Profile, prompt: String, child: Option<String>) -> bool {
             Err(err) => {
                 if !stopped {
                     if !err.is_empty() {
-                        emit(&p, "error", json!({"text": err}));
+                        emit(&p, "error", json!({"text": err, "signIn": signed_out(&err)}));
                     }
                     // A failed main turn ends the iterations.
                     if child.is_none() {
@@ -705,6 +705,7 @@ const SHUTDOWN_WAIT: Duration = Duration::from_secs(3);
 /// the writer is a detached thread the process does not wait for.
 pub fn shutdown() -> Result<(), String> {
     stop();
+    crate::claude_code::cancel_login();
     let deadline = Instant::now() + SHUTDOWN_WAIT;
     // `running` outlasts `active` across a queued or iteration handoff, until the next thread has started.
     while Instant::now() < deadline {
@@ -1360,7 +1361,7 @@ fn run_claude_code(p: &Profile, prompt: &str, child: bool, model: Option<String>
                     match error_cause(&ev) {
                         Some(text) if session.is_some() && text.contains(NO_SESSION) => stale = true,
                         Some(text) => {
-                            emit(p, "error", json!({"text": text}));
+                            emit(p, "error", json!({"text": text, "signIn": signed_out(&text)}));
                             reported = true;
                         }
                         None => textless_error = true,
@@ -1408,9 +1409,14 @@ fn error_cause(ev: &Value) -> Option<String> {
 /// Checked on the whole text, before clipping can drop the phrase; a bare path like `/login.js` is no match.
 fn sign_in_hint(text: &str) -> Option<String> {
     let text = text.to_lowercase();
-    (text.contains("run /login") || text.contains("not logged in")).then(|| {
-        "Claude Code is not signed in. Open a terminal, run `claude` and sign in with /login, or switch the backend to the Claude API in Agent settings (gear icon).".into()
-    })
+    (text.contains("run /login") || text.contains("not logged in")).then(|| SIGNED_OUT.into())
+}
+
+const SIGNED_OUT: &str = "Claude Code is not signed in. Sign in from Agent settings (gear icon), or switch the backend to the Claude API there.";
+
+/// Whether a run's error is the signed-out CLI: its card then offers Sign in.
+fn signed_out(err: &str) -> bool {
+    err == SIGNED_OUT
 }
 
 /// Longest error text kept in the chat card and the saved chat (tool output is capped at 6000).
@@ -1632,6 +1638,7 @@ mod tests {
     fn a_signed_out_cli_points_at_the_terminal_and_the_settings() {
         let hint = error_cause(&json!({"result": "Not logged in · Please run /login"})).unwrap();
         assert!(hint.starts_with("Claude Code is not signed in") && hint.contains("Agent settings"), "{hint}");
+        assert!(signed_out(&hint) && !signed_out("Credit balance is too low"), "the error card offers Sign in for this cause only");
         assert_eq!(error_cause(&json!({"result": "Invalid API key · Please run /login"})).unwrap(), hint);
         assert_eq!(exit_error("exit status: 1", "Error: Not logged in", false), hint);
         assert_eq!(error_cause(&json!({"result": "Credit balance is too low"})).as_deref(), Some("Credit balance is too low"));

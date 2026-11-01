@@ -3,7 +3,8 @@ import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { launch } from '@gpuix/react/automation'
 
-const exe = join(import.meta.dir, '..', 'dist', process.platform === 'win32' ? 'nalarupa.exe' : 'nalarupa')
+// NALARUPA_EXE: a binary elsewhere, e.g. the one inside an installed Nalarupa.app.
+const exe = process.env.NALARUPA_EXE ?? join(import.meta.dir, '..', 'dist', process.platform === 'win32' ? 'nalarupa.exe' : 'nalarupa')
 const app = await launch({ command: exe, env: { ...process.env, GPUIX_BACKGROUND: '1' } })
 try {
   await app.getByTestId('template-blank').waitFor({ timeoutMs: 30000 })
