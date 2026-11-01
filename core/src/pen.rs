@@ -110,7 +110,8 @@ fn generate(ask: &str, cancel: &AtomicBool, on: &mut dyn FnMut(&str) -> bool) ->
     }
     let (client, model) = {
         let e = engine();
-        (crate::provider::current(&e)?, e.setting("agent_model").unwrap_or_else(|| crate::agent::DEFAULT_MODEL.into()))
+        let model = crate::provider::model(&e, &e.backend())?.unwrap_or_else(|| crate::agent::DEFAULT_MODEL.into());
+        (crate::provider::current(&e)?, model)
     };
     let body = json!({"model": model, "max_tokens": 16000, "system": SYSTEM, "messages": [{"role": "user", "content": ask}]});
     let gone = Cell::new(false);

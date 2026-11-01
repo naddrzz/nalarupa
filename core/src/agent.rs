@@ -338,11 +338,21 @@ fn start_thread(p: Profile, prompt: String, child: Option<String>) -> bool {
         let (backend, model) = {
             let e = engine();
             let backend = e.backend();
-            let model = e.setting("agent_model").or_else(|| (backend != "claude-code").then(|| DEFAULT_MODEL.into()));
+            // The client comes from the same snapshot as the model: a provider switched meanwhile cannot get the
+            // other provider's model id.
+            let model = crate::provider::model(&e, &backend).and_then(|m| {
+                let client = if backend == "claude-code" { None } else { Some(crate::provider::current(&e)?) };
+                Ok((m, client))
+            });
             (backend, model)
         };
-        emit(&p, "start", json!({"child": child.is_some(), "backend": backend, "model": model}));
-        let result = if backend == "claude-code" { run_claude_code(&p, &prompt, child.is_some(), model) } else { run_api(&p, &prompt, child.is_some(), model) };
+        emit(&p, "start", json!({"child": child.is_some(), "backend": backend, "model": model.as_ref().ok().and_then(|m| m.0.clone())}));
+        let result = match model {
+            // A provider with no model listed (or no key) fails the turn with what to fix.
+            Err(e) => Err(e),
+            Ok((model, Some(client))) => run_api(&p, &prompt, child.is_some(), model, client),
+            Ok((model, None)) => run_claude_code(&p, &prompt, child.is_some(), model),
+        };
         let stopped = engine().agent.cancel.load(Ordering::SeqCst);
         let usage = match result {
             Ok(u) => u,
@@ -982,14 +992,13 @@ pub fn spawn_spec() -> Value {
            "required": ["config"]}})
 }
 
-fn run_api(p: &Profile, prompt: &str, child: bool, model: Option<String>) -> Result<Value, String> {
-    let (client, model, effort, cancel, state, fast) = {
+fn run_api(p: &Profile, prompt: &str, child: bool, model: Option<String>, client: Box<dyn crate::provider::Provider>) -> Result<Value, String> {
+    let (model, effort, cancel, state, fast) = {
         let mut e = engine();
-        let client = crate::provider::current(&e)?;
         let model = model.unwrap_or_else(|| DEFAULT_MODEL.into());
         let effort = e.setting("agent_effort").unwrap_or_else(|| "high".into());
         let fast = fast_for(Some(&model), e.settings.get("agent_fast") == Some(&json!(true)));
-        (client, model, effort, e.agent.cancel.clone(), e.editor_state(), fast)
+        (model, effort, e.agent.cancel.clone(), e.editor_state(), fast)
     };
     let mut messages = if child { Vec::new() } else { engine().agent.messages.clone() };
     let user = if child { prompt.to_string() } else { format!("{prompt}\n\nThe result of `get_editor_state` (fresh; call it again only if the document changed):\n{state}") };

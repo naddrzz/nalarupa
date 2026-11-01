@@ -465,6 +465,70 @@ assert(call<Record<string, unknown>>('settings_get').anthropic_base_url === 'htt
 call('settings_set', { key: 'anthropic_base_url', value: null })
 assert(!('anthropic_base_url' in call('settings_get')), 'the base URL clears')
 
+// Bring-your-own-key providers: saved with a masked key, tried against a local OpenAI-compatible server (which only
+// answers the right key, so a masked key must not overwrite the saved one), chosen as the backend, and removed.
+{
+  // Its own process: provider_test is a blocking core call, so a server on this thread could never answer it.
+  const script = join(data!, 'fake-provider.ts')
+  writeFileSync(script, `const s = Bun.serve({ port: 0, async fetch(req) {
+    if (req.headers.get('authorization') !== 'Bearer sk-local') return Response.json({ error: { message: 'Incorrect API key' } }, { status: 401 })
+    const body = await req.json()
+    const chunk = (d) => 'data: ' + JSON.stringify({ choices: [{ index: 0, delta: d, finish_reason: null }] }) + '\\n\\n'
+    const sse = chunk({ content: 'OK' }) + 'data: ' + JSON.stringify({ choices: [], usage: { prompt_tokens: 3, completion_tokens: 1 } }) + '\\n\\ndata: [DONE]\\n\\n'
+    return new Response(new URL(req.url).pathname === '/v1/chat/completions' && body.stream ? sse : 'not found', { headers: { 'content-type': 'text/event-stream' } })
+  } }); console.log(s.port)`)
+  const server = Bun.spawn([process.execPath, script], { stdout: 'pipe' })
+  const port = Number(new TextDecoder().decode((await server.stdout.getReader().read()).value).trim())
+  try {
+    const provider = { name: 'Local', format: 'chat', base_url: `http://127.0.0.1:${port}/v1`, api_key: 'sk-local', models: ['qwen3', 'llama'], vision: false }
+    const id = call<string>('provider_save', { provider })
+    const listed = call<Record<string, any>>('settings_get').providers
+    assert(listed.length === 1 && listed[0].id === id && listed[0].api_key === '••••••••' && listed[0].models.join() === 'qwen3,llama', `the provider is saved with its key masked: ${JSON.stringify(listed)}`)
+    // The UI saves back what it read: the mask must keep the real key.
+    call('provider_save', { provider: { ...listed[0], name: 'Local server' } })
+    // The test runs in the background and reports as an event.
+    const tested = async () => {
+      for (let i = 0; i < 100; i++) {
+        const ev = call<{ events: any[] }>('poll').events.find((e) => e.type === 'provider_test')
+        if (ev) return ev
+        await new Promise((r) => setTimeout(r, 100))
+      }
+      throw new Error('doc-check failed: no provider_test event')
+    }
+    assert(call('provider_test', { id }) === true, 'the provider test starts')
+    const tried = await tested()
+    assert(tried.ok && tried.model === 'qwen3' && tried.reply === 'OK', `the provider answers with the kept key: ${JSON.stringify(tried)}`)
+    call('settings_set', { key: 'agent_backend', value: 'provider' })
+    call('settings_set', { key: 'agent_provider', value: id })
+    assert(call<Record<string, unknown>>('settings_get').backend === 'provider', 'the provider backend can be chosen')
+    // A real agent turn on the provider: it starts on the provider's first model and gets the provider's reply.
+    call('new', { template: 'empty' })
+    call('agent_send', { text: 'Say OK' })
+    const seen: any[] = []
+    for (let i = 0; i < 100 && !seen.some((e) => e.kind === 'done'); i++) {
+      seen.push(...call<{ events: any[] }>('poll').events.filter((e) => e.type === 'agent'))
+      await new Promise((r) => setTimeout(r, 100))
+    }
+    const start = seen.find((e) => e.kind === 'start')
+    assert(start?.backend === 'provider' && start?.model === 'qwen3', `the agent runs on the provider and its model: ${JSON.stringify(start)}`)
+    assert(seen.some((e) => e.kind === 'text_delta' && e.text === 'OK') && !seen.some((e) => e.kind === 'error'), `the provider's reply reaches the chat: ${JSON.stringify(seen.filter((e) => e.kind !== 'text_delta').slice(-3))}`)
+    // `done` comes before the run clears `agentRunning`; a reset before that is refused.
+    for (let i = 0; i < 100 && call<{ agentRunning: boolean }>('state').agentRunning; i++) await new Promise((r) => setTimeout(r, 100))
+    call('agent_reset')
+    call('provider_save', { provider: { ...listed[0], api_key: 'sk-wrong' } })
+    call('provider_test', { id })
+    const rejected = await tested()
+    assert(!rejected.ok && /rejected this key/.test(rejected.error), `a wrong key reads as the provider rejecting it: ${JSON.stringify(rejected)}`)
+    throws(() => call('provider_save', { provider: { name: 'No URL', format: 'chat' } }), /base URL/, 'a provider needs a base URL')
+    call('provider_remove', { id })
+    assert(call<Record<string, any>>('settings_get').providers.length === 0, 'the provider is removed')
+    call('settings_set', { key: 'agent_backend', value: null })
+    call('settings_set', { key: 'agent_provider', value: null })
+  } finally {
+    server.kill()
+  }
+}
+
 // Claude Code's own account: its state, its own sign-in (the stand-in finishes after a second, then the core reports
 // the new state as an event) and its sign-out. Nalarupa never sees the credentials. (The stand-in is a shell script.)
 if (process.platform !== 'win32') {

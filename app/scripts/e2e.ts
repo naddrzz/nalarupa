@@ -760,11 +760,11 @@ Insert(document, {type:"frame", name:"${LONG}", x: 22000, y: 0, width:1920, heig
   await app.call('keyDown', { key: 'enter' })
   await sleep(500)
   if (savedKey() !== 'sk-ant-first') throw new Error(`backspace and enter in the saved key box changed the key: ${savedKey()}`)
-  // Shift+Tab from the key box reaches the backend switch: Enter on its last option swaps the box away.
+  // Shift+Tab from the key box reaches the backend switch: Enter on its last option ("Your provider") swaps the box away.
   await app.getByTestId('api-key').click()
   await sleep(300)
   await app.call('keystrokes', { keys: 'shift-tab' })
-  await until(async () => !!(await app!.getByTestId('backend-claude-code-focus').count()), 'the focus ring on the backend switch after Shift+Tab')
+  await until(async () => !!(await app!.getByTestId('backend-provider-focus').count()), 'the focus ring on the backend switch after Shift+Tab')
   await app.call('keystrokes', { keys: 'enter' })
   await until(async () => !(await app!.getByTestId('api-key').count()), 'Shift+Tab from the API key box to reach the backend switch')
   await app.getByText('Claude API').click()
