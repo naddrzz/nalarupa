@@ -452,6 +452,44 @@ assert(call<Record<string, unknown>>('settings_get').anthropic_base_url === 'htt
 call('settings_set', { key: 'anthropic_base_url', value: null })
 assert(!('anthropic_base_url' in call('settings_get')), 'the base URL clears')
 
+// Bring-your-own-key providers: saved with a masked key, tried against a local OpenAI-compatible server (which only
+// answers the right key, so a masked key must not overwrite the saved one), chosen as the backend, and removed.
+{
+  // Its own process: provider_test is a blocking core call, so a server on this thread could never answer it.
+  const script = join(data!, 'fake-provider.ts')
+  writeFileSync(script, `const s = Bun.serve({ port: 0, async fetch(req) {
+    if (req.headers.get('authorization') !== 'Bearer sk-local') return Response.json({ error: { message: 'Incorrect API key' } }, { status: 401 })
+    const body = await req.json()
+    const chunk = (d) => 'data: ' + JSON.stringify({ choices: [{ index: 0, delta: d, finish_reason: null }] }) + '\\n\\n'
+    const sse = chunk({ content: 'OK' }) + 'data: ' + JSON.stringify({ choices: [], usage: { prompt_tokens: 3, completion_tokens: 1 } }) + '\\n\\ndata: [DONE]\\n\\n'
+    return new Response(new URL(req.url).pathname === '/v1/chat/completions' && body.stream ? sse : 'not found', { headers: { 'content-type': 'text/event-stream' } })
+  } }); console.log(s.port)`)
+  const server = Bun.spawn([process.execPath, script], { stdout: 'pipe' })
+  const port = Number(new TextDecoder().decode((await server.stdout.getReader().read()).value).trim())
+  try {
+    const provider = { name: 'Local', format: 'chat', base_url: `http://127.0.0.1:${port}/v1`, api_key: 'sk-local', models: ['qwen3', 'llama'], vision: false }
+    const id = call<string>('provider_save', { provider })
+    const listed = call<Record<string, any>>('settings_get').providers
+    assert(listed.length === 1 && listed[0].id === id && listed[0].api_key === '••••••••' && listed[0].models.join() === 'qwen3,llama', `the provider is saved with its key masked: ${JSON.stringify(listed)}`)
+    // The UI saves back what it read: the mask must keep the real key.
+    call('provider_save', { provider: { ...listed[0], name: 'Local server' } })
+    const tried = call<{ ok: boolean; model: string; reply: string }>('provider_test', { id })
+    assert(tried.ok && tried.model === 'qwen3' && tried.reply === 'OK', `the provider answers with the kept key: ${JSON.stringify(tried)}`)
+    call('settings_set', { key: 'agent_backend', value: 'provider' })
+    call('settings_set', { key: 'agent_provider', value: id })
+    assert(call<Record<string, unknown>>('settings_get').backend === 'provider', 'the provider backend can be chosen')
+    call('provider_save', { provider: { ...listed[0], api_key: 'sk-wrong' } })
+    throws(() => call('provider_test', { id }), /rejected this key/, 'a wrong key reads as the provider rejecting it')
+    throws(() => call('provider_save', { provider: { name: 'No URL', format: 'chat' } }), /base URL/, 'a provider needs a base URL')
+    call('provider_remove', { id })
+    assert(call<Record<string, any>>('settings_get').providers.length === 0, 'the provider is removed')
+    call('settings_set', { key: 'agent_backend', value: null })
+    call('settings_set', { key: 'agent_provider', value: null })
+  } finally {
+    server.kill()
+  }
+}
+
 // While an agent runs, a new conversation and a document switch are both refused: the run keeps its chat and
 // would keep editing the new document. Stop then allows both. (The stand-in `claude` is a shell script: skipped
 // on Windows.)

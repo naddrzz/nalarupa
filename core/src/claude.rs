@@ -4,13 +4,9 @@
 //! while the model is still writing it.
 
 use serde_json::{json, Value};
-use std::io::{BufRead, BufReader};
-use std::sync::mpsc::{sync_channel, RecvTimeoutError};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 const URL: &str = "https://api.anthropic.com/v1/messages";
-/// How often a silent stream re-checks `cancel`.
-const POLL: Duration = Duration::from_millis(200);
 /// A stream (or the wait for its headers) silent this long fails as stalled; the API pings every few seconds.
 const STALL: Duration = Duration::from_secs(120);
 
@@ -63,65 +59,12 @@ impl Client {
         if let Some(b) = beta {
             req = req.header("anthropic-beta", b);
         }
-        // The blocking socket work (headers and body reads) lives on its own thread so a silent
-        // connection cannot hold this one: we poll `cancel` and the idle limit between lines. The
-        // header phases are bounded by the stall limit; once streaming, a thread abandoned on Stop
-        // ends at its next line (the API pings every few seconds) or at the 900 s global timeout.
-        // The worker sends `Ok(None)` when the stream ends, so a dropped sender without it is an error.
-        // Bounded, so a slow `on` callback backpressures the socket instead of queueing every line.
-        let (tx, rx) = sync_channel::<Result<Option<String>, String>>(64);
-        // Slightly past the stall limit, so the reader below reports the stall first.
-        let hdr = Some(self.stall + POLL * 2);
-        let req = req.config().timeout_connect(hdr).timeout_send_request(hdr).timeout_recv_response(hdr).build();
-        std::thread::spawn(move || {
-            let res = match req.send_json(&body) {
-                Ok(res) => res,
-                Err(e) => return drop(tx.send(Err(format!("network error: {e}")))),
-            };
-            let status = res.status().as_u16();
-            let (_, body) = res.into_parts();
-            if status >= 400 {
-                let text = body.into_with_config().limit(1 << 20).read_to_string().unwrap_or_default();
-                let msg = serde_json::from_str::<Value>(&text).ok().and_then(|v| v["error"]["message"].as_str().map(str::to_string)).unwrap_or(text);
-                return drop(tx.send(Err(api_error(status, &msg))));
-            }
-            for line in BufReader::new(body.into_reader()).lines() {
-                let line = line.map(Some).map_err(|e| format!("stream interrupted: {e}"));
-                let failed = line.is_err();
-                if tx.send(line).is_err() || failed {
-                    return;
-                }
-            }
-            let _ = tx.send(Ok(None));
-        });
-
         let mut blocks: Vec<Value> = Vec::new();
         let mut partial: Vec<String> = Vec::new();
         let mut stop_reason = Value::Null;
         let mut usage = json!({});
-        let mut data = String::new();
-        let mut last = Instant::now();
-        loop {
-            if cancel() {
-                return Err("stopped".into());
-            }
-            let line = match rx.recv_timeout(POLL) {
-                Ok(Ok(Some(line))) => line,
-                Ok(Ok(None)) => break,
-                Ok(Err(e)) => return Err(e),
-                Err(RecvTimeoutError::Timeout) if last.elapsed() < self.stall => continue,
-                Err(RecvTimeoutError::Timeout) => return Err(format!("connection stalled: no data from the Claude API for {} s", self.stall.as_secs())),
-                Err(RecvTimeoutError::Disconnected) => return Err("stream interrupted: network worker ended unexpectedly".into()),
-            };
-            last = Instant::now();
-            if let Some(d) = line.strip_prefix("data:") {
-                data.push_str(d.trim_start());
-                continue;
-            }
-            if !line.is_empty() || data.is_empty() {
-                continue;
-            }
-            let ev: Value = serde_json::from_str(&std::mem::take(&mut data)).map_err(|e| format!("bad stream event: {e}"))?;
+        crate::sse::post(req, body, self.stall, "the Claude API", cancel, api_error, &mut |data| {
+            let ev: Value = serde_json::from_str(data).map_err(|e| format!("bad stream event: {e}"))?;
             let idx = ev["index"].as_u64().unwrap_or(0) as usize;
             match ev["type"].as_str().unwrap_or("") {
                 "message_start" => usage = ev["message"]["usage"].clone(),
@@ -137,7 +80,7 @@ impl Client {
                     blocks[idx] = block;
                 }
                 "content_block_delta" => {
-                    let Some(block) = blocks.get_mut(idx) else { continue };
+                    let Some(block) = blocks.get_mut(idx) else { return Ok(true) };
                     let d = &ev["delta"];
                     match d["type"].as_str().unwrap_or("") {
                         "text_delta" => {
@@ -165,11 +108,7 @@ impl Client {
                         if block["type"] == "tool_use" {
                             let raw = partial.get(idx).cloned().unwrap_or_default();
                             // Eager input streaming skips server validation: parse strictly here.
-                            block["input"] = if raw.trim().is_empty() {
-                                json!({})
-                            } else {
-                                serde_json::from_str(&raw).unwrap_or_else(|_| json!({"__invalid_json": raw}))
-                            };
+                            block["input"] = tool_input(&raw);
                         }
                     }
                 }
@@ -182,9 +121,19 @@ impl Client {
                 "error" => return Err(format!("Claude API stream error: {}", ev["error"]["message"].as_str().unwrap_or("unknown"))),
                 _ => {}
             }
-        }
+            Ok(true)
+        })?;
         blocks.retain(|b| !b.is_null());
         Ok(json!({"content": blocks, "stop_reason": stop_reason, "usage": usage}))
+    }
+}
+
+/// A tool call's streamed input: `{}` when empty, else its JSON, or `{"__invalid_json": raw}` for the agent to repair.
+pub fn tool_input(raw: &str) -> Value {
+    if raw.trim().is_empty() {
+        json!({})
+    } else {
+        serde_json::from_str(raw).unwrap_or_else(|_| json!({"__invalid_json": raw}))
     }
 }
 
@@ -200,6 +149,7 @@ fn api_error(status: u16, msg: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Instant;
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::sync::atomic::{AtomicBool, Ordering};

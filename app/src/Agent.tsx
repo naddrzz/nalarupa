@@ -730,9 +730,13 @@ function ModelPicker({ settingsOpen, backendRev, toast }: { settingsOpen: boolea
   // Re-read when the settings panel closes or switches backend: the backend decides the default model.
   const s = useMemo(() => tryCall<Record<string, unknown>>('settings_get') ?? {}, [settingsOpen, backendRev])
   const cli = s.backend === 'claude-code'
-  const items = cli ? [{ value: 'default', label: 'Default' }, ...MODELS] : MODELS
+  // With a provider: its own model ids; the core runs the first one when the chosen model is not among them.
+  const provider = s.backend === 'provider'
+    ? ((s.providers as ProviderConfig[] | undefined) ?? []).find((p) => p.id === s.agent_provider) ?? (s.providers as ProviderConfig[] | undefined)?.[0]
+    : undefined
+  const items = provider ? provider.models.map((m) => ({ value: m, label: m })) : cli ? [{ value: 'default', label: 'Default' }, ...MODELS] : MODELS
   const stored = typeof s.agent_model === 'string' ? s.agent_model : null
-  const current = stored ?? (cli ? 'default' : 'claude-opus-5-5')
+  const current = provider ? (stored && provider.models.includes(stored) ? stored : provider.models[0] ?? '') : stored ?? (cli ? 'default' : 'claude-opus-5-5')
   const [model, setModel] = useState(current)
   const [fast, setFast] = useState(s.agent_fast === true)
   useEffect(() => setModel(current), [s, current])
@@ -996,6 +1000,97 @@ function PermissionCard({ m }: { m: Extract<ChatItem, { kind: 'permission' }> })
 
 /** The gear's panel. It shrinks and scrolls when the agent panel is short (minimum window height, a plan showing),
  *  so the composer below never leaves the window. */
+/** A saved bring-your-own-key provider, as `settings_get` returns it (the key masked). */
+type ProviderConfig = { id?: string; name: string; format: string; base_url: string; api_key?: string | null; models: string[]; vision: boolean }
+
+const FORMATS = [
+  { value: 'chat', label: 'OpenAI Chat', base: 'https://openrouter.ai/api/v1', hint: 'OpenAI-compatible: OpenAI, OpenRouter, Groq, vLLM, LM Studio, Ollama (http://localhost:11434/v1)…' },
+  { value: 'anthropic', label: 'Anthropic Messages', base: 'https://api.anthropic.com', hint: 'Anthropic-compatible APIs and gateways.' },
+]
+
+/**
+ * Bring-your-own-key providers: pick the active one, or add / edit / test / remove one. Keys are saved by the core and
+ * only ever read back masked; saving the mask keeps the saved key.
+ */
+function ProviderSettings({ toast, onChange }: { toast: Toast; onChange: () => void }) {
+  const read = () => {
+    const s = tryCall<Record<string, any>>('settings_get') ?? {}
+    return { list: (s.providers ?? []) as ProviderConfig[], active: (s.agent_provider as string | undefined) ?? s.providers?.[0]?.id }
+  }
+  const [{ list, active }, setState] = useState(read)
+  const [draft, setDraft] = useState<ProviderConfig | null>(null)
+  const [boxes, setBoxes] = useState(0) // remount the fields when the draft is replaced
+  const [keyBox, setKeyBox] = useState(0)
+  const refresh = () => { setState(read()); onChange() }
+  const edit = (p: ProviderConfig | null) => { setDraft(p); setBoxes((n) => n + 1) }
+  const fail = (e: unknown) => toast((e as Error).message, true)
+  const save = () => {
+    if (!draft) return
+    try {
+      const id = call<string>('provider_save', { provider: draft })
+      if (!active) saveSetting(toast, 'agent_provider', id)
+      toast('Provider saved locally')
+      edit(null)
+      refresh()
+    } catch (e) { fail(e) }
+  }
+  const test = (id: string) => {
+    try {
+      const r = call<{ model: string; reply: string }>('provider_test', { id })
+      toast(`${r.model} answered: ${r.reply || '(empty reply)'}`)
+    } catch (e) { fail(e) }
+  }
+  const remove = (id: string) => {
+    try {
+      call('provider_remove', { id })
+      if (id === active) saveSetting(toast, 'agent_provider', null)
+      edit(null)
+      refresh()
+    } catch (e) { fail(e) }
+  }
+  const fmt = FORMATS.find((f) => f.value === draft?.format) ?? FORMATS[0]
+  return (
+    <>
+      {list.length ? (
+        <Segmented
+          label="Active provider"
+          value={active ?? ''}
+          onChange={(v) => { if (saveSetting(toast, 'agent_provider', v)) refresh() }}
+          options={list.map((p) => ({ value: p.id ?? '', label: p.name, testId: `provider-${p.name}` }))}
+        />
+      ) : <T size={11} color={C.ghost}>Add the API of any model you pay for, or a local one. Keys stay on this computer.</T>}
+      {draft ? (
+        <div key={boxes} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <Segmented label="Format" value={draft.format} onChange={(v) => setDraft({ ...draft, format: v })} options={FORMATS.map((f) => ({ value: f.value, label: f.label }))} />
+          <T size={11} color={C.ghost}>{fmt.hint}</T>
+          <Field name="Provider name" value={draft.name} placeholder="Name, e.g. OpenRouter" onCommit={(v) => setDraft({ ...draft, name: v })} testId="provider-name" />
+          <Field name="Base URL" value={draft.base_url} placeholder={fmt.base} onCommit={(v) => setDraft({ ...draft, base_url: v })} testId="provider-base-url" />
+          {/* Remounted after each commit (like the Claude key box): a pasted key must not stay readable. */}
+          <Field key={`key${keyBox}`} name="API key" value="" placeholder={draft.api_key ? 'Key entered. Paste a new key to replace it' : 'API key (blank for a local server)'} onCommit={(v) => {
+            if (!v.trim()) return false
+            setDraft({ ...draft, api_key: v.trim() })
+            setKeyBox((n) => n + 1)
+          }} testId="provider-key" />
+          <Field name="Models" value={draft.models.join(', ')} placeholder="Model ids, comma separated" onCommit={(v) => setDraft({ ...draft, models: v.split(',').map((m) => m.trim()).filter(Boolean) })} testId="provider-models" />
+          <Toggle label="The model can see images (screenshots)" on={draft.vision} onChange={(on) => setDraft({ ...draft, vision: on })} testId="provider-vision" />
+          <Row gap={6}>
+            <Button primary testId="provider-save" onClick={save}>Save</Button>
+            <Button onClick={() => edit(null)}>Cancel</Button>
+            {draft.id ? <Button danger testId="provider-remove" onClick={() => remove(draft.id!)}>Remove</Button> : null}
+          </Row>
+        </div>
+      ) : (
+        <Row gap={6}>
+          <Button testId="provider-add" onClick={() => edit({ name: '', format: 'chat', base_url: '', models: [], vision: true })}>Add provider</Button>
+          {active ? <Button testId="provider-edit" onClick={() => edit(list.find((p) => p.id === active) ?? null)}>Edit</Button> : null}
+          {active ? <Button testId="provider-test" onClick={() => test(active)}>Test</Button> : null}
+        </Row>
+      )}
+      <T size={11} color={C.ghost}>Pick the model below the chat box.</T>
+    </>
+  )
+}
+
 function AgentSettings({ mcpUrl, toast, onBackend }: { mcpUrl: string; toast: Toast; onBackend: () => void }) {
   const s = useMemo(() => tryCall<Record<string, string>>('settings_get') ?? {}, [])
   const [backend, setBackend] = useState(s.backend ?? 'claude-code')
@@ -1017,9 +1112,11 @@ function AgentSettings({ mcpUrl, toast, onBackend }: { mcpUrl: string; toast: To
         label="Agent backend"
         value={backend}
         onChange={(v) => { if (set('agent_backend', v)) { setBackend(v); onBackend() } }}
-        options={[{ value: 'api', label: 'Claude API' }, { value: 'claude-code', label: 'Claude Code CLI', testId: 'backend-claude-code' }]}
+        options={[{ value: 'api', label: 'Claude API' }, { value: 'claude-code', label: 'Claude Code', testId: 'backend-claude-code' }, { value: 'provider', label: 'Your provider', testId: 'backend-provider' }]}
       />
-      {backend === 'api' ? (
+      {backend === 'provider' ? (
+        <ProviderSettings toast={toast} onChange={onBackend} />
+      ) : backend === 'api' ? (
         <>
           {/* settings_get only returns a mask for a saved key: never edit it, an empty box means keep the key. */}
           <Row gap={6}>

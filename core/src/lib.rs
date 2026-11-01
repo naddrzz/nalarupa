@@ -13,6 +13,7 @@ pub mod history;
 pub mod html;
 pub mod layout;
 pub mod mcp;
+pub mod openai_chat;
 pub mod net;
 pub mod pen;
 pub mod provider;
@@ -20,6 +21,7 @@ pub mod raster;
 pub mod render;
 pub mod resolve;
 pub mod script;
+pub mod sse;
 pub mod shader;
 pub mod stream;
 pub mod svg;
@@ -387,6 +389,10 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             if s.contains_key("anthropic_api_key") {
                 s.insert("anthropic_api_key".into(), json!("••••••••"));
             }
+            if let Some(list) = s.get("providers") {
+                let list = provider::masked(list);
+                s.insert("providers".into(), list);
+            }
             // The backend the agent will use, so the UI never re-derives it from settings alone.
             s.insert("backend".into(), json!(e.backend()));
             Ok(Value::Object(s))
@@ -446,6 +452,38 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             Some(b) => Err(format!("unknown backend '{b}': api or claude-code")),
             None => Ok(json!(agent::instructions(&agent::backend()))),
         },
+        // Bring-your-own-key providers: saved with their keys (masked when read back), removed, or tried once.
+        "provider_save" => {
+            let mut e = engine();
+            let mut list = e.settings.get("providers").cloned().unwrap_or(json!([]));
+            let id = provider::save(&mut list, req["provider"].clone())?;
+            e.set_setting("providers", list)?;
+            Ok(json!(id))
+        }
+        "provider_remove" => {
+            let id = req["id"].as_str().ok_or("id required")?;
+            let mut e = engine();
+            let mut list = e.settings.get("providers").cloned().unwrap_or(json!([]));
+            if let Some(all) = list.as_array_mut() {
+                all.retain(|p| p["id"] != id);
+            }
+            e.set_setting("providers", list)?;
+            Ok(json!(true))
+        }
+        "provider_test" => {
+            let id = req["id"].as_str().ok_or("id required")?;
+            // Built under the lock, sent after it: a slow provider must not freeze the editor.
+            let (client, model) = {
+                let e = engine();
+                let list = e.settings.get("providers").cloned().unwrap_or(json!([]));
+                let p = list.as_array().and_then(|a| a.iter().find(|p| p["id"] == id)).ok_or("unknown provider")?;
+                (provider::from_config(p)?, provider::pick_model(p, None).ok_or("This provider lists no models: add a model id first.")?)
+            };
+            let body = json!({"model": model, "max_tokens": 16, "messages": [{"role": "user", "content": "Reply with the single word OK."}]});
+            let out = client.stream(body, None, &|| false, &mut |_| {})?;
+            let text: String = out["content"].as_array().into_iter().flatten().filter_map(|b| b["text"].as_str()).collect();
+            Ok(json!({"ok": true, "model": model, "reply": text.trim()}))
+        }
         "agent_permission" => agent::answer_permission(req["id"].as_str().ok_or("id required")?, req["answer"].as_str().ok_or("answer required: allow, deny or auto")?).map(|_| json!(true)),
         "chat_list" => Ok(agent::chats()),
         "chat_load" => agent::load_chat(req["id"].as_str().ok_or("id required")?),

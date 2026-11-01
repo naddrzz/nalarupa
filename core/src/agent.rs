@@ -338,11 +338,16 @@ fn start_thread(p: Profile, prompt: String, child: Option<String>) -> bool {
         let (backend, model) = {
             let e = engine();
             let backend = e.backend();
-            let model = e.setting("agent_model").or_else(|| (backend != "claude-code").then(|| DEFAULT_MODEL.into()));
+            let model = crate::provider::model(&e, &backend);
             (backend, model)
         };
-        emit(&p, "start", json!({"child": child.is_some(), "backend": backend, "model": model}));
-        let result = if backend == "claude-code" { run_claude_code(&p, &prompt, child.is_some(), model) } else { run_api(&p, &prompt, child.is_some(), model) };
+        emit(&p, "start", json!({"child": child.is_some(), "backend": backend, "model": model.as_ref().ok().cloned().flatten()}));
+        let result = match model {
+            // A provider with no model listed fails the turn with what to fix.
+            Err(e) => Err(e),
+            Ok(model) if backend == "claude-code" => run_claude_code(&p, &prompt, child.is_some(), model),
+            Ok(model) => run_api(&p, &prompt, child.is_some(), model),
+        };
         let stopped = engine().agent.cancel.load(Ordering::SeqCst);
         let usage = match result {
             Ok(u) => u,
