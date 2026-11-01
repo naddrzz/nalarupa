@@ -501,6 +501,8 @@ assert(!('anthropic_base_url' in call('settings_get')), 'the base URL clears')
   } finally {
     server.kill()
   }
+}
+
 // Claude Code's own account: its state, its own sign-in (the stand-in finishes after a second, then the core reports
 // the new state as an event) and its sign-out. Nalarupa never sees the credentials. (The stand-in is a shell script.)
 if (process.platform !== 'win32') {
