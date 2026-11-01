@@ -1,0 +1,60 @@
+# Installs a released macOS .dmg the way a person does (downloaded by a browser, so quarantined) and opens it.
+name: mac-smoke
+on:
+  workflow_dispatch:
+    inputs:
+      tag: { description: "Release tag to test (e.g. v0.2.0)", required: true }
+permissions:
+  contents: read
+jobs:
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix: { os: [macos-15, macos-latest] }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.tag }}
+      APP: ${{ github.workspace }}/Applications/Nalarupa.app
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: 1.4.3 }
+      - run: bun install --frozen-lockfile
+        working-directory: app
+      - name: Download the release disk image as a browser would
+        run: |
+          sw_vers; spctl --status || true
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p '*macos*.dmg' -D dl
+          q="0083;$(printf %x "$(date +%s)");Safari;$(uuidgen)"
+          xattr -w com.apple.quarantine "$q" dl/*.dmg
+          hdiutil attach -nobrowse -mountpoint "$RUNNER_TEMP/nala" dl/*.dmg
+          mkdir -p "$(dirname "$APP")"
+          ditto "$RUNNER_TEMP/nala/Nalarupa.app" "$APP"
+          xattr -rw com.apple.quarantine "$q" "$APP"
+          ls -la "$APP/Contents/MacOS"
+      - name: Signature and Gatekeeper
+        if: always()
+        run: |
+          codesign -dvvv "$APP" 2>&1 | grep -E "Identifier|Format|Signature|TeamIdentifier|flags" || true
+          codesign --verify --deep --strict -vv "$APP" 2>&1 || echo "SMOKE: codesign verify FAILED"
+          spctl --assess -vv --type execute "$APP" 2>&1 || echo "SMOKE: Gatekeeper REJECTS the app"
+          for f in "$APP"/Contents/MacOS/*; do echo "== $(basename "$f")"; file "$f"; codesign -dv "$f" 2>&1 | grep -E "Signature|flags" || true; done
+      - name: Open it the way a double-click does
+        if: always()
+        timeout-minutes: 3
+        run: |
+          open "$APP" || echo "SMOKE: open FAILED"
+          sleep 20
+          if pgrep -fl "Nalarupa.app/Contents/MacOS/nalarupa"; then echo "SMOKE: double-click launch RUNNING"; else echo "SMOKE: double-click launch NOT RUNNING"; fi
+          pkill -f "Nalarupa.app/Contents/MacOS/nalarupa" || true
+      - name: Run the bundled binary with quarantine removed
+        if: always()
+        timeout-minutes: 5
+        working-directory: app
+        run: |
+          xattr -cr "$APP"
+          NALARUPA_EXE="$APP/Contents/MacOS/nalarupa" bun scripts/exe-check.ts || { echo "SMOKE: bundle binary FAILS"; exit 1; }
+          echo "SMOKE: bundle binary RUNS"
