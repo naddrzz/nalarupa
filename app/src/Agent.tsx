@@ -3,7 +3,7 @@
 // usage rows, queued prompts, parallel agents.
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { call, tryCall } from './core'
-import { barAgents, changing, imageSrc, lastContentId, profileOf, resetChat, restoreChat, rowTickMs, runVerb, spinning, store, type Author, type ChatItem } from './agents'
+import { barAgents, changing, imageSrc, lastContentId, profileOf, resetChat, restoreChat, rowTickMs, runVerb, spinning, store, setClaudeAuth, type Author, type ChatItem, type ClaudeAuth } from './agents'
 import type { EventPayload } from '@gpuix/native'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import * as SelectPrimitive from '@gpuix/react/select'
@@ -941,6 +941,7 @@ const Item = memo(function Item({ m, isLast, expanded, toggle }: { m: ChatItem; 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 6, marginBottom: 6, padding: 10, borderRadius: 8, borderWidth: 1, borderColor: '#F8717155', backgroundColor: '#F871711A' }}>
           <T size={12} weight="600" color={C.danger}>{`Something went wrong${m.agent ? ` with ${m.agent.name}` : ''}`}</T>
           <T size={11} color={C.muted}>{m.text}</T>
+          {m.signIn ? <SignInButton authAt={m.authAt ?? 0} /> : null}
         </div>
       )
     case 'external':
@@ -996,6 +997,113 @@ function PermissionCard({ m }: { m: Extract<ChatItem, { kind: 'permission' }> })
 
 /** The gear's panel. It shrinks and scrolls when the agent panel is short (minimum window height, a plan showing),
  *  so the composer below never leaves the window. */
+/** How `claude auth status` says the CLI is signed in. */
+const AUTH_METHODS: Record<string, string> = {
+  'claude.ai': 'your Claude account',
+  api_key: 'an API key (ANTHROPIC_API_KEY)',
+  oauth_token: 'a token (CLAUDE_CODE_OAUTH_TOKEN)',
+  api_key_helper: 'an API key helper',
+  third_party: 'a cloud provider (Bedrock, Vertex or Foundry)',
+}
+
+/** A Claude Code account command; a failure (no CLI, a failed logout) goes to `fail`, not to the console only. */
+function authCall<T>(fail: (message: string) => void, cmd: string, args: Record<string, unknown> = {}): T | null {
+  try {
+    return call<T>(cmd, args)
+  } catch (e) {
+    fail((e as Error).message)
+    return null
+  }
+}
+
+/** Start Claude Code's own browser sign-in; the core reports the result as a `claude_auth` event. */
+function startSignIn(fail: (message: string) => void, console = false): boolean {
+  return authCall(fail, 'claude_auth_login', { console }) !== null
+}
+
+/** The signed-out error card's Sign in: `authAt` is the account state count, so the card redraws when it changes. */
+function SignInButton({ authAt }: { authAt: number }) {
+  // The account state count when this sign-in started; null before one starts.
+  const [from, setFrom] = useState<number | null>(null)
+  const [failed, setFailed] = useState('')
+  if (from !== null && authAt > from) {
+    if (store.claudeAuth?.signedIn) return <T size={11} color={C.muted}>Signed in. Send your message again.</T>
+  } else if (from !== null) {
+    return <T size={11} color={C.muted}>Finish signing in in your browser…</T>
+  }
+  const retry = from !== null
+  return (
+    <>
+      {retry ? <T size={11} color={C.muted}>Sign-in did not finish.</T> : null}
+      {failed ? <T size={11} color={C.danger}>{failed}</T> : null}
+      <Row gap={6}>
+        <Button testId="error-sign-in" onClick={() => { setFailed(''); if (startSignIn(setFailed)) setFrom(store.claudeAuthAt) }}>{retry ? 'Try again' : 'Sign in to Claude Code'}</Button>
+      </Row>
+    </>
+  )
+}
+
+/**
+ * Claude Code's sign-in state, with Sign in / Sign out. Nalarupa only starts the CLI's own flows (`claude auth
+ * login` opens the browser); the credentials stay with Claude Code.
+ */
+function ClaudeCodeAccount({ toast }: { toast: Toast }) {
+  const [auth, setAuth] = useState<ClaudeAuth | null>(() => tryCall<ClaudeAuth>('claude_auth_status'))
+  const [signingIn, setSigningIn] = useState(false)
+  // Only states reported after this panel opened replace the fresh status it read on mount.
+  const [opened] = useState(store.claudeAuthAt)
+  const at = store.claudeAuthAt
+  useEffect(() => {
+    if (at <= opened || !store.claudeAuth) return
+    const live = store.claudeAuth
+    setAuth(live)
+    if (signingIn) {
+      setSigningIn(false)
+      toast(live.signedIn ? 'Signed in to Claude Code' : 'Sign-in did not finish')
+    }
+  }, [at])
+  if (!auth) return null
+  if (!auth.installed) return <T size={11} color={C.danger}>Claude Code is not installed. Install it from code.claude.com, then sign in here.</T>
+  if (signingIn) {
+    return (
+      <>
+        <T size={11} color={C.muted}>Finish signing in in your browser…</T>
+        <Row gap={6}>
+          <Button testId="claude-sign-in-cancel" onClick={() => { tryCall('claude_auth_cancel'); setSigningIn(false) }}>Cancel</Button>
+        </Row>
+      </>
+    )
+  }
+  if (auth.signedIn) {
+    const how = AUTH_METHODS[auth.method ?? ''] ?? auth.method
+    const who = [auth.account, auth.plan].filter(Boolean).join(' · ')
+    return (
+      <>
+        <T size={11} color={C.muted}>{`Signed in with ${how}${who ? ` (${who})` : ''}.`}</T>
+        <Row gap={6}>
+          <Button testId="claude-sign-out" onClick={() => {
+          const s = authCall<ClaudeAuth>(toast, 'claude_auth_logout')
+          if (!s) return
+          setClaudeAuth(s)
+          setAuth(s)
+          toast('Signed out of Claude Code')
+        }}>Sign out</Button>
+        </Row>
+      </>
+    )
+  }
+  return (
+    <>
+      <T size={11} color={C.muted}>Claude Code is not signed in.</T>
+      <Row gap={6}>
+        <Button testId="claude-sign-in" onClick={() => setSigningIn(startSignIn(toast))}>Sign in</Button>
+        <Button testId="claude-sign-in-console" onClick={() => setSigningIn(startSignIn(toast, true))}>Console account</Button>
+      </Row>
+      <T size={11} color={C.ghost}>Opens Claude Code's own sign-in in your browser (a Console account bills API use); your login stays with Claude Code.</T>
+    </>
+  )
+}
+
 function AgentSettings({ mcpUrl, toast, onBackend }: { mcpUrl: string; toast: Toast; onBackend: () => void }) {
   const s = useMemo(() => tryCall<Record<string, string>>('settings_get') ?? {}, [])
   const [backend, setBackend] = useState(s.backend ?? 'claude-code')
@@ -1047,6 +1155,7 @@ function AgentSettings({ mcpUrl, toast, onBackend }: { mcpUrl: string; toast: To
       ) : (
         <>
           <T size={11} color={C.ghost}>Uses your installed `claude` CLI and its login. Canvas tools are passed in as the nalarupa MCP server.</T>
+          <ClaudeCodeAccount toast={toast} />
           <T size={11} color={C.muted} weight="600">Other tools (shell, files outside the document folder)</T>
           <Segmented
             label="Permission for other tools"
