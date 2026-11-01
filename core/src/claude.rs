@@ -58,10 +58,11 @@ impl Client {
                 blocks.retain(|b| b["type"] != "reasoning_item");
             }
         }
-        let mut req = self.http.post(&self.url)
-            .header("x-api-key", &self.key)
-            .header("anthropic-version", "2023-06-01")
-            .header("content-type", "application/json");
+        let mut req = self.http.post(&self.url).header("anthropic-version", "2023-06-01").header("content-type", "application/json");
+        // A keyless provider (a local Anthropic-compatible server) sends no key header at all.
+        if !self.key.trim().is_empty() {
+            req = req.header("x-api-key", &self.key);
+        }
         if let Some(b) = beta {
             req = req.header("anthropic-beta", b);
         }

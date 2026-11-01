@@ -451,7 +451,9 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
         }
         "agent_instructions" => match req["backend"].as_str() {
             Some(b @ ("api" | "claude-code")) => Ok(json!(agent::instructions(b))),
-            Some(b) => Err(format!("unknown backend '{b}': api or claude-code")),
+            // A provider gets the API backend's instructions.
+            Some("provider") => Ok(json!(agent::instructions("api"))),
+            Some(b) => Err(format!("unknown backend '{b}': api, claude-code or provider")),
             None => Ok(json!(agent::instructions(&agent::backend()))),
         },
         // Bring-your-own-key providers: saved with their keys (masked when read back), removed, or tried once.
@@ -472,19 +474,28 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             e.set_setting("providers", list)?;
             Ok(json!(true))
         }
+        // One tiny request in the background (a slow provider must not freeze the editor); the result arrives as a
+        // `provider_test` event: {id, ok, model, reply} or {id, ok: false, error}.
         "provider_test" => {
-            let id = req["id"].as_str().ok_or("id required")?;
-            // Built under the lock, sent after it: a slow provider must not freeze the editor.
+            let id = req["id"].as_str().ok_or("id required")?.to_string();
             let (client, model) = {
                 let e = engine();
                 let list = e.settings.get("providers").cloned().unwrap_or(json!([]));
-                let p = list.as_array().and_then(|a| a.iter().find(|p| p["id"] == id)).ok_or("unknown provider")?;
+                let p = list.as_array().and_then(|a| a.iter().find(|p| p["id"] == id.as_str())).ok_or("unknown provider")?;
                 (provider::from_config(p)?, provider::pick_model(p, None).ok_or("This provider lists no models: add a model id first.")?)
             };
-            let body = json!({"model": model, "max_tokens": 16, "messages": [{"role": "user", "content": "Reply with the single word OK."}]});
-            let out = client.stream(body, None, &|| false, &mut |_| {})?;
-            let text: String = out["content"].as_array().into_iter().flatten().filter_map(|b| b["text"].as_str()).collect();
-            Ok(json!({"ok": true, "model": model, "reply": text.trim()}))
+            std::thread::spawn(move || {
+                let body = json!({"model": model, "max_tokens": 16, "messages": [{"role": "user", "content": "Reply with the single word OK."}]});
+                let ev = match client.stream(body, None, &|| false, &mut |_| {}) {
+                    Ok(out) => {
+                        let text: String = out["content"].as_array().into_iter().flatten().filter_map(|b| b["text"].as_str()).collect();
+                        json!({"type": "provider_test", "id": id, "ok": true, "model": model, "reply": text.trim()})
+                    }
+                    Err(error) => json!({"type": "provider_test", "id": id, "ok": false, "model": model, "error": error}),
+                };
+                engine().emit(ev);
+            });
+            Ok(json!(true))
         }
         // Claude Code's own account: its state, and its own browser sign-in and sign-out (crate::claude_code).
         "claude_auth_status" => Ok(claude_code::status()),

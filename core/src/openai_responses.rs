@@ -221,7 +221,7 @@ pub fn translate(body: &Value, vision: bool, openai: bool) -> Value {
     if let Some(n) = body["max_tokens"].as_u64() {
         out.insert("max_output_tokens".into(), json!(n));
     }
-    if let (true, Some(effort)) = (openai, body["output_config"]["effort"].as_str()) {
+    if let (true, Some(effort)) = (openai && crate::openai_chat::reasoning_model(body["model"].as_str().unwrap_or("")), body["output_config"]["effort"].as_str()) {
         out.insert("reasoning".into(), json!({"effort": effort}));
         reasons = true;
     }
@@ -294,7 +294,7 @@ mod tests {
         let reasoning = json!({"type": "reasoning", "id": "rs_1", "encrypted_content": "gAAA", "summary": []});
         let png = json!({"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBOR"}});
         let body = json!({
-            "model": "gpt-x",
+            "model": "gpt-5.1",
             "max_tokens": 32000,
             "system": [{"type": "text", "text": "You are a design agent.", "cache_control": {"type": "ephemeral"}}],
             "tools": [{"name": "execute", "description": "Run", "input_schema": {"type": "object"}, "eager_input_streaming": true}],

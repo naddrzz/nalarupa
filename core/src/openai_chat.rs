@@ -88,7 +88,8 @@ impl Client {
                 }
                 let call = &mut calls[i];
                 let fresh = call.1.is_empty();
-                if let Some(id) = tc["id"].as_str().filter(|id| !id.is_empty()) {
+                // A call keeps the first id it was shown under: one arriving late must not rename it mid-stream.
+                if let Some(id) = tc["id"].as_str().filter(|id| !id.is_empty() && call.0.is_empty()) {
                     call.0 = id.to_string();
                 }
                 if let Some(name) = tc["function"]["name"].as_str().filter(|n| !n.is_empty()) {
@@ -119,7 +120,8 @@ impl Client {
             content.push(json!({"type": "tool_use", "id": id, "name": name, "input": crate::claude::tool_input(args)}));
         }
         // Whether tools run is decided by the calls collected, not by the finish reason (servers differ).
-        let stop = if !calls.is_empty() { "tool_use" } else if finish == "length" { "max_tokens" } else { "end_turn" };
+        // A reply cut off by the token limit stays max_tokens even with calls in it: the last one may be truncated.
+        let stop = if finish == "length" { "max_tokens" } else if !calls.is_empty() { "tool_use" } else { "end_turn" };
         Ok(json!({"content": content, "stop_reason": stop, "usage": usage}))
     }
 }
@@ -205,10 +207,16 @@ pub fn translate(body: &Value, vision: bool, openai: bool) -> Value {
     if let Some(n) = body["max_tokens"].as_u64() {
         out.insert(if openai { "max_completion_tokens" } else { "max_tokens" }.into(), json!(n));
     }
-    if let (true, Some(effort)) = (openai, body["output_config"]["effort"].as_str()) {
+    if let (true, Some(effort)) = (openai && reasoning_model(body["model"].as_str().unwrap_or("")), body["output_config"]["effort"].as_str()) {
         out.insert("reasoning_effort".into(), json!(effort));
     }
     Value::Object(out)
+}
+
+/// OpenAI's reasoning models (o-series, gpt-5 and later), the only ones that take a reasoning effort.
+pub fn reasoning_model(model: &str) -> bool {
+    let m = model.rsplit('/').next().unwrap_or(model);
+    (m.starts_with('o') && m[1..].starts_with(|c: char| c.is_ascii_digit())) || ["gpt-5", "gpt-6", "gpt-7"].iter().any(|p| m.starts_with(p))
 }
 
 fn image_part(b: &Value) -> Value {
@@ -305,6 +313,26 @@ mod tests {
         let (base, _) = fake_server(vec![bad]);
         let out = Client::new(&base, None, true).stream(json!({"model": "m", "messages": []}), None, &|| false, &mut |_| {}).unwrap();
         assert_eq!(out["content"][0]["input"], json!({"__invalid_json": "{\"input\": \"x"}));
+        assert_eq!(out["stop_reason"], "tool_use");
+        // Cut off by the token limit mid-call: the agent must see max_tokens, so it does not run a truncated call.
+        let cut = chunks(&[delta(json!({"tool_calls": [{"index": 0, "id": "call_c", "function": {"name": "execute", "arguments": "{\"input\": \"Ins"}}]})), json!({"choices": [{"index": 0, "delta": {}, "finish_reason": "length"}]})]);
+        let (base, _) = fake_server(vec![cut]);
+        let out = Client::new(&base, None, true).stream(json!({"model": "m", "messages": []}), None, &|| false, &mut |_| {}).unwrap();
+        assert_eq!(out["stop_reason"], "max_tokens");
+        // An id that only arrives after the call started does not change the call's identity mid-stream.
+        let late = chunks(&[
+            delta(json!({"tool_calls": [{"index": 0, "function": {"name": "execute", "arguments": "{}"}}]})),
+            delta(json!({"tool_calls": [{"index": 0, "id": "call_late", "function": {"arguments": ""}}]})),
+        ]);
+        let (base, _) = fake_server(vec![late]);
+        let mut ids = Vec::new();
+        let out = Client::new(&base, None, true).stream(json!({"model": "m", "messages": []}), None, &|| false, &mut |ev| {
+            if let Event::ToolStart { id, .. } | Event::ToolInput { id, .. } = ev {
+                ids.push(id.to_string());
+            }
+        }).unwrap();
+        assert!(ids.iter().all(|i| i == &ids[0]), "{ids:?}");
+        assert_eq!(out["content"][0]["id"], json!(ids[0]));
         assert!(out["content"][0]["id"].as_str().is_some_and(|id| !id.is_empty()), "a missing id is made up");
     }
 
@@ -357,11 +385,16 @@ mod tests {
         let msgs = blind["messages"].as_array().unwrap();
         assert_eq!(msgs.len(), 5);
         assert!(msgs[4]["content"].as_str().unwrap().contains("screenshot is not available"), "{}", msgs[4]);
-        // OpenAI itself wants max_completion_tokens and takes the effort as reasoning_effort.
+        // OpenAI itself wants max_completion_tokens; only its reasoning models take the effort.
         let openai = translate(&history(), true, true);
         assert_eq!(openai["max_completion_tokens"], 32000);
         assert!(openai.get("max_tokens").is_none());
-        assert_eq!(openai["reasoning_effort"], "high");
+        assert!(openai.get("reasoning_effort").is_none(), "gpt-x is not a reasoning model");
+        for model in ["o3", "o4-mini", "gpt-5.1", "gpt-6-astra"] {
+            let mut h = history();
+            h["model"] = json!(model);
+            assert_eq!(translate(&h, true, true)["reasoning_effort"], "high", "{model}");
+        }
     }
 
     #[test]

@@ -47,6 +47,9 @@ export const store = {
   /** The latest Claude Code account state, from a finished sign-in flow or a sign-out, and how many there were. */
   claudeAuth: null as ClaudeAuth | null,
   claudeAuthAt: 0,
+  /** The last provider test's result (core `provider_test` event), and how many there were. */
+  providerTest: null as { id: string; ok: boolean; model: string; reply?: string; error?: string } | null,
+  providerTestAt: 0,
   profiles: new Map<string, Profile>(),
   running: new Set<string>(),
   /** Backend and model of each agent's current turn, from its `start` event. */
@@ -202,6 +205,12 @@ export function applyEvents(events: any[], now: number): boolean {
       const pen = store.pens.get(ev.id)
       if (pen) Object.assign(pen, { tx: ev.x, ty: ev.y })
       else store.pens.set(ev.id, { x: ev.x, y: ev.y, tx: ev.x, ty: ev.y, appearAt: now })
+      changed = true
+      continue
+    }
+    if (ev.type === 'provider_test') {
+      store.providerTest = ev
+      store.providerTestAt++
       changed = true
       continue
     }
