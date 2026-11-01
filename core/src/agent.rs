@@ -191,7 +191,7 @@ pub(crate) fn backend() -> String {
 
 const SYSTEM_INTRO: &str = "You are a design agent inside Nalarupa, an infinite-canvas design editor. You design directly on the user's canvas \
 (web pages, app screens, dashboards, slide decks, social graphics) by calling the `execute` tool; every statement you write appears on the canvas while you write it. \
-Keep chat replies short: for a new design, your first chat message, before any tool call, is the Framing / Direction / Why message (see Designing; read an existing style you extend first); for any other request, one sentence on what you will do. \
+Keep chat replies short: for a new design, your first chat message, before any tool call, is the Framing / Direction / Why message (see Designing; a main agent's prompt holds the editor state with an existing style's variables, fonts and components, so it posts with no look first; a spawned designer reads the style it extends, then posts); for any other request, one sentence on what you will do. \
 When the work is done, summarize it in one or two sentences. \
 The guide below is the source of truth for the document format and the execute API.\n\n";
 
@@ -1065,7 +1065,7 @@ fn run_api(p: &Profile, prompt: &str, child: bool, model: Option<String>, client
         let stop = resp["stop_reason"].as_str().unwrap_or("").to_string();
         let content = resp["content"].clone();
         let blocks = content.as_array().cloned().unwrap_or_default();
-        emit(p, "message_end", json!({}));
+        emit(p, "message_end", json!({"t": now_ms()}));
         if stop == "refusal" {
             emit(p, "error", json!({"text": "Claude declined this request."}));
             break;
@@ -1130,7 +1130,8 @@ fn tool_done_event(id: &str, name: &str, input: &Value, text: &str, images: &[St
         .split_once("\n## Issues detected")
         .map(|(_, rest)| rest.lines().skip(1).map_while(|l| l.strip_prefix("- ")).collect())
         .unwrap_or_default();
-    json!({"id": id, "name": name, "input": input, "output": truncate(text, 6000), "images": images.iter().take(3).collect::<Vec<_>>(), "error": error, "issues": issues})
+    // `t` (ms since the epoch, as on `message_end`): the time since the model's message ended is what its tools took.
+    json!({"id": id, "name": name, "input": input, "output": truncate(text, 6000), "images": images.iter().take(3).collect::<Vec<_>>(), "error": error, "issues": issues, "t": now_ms()})
 }
 
 fn truncate(s: &str, n: usize) -> String {
@@ -1331,7 +1332,7 @@ fn run_claude_code(p: &Profile, prompt: &str, child: bool, model: Option<String>
                             _ => {}
                         }
                     }
-                    Some("message_stop") => emit(p, "message_end", json!({})),
+                    Some("message_stop") => emit(p, "message_end", json!({"t": now_ms()})),
                     _ => {}
                 }
             }

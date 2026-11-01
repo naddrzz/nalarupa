@@ -7,7 +7,9 @@
 // top-level frames as PNGs, its document, its transcript, and metrics.json + summary.md. `compare` writes one page
 // with two eval runs side by side and B − A for every metric; `summary` reprints a run's summary.md. Both flag
 // unrelated briefs whose results look alike (sameness is a defect): only briefs of one kind are compared, since a
-// phone screen and a page differ by shape alone, and the existing-style brief is meant to look like its fixture.
+// phone screen and a page differ by shape alone, and the existing-style brief is meant to look like its fixture. The
+// ground (the colour most of the first screen is painted in) is compared on its own, since pages kept drifting back to
+// one warm cream whatever their structure.
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join, relative, resolve } from 'node:path'
@@ -61,7 +63,9 @@ const BRIEF_TIMEOUT = 30 * 60_000
 const FONT_WAIT = 8000
 // Similarity at or above which two unrelated briefs count as looking alike. Set from the first baseline eval run: the
 // pairs a person judged alike scored 0.84–0.95 on colour, the distinct ones 0.74 and below.
-const SAME = { colour: 0.83, layout: 0.85 }
+// Ground: the RGB distance (0–441) under which two grounds read as the same colour; #F3F1EA and #F4EFE6 (the final
+// eval run's bakery and ledgerline, both cream) are 5 apart, a cream and a chart white about 20.
+const SAME = { colour: 0.83, layout: 0.85, ground: 12 }
 const ASPECT: Record<Kind, number> = { page: 0.625, mobile: 2.16, slides: 0.5625, existing: 0.625 }
 
 const args = process.argv.slice(2)
@@ -116,6 +120,28 @@ const similarity = (a: Thumb, b: Thumb) => {
   return { colour, layout: xx && yy ? Math.max(0, xy / Math.sqrt(xx * yy)) : 0 }
 }
 
+/** The ground of a frame's first screen: the colour most of it is painted in (the mode of its pixels, 32 levels a
+ * channel, averaged back into a hex colour). */
+const ground = (file: string, kind: Kind): string => {
+  const img = decodePng(file)
+  const cropH = Math.min(img.h, img.w * ASPECT[kind])
+  const step = Math.max(1, Math.floor(Math.sqrt((img.w * cropH) / 40000)))
+  const bins = new Map<number, number[]>()
+  for (let y = 0; y < cropH; y += step)
+    for (let x = 0; x < img.w; x += step) {
+      const [r, g, b, a] = img.at(x, y)
+      const k = (a ?? 255) / 255
+      const px = [r * k + 255 * (1 - k), g * k + 255 * (1 - k), b * k + 255 * (1 - k)]
+      const key = px.reduce((s, v) => (s << 5) | (v >> 3), 0)
+      const bin = bins.get(key) ?? [0, 0, 0, 0]
+      bins.set(key, [bin[0] + px[0], bin[1] + px[1], bin[2] + px[2], bin[3] + 1])
+    }
+  const top = [...bins.values()].sort((p, q) => q[3] - p[3])[0]
+  return '#' + top.slice(0, 3).map((v) => Math.round(v / top[3]).toString(16).padStart(2, '0')).join('').toUpperCase()
+}
+const rgb = (hex: string) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16))
+const groundDistance = (a: string, b: string) => Math.hypot(...rgb(a).map((v, i) => v - rgb(b)[i]))
+
 type Shot = { file: string; name: string; w: number; h: number }
 type BriefResult = {
   id: string; kind: Kind; brief: string; ok: boolean; error?: string; wallMs: number
@@ -123,25 +149,32 @@ type BriefResult = {
   executeCalls: number; failedExecutes: number; repairs: number; issues: string[]
   /** Execute calls that returned a screenshot (the critique pass looks at one per finished section and revision). */
   screenshots?: number
+  /** Wall time spent in tool calls: from the end of each model message (`message_end`) to each of its tool results,
+   * which is the core running what the streamed `execute` had not yet run, its screenshots, and the backend's
+   * round trip. The rest of `wallMs` is the model's. */
+  toolMs?: number
   instructionsChars: number; guideReads: { tool: string; arg: string; chars: number }[]; guideChars: number
   /** Everything the agents said before the first execute, one "name: text" block each (named before it held more). */
   firstMessage: string; deniedTools: string[]; shots: Shot[]
 }
 type Run = { meta: { sha: string; backend: string; model: string | null; designs?: number; iterate?: string; parallel?: number; mode?: string; date: string }; briefs: BriefResult[] }
-type Pair = { a: string; b: string; colour: number; layout: number }
-const alike = (p: Pair) => p.colour >= SAME.colour || p.layout >= SAME.layout
+type Pair = { a: string; b: string; colour: number; layout: number; ground: [string, string]; groundDistance: number }
+const alike = (p: Pair) => p.colour >= SAME.colour || p.layout >= SAME.layout || p.groundDistance <= SAME.ground
+const pairText = (p: Pair) => `colour ${p.colour.toFixed(3)}, layout ${p.layout.toFixed(3)}, ground ${p.ground[0]} / ${p.ground[1]} (${p.groundDistance.toFixed(1)} apart${p.groundDistance <= SAME.ground ? ', the same colour' : ''})`
 const minutes = (ms: number) => (ms / 60_000).toFixed(1)
 
 const isTool = (name: string, tool: string) => name === tool || name.endsWith(`__${tool}`)
 
 /** Pairs of different briefs of the same kind, most alike first; the existing-style brief should look like its fixture, so it is left out. */
 const sameness = (dir: string, run: Run): Pair[] => {
-  const thumbs = run.briefs.filter((r) => r.shots[0] && r.kind !== 'existing').map((r) => ({ r, t: thumb(join(dir, r.shots[0].file), r.kind) }))
+  const thumbs = run.briefs.filter((r) => r.shots[0] && r.kind !== 'existing').map((r) => ({ r, t: thumb(join(dir, r.shots[0].file), r.kind), g: ground(join(dir, r.shots[0].file), r.kind) }))
   const pairs: Pair[] = []
   for (let i = 0; i < thumbs.length; i++)
     for (let j = i + 1; j < thumbs.length; j++)
-      if (thumbs[i].r.kind === thumbs[j].r.kind) pairs.push({ a: thumbs[i].r.id, b: thumbs[j].r.id, ...similarity(thumbs[i].t, thumbs[j].t) })
-  return pairs.sort((x, y) => Math.max(y.colour, y.layout) - Math.max(x.colour, x.layout))
+      if (thumbs[i].r.kind === thumbs[j].r.kind)
+        pairs.push({ a: thumbs[i].r.id, b: thumbs[j].r.id, ...similarity(thumbs[i].t, thumbs[j].t), ground: [thumbs[i].g, thumbs[j].g], groundDistance: groundDistance(thumbs[i].g, thumbs[j].g) })
+  // Flagged pairs first, then the most alike by colour or layout.
+  return pairs.sort((x, y) => Number(alike(y)) - Number(alike(x)) || Math.max(y.colour, y.layout) - Math.max(x.colour, x.layout))
 }
 
 const totals = (run: Run) => {
@@ -156,6 +189,8 @@ const totals = (run: Run) => {
     screenshots: run.briefs.every((r) => r.screenshots !== undefined) ? sum((r) => r.screenshots ?? 0) : '–',
     turns: sum((r) => r.turns),
     minutes: +minutes(sum((r) => r.wallMs)),
+    // Older eval runs did not time tool calls.
+    toolMinutes: run.briefs.every((r) => r.toolMs !== undefined) ? +minutes(sum((r) => r.toolMs ?? 0)) : '–',
     costUsd: +sum((r) => r.costUsd).toFixed(2),
     instructionsChars: run.briefs[0]?.instructionsChars ?? 0,
     guideChars: Math.round(sum((r) => r.guideChars) / Math.max(1, run.briefs.length)),
@@ -166,22 +201,22 @@ const totals = (run: Run) => {
 const setting = (m: Run['meta']) => (m.designs ? ` · Let it cook ${m.designs}× ${m.iterate}` : '') + (m.parallel ? ` · ${m.parallel} designers ${m.mode}` : '')
 
 const summary = (dir: string, run: Run) => {
-  const rows = run.briefs.map((r) => `| ${r.id} | ${r.ok ? 'ok' : `**${r.error}**`} | ${r.issues.length} | ${r.failedExecutes} | ${r.repairs} | ${r.executeCalls} | ${r.screenshots ?? '–'} | ${r.turns} | ${minutes(r.wallMs)} | ${r.guideChars} |`)
+  const rows = run.briefs.map((r) => `| ${r.id} | ${r.ok ? 'ok' : `**${r.error}**`} | ${r.issues.length} | ${r.failedExecutes} | ${r.repairs} | ${r.executeCalls} | ${r.screenshots ?? '–'} | ${r.turns} | ${minutes(r.wallMs)} | ${r.toolMs === undefined ? '–' : minutes(r.toolMs)} | ${r.guideChars} |`)
   const t = totals(run)
   const pairs = sameness(dir, run)
   return [
     `# Eval run ${run.meta.date} (${run.meta.sha}, ${run.meta.backend}${run.meta.model ? `, ${run.meta.model}` : ''})${setting(run.meta)}`,
     '',
-    '| Brief | Result | Issues detected | Failed executes | Repair attempts | Executes | Screenshots | Turns | Minutes | Guide chars read |',
-    '|---|---|---|---|---|---|---|---|---|---|',
+    '| Brief | Result | Issues detected | Failed executes | Repair attempts | Executes | Screenshots | Turns | Minutes | In tools | Guide chars read |',
+    '|---|---|---|---|---|---|---|---|---|---|---|',
     ...rows,
-    `| **Total** | ${t.briefs} | ${t.issues} | ${t.failedExecutes} | ${t.repairs} | ${t.executeCalls} | ${t.screenshots} | ${t.turns} | ${t.minutes} | ${t.guideChars} avg |`,
+    `| **Total** | ${t.briefs} | ${t.issues} | ${t.failedExecutes} | ${t.repairs} | ${t.executeCalls} | ${t.screenshots} | ${t.turns} | ${t.minutes} | ${t.toolMinutes} | ${t.guideChars} avg |`,
     '',
     `Always-loaded instructions: ${t.instructionsChars} chars. Cost: $${t.costUsd}.`,
     '',
     '## Sameness (unrelated briefs of one kind)',
     '',
-    ...pairs.map((p) => `- ${p.a} / ${p.b}: colour ${p.colour.toFixed(3)}, layout ${p.layout.toFixed(3)}${alike(p) ? ' **looks alike**' : ''}`),
+    ...pairs.map((p) => `- ${p.a} / ${p.b}: ${pairText(p)}${alike(p) ? ' **looks alike**' : ''}`),
     '',
   ].join('\n')
 }
@@ -199,14 +234,14 @@ const page = (out: string, runs: [string, Run][]) => {
     return sameBriefs && !Number.isNaN(a) && !Number.isNaN(b) ? `${b - a > 0 ? '+' : ''}${+(b - a).toFixed(2)}` : '–'
   }
   const metric = keys.map((k) => `<tr><td>${k}</td>${ts.map(([, , t]) => `<td>${t[k]}</td>`).join('')}<td>${delta(k)}</td></tr>`).join('')
-  const same = `<tr><td>looks alike</td>${ts.map(([, , , p]) => `<td>${p.filter(alike).map((x) => `${x.a}/${x.b} colour ${x.colour.toFixed(2)} layout ${x.layout.toFixed(2)}`).join('<br>') || 'none'}</td>`).join('')}<td></td></tr>`
+  const same = `<tr><td>looks alike</td>${ts.map(([, , , p]) => `<td>${p.filter(alike).map((x) => `${x.a}/${x.b} ${esc(pairText(x))}`).join('<br>') || 'none'}</td>`).join('')}<td></td></tr>`
   const ids = [...new Set(runs.flatMap(([, r]) => r.briefs.map((b) => b.id)))]
   const briefs = ids.map((id) => {
     const cells = ts.map(([d, r]) => {
       const b = r.briefs.find((x) => x.id === id)
       if (!b) return '<td>not run</td>'
       const imgs = b.shots.map((s) => [esc(relative(dirname(out), join(d, s.file))), esc(s.name)]).map(([src, name]) => `<a href="${src}"><img src="${src}" title="${name}"></a>`).join('')
-      return `<td><p class="m">${b.ok ? '' : `<b>${esc(b.error ?? '')}</b> · `}issues ${b.issues.length} · failed ${b.failedExecutes} · repair attempts ${b.repairs} · turns ${b.turns} · ${minutes(b.wallMs)} min</p><blockquote>${esc(b.firstMessage || '(no message before the first execute)')}</blockquote><div class="shots">${imgs}</div></td>`
+      return `<td><p class="m">${b.ok ? '' : `<b>${esc(b.error ?? '')}</b> · `}issues ${b.issues.length} · failed ${b.failedExecutes} · repair attempts ${b.repairs} · turns ${b.turns} · ${minutes(b.wallMs)} min${b.toolMs === undefined ? '' : ` (${minutes(b.toolMs)} in tools)`}</p><blockquote>${esc(b.firstMessage || '(no message before the first execute)')}</blockquote><div class="shots">${imgs}</div></td>`
     })
     const [a, b] = runs.map(([, r]) => r.briefs.find((x) => x.id === id))
     const d = (f: (r: BriefResult) => number) => (a && b ? `${f(b) - f(a) > 0 ? '+' : ''}${+(f(b) - f(a)).toFixed(1)}` : '–')
@@ -258,7 +293,7 @@ const run = async () => {
     call('new', { template: 'empty' })
     const r: BriefResult = {
       id: b.id, kind: b.kind, brief: b.text, ok: true, wallMs: 0, turns: 0, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, costUsd: 0,
-      executeCalls: 0, failedExecutes: 0, repairs: 0, issues: [], screenshots: 0, instructionsChars, guideReads: [], guideChars: 0, firstMessage: '', deniedTools: [], shots: [],
+      executeCalls: 0, failedExecutes: 0, repairs: 0, issues: [], screenshots: 0, toolMs: 0, instructionsChars, guideReads: [], guideChars: 0, firstMessage: '', deniedTools: [], shots: [],
     }
     console.log(`== ${b.id}`)
     if (b.kind === 'existing') {
@@ -275,6 +310,9 @@ const run = async () => {
     const before = new Set(call<any[]>('frames').map((f) => f.id))
     const transcript: string[] = [`# ${b.id}\n\n> ${b.text}\n`]
     const text = new Map<string, string>()
+    // Per agent, the core's time stamp of its last message end or tool result: a tool's time runs from there to its own
+    // result, so the model writing the call is not counted. A core that stamps no events leaves `toolMs` unknown.
+    const boundary = new Map<string, number>()
     let executed = false
     call('agent_send', { text: b.text, designs, iterate, parallel, mode })
     const started = Date.now()
@@ -295,7 +333,14 @@ const run = async () => {
           text.delete(who)
         }
         if (e.kind === 'tool_start' && isTool(e.name, 'execute')) executed = true
+        if (e.kind === 'message_end' && typeof e.t === 'number') boundary.set(who, e.t)
         if (e.kind === 'tool_done') {
+          const from = boundary.get(who)
+          if (typeof e.t !== 'number') r.toolMs = undefined
+          else if (from !== undefined && r.toolMs !== undefined) {
+            r.toolMs += Math.max(0, e.t - from)
+            boundary.set(who, e.t)
+          }
           transcript.push(`- \`${e.name}\`${e.error ? ' **failed**' : ''}${e.issues?.length ? `, ${e.issues.length} issues` : ''}`)
           if (isTool(e.name, 'execute')) {
             r.executeCalls++
