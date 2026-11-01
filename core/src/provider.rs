@@ -61,6 +61,7 @@ pub fn from_config(p: &Value) -> Result<Box<dyn Provider>, String> {
     match p["format"].as_str().unwrap_or("") {
         "anthropic" => Ok(Box::new(crate::claude::Client::at(key.unwrap_or_default(), Some(base)))),
         "chat" => Ok(Box::new(crate::openai_chat::Client::new(base, key, p["vision"] != false))),
+        "responses" => Ok(Box::new(crate::openai_responses::Client::new(base, key, p["vision"] != false))),
         f => Err(format!("Provider \"{}\" uses the \"{f}\" format, which this version of Nalarupa cannot speak yet.", name(p))),
     }
 }
@@ -199,7 +200,7 @@ pub(crate) mod tests {
     #[test]
     fn the_active_provider_picks_the_client_and_the_model() {
         let ps = providers();
-        assert!(from_config(&ps[0]).is_ok() && from_config(&ps[1]).is_ok());
+        assert!(from_config(&ps[0]).is_ok() && from_config(&ps[1]).is_ok() && from_config(&ps[2]).is_ok());
         assert!(from_config(&json!({"format": "chat"})).err().unwrap().contains("base URL"), "a provider needs a base URL");
         assert!(from_config(&json!({"format": "gemini", "base_url": "x"})).err().unwrap().contains("gemini"));
         // The chosen model when the provider offers it, else its first model.

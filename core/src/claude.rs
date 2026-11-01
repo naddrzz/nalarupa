@@ -52,6 +52,12 @@ impl Client {
     /// POST /v1/messages with `stream: true`; returns `{content, stop_reason, usage}`.
     pub fn stream(&self, mut body: Value, beta: Option<&str>, cancel: &dyn Fn() -> bool, on: &mut dyn FnMut(Event)) -> Result<Value, String> {
         body["stream"] = json!(true);
+        // Reasoning items from an OpenAI Responses provider earlier in the chat mean nothing here.
+        for m in body["messages"].as_array_mut().into_iter().flatten() {
+            if let Some(blocks) = m["content"].as_array_mut() {
+                blocks.retain(|b| b["type"] != "reasoning_item");
+            }
+        }
         let mut req = self.http.post(&self.url)
             .header("x-api-key", &self.key)
             .header("anthropic-version", "2023-06-01")
