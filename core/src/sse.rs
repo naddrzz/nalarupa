@@ -47,9 +47,10 @@ pub fn post(
         loop {
             buf.clear();
             // One line at most LINE_MAX bytes: a server that never sends a newline cannot grow memory without bound.
-            let line = match (&mut reader).take(LINE_MAX as u64 + 1).read_until(b'\n', &mut buf) {
+            // Room for the payload plus a CRLF terminator; no newline within that means the line is too long.
+            let line = match (&mut reader).take(LINE_MAX as u64 + 2).read_until(b'\n', &mut buf) {
                 Ok(0) => break,
-                Ok(_) if buf.len() > LINE_MAX && !buf.ends_with(b"\n") => Err(format!("stream interrupted: a line over {} MB", LINE_MAX >> 20)),
+                Ok(_) if buf.len() > LINE_MAX + 1 && !buf.ends_with(b"\n") => Err(format!("stream interrupted: a line over {} MB", LINE_MAX >> 20)),
                 Ok(_) => Ok(Some(String::from_utf8_lossy(&buf).trim_end_matches(['\r', '\n']).to_string())),
                 Err(e) => Err(format!("stream interrupted: {e}")),
             };

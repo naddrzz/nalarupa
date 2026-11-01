@@ -41,9 +41,10 @@ impl Client {
 
     pub fn stream(&self, body: Value, _beta: Option<&str>, cancel: &dyn Fn() -> bool, on: &mut dyn FnMut(Event)) -> Result<Value, String> {
         let body = translate(&body, self.vision, self.openai);
-        // Usage comes only when asked for; a server that rejects the option is asked once more without it.
+        // Usage comes only when asked for; a server that rejects the option is asked once more without it. Only a
+        // 400 before the stream (nothing shown yet), never an error in the middle of one, so no reply is repeated.
         match self.attempt(body.clone(), true, cancel, on) {
-            Err(e) if e.contains("stream_options") => self.attempt(body, false, cancel, on),
+            Err(e) if e.starts_with("Provider error 400:") && e.contains("stream_options") => self.attempt(body, false, cancel, on),
             other => other,
         }
     }

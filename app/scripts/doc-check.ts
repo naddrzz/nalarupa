@@ -512,6 +512,8 @@ assert(!('anthropic_base_url' in call('settings_get')), 'the base URL clears')
     const start = seen.find((e) => e.kind === 'start')
     assert(start?.backend === 'provider' && start?.model === 'qwen3', `the agent runs on the provider and its model: ${JSON.stringify(start)}`)
     assert(seen.some((e) => e.kind === 'text_delta' && e.text === 'OK') && !seen.some((e) => e.kind === 'error'), `the provider's reply reaches the chat: ${JSON.stringify(seen.filter((e) => e.kind !== 'text_delta').slice(-3))}`)
+    // `done` comes before the run clears `agentRunning`; a reset before that is refused.
+    for (let i = 0; i < 100 && call<{ agentRunning: boolean }>('state').agentRunning; i++) await new Promise((r) => setTimeout(r, 100))
     call('agent_reset')
     call('provider_save', { provider: { ...listed[0], api_key: 'sk-wrong' } })
     call('provider_test', { id })
