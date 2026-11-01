@@ -3,6 +3,7 @@
 
 pub mod agent;
 pub mod claude;
+pub mod claude_code;
 pub mod doc;
 pub mod editor;
 pub mod engine;
@@ -445,6 +446,14 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
             Some(b) => Err(format!("unknown backend '{b}': api or claude-code")),
             None => Ok(json!(agent::instructions(&agent::backend()))),
         },
+        // Claude Code's own account: its state, and its own browser sign-in and sign-out (crate::claude_code).
+        "claude_auth_status" => Ok(claude_code::status()),
+        "claude_auth_login" => claude_code::login(req["console"] == true).map(|_| json!(true)),
+        "claude_auth_cancel" => {
+            claude_code::cancel_login();
+            Ok(json!(true))
+        }
+        "claude_auth_logout" => claude_code::logout(),
         "agent_permission" => agent::answer_permission(req["id"].as_str().ok_or("id required")?, req["answer"].as_str().ok_or("answer required: allow, deny or auto")?).map(|_| json!(true)),
         "chat_list" => Ok(agent::chats()),
         "chat_load" => agent::load_chat(req["id"].as_str().ok_or("id required")?),

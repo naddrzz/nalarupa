@@ -17,7 +17,7 @@ export type ChatItem =
       images?: string[]; error?: boolean; lines?: number; running: boolean; header: boolean; by?: Author
     }
   | { kind: 'note'; id: number; text: string }
-  | { kind: 'error'; id: number; agent?: Profile; text: string }
+  | { kind: 'error'; id: number; agent?: Profile; text: string; signIn?: boolean }
   | { kind: 'usage'; id: number; agent: Profile; durationMs: number; usage: any; stopped: boolean; failed: boolean }
   | { kind: 'external'; id: number; text: string; error?: boolean }
   /** The agent waits for the user to allow a tool (permission card). */
@@ -39,8 +39,13 @@ export type CursorState = {
 }
 
 let nextId = 1
+/** Claude Code's account as `claude auth status` reports it (core `claude_auth_status`). */
+export type ClaudeAuth = { installed: boolean; signedIn: boolean; method: string | null; account: string | null; plan: string | null }
+
 export const store = {
   items: [] as ChatItem[],
+  /** The latest Claude Code account state the core reported after a sign-in flow ended. */
+  claudeAuth: null as ClaudeAuth | null,
   profiles: new Map<string, Profile>(),
   running: new Set<string>(),
   /** Backend and model of each agent's current turn, from its `start` event. */
@@ -190,6 +195,11 @@ export function applyEvents(events: any[], now: number): boolean {
       changed = true
       continue
     }
+    if (ev.type === 'claude_auth') {
+      store.claudeAuth = ev.state
+      changed = true
+      continue
+    }
     if (ev.type === 'pen_end') {
       store.pens.delete(ev.id)
       changed = true
@@ -272,7 +282,7 @@ export function applyEvents(events: any[], now: number): boolean {
         store.items.push({ kind: 'note', id: nextId++, text: ev.text })
         break
       case 'error':
-        store.items.push({ kind: 'error', id: nextId++, agent: p, text: ev.text })
+        store.items.push({ kind: 'error', id: nextId++, agent: p, text: ev.text, signIn: !!ev.signIn })
         break
       case 'external':
         store.items.push({ kind: 'external', id: nextId++, text: ev.text, error: ev.error === true })
