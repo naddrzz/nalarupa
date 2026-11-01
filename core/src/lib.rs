@@ -15,6 +15,7 @@ pub mod layout;
 pub mod mcp;
 pub mod net;
 pub mod pen;
+pub mod provider;
 pub mod raster;
 pub mod render;
 pub mod resolve;

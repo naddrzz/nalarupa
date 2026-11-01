@@ -108,14 +108,13 @@ fn generate(ask: &str, cancel: &AtomicBool, on: &mut dyn FnMut(&str) -> bool) ->
     if crate::agent::backend() == "claude-code" {
         return claude_code(ask, cancel, on);
     }
-    let (key, model) = {
+    let (client, model) = {
         let e = engine();
-        let key = e.api_key().ok_or("no Anthropic API key")?;
-        (key, e.setting("agent_model").unwrap_or_else(|| crate::agent::DEFAULT_MODEL.into()))
+        (crate::provider::current(&e)?, e.setting("agent_model").unwrap_or_else(|| crate::agent::DEFAULT_MODEL.into()))
     };
     let body = json!({"model": model, "max_tokens": 16000, "system": SYSTEM, "messages": [{"role": "user", "content": ask}]});
     let gone = Cell::new(false);
-    let res = crate::claude::Client::new(key).stream(body, None, &|| gone.get() || cancel.load(Ordering::SeqCst), &mut |ev| {
+    let res = client.stream(body, None, &|| gone.get() || cancel.load(Ordering::SeqCst), &mut |ev| {
         if let crate::claude::Event::Text(t) = ev {
             if !on(t) {
                 gone.set(true);

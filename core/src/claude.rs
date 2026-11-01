@@ -40,6 +40,14 @@ impl Client {
         Client { http, key, url: URL.into(), stall: STALL }
     }
 
+    /// A client for the Claude API at `base` (a gateway's root, with or without `/v1`), else the Anthropic API.
+    pub fn at(key: String, base: Option<&str>) -> Client {
+        match base.map(str::trim).filter(|b| !b.is_empty()) {
+            Some(b) => Client { url: format!("{}/v1/messages", b.trim_end_matches('/').trim_end_matches("/v1")), ..Client::new(key) },
+            None => Client::new(key),
+        }
+    }
+
     /// POST /v1/messages with `stream: true`; returns `{content, stop_reason, usage}`.
     pub fn stream(&self, mut body: Value, beta: Option<&str>, cancel: &dyn Fn() -> bool, on: &mut dyn FnMut(Event)) -> Result<Value, String> {
         body["stream"] = json!(true);
