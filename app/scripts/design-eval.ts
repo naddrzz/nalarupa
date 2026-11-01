@@ -474,14 +474,17 @@ else if (args[0] === 'run') {
   const data = mkdtempSync(join(tmpdir(), 'nalarupa-eval-'))
   // Only the agent's own settings (providers, the Claude key and base URL) come along from the person's data
   // folder; their documents, recents and chats stay out of the eval.
-  // The copied settings may hold API keys: the folder goes on every exit, Ctrl+C included.
+  // The copied settings may hold API keys: the folder goes on every exit, Ctrl+C included. A signal stops the
+  // eval child too, so a cancelled run spends no more tokens.
   const clean = () => rmSync(data, { recursive: true, force: true })
-  process.on('SIGINT', () => { clean(); process.exit(130) })
-  process.on('SIGTERM', () => { clean(); process.exit(143) })
+  let child: ReturnType<typeof Bun.spawn> | undefined
+  const stop = (signal: NodeJS.Signals, exit: number) => () => { child?.kill(signal); clean(); process.exit(exit) }
+  process.on('SIGINT', stop('SIGINT', 130))
+  process.on('SIGTERM', stop('SIGTERM', 143))
   let code = 1
   try {
     writeFileSync(join(data, 'settings.json'), JSON.stringify(agentSettings()))
-    const child = Bun.spawn([process.execPath, import.meta.path, ...args], { env: { ...process.env, NALARUPA_DATA: data, EVAL_OUT: out }, stdio: ['inherit', 'inherit', 'inherit'] })
+    child = Bun.spawn([process.execPath, import.meta.path, ...args], { env: { ...process.env, NALARUPA_DATA: data, EVAL_OUT: out }, stdio: ['inherit', 'inherit', 'inherit'] })
     code = (await child.exited) ?? 1
   } finally {
     clean()
