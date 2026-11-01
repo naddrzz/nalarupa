@@ -488,7 +488,11 @@ pub fn dispatch(req: &Value) -> Result<Value, String> {
                 let ev = match client.stream(body, None, &|| false, &mut |_| {}) {
                     Ok(out) => {
                         let text: String = out["content"].as_array().into_iter().flatten().filter_map(|b| b["text"].as_str()).collect();
-                        json!({"type": "provider_test", "id": id, "ok": true, "model": model, "reply": text.trim()})
+                        if text.trim().is_empty() {
+                            json!({"type": "provider_test", "id": id, "ok": false, "model": model, "error": "The provider answered with no text. Check the model id."})
+                        } else {
+                            json!({"type": "provider_test", "id": id, "ok": true, "model": model, "reply": text.trim()})
+                        }
                     }
                     Err(error) => json!({"type": "provider_test", "id": id, "ok": false, "model": model, "error": error}),
                 };

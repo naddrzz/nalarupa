@@ -2,10 +2,12 @@
 //! its own thread, so a silent connection cannot hold the caller: it polls `cancel` and the stall limit between lines.
 
 use serde_json::Value;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::sync::mpsc::{sync_channel, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
+/// The longest event line accepted (model events are small; this only stops a runaway line).
+const LINE_MAX: usize = 8 << 20;
 /// How often a silent stream re-checks `cancel`.
 const POLL: Duration = Duration::from_millis(200);
 
@@ -40,8 +42,17 @@ pub fn post(
             let msg = serde_json::from_str::<Value>(&text).ok().and_then(|v| v["error"]["message"].as_str().map(str::to_string)).unwrap_or(text);
             return drop(tx.send(Err(error(status, &msg))));
         }
-        for line in BufReader::new(body.into_reader()).lines() {
-            let line = line.map(Some).map_err(|e| format!("stream interrupted: {e}"));
+        let mut reader = BufReader::new(body.into_reader());
+        let mut buf = Vec::new();
+        loop {
+            buf.clear();
+            // One line at most LINE_MAX bytes: a server that never sends a newline cannot grow memory without bound.
+            let line = match (&mut reader).take(LINE_MAX as u64 + 1).read_until(b'\n', &mut buf) {
+                Ok(0) => break,
+                Ok(_) if buf.len() > LINE_MAX && !buf.ends_with(b"\n") => Err(format!("stream interrupted: a line over {} MB", LINE_MAX >> 20)),
+                Ok(_) => Ok(Some(String::from_utf8_lossy(&buf).trim_end_matches(['\r', '\n']).to_string())),
+                Err(e) => Err(format!("stream interrupted: {e}")),
+            };
             let failed = line.is_err();
             if tx.send(line).is_err() || failed {
                 return;

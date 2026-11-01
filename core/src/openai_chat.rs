@@ -29,10 +29,9 @@ impl Client {
             .http_status_as_error(false)
             .build()
             .into();
-        let base = base.trim().trim_end_matches('/');
         Client {
             http,
-            url: format!("{base}/chat/completions"),
+            url: crate::provider::endpoint(base, "/chat/completions"),
             key: key.filter(|k| !k.trim().is_empty()),
             vision,
             openai: base.contains("://api.openai.com"),
@@ -41,13 +40,25 @@ impl Client {
     }
 
     pub fn stream(&self, body: Value, _beta: Option<&str>, cancel: &dyn Fn() -> bool, on: &mut dyn FnMut(Event)) -> Result<Value, String> {
+        let body = translate(&body, self.vision, self.openai);
+        // Usage comes only when asked for; a server that rejects the option is asked once more without it.
+        match self.attempt(body.clone(), true, cancel, on) {
+            Err(e) if e.contains("stream_options") => self.attempt(body, false, cancel, on),
+            other => other,
+        }
+    }
+
+    fn attempt(&self, mut body: Value, usage_option: bool, cancel: &dyn Fn() -> bool, on: &mut dyn FnMut(Event)) -> Result<Value, String> {
         let mut req = self.http.post(&self.url).header("content-type", "application/json");
         if let Some(k) = &self.key {
             req = req.header("authorization", &format!("Bearer {k}"));
         }
-        let mut body = translate(&body, self.vision, self.openai);
         body["stream"] = json!(true);
-        body["stream_options"] = json!({"include_usage": true});
+        if usage_option {
+            body["stream_options"] = json!({"include_usage": true});
+        }
+        // A reply is finished by [DONE] or a finish reason; a socket that just closes means it was cut.
+        let mut ended = false;
         let mut text = String::new();
         let mut thinking = String::new();
         // Tool calls by their stream index: (id, name, arguments so far).
@@ -56,6 +67,7 @@ impl Client {
         let mut usage = json!({});
         crate::sse::post(req, body, self.stall, "the provider", cancel, api_error, &mut |data| {
             if data.trim() == "[DONE]" {
+                ended = true;
                 return Ok(false);
             }
             let ev: Value = serde_json::from_str(data).map_err(|e| format!("bad stream event: {e}"))?;
@@ -68,6 +80,7 @@ impl Client {
             let Some(choice) = ev["choices"].get(0) else { return Ok(true) };
             if let Some(f) = choice["finish_reason"].as_str() {
                 finish = f.to_string();
+                ended = true;
             }
             let d = &choice["delta"];
             // Compatible servers stream reasoning under several names; it is shown, never sent back.
@@ -108,6 +121,9 @@ impl Client {
             }
             Ok(true)
         })?;
+        if !ended {
+            return Err("The provider's stream ended before the reply finished (no finish reason). Try again.".into());
+        }
         let mut content = Vec::new();
         if !thinking.is_empty() {
             content.push(json!({"type": "thinking", "thinking": thinking}));
@@ -395,6 +411,54 @@ mod tests {
             h["model"] = json!(model);
             assert_eq!(translate(&h, true, true)["reasoning_effort"], "high", "{model}");
         }
+    }
+
+    #[test]
+    fn a_stream_cut_before_its_end_is_an_error_and_query_bases_keep_their_query() {
+        // Text, then the connection closes: no finish reason and no [DONE].
+        let cut = format!("data: {}\n\n", delta(json!({"content": "Half a sen"})));
+        let (base, _) = fake_server(vec![cut]);
+        let e = Client::new(&base, None, true).stream(json!({"model": "m", "messages": []}), None, &|| false, &mut |_| {}).unwrap_err();
+        assert!(e.contains("ended before"), "{e}");
+        let (base, seen) = fake_server(vec![chunks(&[json!({"choices": [{"index": 0, "delta": {"content": "ok"}, "finish_reason": "stop"}]})])]);
+        Client::new(&format!("{base}/v1?tenant=a"), None, true).stream(json!({"model": "m", "messages": []}), None, &|| false, &mut |_| {}).unwrap();
+        assert_eq!(seen.lock().unwrap()[0].path, "/v1/chat/completions?tenant=a");
+    }
+
+    #[test]
+    fn a_server_that_rejects_stream_options_is_asked_again_without_them() {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", l.local_addr().unwrap());
+        let bodies = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+        let log = bodies.clone();
+        std::thread::spawn(move || {
+            for reply in [None, Some(chunks(&[json!({"choices": [{"index": 0, "delta": {"content": "ok"}, "finish_reason": "stop"}]})]))] {
+                use std::io::{Read, Write};
+                let (mut s, _) = l.accept().unwrap();
+                s.set_read_timeout(Some(std::time::Duration::from_millis(300))).unwrap();
+                let mut raw = Vec::new();
+                let mut buf = [0u8; 65536];
+                while let Ok(n) = s.read(&mut buf) {
+                    if n == 0 { break }
+                    raw.extend_from_slice(&buf[..n]);
+                    let t = String::from_utf8_lossy(&raw).to_string();
+                    if let Some((h, b)) = t.split_once("\r\n\r\n") {
+                        let len = h.lines().find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0))).unwrap_or(0);
+                        if b.len() >= len { break }
+                    }
+                }
+                let t = String::from_utf8_lossy(&raw).to_string();
+                log.lock().unwrap().push(serde_json::from_str(t.split_once("\r\n\r\n").map_or("", |x| x.1)).unwrap_or(Value::Null));
+                let _ = match reply {
+                    None => write!(s, "HTTP/1.1 400 Bad Request\r\ncontent-type: application/json\r\nconnection: close\r\n\r\n{}", json!({"error": {"message": "Unrecognized request argument supplied: stream_options"}})),
+                    Some(r) => write!(s, "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n{r}"),
+                };
+            }
+        });
+        let out = Client::new(&base, None, true).stream(json!({"model": "m", "messages": []}), None, &|| false, &mut |_| {}).unwrap();
+        assert_eq!(out["content"][0]["text"], "ok");
+        let sent = bodies.lock().unwrap();
+        assert!(sent[0].get("stream_options").is_some() && sent[1].get("stream_options").is_none(), "{sent:?}");
     }
 
     #[test]
