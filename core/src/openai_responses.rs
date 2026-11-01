@@ -29,8 +29,7 @@ impl Client {
             .http_status_as_error(false)
             .build()
             .into();
-        let base = base.trim().trim_end_matches('/');
-        Client { http, url: format!("{base}/responses"), key: key.filter(|k| !k.trim().is_empty()), vision, openai: base.contains("://api.openai.com"), stall: STALL }
+        Client { http, url: crate::provider::endpoint(base, "/responses"), key: key.filter(|k| !k.trim().is_empty()), vision, openai: base.contains("://api.openai.com"), stall: STALL }
     }
 
     pub fn stream(&self, body: Value, _beta: Option<&str>, cancel: &dyn Fn() -> bool, on: &mut dyn FnMut(Event)) -> Result<Value, String> {
@@ -47,6 +46,8 @@ impl Client {
         let mut calls: Vec<(usize, String, String, String)> = Vec::new();
         let mut stop = "end_turn";
         let mut usage = json!({});
+        // Finished only by response.completed or .incomplete; a socket that just closes means the reply was cut.
+        let mut ended = false;
         crate::sse::post(req, body, self.stall, "the provider", cancel, crate::openai_chat::api_error, &mut |data| {
             let ev: Value = serde_json::from_str(data).map_err(|e| format!("bad stream event: {e}"))?;
             let idx = ev["output_index"].as_u64().unwrap_or(0) as usize;
@@ -91,6 +92,7 @@ impl Client {
                 }
                 "response.completed" => {
                     usage = usage_of(&ev["response"]);
+                    ended = true;
                     return Ok(false);
                 }
                 "response.incomplete" => {
@@ -100,6 +102,7 @@ impl Client {
                         return Err(format!("The provider stopped the reply early ({reason})."));
                     }
                     stop = "max_tokens";
+                    ended = true;
                     return Ok(false);
                 }
                 "response.failed" => {
@@ -111,6 +114,9 @@ impl Client {
             }
             Ok(true)
         })?;
+        if !ended {
+            return Err("The provider's stream ended before the reply finished. Try again.".into());
+        }
         let mut content = Vec::new();
         if !thinking.is_empty() {
             content.push(json!({"type": "thinking", "thinking": thinking}));
@@ -341,5 +347,9 @@ mod tests {
         assert_eq!(out["stop_reason"], "max_tokens");
         let e = c.stream(json!({"model": "m", "messages": []}), None, &|| false, &mut |_| {}).unwrap_err();
         assert!(e.contains("The server had an error"), "{e}");
+        // Text, then the connection closes without response.completed: a cut-off reply, not a finished one.
+        let (base, _) = fake_server(vec![events(&[json!({"type": "response.output_text.delta", "output_index": 0, "delta": "Half"})])]);
+        let e = Client::new(&base, None, true).stream(json!({"model": "m", "messages": []}), None, &|| false, &mut |_| {}).unwrap_err();
+        assert!(e.contains("ended before"), "{e}");
     }
 }
