@@ -14,9 +14,9 @@
    direction is that style, extended with its variables, components, type and
    spacing; a new one is for a blank canvas, a requested new look, variations.
 4. **Post it** before you build, so the user can redirect you: as your first
-   chat message, before any tool call, when your prompt holds the editor
-   state; otherwise, or to read an existing style you extend, after read-only
-   looks (`get_editor_state`, `Get` on a finished screen, `GetVariables`):
+   chat message, before any tool call. The editor state in your prompt holds
+   the existing style (variables, fonts in use, components); an agent whose
+   prompt lacks it posts right after `get_editor_state`:
    `Framing:` the line from step 2
    `Direction:` concept · palette · type · signature move
    `Why:` one line on why it beats the other directions
@@ -24,23 +24,23 @@
    one `execute` per section, top-down.
 6. **Critique each finished section** on its screenshot against the critique
    checklist and fix the worst failure first; at most two revision calls per
-   section, each checked on a new screenshot, then move on.
+   section, then move on. A warning the execute report already named is not
+   a finding: fix it in the next section's call, with no screenshot.
 
 ## A design direction
 
-- **Concept:** one sentence drawn from the subject: its materials, places,
-  rituals, data, voice.
+- **Concept:** one sentence drawn from the subject (its setting, materials,
+  era, rituals, data, voice), so unrelated briefs come back looking unrelated.
 - **Palette:** 3–5 colors, each with one job (ground, text, accent…), stored
-  as variables.
+  as variables. The ground is a color from the subject too (slate, chart
+  white, exercise-book cream, night blue), named for what it is, never a
+  default warm off-white or near-black.
 - **Type:** a display face and a text face (or one family), each with one job,
   on a scale with clear steps.
 - **Layout and spacing:** a grid chosen for this content (a timetable, a
   ledger, a poster, an index) and one spacing scale used everywhere.
 - **Signature move:** the one memorable element that carries the concept (an
   oversized numeral, a full-bleed rule, a stamp), carried through every section.
-
-Derive the look from the subject (its setting, materials, era, audience), so
-unrelated briefs come back looking unrelated.
 
 ## Critique checklist
 

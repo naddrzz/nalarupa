@@ -95,8 +95,9 @@ Returning `undefined` collects nothing.
 - Style objects you spread must include `type`.
 - Read back with `Get` instead of guessing sizes; layout is computed for you.
 - End a call that completes a section with `TakeScreenshot([sectionId])`.
-  Screenshots are expensive: one per finished section, and one per revision
-  of it.
+  Screenshots are expensive: one per finished section, and one after a
+  revision only when it changed what the section looks like; none for a call
+  that only reads, sets structure, or fixes a warning the report named.
 
 ## Examples
 
