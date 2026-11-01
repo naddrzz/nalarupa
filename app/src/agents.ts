@@ -17,7 +17,7 @@ export type ChatItem =
       images?: string[]; error?: boolean; lines?: number; running: boolean; header: boolean; by?: Author
     }
   | { kind: 'note'; id: number; text: string }
-  | { kind: 'error'; id: number; agent?: Profile; text: string }
+  | { kind: 'error'; id: number; agent?: Profile; text: string; signIn?: boolean; authAt?: number }
   | { kind: 'usage'; id: number; agent: Profile; durationMs: number; usage: any; stopped: boolean; failed: boolean }
   | { kind: 'external'; id: number; text: string; error?: boolean }
   /** The agent waits for the user to allow a tool (permission card). */
@@ -39,8 +39,14 @@ export type CursorState = {
 }
 
 let nextId = 1
+/** Claude Code's account as `claude auth status` reports it (core `claude_auth_status`). */
+export type ClaudeAuth = { installed: boolean; signedIn: boolean; method: string | null; account: string | null; plan: string | null }
+
 export const store = {
   items: [] as ChatItem[],
+  /** The latest Claude Code account state, from a finished sign-in flow or a sign-out, and how many there were. */
+  claudeAuth: null as ClaudeAuth | null,
+  claudeAuthAt: 0,
   profiles: new Map<string, Profile>(),
   running: new Set<string>(),
   /** Backend and model of each agent's current turn, from its `start` event. */
@@ -173,6 +179,15 @@ export function poke(p: Profile, now: number) {
   wakeCursor(p.id, c, now)
 }
 
+/** Record a new Claude Code account state. Signed-out error cards get a fresh item so their memoized row redraws. */
+export function setClaudeAuth(state: ClaudeAuth) {
+  store.claudeAuth = state
+  store.claudeAuthAt++
+  store.items.forEach((it, i) => {
+    if (it.kind === 'error' && it.signIn) store.items[i] = { ...it, authAt: store.claudeAuthAt }
+  })
+}
+
 /** Apply core events; returns true when anything visible changed. */
 export function applyEvents(events: any[], now: number): boolean {
   let changed = false
@@ -187,6 +202,11 @@ export function applyEvents(events: any[], now: number): boolean {
       const pen = store.pens.get(ev.id)
       if (pen) Object.assign(pen, { tx: ev.x, ty: ev.y })
       else store.pens.set(ev.id, { x: ev.x, y: ev.y, tx: ev.x, ty: ev.y, appearAt: now })
+      changed = true
+      continue
+    }
+    if (ev.type === 'claude_auth') {
+      setClaudeAuth(ev.state)
       changed = true
       continue
     }
@@ -272,7 +292,7 @@ export function applyEvents(events: any[], now: number): boolean {
         store.items.push({ kind: 'note', id: nextId++, text: ev.text })
         break
       case 'error':
-        store.items.push({ kind: 'error', id: nextId++, agent: p, text: ev.text })
+        store.items.push({ kind: 'error', id: nextId++, agent: p, text: ev.text, signIn: !!ev.signIn })
         break
       case 'external':
         store.items.push({ kind: 'external', id: nextId++, text: ev.text, error: ev.error === true })
