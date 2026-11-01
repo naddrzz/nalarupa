@@ -10,13 +10,12 @@
    different side of the subject and apart on the **variation axes**: framing,
    layout structure, type pairing, color logic. Pick the one that best serves
    the framing; a designer handed a direction by the lead builds that one.
-   With an existing style (variables, components, finished screens) the
-   direction is that style, extended with its variables, components, type and
-   spacing; a new one is for a blank canvas, a requested new look, variations.
+   With an existing style (variables, components, finished screens), extend
+   it; a new direction is for a blank canvas, a requested new look, variations.
 4. **Post it** before you build, so the user can redirect you: as your first
-   chat message, before any tool call. The editor state in your prompt holds
-   the existing style (variables, fonts in use, components); an agent whose
-   prompt lacks it posts right after `get_editor_state`:
+   chat message, before any tool call. Your prompt's editor state holds the
+   existing style (variables, fonts, components); without it, look first
+   (`get_editor_state`, or `GetVariables` and `Get` on a screen), then post:
    `Framing:` the line from step 2
    `Direction:` concept · palette · type · signature move
    `Why:` one line on why it beats the other directions
@@ -24,8 +23,9 @@
    one `execute` per section, top-down.
 6. **Critique each finished section** on its screenshot against the critique
    checklist and fix the worst failure first; at most two revision calls per
-   section, then move on. A warning the execute report already named is not
-   a finding: fix it in the next section's call, with no screenshot.
+   section, then move on. A warning the execute report already named is not a
+   finding: fix it in the next section's call or a last cleanup call, with no
+   screenshot.
 
 ## A design direction
 
@@ -40,7 +40,7 @@
 - **Layout and spacing:** a grid chosen for this content (a timetable, a
   ledger, a poster, an index) and one spacing scale used everywhere.
 - **Signature move:** the one memorable element that carries the concept (an
-  oversized numeral, a full-bleed rule, a stamp), carried through every section.
+  oversized numeral, a full-bleed rule, a stamp), repeated in every section.
 
 ## Critique checklist
 

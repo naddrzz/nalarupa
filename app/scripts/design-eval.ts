@@ -149,7 +149,9 @@ type BriefResult = {
   executeCalls: number; failedExecutes: number; repairs: number; issues: string[]
   /** Execute calls that returned a screenshot (the critique pass looks at one per finished section and revision). */
   screenshots?: number
-  /** Wall time spent inside tool calls (execute, its screenshots included); the rest of `wallMs` is the model's. */
+  /** Wall time spent in tool calls: from the end of each model message (`message_end`) to each of its tool results,
+   * which is the core running what the streamed `execute` had not yet run, its screenshots, and the backend's
+   * round trip. The rest of `wallMs` is the model's. */
   toolMs?: number
   instructionsChars: number; guideReads: { tool: string; arg: string; chars: number }[]; guideChars: number
   /** Everything the agents said before the first execute, one "name: text" block each (named before it held more). */
@@ -158,7 +160,7 @@ type BriefResult = {
 type Run = { meta: { sha: string; backend: string; model: string | null; designs?: number; iterate?: string; parallel?: number; mode?: string; date: string }; briefs: BriefResult[] }
 type Pair = { a: string; b: string; colour: number; layout: number; ground: [string, string]; groundDistance: number }
 const alike = (p: Pair) => p.colour >= SAME.colour || p.layout >= SAME.layout || p.groundDistance <= SAME.ground
-const pairText = (p: Pair) => `colour ${p.colour.toFixed(3)}, layout ${p.layout.toFixed(3)}, ground ${p.ground[0]} / ${p.ground[1]}${p.groundDistance <= SAME.ground ? ' (same)' : ''}`
+const pairText = (p: Pair) => `colour ${p.colour.toFixed(3)}, layout ${p.layout.toFixed(3)}, ground ${p.ground[0]} / ${p.ground[1]} (${p.groundDistance.toFixed(1)} apart${p.groundDistance <= SAME.ground ? ', the same colour' : ''})`
 const minutes = (ms: number) => (ms / 60_000).toFixed(1)
 
 const isTool = (name: string, tool: string) => name === tool || name.endsWith(`__${tool}`)
@@ -170,8 +172,9 @@ const sameness = (dir: string, run: Run): Pair[] => {
   for (let i = 0; i < thumbs.length; i++)
     for (let j = i + 1; j < thumbs.length; j++)
       if (thumbs[i].r.kind === thumbs[j].r.kind)
-        pairs.push({ a: thumbs[i].r.id, b: thumbs[j].r.id, ...similarity(thumbs[i].t, thumbs[j].t), ground: [thumbs[i].g, thumbs[j].g], groundDistance: +groundDistance(thumbs[i].g, thumbs[j].g).toFixed(1) })
-  return pairs.sort((x, y) => Math.max(y.colour, y.layout) - Math.max(x.colour, x.layout))
+        pairs.push({ a: thumbs[i].r.id, b: thumbs[j].r.id, ...similarity(thumbs[i].t, thumbs[j].t), ground: [thumbs[i].g, thumbs[j].g], groundDistance: groundDistance(thumbs[i].g, thumbs[j].g) })
+  // Flagged pairs first, then the most alike by colour or layout.
+  return pairs.sort((x, y) => Number(alike(y)) - Number(alike(x)) || Math.max(y.colour, y.layout) - Math.max(x.colour, x.layout))
 }
 
 const totals = (run: Run) => {
@@ -307,8 +310,9 @@ const run = async () => {
     const before = new Set(call<any[]>('frames').map((f) => f.id))
     const transcript: string[] = [`# ${b.id}\n\n> ${b.text}\n`]
     const text = new Map<string, string>()
-    // When each tool call started, so its time (a screenshot's rasterizing included) is told apart from the model's.
-    const toolStarts = new Map<string, number>()
+    // Per agent, the core's time stamp of its last message end or tool result: a tool's time runs from there to its own
+    // result, so the model writing the call is not counted. A core that stamps no events leaves `toolMs` unknown.
+    const boundary = new Map<string, number>()
     let executed = false
     call('agent_send', { text: b.text, designs, iterate, parallel, mode })
     const started = Date.now()
@@ -329,12 +333,13 @@ const run = async () => {
           text.delete(who)
         }
         if (e.kind === 'tool_start' && isTool(e.name, 'execute')) executed = true
-        if (e.kind === 'tool_start') toolStarts.set(String(e.id), Date.now())
+        if (e.kind === 'message_end' && typeof e.t === 'number') boundary.set(who, e.t)
         if (e.kind === 'tool_done') {
-          const t0 = toolStarts.get(String(e.id))
-          if (t0 !== undefined) {
-            r.toolMs = (r.toolMs ?? 0) + Date.now() - t0
-            toolStarts.delete(String(e.id))
+          const from = boundary.get(who)
+          if (typeof e.t !== 'number') r.toolMs = undefined
+          else if (from !== undefined && r.toolMs !== undefined) {
+            r.toolMs += Math.max(0, e.t - from)
+            boundary.set(who, e.t)
           }
           transcript.push(`- \`${e.name}\`${e.error ? ' **failed**' : ''}${e.issues?.length ? `, ${e.issues.length} issues` : ''}`)
           if (isTool(e.name, 'execute')) {

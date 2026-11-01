@@ -1109,13 +1109,15 @@ impl Engine {
         let vars = self.doc.root["variables"].as_object().map(|v| v.len()).unwrap_or(0);
         let themes = self.doc.root["themes"].as_object().map(|t| t.keys().cloned().collect::<Vec<_>>().join(", ")).unwrap_or_default();
         let mut values: Vec<String> = self.doc.root["variables"].as_object().into_iter().flatten().take(30).map(|(name, v)| {
+            // A themed variable shows its base (un-themed) entry, wherever it sits, as the resolver applies it.
             let value = match &v["value"] {
-                Value::Array(a) => a.first().map(|x| &x["value"]).cloned().unwrap_or(Value::Null),
+                Value::Array(a) => a.iter().find(|x| x["theme"].as_object().is_none_or(|t| t.is_empty())).or(a.first()).map(|x| x["value"].clone()).unwrap_or(Value::Null),
                 x => x.clone(),
             };
             match value {
                 Value::String(x) => format!("{name} {x}"),
                 Value::Number(x) => format!("{name} {x}"),
+                Value::Bool(x) => format!("{name} {x}"),
                 _ => name.clone(),
             }
         }).collect();
@@ -1125,6 +1127,7 @@ impl Engine {
         s += &format!("- Variables: {vars}{}{}\n", if themes.is_empty() { String::new() } else { format!(" (theme axes: {themes})") },
             if values.is_empty() { String::new() } else { format!(": {}", values.join(", ")) });
         let mut fonts: Vec<(String, Vec<u64>)> = Vec::new();
+        let mut more_fonts = 0;
         crate::doc::walk(self.doc.children(), &mut |n| {
             let Some(family) = n["fontFamily"].as_str().filter(|f| !f.is_empty()) else { return };
             let size = n["fontSize"].as_f64().map(|v| v.round() as u64);
@@ -1134,14 +1137,19 @@ impl Engine {
                 }
             } else if fonts.len() < 12 {
                 fonts.push((family.to_string(), size.into_iter().collect()));
+            } else {
+                more_fonts += 1;
             }
         });
         if !fonts.is_empty() {
-            let list: Vec<String> = fonts.into_iter().map(|(f, mut sizes)| {
+            let mut list: Vec<String> = fonts.into_iter().map(|(f, mut sizes)| {
                 sizes.sort_unstable_by(|a, b| b.cmp(a));
                 sizes.truncate(8);
                 if sizes.is_empty() { f } else { format!("{f} ({})", sizes.iter().map(u64::to_string).collect::<Vec<_>>().join(", ")) }
             }).collect();
+            if more_fonts > 0 {
+                list.push(format!("... +{more_fonts} other families"));
+            }
             s += &format!("- Fonts in use: {}\n", list.join("; "));
         }
         if let Some(b) = self.renderer.bounds() {
@@ -1371,8 +1379,9 @@ mod tests {
         e.doc.root = json!({
             "variables": {
                 "ink": {"type": "color", "value": "#1F2A1C"},
-                "paper": {"type": "color", "value": [{"value": "#F4EFE6"}, {"value": "#111111", "theme": {"mode": "dark"}}]},
-                "space": {"type": "number", "value": 24}
+                "paper": {"type": "color", "value": [{"value": "#111111", "theme": {"mode": "dark"}}, {"value": "#F4EFE6"}]},
+                "space": {"type": "number", "value": 24},
+                "dense": {"type": "boolean", "value": true}
             },
             "themes": {"mode": ["light", "dark"]},
             "children": [{"id": "home", "type": "frame", "name": "Home", "width": 1440, "height": 900, "children": [
@@ -1383,11 +1392,15 @@ mod tests {
             ]}]
         });
         let s = e.editor_state();
-        assert!(s.contains("- Variables: 3 (theme axes: mode): ink #1F2A1C, paper #F4EFE6, space 24\n"), "{s}");
+        assert!(s.contains("- Variables: 4 (theme axes: mode): ink #1F2A1C, paper #F4EFE6, space 24, dense true\n"), "the base entry of a themed variable, wherever it sits: {s}");
         assert!(s.contains("- Fonts in use: Fraunces (72, 30); Work Sans (17)\n"), "{s}");
         e.doc.root = json!({"children": [{"id": "r", "type": "rectangle", "width": 10, "height": 10}]});
         let s = e.editor_state();
         assert!(s.contains("- Variables: 0\n") && !s.contains("Fonts in use"), "{s}");
+        let texts: Vec<Value> = (0..14).map(|i| json!({"id": format!("t{i}"), "type": "text", "fontFamily": format!("Face {i}"), "fontSize": 16, "content": "x"})).collect();
+        e.doc.root = json!({"children": [{"id": "f", "type": "frame", "children": texts}]});
+        let s = e.editor_state();
+        assert!(s.contains("Face 11 (16); ... +2 other families\n") && !s.contains("Face 12"), "the font list is capped with a count of what it left out: {s}");
     }
 
     #[test]
