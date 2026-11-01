@@ -41,6 +41,8 @@ impl Client {
         body["stream"] = json!(true);
         let mut thinking = String::new();
         let mut text = String::new();
+        // Text by output index, so text written after a call stays after it when the turn is rebuilt.
+        let mut texts: Vec<(usize, String)> = Vec::new();
         let mut refusal = String::new();
         let mut reasoning: Vec<Value> = Vec::new();
         // Function calls by output index: (call_id, name, arguments so far).
@@ -62,6 +64,10 @@ impl Client {
                 "response.output_text.delta" => {
                     let t = ev["delta"].as_str().unwrap_or("");
                     text.push_str(t);
+                    match texts.last_mut() {
+                        Some((i, seg)) if *i == idx => seg.push_str(t),
+                        _ => texts.push((idx, t.to_string())),
+                    }
                     on(Event::Text(t));
                 }
                 "response.output_item.added" if ev["item"]["type"] == "function_call" => {
@@ -128,16 +134,15 @@ impl Client {
             content.push(json!({"type": "thinking", "thinking": thinking}));
         }
         content.extend(reasoning.into_iter().map(|item| json!({"type": "reasoning_item", "item": item})));
-        if !text.is_empty() {
-            content.push(json!({"type": "text", "text": text}));
-        }
         // A reply cut off by the token limit stays max_tokens even with calls in it: the last one may be truncated.
         if !calls.is_empty() && stop == "end_turn" {
             stop = "tool_use";
         }
-        for (_, id, name, args) in calls {
-            content.push(json!({"type": "tool_use", "id": id, "name": name, "input": crate::claude::tool_input(&args)}));
-        }
+        // Text segments and calls in the order the model wrote them (their output index).
+        let mut parts: Vec<(usize, Value)> = texts.into_iter().map(|(i, t)| (i, json!({"type": "text", "text": t}))).collect();
+        parts.extend(calls.into_iter().map(|(i, id, name, args)| (i, json!({"type": "tool_use", "id": id, "name": name, "input": crate::claude::tool_input(&args)}))));
+        parts.sort_by_key(|(i, _)| *i);
+        content.extend(parts.into_iter().map(|(_, b)| b));
         Ok(json!({"content": content, "stop_reason": stop, "usage": usage}))
     }
 }
@@ -354,6 +359,17 @@ mod tests {
         assert_eq!(out["stop_reason"], "max_tokens");
         let e = c.stream(json!({"model": "m", "messages": []}), None, &|| false, &mut |_| {}).unwrap_err();
         assert!(e.contains("The server had an error"), "{e}");
+        // Text after a call stays after it, so the replayed history keeps the model's order.
+        let ordered = events(&[
+            json!({"type": "response.output_text.delta", "output_index": 0, "delta": "First."}),
+            json!({"type": "response.output_item.added", "output_index": 1, "item": {"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "execute", "arguments": "{}"}}),
+            json!({"type": "response.output_text.delta", "output_index": 2, "delta": "Then."}),
+            json!({"type": "response.completed", "response": {"status": "completed"}}),
+        ]);
+        let (base, _) = fake_server(vec![ordered]);
+        let out = Client::new(&base, None, true).stream(json!({"model": "m", "messages": []}), None, &|| false, &mut |_| {}).unwrap();
+        let kinds: Vec<&str> = out["content"].as_array().unwrap().iter().map(|b| b["text"].as_str().or(b["name"].as_str()).unwrap_or("")).collect();
+        assert_eq!(kinds, ["First.", "execute", "Then."]);
         // Cut off by the token limit with a call in it: max_tokens, so the agent does not run a truncated call.
         let cut_call = events(&[
             json!({"type": "response.output_item.added", "output_index": 0, "item": {"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "execute", "arguments": ""}}),
