@@ -1007,8 +1007,9 @@ function PermissionCard({ m }: { m: Extract<ChatItem, { kind: 'permission' }> })
 type ProviderConfig = { id?: string; name: string; format: string; base_url: string; api_key?: string | null; models: string[]; vision: boolean }
 
 const FORMATS = [
-  { value: 'chat', label: 'OpenAI Chat', base: 'https://openrouter.ai/api/v1', hint: 'OpenAI-compatible: OpenAI, OpenRouter, Groq, vLLM, LM Studio, Ollama (http://localhost:11434/v1)…' },
-  { value: 'anthropic', label: 'Anthropic Messages', base: 'https://api.anthropic.com', hint: 'Anthropic-compatible APIs and gateways.' },
+  { value: 'chat', label: 'Chat', base: 'https://openrouter.ai/api/v1', hint: 'OpenAI Chat Completions, which most OpenAI-compatible servers speak: OpenAI, OpenRouter, Groq, vLLM, LM Studio, Ollama (http://localhost:11434/v1)…' },
+  { value: 'responses', label: 'Responses', base: 'https://api.openai.com/v1', hint: 'OpenAI Responses API, for OpenAI models that call tools only through it.' },
+  { value: 'anthropic', label: 'Anthropic', base: 'https://api.anthropic.com', hint: 'Anthropic Messages: Anthropic-compatible APIs and gateways.' },
 ]
 
 /**

@@ -61,7 +61,7 @@ pub fn endpoint(base: &str, path: &str) -> String {
 /// How a saved key reads back: never the key itself.
 const MASK: &str = "••••••••";
 /// The wire formats a provider can speak.
-const FORMATS: [&str; 2] = ["anthropic", "chat"];
+const FORMATS: [&str; 3] = ["anthropic", "chat", "responses"];
 
 fn name(p: &Value) -> &str {
     p["name"].as_str().filter(|n| !n.is_empty()).unwrap_or("Provider")
@@ -74,6 +74,7 @@ pub fn from_config(p: &Value) -> Result<Box<dyn Provider>, String> {
     match p["format"].as_str().unwrap_or("") {
         "anthropic" => Ok(Box::new(crate::claude::Client::at(key.unwrap_or_default(), Some(base)))),
         "chat" => Ok(Box::new(crate::openai_chat::Client::new(base, key, p["vision"] != false))),
+        "responses" => Ok(Box::new(crate::openai_responses::Client::new(base, key, p["vision"] != false))),
         f => Err(format!("Provider \"{}\" uses the \"{f}\" format, which this version of Nalarupa cannot speak yet.", name(p))),
     }
 }
@@ -101,7 +102,7 @@ pub fn save(list: &mut Value, mut p: Value) -> Result<String, String> {
     }
     let format = p["format"].as_str().unwrap_or("");
     if !FORMATS.contains(&format) {
-        return Err(format!("Unknown format \"{format}\": choose anthropic or chat."));
+        return Err(format!("Unknown format \"{format}\": choose anthropic, chat or responses."));
     }
     let all = list.as_array_mut().expect("an array");
     let id = p["id"].as_str().filter(|i| !i.is_empty()).map(str::to_string).unwrap_or_else(|| format!("p{:08x}", crate::doc::random_u64() & 0xffff_ffff));
@@ -212,7 +213,7 @@ pub(crate) mod tests {
     #[test]
     fn the_active_provider_picks_the_client_and_the_model() {
         let ps = providers();
-        assert!(from_config(&ps[0]).is_ok() && from_config(&ps[1]).is_ok());
+        assert!(from_config(&ps[0]).is_ok() && from_config(&ps[1]).is_ok() && from_config(&ps[2]).is_ok());
         assert!(from_config(&json!({"format": "chat"})).err().unwrap().contains("base URL"), "a provider needs a base URL");
         assert!(from_config(&json!({"format": "gemini", "base_url": "x"})).err().unwrap().contains("gemini"));
         // The chosen model when the provider offers it, else its first model.
@@ -255,6 +256,30 @@ pub(crate) mod tests {
             assert_eq!(header(&r, "anthropic-beta"), Some("b1"));
             assert_eq!(r.body["stream"], json!(true));
         }
+    }
+
+    #[test]
+    fn a_chat_switched_to_the_claude_api_drops_what_only_other_formats_understand() {
+        let reply = sse(&[json!({"type": "message_stop"})]);
+        let (root, seen) = fake_server(vec![reply]);
+        let client = crate::claude::Client::at("k".into(), Some(&root));
+        let messages = json!([
+            {"role": "user", "content": "Design a page"},
+            // From a Responses provider: an unsigned thinking summary and an opaque reasoning item, nothing else.
+            {"role": "assistant", "content": [{"type": "thinking", "thinking": "Plan."}, {"type": "reasoning_item", "item": {"id": "rs_1"}}]},
+            {"role": "user", "content": "Go on"},
+            // From Claude: signed thinking stays.
+            {"role": "assistant", "content": [{"type": "thinking", "thinking": "Hm.", "signature": "sig"}, {"type": "text", "text": "Done."}]},
+            {"role": "user", "content": "Thanks"},
+        ]);
+        Provider::stream(&client, json!({"model": "m", "messages": messages}), None, &|| false, &mut |_| {}).unwrap();
+        let sent = seen.lock().unwrap()[0].body["messages"].clone();
+        assert_eq!(sent, json!([
+            {"role": "user", "content": "Design a page"},
+            {"role": "user", "content": "Go on"},
+            {"role": "assistant", "content": [{"type": "thinking", "thinking": "Hm.", "signature": "sig"}, {"type": "text", "text": "Done."}]},
+            {"role": "user", "content": "Thanks"},
+        ]));
     }
 
     #[test]

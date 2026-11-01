@@ -15,6 +15,7 @@ pub mod html;
 pub mod layout;
 pub mod mcp;
 pub mod openai_chat;
+pub mod openai_responses;
 pub mod net;
 pub mod pen;
 pub mod provider;
