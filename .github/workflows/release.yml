@@ -114,7 +114,17 @@ jobs:
     # Apple Silicon: GPUIX has no darwin-x64 addon.
     runs-on: macos-14
     timeout-minutes: 60
-    env: { VERSION: "${{ needs.version.outputs.version }}" }
+    outputs:
+      notarized: ${{ steps.dmg.outputs.notarized }}
+    env:
+      VERSION: "${{ needs.version.outputs.version }}"
+      # Developer ID signing and notarization, when the repository has them (docs/release-signing.md). Without them
+      # the app is ad-hoc signed: it runs, but Gatekeeper blocks a downloaded copy until the person allows it.
+      MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
     steps:
       - uses: actions/checkout@v4
         with: { persist-credentials: false }
@@ -146,17 +156,67 @@ jobs:
             cp "$b/icon-$((s * 2)).png" "$set/icon_${s}x${s}@2x.png"
           done
           iconutil -c icns "$set" -o "$app/Contents/Resources/Nalarupa.icns"
-          # Ad-hoc signature: arm64 code must be signed to run. Not notarized, so the first open needs
-          # right-click > Open (or System Settings > Privacy & Security > Open Anyway).
-          codesign --force --deep --sign - "$app"
+          if [ -n "$MACOS_CERTIFICATE" ]; then
+            # Developer ID with the hardened runtime: inner code first, then the executable and the bundle.
+            kc="$RUNNER_TEMP/sign.keychain-db"
+            pw=$(uuidgen)
+            security create-keychain -p "$pw" "$kc"
+            security set-keychain-settings -lut 21600 "$kc"
+            security unlock-keychain -p "$pw" "$kc"
+            echo "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+            security import "$RUNNER_TEMP/cert.p12" -k "$kc" -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+            rm "$RUNNER_TEMP/cert.p12"
+            security set-key-partition-list -S apple-tool:,apple: -s -k "$pw" "$kc" >/dev/null
+            # The search list is one argument per keychain (macOS bash 3.2 has no mapfile).
+            # shellcheck disable=SC2046
+            security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+            id=$(security find-identity -v -p codesigning "$kc" | awk '/Developer ID Application/ { print $2; exit }')
+            [ -n "$id" ] || { echo "::error::no Developer ID Application identity in MACOS_CERTIFICATE"; exit 1; }
+            echo "SIGN_ID=$id" >> "$GITHUB_ENV"
+            sign() { codesign --force --timestamp --options runtime --sign "$id" "$@"; }
+            for f in "$app"/Contents/MacOS/*.dylib "$app"/Contents/MacOS/*.node; do sign "$f"; done
+            sign --entitlements packaging/macos/entitlements.plist "$app/Contents/MacOS/nalarupa"
+            sign --entitlements packaging/macos/entitlements.plist "$app"
+          else
+            # Ad-hoc: arm64 code must be signed to run at all.
+            codesign --force --deep --sign - "$app"
+          fi
           codesign --verify --deep --strict "$app"
       - name: Disk image
+        id: dmg
         run: |
           stage=$(mktemp -d)
           cp -R out/Nalarupa.app "$stage/"
           ln -s /Applications "$stage/Applications"
-          hdiutil create -volname "Nalarupa $VERSION" -srcfolder "$stage" -format UDZO -ov "out/Nalarupa-$VERSION-macos-arm64.dmg"
+          dmg="out/Nalarupa-$VERSION-macos-arm64.dmg"
+          hdiutil create -volname "Nalarupa $VERSION" -srcfolder "$stage" -format UDZO -ov "$dmg"
           rm -rf out/Nalarupa.app
+          if [ -n "${SIGN_ID:-}" ] && [ -n "$APPLE_ID" ]; then
+            codesign --force --timestamp --sign "$SIGN_ID" "$dmg"
+            xcrun notarytool submit "$dmg" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
+            xcrun stapler staple "$dmg"
+            echo "notarized=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "notarized=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::macOS build not notarized (no Apple signing secrets): Gatekeeper blocks it until the person allows it"
+          fi
+      # Check the app the way a downloaded copy is checked: quarantined, then assessed by Gatekeeper.
+      - name: Gatekeeper
+        run: |
+          dmg="out/Nalarupa-$VERSION-macos-arm64.dmg"
+          xattr -w com.apple.quarantine "0083;$(printf %x "$(date +%s)");Safari;$(uuidgen)" "$dmg"
+          hdiutil attach -nobrowse -mountpoint "$RUNNER_TEMP/dmg" "$dmg"
+          ditto "$RUNNER_TEMP/dmg/Nalarupa.app" "$RUNNER_TEMP/Nalarupa.app"
+          hdiutil detach "$RUNNER_TEMP/dmg"
+          xattr -w com.apple.quarantine "0083;$(printf %x "$(date +%s)");Safari;$(uuidgen)" "$RUNNER_TEMP/Nalarupa.app"
+          if spctl --assess -vv --type execute "$RUNNER_TEMP/Nalarupa.app"; then
+            echo "Gatekeeper accepts the downloaded app"
+          elif [ "${{ steps.dmg.outputs.notarized }}" = true ]; then
+            echo "::error::Gatekeeper rejects the notarized app"; exit 1
+          else
+            echo "::warning::Gatekeeper rejects the downloaded app (expected without notarization; the release notes say how to allow it)"
+          fi
+          xattr -d com.apple.quarantine "$dmg"
       - uses: actions/upload-artifact@v4
         with: { name: macos, path: out/*, if-no-files-found: error }
 
@@ -214,12 +274,18 @@ jobs:
             echo "tagged $GITHUB_SHA as $TAG"
           fi
       - name: Draft release
+        env:
+          NOTARIZED: ${{ needs.macos.outputs.notarized }}
         run: |
+          MAC_NOTE=""
+          if [ "$NOTARIZED" != true ]; then
+            MAC_NOTE=" This build is not notarized, so macOS blocks it the first time: open System Settings > Privacy & Security and click **Open Anyway** next to Nalarupa (or run \`xattr -dr com.apple.quarantine /Applications/Nalarupa.app\` in Terminal)."
+          fi
           cat > notes.md <<EOF
           Nalarupa $VERSION
 
           - **Windows (x64):** \`Nalarupa-$VERSION-windows-x64-setup.exe\` installs for all users; the portable zip runs from any folder.
-          - **macOS 13+ (Apple Silicon):** open the \`.dmg\` and drag Nalarupa to Applications. The app is not notarized: the first time, right-click it and choose Open.
+          - **macOS 13+ (Apple Silicon):** open the \`.dmg\` and drag Nalarupa to Applications.$MAC_NOTE
           - **Linux (x64):** unpack the tarball, \`cd\` into its folder and run \`./install.sh\` (installs to \`~/.local\`), or run \`./nalarupa\` in place. Needs a Wayland session and Vulkan drivers.
           EOF
           # A re-run of the same version refreshes the existing release's files instead of failing on a second create.
