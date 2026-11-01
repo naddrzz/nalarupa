@@ -10,7 +10,7 @@ jobs:
   smoke:
     strategy:
       fail-fast: false
-      matrix: { os: [macos-14, macos-15] }
+      matrix: { os: [macos-15, macos-latest] }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     env:
@@ -56,4 +56,5 @@ jobs:
         working-directory: app
         run: |
           xattr -cr "$APP"
-          NALARUPA_EXE="$APP/Contents/MacOS/nalarupa" bun scripts/exe-check.ts && echo "SMOKE: bundle binary RUNS" || echo "SMOKE: bundle binary FAILS"
+          NALARUPA_EXE="$APP/Contents/MacOS/nalarupa" bun scripts/exe-check.ts || { echo "SMOKE: bundle binary FAILS"; exit 1; }
+          echo "SMOKE: bundle binary RUNS"

@@ -96,8 +96,8 @@ and desktop shortcuts and an uninstaller. Or extract `Nalarupa-<version>-windows
 keeping its files together, and run `nalarupa.exe`.
 
 **macOS 13+ (Apple Silicon):** open `Nalarupa-<version>-macos-arm64.dmg` and drag Nalarupa to Applications. A release
-that is not notarized (its notes say so) is blocked by macOS the first time you open it: open System Settings >
-Privacy & Security and click **Open Anyway** next to Nalarupa, or run
+that is not notarized (its notes say so) is blocked by macOS the first time you open it: try to open Nalarupa once,
+then open System Settings > Privacy & Security and click **Open Anyway** next to it, or run
 `xattr -dr com.apple.quarantine /Applications/Nalarupa.app` in Terminal.
 
 **Linux x64:** unpack `Nalarupa-<version>-linux-x64.tar.gz`, `cd Nalarupa-<version>-linux-x64`, and run

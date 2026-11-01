@@ -111,8 +111,8 @@ jobs:
 
   macos:
     needs: version
-    # Apple Silicon: GPUIX has no darwin-x64 addon.
-    runs-on: macos-14
+    # Apple Silicon: GPUIX has no darwin-x64 addon. macOS 14 images retire on 2026-11-02.
+    runs-on: macos-15
     timeout-minutes: 60
     outputs:
       notarized: ${{ steps.dmg.outputs.notarized }}
@@ -120,11 +120,12 @@ jobs:
       VERSION: "${{ needs.version.outputs.version }}"
       # Developer ID signing and notarization, when the repository has them (docs/release-signing.md). Without them
       # the app is ad-hoc signed: it runs, but Gatekeeper blocks a downloaded copy until the person allows it.
-      MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
-      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
-      APPLE_ID: ${{ secrets.APPLE_ID }}
-      APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      # Never on pull requests: their code runs in this job, and must not see the signing key.
+      MACOS_CERTIFICATE: ${{ github.event_name != 'pull_request' && secrets.MACOS_CERTIFICATE || '' }}
+      MACOS_CERTIFICATE_PASSWORD: ${{ github.event_name != 'pull_request' && secrets.MACOS_CERTIFICATE_PASSWORD || '' }}
+      APPLE_ID: ${{ github.event_name != 'pull_request' && secrets.APPLE_ID || '' }}
+      APPLE_APP_PASSWORD: ${{ github.event_name != 'pull_request' && secrets.APPLE_APP_PASSWORD || '' }}
+      APPLE_TEAM_ID: ${{ github.event_name != 'pull_request' && secrets.APPLE_TEAM_ID || '' }}
     steps:
       - uses: actions/checkout@v4
         with: { persist-credentials: false }
@@ -157,6 +158,10 @@ jobs:
           done
           iconutil -c icns "$set" -o "$app/Contents/Resources/Nalarupa.icns"
           if [ -n "$MACOS_CERTIFICATE" ]; then
+            # Notarizing needs all five secrets: a partial set is a setup mistake, not an unsigned build.
+            for v in MACOS_CERTIFICATE_PASSWORD APPLE_ID APPLE_APP_PASSWORD APPLE_TEAM_ID; do
+              [ -n "${!v}" ] || { echo "::error::MACOS_CERTIFICATE is set but $v is not; set all five (docs/release-signing.md)"; exit 1; }
+            done
             # Developer ID with the hardened runtime: inner code first, then the executable and the bundle.
             kc="$RUNNER_TEMP/sign.keychain-db"
             pw=$(uuidgen)
@@ -191,7 +196,7 @@ jobs:
           dmg="out/Nalarupa-$VERSION-macos-arm64.dmg"
           hdiutil create -volname "Nalarupa $VERSION" -srcfolder "$stage" -format UDZO -ov "$dmg"
           rm -rf out/Nalarupa.app
-          if [ -n "${SIGN_ID:-}" ] && [ -n "$APPLE_ID" ]; then
+          if [ -n "${SIGN_ID:-}" ]; then
             codesign --force --timestamp --sign "$SIGN_ID" "$dmg"
             xcrun notarytool submit "$dmg" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
             xcrun stapler staple "$dmg"
@@ -205,6 +210,7 @@ jobs:
         run: |
           dmg="out/Nalarupa-$VERSION-macos-arm64.dmg"
           xattr -w com.apple.quarantine "0083;$(printf %x "$(date +%s)");Safari;$(uuidgen)" "$dmg"
+          mkdir -p "$RUNNER_TEMP/dmg"
           hdiutil attach -nobrowse -mountpoint "$RUNNER_TEMP/dmg" "$dmg"
           ditto "$RUNNER_TEMP/dmg/Nalarupa.app" "$RUNNER_TEMP/Nalarupa.app"
           hdiutil detach "$RUNNER_TEMP/dmg"
@@ -279,7 +285,7 @@ jobs:
         run: |
           MAC_NOTE=""
           if [ "$NOTARIZED" != true ]; then
-            MAC_NOTE=" This build is not notarized, so macOS blocks it the first time: open System Settings > Privacy & Security and click **Open Anyway** next to Nalarupa (or run \`xattr -dr com.apple.quarantine /Applications/Nalarupa.app\` in Terminal)."
+            MAC_NOTE=" This build is not notarized, so macOS blocks it the first time: try to open Nalarupa once, then open System Settings > Privacy & Security and click **Open Anyway** next to it (or run \`xattr -dr com.apple.quarantine /Applications/Nalarupa.app\` in Terminal)."
           fi
           cat > notes.md <<EOF
           Nalarupa $VERSION
@@ -291,6 +297,9 @@ jobs:
           # A re-run of the same version refreshes the existing release's files instead of failing on a second create.
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$TAG" out/* --repo "$GITHUB_REPOSITORY" --clobber
+            # The notes describe these files (notarized or not): refresh them, with the generated changelog below.
+            gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" -f tag_name="$TAG" --jq .body >> notes.md
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file notes.md
           else
             gh release create "$TAG" out/* --repo "$GITHUB_REPOSITORY" --draft --title "Nalarupa $VERSION" --notes-file notes.md --generate-notes
           fi
