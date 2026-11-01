@@ -41,6 +41,7 @@ impl Client {
         body["stream"] = json!(true);
         let mut thinking = String::new();
         let mut text = String::new();
+        let mut refusal = String::new();
         let mut reasoning: Vec<Value> = Vec::new();
         // Function calls by output index: (call_id, name, arguments so far).
         let mut calls: Vec<(usize, String, String, String)> = Vec::new();
@@ -57,6 +58,7 @@ impl Client {
                     thinking.push_str(t);
                     on(Event::Thinking(t));
                 }
+                "response.refusal.delta" => refusal.push_str(ev["delta"].as_str().unwrap_or("")),
                 "response.output_text.delta" => {
                     let t = ev["delta"].as_str().unwrap_or("");
                     text.push_str(t);
@@ -117,6 +119,10 @@ impl Client {
         if !ended {
             return Err("The provider's stream ended before the reply finished. Try again.".into());
         }
+        // A refusal is not an empty success: say so, as the Claude path does.
+        if text.is_empty() && calls.is_empty() && !refusal.is_empty() {
+            return Err(format!("The model declined this request: {}", refusal.trim()));
+        }
         let mut content = Vec::new();
         if !thinking.is_empty() {
             content.push(json!({"type": "thinking", "thinking": thinking}));
@@ -125,7 +131,8 @@ impl Client {
         if !text.is_empty() {
             content.push(json!({"type": "text", "text": text}));
         }
-        if !calls.is_empty() {
+        // A reply cut off by the token limit stays max_tokens even with calls in it: the last one may be truncated.
+        if !calls.is_empty() && stop == "end_turn" {
             stop = "tool_use";
         }
         for (_, id, name, args) in calls {
@@ -347,6 +354,21 @@ mod tests {
         assert_eq!(out["stop_reason"], "max_tokens");
         let e = c.stream(json!({"model": "m", "messages": []}), None, &|| false, &mut |_| {}).unwrap_err();
         assert!(e.contains("The server had an error"), "{e}");
+        // Cut off by the token limit with a call in it: max_tokens, so the agent does not run a truncated call.
+        let cut_call = events(&[
+            json!({"type": "response.output_item.added", "output_index": 0, "item": {"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "execute", "arguments": ""}}),
+            json!({"type": "response.function_call_arguments.delta", "output_index": 0, "delta": "{\"input\": \"Ins"}),
+            json!({"type": "response.incomplete", "response": {"status": "incomplete", "incomplete_details": {"reason": "max_output_tokens"}}}),
+        ]);
+        let refused = events(&[
+            json!({"type": "response.refusal.delta", "output_index": 0, "delta": "I can't help with that."}),
+            json!({"type": "response.completed", "response": {"status": "completed"}}),
+        ]);
+        let (base, _) = fake_server(vec![cut_call, refused]);
+        let c = Client::new(&base, None, true);
+        assert_eq!(c.stream(json!({"model": "m", "messages": []}), None, &|| false, &mut |_| {}).unwrap()["stop_reason"], "max_tokens");
+        let e = c.stream(json!({"model": "m", "messages": []}), None, &|| false, &mut |_| {}).unwrap_err();
+        assert!(e.contains("declined") && e.contains("I can't help with that."), "{e}");
         // Text, then the connection closes without response.completed: a cut-off reply, not a finished one.
         let (base, _) = fake_server(vec![events(&[json!({"type": "response.output_text.delta", "output_index": 0, "delta": "Half"})])]);
         let e = Client::new(&base, None, true).stream(json!({"model": "m", "messages": []}), None, &|| false, &mut |_| {}).unwrap_err();

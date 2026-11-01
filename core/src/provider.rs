@@ -259,6 +259,30 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_chat_switched_to_the_claude_api_drops_what_only_other_formats_understand() {
+        let reply = sse(&[json!({"type": "message_stop"})]);
+        let (root, seen) = fake_server(vec![reply]);
+        let client = crate::claude::Client::at("k".into(), Some(&root));
+        let messages = json!([
+            {"role": "user", "content": "Design a page"},
+            // From a Responses provider: an unsigned thinking summary and an opaque reasoning item, nothing else.
+            {"role": "assistant", "content": [{"type": "thinking", "thinking": "Plan."}, {"type": "reasoning_item", "item": {"id": "rs_1"}}]},
+            {"role": "user", "content": "Go on"},
+            // From Claude: signed thinking stays.
+            {"role": "assistant", "content": [{"type": "thinking", "thinking": "Hm.", "signature": "sig"}, {"type": "text", "text": "Done."}]},
+            {"role": "user", "content": "Thanks"},
+        ]);
+        Provider::stream(&client, json!({"model": "m", "messages": messages}), None, &|| false, &mut |_| {}).unwrap();
+        let sent = seen.lock().unwrap()[0].body["messages"].clone();
+        assert_eq!(sent, json!([
+            {"role": "user", "content": "Design a page"},
+            {"role": "user", "content": "Go on"},
+            {"role": "assistant", "content": [{"type": "thinking", "thinking": "Hm.", "signature": "sig"}, {"type": "text", "text": "Done."}]},
+            {"role": "user", "content": "Thanks"},
+        ]));
+    }
+
+    #[test]
     fn a_whole_turn_passes_through_the_provider_interface() {
         let turn1 = sse(&[
             json!({"type": "message_start", "message": {"usage": {"input_tokens": 12}}}),

@@ -52,11 +52,16 @@ impl Client {
     /// POST /v1/messages with `stream: true`; returns `{content, stop_reason, usage}`.
     pub fn stream(&self, mut body: Value, beta: Option<&str>, cancel: &dyn Fn() -> bool, on: &mut dyn FnMut(Event)) -> Result<Value, String> {
         body["stream"] = json!(true);
-        // Reasoning items from an OpenAI Responses provider earlier in the chat mean nothing here.
-        for m in body["messages"].as_array_mut().into_iter().flatten() {
-            if let Some(blocks) = m["content"].as_array_mut() {
-                blocks.retain(|b| b["type"] != "reasoning_item");
+        // A chat that ran on another provider before: its reasoning items and unsigned thinking mean nothing here
+        // (Claude only takes back thinking it signed), and a message left empty is dropped (the API rejects empty
+        // content and merges the user turns around it).
+        if let Some(messages) = body["messages"].as_array_mut() {
+            for m in messages.iter_mut() {
+                if let Some(blocks) = m["content"].as_array_mut() {
+                    blocks.retain(|b| b["type"] != "reasoning_item" && !(b["type"] == "thinking" && b.get("signature").is_none()));
+                }
             }
+            messages.retain(|m| !m["content"].as_array().is_some_and(|c| c.is_empty()));
         }
         let mut req = self.http.post(&self.url).header("anthropic-version", "2023-06-01").header("content-type", "application/json");
         // A keyless provider (a local Anthropic-compatible server) sends no key header at all.
