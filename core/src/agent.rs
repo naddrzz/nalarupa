@@ -1067,7 +1067,11 @@ fn run_api(p: &Profile, prompt: &str, child: bool, model: Option<String>, client
         let blocks = content.as_array().cloned().unwrap_or_default();
         emit(p, "message_end", json!({"t": now_ms()}));
         if stop == "refusal" {
-            emit(p, "error", json!({"text": "Claude declined this request."}));
+            let text = match resp["refusal"].as_str() {
+                Some(why) => format!("The model declined this request: {why}"),
+                None => "Claude declined this request.".into(),
+            };
+            emit(p, "error", json!({"text": text}));
             break;
         }
         // Append unchanged so thinking blocks stay valid for the next request.

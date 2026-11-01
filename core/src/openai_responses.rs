@@ -66,7 +66,8 @@ impl Client {
                     text.push_str(t);
                     match texts.last_mut() {
                         Some((i, seg)) if *i == idx => seg.push_str(t),
-                        _ => texts.push((idx, t.to_string())),
+                        _ if !t.is_empty() => texts.push((idx, t.to_string())),
+                        _ => {}
                     }
                     on(Event::Text(t));
                 }
@@ -125,9 +126,10 @@ impl Client {
         if !ended {
             return Err("The provider's stream ended before the reply finished. Try again.".into());
         }
-        // A refusal is not an empty success: say so, as the Claude path does.
+        // A refusal is not an empty success: stop_reason `refusal`, as the Claude API reports it, so the agent
+        // keeps the prompt in its history and shows the model's reason.
         if text.is_empty() && calls.is_empty() && !refusal.is_empty() {
-            return Err(format!("The model declined this request: {}", refusal.trim()));
+            return Ok(json!({"content": [], "stop_reason": "refusal", "refusal": refusal.trim(), "usage": usage}));
         }
         let mut content = Vec::new();
         if !thinking.is_empty() {
@@ -383,8 +385,15 @@ mod tests {
         let (base, _) = fake_server(vec![cut_call, refused]);
         let c = Client::new(&base, None, true);
         assert_eq!(c.stream(json!({"model": "m", "messages": []}), None, &|| false, &mut |_| {}).unwrap()["stop_reason"], "max_tokens");
-        let e = c.stream(json!({"model": "m", "messages": []}), None, &|| false, &mut |_| {}).unwrap_err();
-        assert!(e.contains("declined") && e.contains("I can't help with that."), "{e}");
+        let out = c.stream(json!({"model": "m", "messages": []}), None, &|| false, &mut |_| {}).unwrap();
+        assert_eq!((out["stop_reason"].as_str(), out["refusal"].as_str()), (Some("refusal"), Some("I can't help with that.")));
+        // An empty text delta opens no text block.
+        let (base, _) = fake_server(vec![events(&[
+            json!({"type": "response.output_text.delta", "output_index": 0, "delta": ""}),
+            json!({"type": "response.completed", "response": {"status": "completed"}}),
+        ])]);
+        let out = Client::new(&base, None, true).stream(json!({"model": "m", "messages": []}), None, &|| false, &mut |_| {}).unwrap();
+        assert_eq!(out["content"], json!([]));
         // Text, then the connection closes without response.completed: a cut-off reply, not a finished one.
         let (base, _) = fake_server(vec![events(&[json!({"type": "response.output_text.delta", "output_index": 0, "delta": "Half"})])]);
         let e = Client::new(&base, None, true).stream(json!({"model": "m", "messages": []}), None, &|| false, &mut |_| {}).unwrap_err();
