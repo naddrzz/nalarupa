@@ -90,12 +90,13 @@ pub(crate) mod tests {
     #[test]
     fn a_base_url_routes_the_claude_api_and_keeps_its_headers() {
         let reply = sse(&[json!({"type": "message_stop"})]);
-        for base in ["/gateway", "/gateway/", "/gateway/v1"] {
+        for base in ["/gateway", "/gateway/", "/gateway/v1", "/gateway?team=a#notes"] {
             let (root, seen) = fake_server(vec![reply.clone()]);
             let client = crate::claude::Client::at("sk-test".into(), Some(&format!("{root}{base}")));
             Provider::stream(&client, json!({"model": "m", "messages": []}), Some("b1"), &|| false, &mut |_| {}).unwrap();
             let r = seen.lock().unwrap()[0].clone();
-            assert_eq!(r.path, "/gateway/v1/messages", "{base}");
+            let want = if base.contains('?') { "/gateway/v1/messages?team=a" } else { "/gateway/v1/messages" };
+            assert_eq!(r.path, want, "{base}");
             assert_eq!(header(&r, "x-api-key"), Some("sk-test"));
             assert_eq!(header(&r, "anthropic-version"), Some("2023-06-01"));
             assert_eq!(header(&r, "anthropic-beta"), Some("b1"));

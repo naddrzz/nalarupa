@@ -1000,6 +1000,8 @@ function AgentSettings({ mcpUrl, toast, onBackend }: { mcpUrl: string; toast: To
   const s = useMemo(() => tryCall<Record<string, string>>('settings_get') ?? {}, [])
   const [backend, setBackend] = useState(s.backend ?? 'claude-code')
   const [hasKey, setHasKey] = useState(!!s.anthropic_api_key)
+  // Kept here, not read from the mount-time snapshot `s`: switching backends remounts the field.
+  const [baseUrl, setBaseUrl] = useState<string>(s.anthropic_base_url ?? '')
   const [keyBox, setKeyBox] = useState(0)
   const [perms, setPerms] = useState<'ask' | 'auto'>((s as Record<string, unknown>).agent_auto_permissions === true ? 'auto' : 'ask')
   const set = (key: string, value: unknown) => saveSetting(toast, key, value)
@@ -1032,7 +1034,11 @@ function AgentSettings({ mcpUrl, toast, onBackend }: { mcpUrl: string; toast: To
             {hasKey ? <Button testId="api-key-remove" onClick={() => { if (!set('anthropic_api_key', null)) return; setHasKey(false); toast('API key removed') }}>Remove</Button> : null}
           </Row>
           <T size={11} color={C.ghost}>Or set ANTHROPIC_API_KEY. Pick the model below the chat box.</T>
-          <Field name="Base URL" value={s.anthropic_base_url ?? ''} placeholder="https://api.anthropic.com (optional: a Claude gateway)" onCommit={(v) => set('anthropic_base_url', v.trim() || null)} testId="api-base-url" />
+          <Field name="Base URL" value={baseUrl} placeholder="https://api.anthropic.com (optional: a Claude gateway)" onCommit={(v) => {
+            const url = v.trim()
+            if (!set('anthropic_base_url', url || null)) return false
+            setBaseUrl(url)
+          }} testId="api-base-url" />
           <Row>
             <T size={11} color={C.muted}>Effort</T>
             <Field name="Effort" value={s.agent_effort ?? 'high'} width={90} placeholder="high" onCommit={(v) => set('agent_effort', v || null)} />
