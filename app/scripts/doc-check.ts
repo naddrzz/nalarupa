@@ -529,7 +529,7 @@ assert(!('anthropic_base_url' in call('settings_get')), 'the base URL clears')
       await new Promise((r) => setTimeout(r, 100))
     }
     const child = both.find((e) => e.kind === 'start' && e.agent?.parent)
-    assert(child?.backend === 'provider' && child?.model === 'qwen3', `the spawned designer runs on the provider and its model: ${JSON.stringify(both.filter((e) => e.kind === 'start' || e.kind === 'error').slice(0, 4))}`)
+    assert(child?.backend === 'provider' && child?.model === 'qwen3' && !both.some((e) => e.kind === 'error'), `the spawned designer runs on the provider and its model, without errors: ${JSON.stringify(both.filter((e) => e.kind === 'start' || e.kind === 'error').slice(0, 4))}`)
     rmSync(join(data!, 'frame-id.txt'))
     // `done` comes before the run clears `agentRunning`; a reset before that is refused.
     for (let i = 0; i < 100 && call<{ agentRunning: boolean }>('state').agentRunning; i++) await new Promise((r) => setTimeout(r, 100))
