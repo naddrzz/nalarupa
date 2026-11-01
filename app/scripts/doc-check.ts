@@ -446,6 +446,11 @@ call('settings_set', { key: 'anthropic_api_key', value: ' \t' })
 assert(call<{ hasApiKey: boolean }>('init').hasApiKey === false && call<Record<string, unknown>>('settings_get').backend === 'claude-code', 'a blank saved API key is no key either')
 call('settings_set', { key: 'anthropic_api_key', value: null })
 throws(() => call('settings_set', { value: 1 }), /key required/, 'settings_set without a key')
+// A Claude gateway: the base URL is kept and read back as entered (it is not a secret), and clears with null.
+call('settings_set', { key: 'anthropic_base_url', value: 'https://gateway.example.com' })
+assert(call<Record<string, unknown>>('settings_get').anthropic_base_url === 'https://gateway.example.com', 'the Claude API base URL is saved and shown')
+call('settings_set', { key: 'anthropic_base_url', value: null })
+assert(!('anthropic_base_url' in call('settings_get')), 'the base URL clears')
 
 // While an agent runs, a new conversation and a document switch are both refused: the run keeps its chat and
 // would keep editing the new document. Stop then allows both. (The stand-in `claude` is a shell script: skipped

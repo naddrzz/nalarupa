@@ -982,21 +982,19 @@ pub fn spawn_spec() -> Value {
 }
 
 fn run_api(p: &Profile, prompt: &str, child: bool, model: Option<String>) -> Result<Value, String> {
-    let (key, model, effort, cancel, state, fast) = {
+    let (client, model, effort, cancel, state, fast) = {
         let mut e = engine();
-        let key = e.api_key()
-            .ok_or("No Anthropic API key. Add one in Settings, set ANTHROPIC_API_KEY, or switch the backend to Claude Code.")?;
+        let client = crate::provider::current(&e)?;
         let model = model.unwrap_or_else(|| DEFAULT_MODEL.into());
         let effort = e.setting("agent_effort").unwrap_or_else(|| "high".into());
         let fast = fast_for(Some(&model), e.settings.get("agent_fast") == Some(&json!(true)));
-        (key, model, effort, e.agent.cancel.clone(), e.editor_state(), fast)
+        (client, model, effort, e.agent.cancel.clone(), e.editor_state(), fast)
     };
     let mut messages = if child { Vec::new() } else { engine().agent.messages.clone() };
     let user = if child { prompt.to_string() } else { format!("{prompt}\n\nThe result of `get_editor_state` (fresh; call it again only if the document changed):\n{state}") };
     messages.push(json!({"role": "user", "content": [{"type": "text", "text": user}]}));
 
     let modern = ["claude-opus-5-5", "claude-fable-5", "claude-sonnet-5-5"].iter().any(|m| model.starts_with(m));
-    let client = crate::claude::Client::new(key);
     let system = json!([{"type": "text", "text": instructions("api"), "cache_control": {"type": "ephemeral"}}]);
     let tools = api_tools(child);
     let mut usage = json!({"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "turns": 0});
