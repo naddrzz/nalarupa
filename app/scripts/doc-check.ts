@@ -474,7 +474,13 @@ assert(!('anthropic_base_url' in call('settings_get')), 'the base URL clears')
     if (req.headers.get('authorization') !== 'Bearer sk-local') return Response.json({ error: { message: 'Incorrect API key' } }, { status: 401 })
     const body = await req.json()
     const chunk = (d) => 'data: ' + JSON.stringify({ choices: [{ index: 0, delta: d, finish_reason: null }] }) + '\\n\\n'
-    const sse = chunk({ content: 'OK' }) + 'data: ' + JSON.stringify({ choices: [], usage: { prompt_tokens: 3, completion_tokens: 1 } }) + '\\n\\ndata: [DONE]\\n\\n'
+    const sse0 = chunk({ content: 'OK' }) + 'data: ' + JSON.stringify({ choices: [], usage: { prompt_tokens: 3, completion_tokens: 1 } }) + '\\n\\ndata: [DONE]\\n\\n'
+    // A lead's first turn with spawn_agents on offer: start one designer in the frame named in frame-id.txt.
+    const lead = (body.tools ?? []).some((t) => t.function?.name === 'spawn_agents') && !body.messages.some((m) => m.role === 'tool')
+    const frame = (await Bun.file(${JSON.stringify(join(data!, 'frame-id.txt'))}).text().catch(() => '')).trim()
+    const spawn = chunk({ tool_calls: [{ index: 0, id: 'call_spawn', type: 'function', function: { name: 'spawn_agents', arguments: JSON.stringify({ config: [{ prompt: 'Draw the footer', containerNodes: [frame] }] }) } }] })
+      + 'data: ' + JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] }) + '\\n\\ndata: [DONE]\\n\\n'
+    const sse = lead && frame ? spawn : sse0
     return new Response(new URL(req.url).pathname === '/v1/chat/completions' && body.stream ? sse : 'not found', { headers: { 'content-type': 'text/event-stream' } })
   } }); console.log(s.port)`)
   const server = Bun.spawn([process.execPath, script], { stdout: 'pipe' })
@@ -512,6 +518,19 @@ assert(!('anthropic_base_url' in call('settings_get')), 'the base URL clears')
     const start = seen.find((e) => e.kind === 'start')
     assert(start?.backend === 'provider' && start?.model === 'qwen3', `the agent runs on the provider and its model: ${JSON.stringify(start)}`)
     assert(seen.some((e) => e.kind === 'text_delta' && e.text === 'OK') && !seen.some((e) => e.kind === 'error'), `the provider's reply reaches the chat: ${JSON.stringify(seen.filter((e) => e.kind !== 'text_delta').slice(-3))}`)
+    for (let i = 0; i < 100 && call<{ agentRunning: boolean }>('state').agentRunning; i++) await new Promise((r) => setTimeout(r, 100))
+    // A spawned designer runs on the lead's provider and model: the lead's first reply spawns one into a frame.
+    const frame = exec('Print(Insert(document, {type:"frame", name:"Footer", width:400, height:200}))').match(/## Print output\n(\S+)/)![1]
+    writeFileSync(join(data!, 'frame-id.txt'), frame)
+    call('agent_send', { text: 'Split this work', parallel: 2, mode: 'split' })
+    const both: any[] = []
+    for (let i = 0; i < 150 && both.filter((e) => e.kind === 'done').length < 2; i++) {
+      both.push(...call<{ events: any[] }>('poll').events.filter((e) => e.type === 'agent'))
+      await new Promise((r) => setTimeout(r, 100))
+    }
+    const child = both.find((e) => e.kind === 'start' && e.agent?.parent)
+    assert(child?.backend === 'provider' && child?.model === 'qwen3' && !both.some((e) => e.kind === 'error'), `the spawned designer runs on the provider and its model, without errors: ${JSON.stringify(both.filter((e) => e.kind === 'start' || e.kind === 'error').slice(0, 4))}`)
+    rmSync(join(data!, 'frame-id.txt'))
     // `done` comes before the run clears `agentRunning`; a reset before that is refused.
     for (let i = 0; i < 100 && call<{ agentRunning: boolean }>('state').agentRunning; i++) await new Promise((r) => setTimeout(r, 100))
     call('agent_reset')

@@ -1,5 +1,5 @@
 // Design agent eval (manual: every run spends model tokens, so it is not in CI).
-//   bun scripts/design-eval.ts run [--backend claude-code|api] [--model id] [--only id,id] [--designs n --iterate style|layout] [--parallel n [--mode split|side]] [--out dir]
+//   bun scripts/design-eval.ts run [--backend claude-code|api|provider] [--model id] [--only id,id] [--designs n --iterate style|layout] [--parallel n [--mode split|side]] [--out dir]
 //   bun scripts/design-eval.ts compare <runA> <runB> [--out page.html]
 //   bun scripts/design-eval.ts summary <run>
 //   bun scripts/design-eval.ts fonts        (every face the guide names loads; no model involved)
@@ -157,7 +157,7 @@ type BriefResult = {
   /** Everything the agents said before the first execute, one "name: text" block each (named before it held more). */
   firstMessage: string; deniedTools: string[]; shots: Shot[]
 }
-type Run = { meta: { sha: string; backend: string; model: string | null; designs?: number; iterate?: string; parallel?: number; mode?: string; date: string }; briefs: BriefResult[] }
+type Run = { meta: { sha: string; backend: string; model: string | null; provider?: { name: string; format: string; model: string }; designs?: number; iterate?: string; parallel?: number; mode?: string; date: string }; briefs: BriefResult[] }
 type Pair = { a: string; b: string; colour: number; layout: number; ground: [string, string]; groundDistance: number }
 const alike = (p: Pair) => p.colour >= SAME.colour || p.layout >= SAME.layout || p.groundDistance <= SAME.ground
 const pairText = (p: Pair) => `colour ${p.colour.toFixed(3)}, layout ${p.layout.toFixed(3)}, ground ${p.ground[0]} / ${p.ground[1]} (${p.groundDistance.toFixed(1)} apart${p.groundDistance <= SAME.ground ? ', the same colour' : ''})`
@@ -198,7 +198,7 @@ const totals = (run: Run) => {
 }
 
 /** How the run drove the agent, when not one design by one agent. */
-const setting = (m: Run['meta']) => (m.designs ? ` · Let it cook ${m.designs}× ${m.iterate}` : '') + (m.parallel ? ` · ${m.parallel} designers ${m.mode}` : '')
+const setting = (m: Run['meta']) => (m.provider ? ` · ${m.provider.name} (${m.provider.format})` : '') + (m.designs ? ` · Let it cook ${m.designs}× ${m.iterate}` : '') + (m.parallel ? ` · ${m.parallel} designers ${m.mode}` : '')
 
 const summary = (dir: string, run: Run) => {
   const rows = run.briefs.map((r) => `| ${r.id} | ${r.ok ? 'ok' : `**${r.error}**`} | ${r.issues.length} | ${r.failedExecutes} | ${r.repairs} | ${r.executeCalls} | ${r.screenshots ?? '–'} | ${r.turns} | ${minutes(r.wallMs)} | ${r.toolMs === undefined ? '–' : minutes(r.toolMs)} | ${r.guideChars} |`)
@@ -259,7 +259,7 @@ const run = async () => {
   const { call } = await import('../src/core')
   const out = resolve(process.env.EVAL_OUT!)
   const backend = flag('backend') ?? 'claude-code'
-  if (backend !== 'claude-code' && backend !== 'api') throw new Error(`unknown backend '${backend}': claude-code or api`)
+  if (!['claude-code', 'api', 'provider'].includes(backend)) throw new Error(`unknown backend '${backend}': claude-code, api or provider`)
   const model = flag('model') ?? null
   const only = flag('only')?.split(',')
   const unknown = only?.filter((id) => !BRIEFS.some((b) => b.id === id))
@@ -282,9 +282,17 @@ const run = async () => {
     return { text: res.content.map((c: any) => c.text ?? '').join(''), isError: !!res.isError }
   }
   call('settings_set', { key: 'agent_backend', value: backend })
-  call('settings_set', { key: 'agent_model', value: model })
+  // A provider keeps its own model choice (provider_model, copied from the app's settings), apart from the Claude
+  // backends' agent_model; --model overrides it, and without the flag the saved choice stands.
+  if (backend !== 'provider' || model) call('settings_set', { key: backend === 'provider' ? 'provider_model' : 'agent_model', value: model })
+  // With a provider, the eval run records which one: name, wire format and the model the runs use.
+  const s = call<Record<string, any>>('settings_get')
+  const p = backend === 'provider' ? ((s.providers ?? []) as any[]).find((x) => x.id === s.agent_provider) ?? s.providers?.[0] : undefined
+  if (backend === 'provider' && !p) throw new Error('no provider saved: add one in Agent settings first')
+  const chosen = model ?? (s.provider_model as string | undefined)
+  const provider = p && { name: p.name, format: p.format, model: chosen && p.models.includes(chosen) ? chosen : p.models[0] }
   const sha = Bun.spawnSync(['git', 'rev-parse', '--short', 'HEAD']).stdout.toString().trim()
-  const result: Run = { meta: { sha, backend, model, ...(designs > 1 && { designs, iterate }), ...(parallel > 1 && { parallel, mode }), date: new Date().toISOString().slice(0, 16).replace('T', ' ') }, briefs: [] }
+  const result: Run = { meta: { sha, backend, model: provider?.model ?? model, ...(provider && { provider }), ...(designs > 1 && { designs, iterate }), ...(parallel > 1 && { parallel, mode }), date: new Date().toISOString().slice(0, 16).replace('T', ' ') }, briefs: [] }
   const instructionsChars = call<string>('agent_instructions', { backend }).length
   for (const b of briefs) {
     const dir = join(out, b.id)
@@ -407,6 +415,25 @@ const run = async () => {
   process.exit(0)
 }
 
+/** The agent settings saved in the app's data folder (NALARUPA_DATA, else the platform's local data folder). */
+function agentSettings(): Record<string, unknown> {
+  // `||`, not `??`: an empty variable means unset, as the core reads it.
+  const dir = process.env.NALARUPA_DATA
+    || (process.platform === 'win32' ? join(process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local'), 'Nalarupa')
+      : process.platform === 'darwin' ? join(homedir(), 'Library', 'Application Support', 'Nalarupa')
+      : join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'Nalarupa'))
+  let all: Record<string, unknown> = {}
+  try {
+    const parsed = JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8'))
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) all = parsed
+  } catch (e) {
+    // No settings yet is normal; anything else (a corrupt file) is worth knowing before a long run.
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') console.warn(`design-eval: the app settings in ${dir} were not read (${(e as Error).message})`)
+  }
+  const keys = ['providers', 'agent_provider', 'provider_model', 'anthropic_api_key', 'anthropic_base_url']
+  return Object.fromEntries(keys.filter((k) => k in all).map((k) => [k, all[k]]))
+}
+
 const load = (dir: string): Run => JSON.parse(readFileSync(join(dir, 'metrics.json'), 'utf8'))
 
 /** Every face the guide names (its pairings and its examples) loads from the web. */
@@ -445,9 +472,24 @@ else if (args[0] === 'run') {
   const out = resolve(flag('out') ?? join(homedir(), 'nalarupa-eval', stamp))
   mkdirSync(out, { recursive: true })
   const data = mkdtempSync(join(tmpdir(), 'nalarupa-eval-'))
-  const child = Bun.spawnSync([process.execPath, import.meta.path, ...args], { env: { ...process.env, NALARUPA_DATA: data, EVAL_OUT: out }, stdio: ['inherit', 'inherit', 'inherit'] })
-  rmSync(data, { recursive: true, force: true })
-  process.exit(child.exitCode ?? 1)
+  // Only the agent's own settings (providers, the Claude key and base URL) come along from the person's data
+  // folder; their documents, recents and chats stay out of the eval.
+  // The copied settings may hold API keys: the folder goes on every exit, Ctrl+C included. A signal stops the
+  // eval child too, so a cancelled run spends no more tokens.
+  const clean = () => rmSync(data, { recursive: true, force: true })
+  let child: ReturnType<typeof Bun.spawn> | undefined
+  const stop = (signal: NodeJS.Signals, exit: number) => () => { child?.kill(signal); clean(); process.exit(exit) }
+  process.on('SIGINT', stop('SIGINT', 130))
+  process.on('SIGTERM', stop('SIGTERM', 143))
+  let code = 1
+  try {
+    writeFileSync(join(data, 'settings.json'), JSON.stringify(agentSettings()))
+    child = Bun.spawn([process.execPath, import.meta.path, ...args], { env: { ...process.env, NALARUPA_DATA: data, EVAL_OUT: out }, stdio: ['inherit', 'inherit', 'inherit'] })
+    code = (await child.exited) ?? 1
+  } finally {
+    clean()
+  }
+  process.exit(code)
 } else if (args[0] === 'compare' && args[1] && args[2]) {
   const dirs = [resolve(args[1]), resolve(args[2])]
   const out = resolve(flag('out') ?? join(dirs[1], 'compare.html'))
@@ -461,6 +503,6 @@ else if (args[0] === 'run') {
 } else if (args[0] === 'summary' && args[1]) {
   console.log(summary(resolve(args[1]), load(resolve(args[1]))))
 } else {
-  console.error('usage: design-eval.ts run [--backend claude-code|api] [--model id] [--only id,id] [--designs n --iterate style|layout] [--parallel n [--mode split|side]] [--out dir]\n       design-eval.ts compare <runA> <runB> [--out page.html]\n       design-eval.ts summary <run>\n       design-eval.ts fonts')
+  console.error('usage: design-eval.ts run [--backend claude-code|api|provider] [--model id] [--only id,id] [--designs n --iterate style|layout] [--parallel n [--mode split|side]] [--out dir]\n       design-eval.ts compare <runA> <runB> [--out page.html]\n       design-eval.ts summary <run>\n       design-eval.ts fonts')
   process.exit(2)
 }
