@@ -700,6 +700,7 @@ const SHUTDOWN_WAIT: Duration = Duration::from_secs(3);
 /// the writer is a detached thread the process does not wait for.
 pub fn shutdown() -> Result<(), String> {
     stop();
+    crate::claude_code::cancel_login();
     let deadline = Instant::now() + SHUTDOWN_WAIT;
     // `running` outlasts `active` across a queued or iteration handoff, until the next thread has started.
     while Instant::now() < deadline {
@@ -1357,7 +1358,7 @@ fn run_claude_code(p: &Profile, prompt: &str, child: bool, model: Option<String>
                     match error_cause(&ev) {
                         Some(text) if session.is_some() && text.contains(NO_SESSION) => stale = true,
                         Some(text) => {
-                            emit(p, "error", json!({"text": text}));
+                            emit(p, "error", json!({"text": text, "signIn": signed_out(&text)}));
                             reported = true;
                         }
                         None => textless_error = true,

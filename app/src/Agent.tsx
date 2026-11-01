@@ -3,7 +3,7 @@
 // usage rows, queued prompts, parallel agents.
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { call, tryCall } from './core'
-import { barAgents, changing, imageSrc, lastContentId, profileOf, resetChat, restoreChat, rowTickMs, runVerb, spinning, store, type Author, type ChatItem, type ClaudeAuth } from './agents'
+import { barAgents, changing, imageSrc, lastContentId, profileOf, resetChat, restoreChat, rowTickMs, runVerb, spinning, store, setClaudeAuth, type Author, type ChatItem, type ClaudeAuth } from './agents'
 import type { EventPayload } from '@gpuix/native'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import * as SelectPrimitive from '@gpuix/react/select'
@@ -941,7 +941,7 @@ const Item = memo(function Item({ m, isLast, expanded, toggle }: { m: ChatItem; 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 6, marginBottom: 6, padding: 10, borderRadius: 8, borderWidth: 1, borderColor: '#F8717155', backgroundColor: '#F871711A' }}>
           <T size={12} weight="600" color={C.danger}>{`Something went wrong${m.agent ? ` with ${m.agent.name}` : ''}`}</T>
           <T size={11} color={C.muted}>{m.text}</T>
-          {m.signIn ? <SignInButton /> : null}
+          {m.signIn ? <SignInButton authAt={m.authAt ?? 0} /> : null}
         </div>
       )
     case 'external':
@@ -1006,18 +1006,41 @@ const AUTH_METHODS: Record<string, string> = {
   third_party: 'a cloud provider (Bedrock, Vertex or Foundry)',
 }
 
-/** Start Claude Code's own browser sign-in; the core reports the result as a `claude_auth` event. */
-function startSignIn(console = false): boolean {
-  return tryCall('claude_auth_login', { console }) !== null
+/** A Claude Code account command; a failure (no CLI, a failed logout) goes to `fail`, not to the console only. */
+function authCall<T>(fail: (message: string) => void, cmd: string, args: Record<string, unknown> = {}): T | null {
+  try {
+    return call<T>(cmd, args)
+  } catch (e) {
+    fail((e as Error).message)
+    return null
+  }
 }
 
-function SignInButton() {
-  const [started, setStarted] = useState(false)
-  const auth = store.claudeAuth
-  if (started && auth?.signedIn) return <T size={11} color={C.muted}>Signed in. Send your message again.</T>
-  return started
-    ? <T size={11} color={C.muted}>Finish signing in in your browser…</T>
-    : <Button testId="error-sign-in" onClick={() => setStarted(startSignIn())}>Sign in to Claude Code</Button>
+/** Start Claude Code's own browser sign-in; the core reports the result as a `claude_auth` event. */
+function startSignIn(fail: (message: string) => void, console = false): boolean {
+  return authCall(fail, 'claude_auth_login', { console }) !== null
+}
+
+/** The signed-out error card's Sign in: `authAt` is the account state count, so the card redraws when it changes. */
+function SignInButton({ authAt }: { authAt: number }) {
+  // The account state count when this sign-in started; null before one starts.
+  const [from, setFrom] = useState<number | null>(null)
+  const [failed, setFailed] = useState('')
+  if (from !== null && authAt > from) {
+    if (store.claudeAuth?.signedIn) return <T size={11} color={C.muted}>Signed in. Send your message again.</T>
+  } else if (from !== null) {
+    return <T size={11} color={C.muted}>Finish signing in in your browser…</T>
+  }
+  const retry = from !== null
+  return (
+    <>
+      {retry ? <T size={11} color={C.muted}>Sign-in did not finish.</T> : null}
+      {failed ? <T size={11} color={C.danger}>{failed}</T> : null}
+      <Row gap={6}>
+        <Button testId="error-sign-in" onClick={() => { setFailed(''); if (startSignIn(setFailed)) setFrom(store.claudeAuthAt) }}>{retry ? 'Try again' : 'Sign in to Claude Code'}</Button>
+      </Row>
+    </>
+  )
 }
 
 /**
@@ -1027,15 +1050,18 @@ function SignInButton() {
 function ClaudeCodeAccount({ toast }: { toast: Toast }) {
   const [auth, setAuth] = useState<ClaudeAuth | null>(() => tryCall<ClaudeAuth>('claude_auth_status'))
   const [signingIn, setSigningIn] = useState(false)
-  const live = store.claudeAuth
+  // Only states reported after this panel opened replace the fresh status it read on mount.
+  const [opened] = useState(store.claudeAuthAt)
+  const at = store.claudeAuthAt
   useEffect(() => {
-    if (!live) return
+    if (at <= opened || !store.claudeAuth) return
+    const live = store.claudeAuth
     setAuth(live)
     if (signingIn) {
       setSigningIn(false)
       toast(live.signedIn ? 'Signed in to Claude Code' : 'Sign-in did not finish')
     }
-  }, [live])
+  }, [at])
   if (!auth) return null
   if (!auth.installed) return <T size={11} color={C.danger}>Claude Code is not installed. Install it from code.claude.com, then sign in here.</T>
   if (signingIn) {
@@ -1055,7 +1081,13 @@ function ClaudeCodeAccount({ toast }: { toast: Toast }) {
       <>
         <T size={11} color={C.muted}>{`Signed in with ${how}${who ? ` (${who})` : ''}.`}</T>
         <Row gap={6}>
-          <Button testId="claude-sign-out" onClick={() => { const s = tryCall<ClaudeAuth>('claude_auth_logout'); if (s) { setAuth(s); toast('Signed out of Claude Code') } }}>Sign out</Button>
+          <Button testId="claude-sign-out" onClick={() => {
+          const s = authCall<ClaudeAuth>(toast, 'claude_auth_logout')
+          if (!s) return
+          setClaudeAuth(s)
+          setAuth(s)
+          toast('Signed out of Claude Code')
+        }}>Sign out</Button>
         </Row>
       </>
     )
@@ -1064,8 +1096,8 @@ function ClaudeCodeAccount({ toast }: { toast: Toast }) {
     <>
       <T size={11} color={C.muted}>Claude Code is not signed in.</T>
       <Row gap={6}>
-        <Button testId="claude-sign-in" onClick={() => setSigningIn(startSignIn())}>Sign in</Button>
-        <Button testId="claude-sign-in-console" onClick={() => setSigningIn(startSignIn(true))}>Console account</Button>
+        <Button testId="claude-sign-in" onClick={() => setSigningIn(startSignIn(toast))}>Sign in</Button>
+        <Button testId="claude-sign-in-console" onClick={() => setSigningIn(startSignIn(toast, true))}>Console account</Button>
       </Row>
       <T size={11} color={C.ghost}>Opens Claude Code's own sign-in in your browser (a Console account bills API use); your login stays with Claude Code.</T>
     </>

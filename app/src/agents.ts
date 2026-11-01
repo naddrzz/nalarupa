@@ -17,7 +17,7 @@ export type ChatItem =
       images?: string[]; error?: boolean; lines?: number; running: boolean; header: boolean; by?: Author
     }
   | { kind: 'note'; id: number; text: string }
-  | { kind: 'error'; id: number; agent?: Profile; text: string; signIn?: boolean }
+  | { kind: 'error'; id: number; agent?: Profile; text: string; signIn?: boolean; authAt?: number }
   | { kind: 'usage'; id: number; agent: Profile; durationMs: number; usage: any; stopped: boolean; failed: boolean }
   | { kind: 'external'; id: number; text: string; error?: boolean }
   /** The agent waits for the user to allow a tool (permission card). */
@@ -44,8 +44,9 @@ export type ClaudeAuth = { installed: boolean; signedIn: boolean; method: string
 
 export const store = {
   items: [] as ChatItem[],
-  /** The latest Claude Code account state the core reported after a sign-in flow ended. */
+  /** The latest Claude Code account state, from a finished sign-in flow or a sign-out, and how many there were. */
   claudeAuth: null as ClaudeAuth | null,
+  claudeAuthAt: 0,
   profiles: new Map<string, Profile>(),
   running: new Set<string>(),
   /** Backend and model of each agent's current turn, from its `start` event. */
@@ -178,6 +179,15 @@ export function poke(p: Profile, now: number) {
   wakeCursor(p.id, c, now)
 }
 
+/** Record a new Claude Code account state. Signed-out error cards get a fresh item so their memoized row redraws. */
+export function setClaudeAuth(state: ClaudeAuth) {
+  store.claudeAuth = state
+  store.claudeAuthAt++
+  store.items.forEach((it, i) => {
+    if (it.kind === 'error' && it.signIn) store.items[i] = { ...it, authAt: store.claudeAuthAt }
+  })
+}
+
 /** Apply core events; returns true when anything visible changed. */
 export function applyEvents(events: any[], now: number): boolean {
   let changed = false
@@ -196,7 +206,7 @@ export function applyEvents(events: any[], now: number): boolean {
       continue
     }
     if (ev.type === 'claude_auth') {
-      store.claudeAuth = ev.state
+      setClaudeAuth(ev.state)
       changed = true
       continue
     }
