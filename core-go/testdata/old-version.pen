@@ -1,0 +1,22 @@
+{
+  "version": "2.6",
+  "children": [
+    {"type": "frame", "id": "root", "x": 0, "y": 0, "width": 400, "height": 300, "layout": "none", "strokeWidth": {"top": 1, "right": 2, "bottom": 1, "left": 1},
+     "effect": [{"type": "shadow", "shadowType": "inner", "spread": 3, "blur": 4}, {"type": "blur", "radius": 2}],
+     "children": [
+       {"type": "icon_font", "id": "ic", "iconFontName": "home", "iconFontFamily": "lucide", "x": 10, "y": 10, "width": 24, "height": 24, "fill": "#000000"},
+       {"type": "rectangle", "id": "st", "x": 50, "y": 10, "width": 40, "height": 40, "stroke": {"fill": "#FF0000", "thickness": 2, "align": "outside", "cap": "round", "join": "bevel"}},
+       {"type": "rectangle", "id": "st2", "x": 100, "y": 10, "width": 40, "height": 40, "stroke": {"fill": "#00FF00"}},
+       {"type": "ellipse", "id": "arc", "x": 150, "y": 10, "width": 40, "height": 40, "sweepAngle": 90.5, "effect": {"type": "shadow", "shadowType": "inner", "spread": 1}},
+       {"type": "group", "id": "lg", "x": 10, "y": 100, "layout": "vertical", "gap": 5, "padding": 4, "children": [
+         {"type": "rectangle", "id": "lg1", "width": 30, "height": 10},
+         {"type": "rectangle", "id": "lg2", "width": 20, "height": 10}
+       ]},
+       {"type": "group", "id": "pg", "x": 200, "y": 100, "gap": 5, "padding": 4, "justifyContent": "center", "children": [
+         {"type": "rectangle", "id": "pg1", "x": 0, "y": 0, "width": 30, "height": 10}
+       ]}
+     ]},
+    {"type": "frame", "id": "comp", "reusable": true, "x": 500, "y": 0, "width": 50, "height": 50, "children": [{"type": "rectangle", "id": "inner", "width": 10, "height": 10}]},
+    {"type": "ref", "id": "inst", "ref": "comp", "x": 500, "y": 100, "sweepAngle": 45, "descendants": {"inner": {"type": "icon_font", "iconFontName": "star", "width": 12, "height": 12, "stroke": {"thickness": 1}}}}
+  ]
+}

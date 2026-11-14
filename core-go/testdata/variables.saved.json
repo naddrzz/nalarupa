@@ -1,0 +1,163 @@
+{
+  "version": "2.19",
+  "themes": {
+    "mode": [
+      "light",
+      "dark"
+    ],
+    "density": [
+      "comfy",
+      "compact"
+    ]
+  },
+  "variables": {
+    "bg": {
+      "type": "color",
+      "value": [
+        {
+          "value": "#FFFFFF"
+        },
+        {
+          "value": "#111111",
+          "theme": {
+            "mode": "dark"
+          }
+        }
+      ]
+    },
+    "gap": {
+      "type": "number",
+      "value": [
+        {
+          "value": 16
+        },
+        {
+          "value": 8,
+          "theme": {
+            "density": "compact"
+          }
+        }
+      ]
+    },
+    "pad": {
+      "type": "number",
+      "value": [
+        {
+          "value": 24,
+          "theme": {
+            "density": "comfy"
+          }
+        },
+        {
+          "value": 12,
+          "theme": {
+            "density": "compact"
+          }
+        }
+      ]
+    },
+    "cardW": {
+      "type": "number",
+      "value": 240
+    },
+    "alias": {
+      "type": "number",
+      "value": "$cardW"
+    },
+    "tall": {
+      "type": "number",
+      "value": [
+        {
+          "value": 80,
+          "theme": {
+            "mode": "dark",
+            "density": "compact"
+          }
+        },
+        {
+          "value": 40
+        }
+      ]
+    }
+  },
+  "children": [
+    {
+      "type": "frame",
+      "id": "light",
+      "x": 0,
+      "y": 0,
+      "layout": "vertical",
+      "gap": "$gap",
+      "padding": "$pad",
+      "fill": "$bg",
+      "children": [
+        {
+          "type": "rectangle",
+          "id": "l1",
+          "width": "$cardW",
+          "height": "$tall"
+        },
+        {
+          "type": "rectangle",
+          "id": "l2",
+          "width": "$alias",
+          "height": 20
+        },
+        {
+          "type": "rectangle",
+          "id": "l3",
+          "width": "$49",
+          "height": "$unknown"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "dark",
+      "x": 400,
+      "y": 0,
+      "layout": "vertical",
+      "gap": "$gap",
+      "padding": "$pad",
+      "fill": "$bg",
+      "theme": {
+        "mode": "dark",
+        "density": "compact"
+      },
+      "children": [
+        {
+          "type": "rectangle",
+          "id": "d1",
+          "width": "$cardW",
+          "height": "$tall"
+        },
+        {
+          "type": "frame",
+          "id": "d2",
+          "gap": "$gap",
+          "padding": [
+            "$pad",
+            4
+          ],
+          "theme": {
+            "density": "comfy"
+          },
+          "children": [
+            {
+              "type": "rectangle",
+              "id": "d2a",
+              "width": 10,
+              "height": "$tall"
+            },
+            {
+              "type": "rectangle",
+              "id": "d2b",
+              "width": 10,
+              "height": 10
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

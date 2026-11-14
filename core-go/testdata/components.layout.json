@@ -1,0 +1,409 @@
+[
+  {
+    "id": "card",
+    "type": "frame",
+    "x": 0.0,
+    "y": 0.0,
+    "w": 200.0,
+    "h": 176.0,
+    "problem": null,
+    "children": [
+      {
+        "id": "media",
+        "type": "rectangle",
+        "x": 12.0,
+        "y": 16.0,
+        "w": 176.0,
+        "h": 100.0,
+        "problem": null,
+        "children": []
+      },
+      {
+        "id": "row",
+        "type": "frame",
+        "x": 12.0,
+        "y": 124.0,
+        "w": 176.0,
+        "h": 12.0,
+        "problem": null,
+        "children": [
+          {
+            "id": "dot",
+            "type": "ellipse",
+            "x": 12.0,
+            "y": 124.0,
+            "w": 12.0,
+            "h": 12.0,
+            "problem": null,
+            "children": []
+          },
+          {
+            "id": "bar",
+            "type": "rectangle",
+            "x": 128.0,
+            "y": 126.75,
+            "w": 60.0,
+            "h": 6.5,
+            "problem": null,
+            "children": []
+          }
+        ]
+      },
+      {
+        "id": "badge",
+        "type": "frame",
+        "x": 12.0,
+        "y": 144.0,
+        "w": 50.0,
+        "h": 16.0,
+        "problem": null,
+        "children": [
+          {
+            "id": "badge/pillDot",
+            "type": "rectangle",
+            "x": 22.0,
+            "y": 148.0,
+            "w": 30.0,
+            "h": 8.0,
+            "problem": null,
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "pill",
+    "type": "frame",
+    "x": 300.0,
+    "y": 0.0,
+    "w": 50.0,
+    "h": 16.0,
+    "problem": null,
+    "children": [
+      {
+        "id": "pillDot",
+        "type": "rectangle",
+        "x": 310.0,
+        "y": 4.0,
+        "w": 30.0,
+        "h": 8.0,
+        "problem": null,
+        "children": []
+      }
+    ]
+  },
+  {
+    "id": "card2",
+    "type": "frame",
+    "x": 0.0,
+    "y": 300.0,
+    "w": 260.0,
+    "h": 224.0,
+    "problem": null,
+    "children": [
+      {
+        "id": "card2/media",
+        "type": "rectangle",
+        "x": 12.0,
+        "y": 316.0,
+        "w": 236.0,
+        "h": 140.0,
+        "problem": null,
+        "children": []
+      },
+      {
+        "id": "card2/row",
+        "type": "frame",
+        "x": 12.0,
+        "y": 464.0,
+        "w": 236.0,
+        "h": 20.0,
+        "problem": null,
+        "children": [
+          {
+            "id": "card2/dot",
+            "type": "ellipse",
+            "x": 12.0,
+            "y": 468.0,
+            "w": 12.0,
+            "h": 12.0,
+            "problem": null,
+            "children": []
+          },
+          {
+            "id": "card2/bar",
+            "type": "ellipse",
+            "x": 228.0,
+            "y": 464.0,
+            "w": 20.0,
+            "h": 20.0,
+            "problem": null,
+            "children": []
+          }
+        ]
+      },
+      {
+        "id": "card2/badge",
+        "type": "frame",
+        "x": 12.0,
+        "y": 492.0,
+        "w": 70.0,
+        "h": 16.0,
+        "problem": null,
+        "children": [
+          {
+            "id": "card2/badge/pillDot",
+            "type": "rectangle",
+            "x": 22.0,
+            "y": 496.0,
+            "w": 50.0,
+            "h": 8.0,
+            "problem": null,
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "v",
+    "type": "frame",
+    "x": 600.0,
+    "y": 0.0,
+    "w": 150.0,
+    "h": 194.0,
+    "problem": null,
+    "children": [
+      {
+        "id": "v/media",
+        "type": "rectangle",
+        "x": 612.0,
+        "y": 16.0,
+        "w": 126.0,
+        "h": 100.0,
+        "problem": null,
+        "children": []
+      },
+      {
+        "id": "v/row",
+        "type": "frame",
+        "x": 612.0,
+        "y": 124.0,
+        "w": 126.0,
+        "h": 30.0,
+        "problem": null,
+        "children": [
+          {
+            "id": "v/dot",
+            "type": "ellipse",
+            "x": 612.0,
+            "y": 124.0,
+            "w": 30.0,
+            "h": 30.0,
+            "problem": null,
+            "children": []
+          },
+          {
+            "id": "v/bar",
+            "type": "rectangle",
+            "x": 678.0,
+            "y": 135.75,
+            "w": 60.0,
+            "h": 6.5,
+            "problem": null,
+            "children": []
+          }
+        ]
+      },
+      {
+        "id": "v/badge",
+        "type": "frame",
+        "x": 612.0,
+        "y": 162.0,
+        "w": 50.0,
+        "h": 16.0,
+        "problem": null,
+        "children": [
+          {
+            "id": "v/badge/pillDot",
+            "type": "rectangle",
+            "x": 622.0,
+            "y": 166.0,
+            "w": 30.0,
+            "h": 8.0,
+            "problem": null,
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "vi",
+    "type": "frame",
+    "x": 600.0,
+    "y": 400.0,
+    "w": 150.0,
+    "h": 194.0,
+    "problem": null,
+    "children": [
+      {
+        "id": "vi/media",
+        "type": "rectangle",
+        "x": 612.0,
+        "y": 416.0,
+        "w": 126.0,
+        "h": 100.0,
+        "problem": null,
+        "children": []
+      },
+      {
+        "id": "vi/row",
+        "type": "frame",
+        "x": 612.0,
+        "y": 524.0,
+        "w": 126.0,
+        "h": 30.0,
+        "problem": null,
+        "children": [
+          {
+            "id": "vi/dot",
+            "type": "ellipse",
+            "x": 612.0,
+            "y": 524.0,
+            "w": 30.0,
+            "h": 30.0,
+            "problem": null,
+            "children": []
+          },
+          {
+            "id": "vi/bar",
+            "type": "rectangle",
+            "x": 678.0,
+            "y": 535.75,
+            "w": 60.0,
+            "h": 6.5,
+            "problem": null,
+            "children": []
+          }
+        ]
+      },
+      {
+        "id": "vi/badge",
+        "type": "frame",
+        "x": 612.0,
+        "y": 562.0,
+        "w": 50.0,
+        "h": 16.0,
+        "problem": null,
+        "children": [
+          {
+            "id": "vi/badge/pillDot",
+            "type": "rectangle",
+            "x": 622.0,
+            "y": 566.0,
+            "w": 30.0,
+            "h": 8.0,
+            "problem": null,
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "grid",
+    "type": "frame",
+    "x": 900.0,
+    "y": 0.0,
+    "w": 294.0,
+    "h": 88.0,
+    "problem": null,
+    "children": [
+      {
+        "id": "g1",
+        "type": "frame",
+        "x": 920.0,
+        "y": 52.0,
+        "w": 50.0,
+        "h": 16.0,
+        "problem": null,
+        "children": [
+          {
+            "id": "g1/pillDot",
+            "type": "rectangle",
+            "x": 930.0,
+            "y": 56.0,
+            "w": 30.0,
+            "h": 8.0,
+            "problem": null,
+            "children": []
+          }
+        ]
+      },
+      {
+        "id": "TlKVJ",
+        "type": "frame",
+        "x": 990.0,
+        "y": 36.0,
+        "w": 54.0,
+        "h": 32.0,
+        "problem": null,
+        "children": [
+          {
+            "id": "TlKVJ/pillDot",
+            "type": "rectangle",
+            "x": 1002.0,
+            "y": 48.0,
+            "w": 30.0,
+            "h": 8.0,
+            "problem": null,
+            "children": []
+          }
+        ]
+      },
+      {
+        "id": "YpPXN",
+        "type": "frame",
+        "x": 1064.0,
+        "y": 20.0,
+        "w": 50.0,
+        "h": 48.0,
+        "problem": null,
+        "children": [
+          {
+            "id": "YpPXN/pillDot",
+            "type": "rectangle",
+            "x": 1074.0,
+            "y": 24.0,
+            "w": 30.0,
+            "h": 40.0,
+            "problem": null,
+            "children": []
+          }
+        ]
+      },
+      {
+        "id": "L2dh1",
+        "type": "rectangle",
+        "x": 1134.0,
+        "y": 58.0,
+        "w": 10.0,
+        "h": 10.0,
+        "problem": null,
+        "children": []
+      },
+      {
+        "id": "sgahZ",
+        "type": "rectangle",
+        "x": 1164.0,
+        "y": 53.0,
+        "w": 10.0,
+        "h": 15.0,
+        "problem": null,
+        "children": []
+      }
+    ]
+  }
+]

@@ -28,6 +28,12 @@ jobs:
         with: { bun-version: 1.4.3 }
       - run: cargo build --release && cargo test --release
         working-directory: core
+      # The Go port of the core (stdlib only, so no module cache); the parity test runs against the CLI just built.
+      - uses: actions/setup-go@v5
+        with: { go-version-file: core-go/go.mod, cache: false }
+      - run: go vet ./... && go test ./...
+        working-directory: core-go
+        env: { NALARUPA_CLI: ../core/target/release/nalarupa-cli }
       - run: bun install --frozen-lockfile && bun run typecheck && bun run smoke && bun run editor-check && bun run mcp-check && bun run doc-check && bun run script-check && bun run chat-check && bun run mcp-install-check && bun run drag-check && bun run viewport-check && bun run issues-check && bun run layout-check && bun run text-check && bun run scriptnode-check && bun run shader-check && bun run paint-check && bun run component-check
         working-directory: app
       # Step timeouts: a hung suite fails its step, which claude-ci-fix picks up, instead of cancelling the job.
@@ -61,6 +67,12 @@ jobs:
       - id: core
         run: cargo build --release && cargo test --release
         working-directory: core
+      - uses: actions/setup-go@v5
+        with: { go-version-file: core-go/go.mod, cache: false }
+      - id: core-go
+        run: go vet ./... && go test ./...
+        working-directory: core-go
+        env: { NALARUPA_CLI: ../core/target/release/nalarupa-cli.exe }
       - id: app
         run: bun install --frozen-lockfile && bun run typecheck && bun run smoke && bun run editor-check && bun run mcp-check && bun run doc-check && bun run script-check && bun run chat-check && bun run drag-check && bun run viewport-check && bun run issues-check
         working-directory: app

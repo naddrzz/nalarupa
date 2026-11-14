@@ -1,0 +1,338 @@
+{
+  "version": "2.19",
+  "children": [
+    {
+      "type": "frame",
+      "id": "row",
+      "x": 0,
+      "y": 0,
+      "width": 400,
+      "height": 80,
+      "padding": [
+        10,
+        20,
+        30,
+        40
+      ],
+      "gap": "6",
+      "alignItems": "center",
+      "justifyContent": "end",
+      "children": [
+        {
+          "type": "rectangle",
+          "id": "a",
+          "width": 50,
+          "height": 20
+        },
+        {
+          "type": "rectangle",
+          "id": "b",
+          "width": "fill_container",
+          "height": "fill_container"
+        },
+        {
+          "type": "rectangle",
+          "id": "c",
+          "width": "120",
+          "height": 10,
+          "rotation": 45
+        },
+        {
+          "type": "rectangle",
+          "id": "d",
+          "width": 30,
+          "height": 10,
+          "flipY": true,
+          "flipX": true
+        },
+        {
+          "type": "rectangle",
+          "id": "abs",
+          "layoutPosition": "absolute",
+          "x": 390,
+          "y": 70,
+          "width": 30,
+          "height": 30
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "col",
+      "x": 500,
+      "y": 0,
+      "layout": "vertical",
+      "padding": "8",
+      "gap": 4,
+      "justifyContent": "center",
+      "alignItems": "end",
+      "height": 300,
+      "children": [
+        {
+          "type": "rectangle",
+          "id": "c1",
+          "width": 100,
+          "height": 20
+        },
+        {
+          "type": "rectangle",
+          "id": "c2",
+          "width": "fill_container",
+          "height": "fill_container(15)"
+        },
+        {
+          "type": "frame",
+          "id": "c3",
+          "width": "fit_content(77)",
+          "height": "fit_content",
+          "children": [
+            {
+              "type": "rectangle",
+              "id": "c3a",
+              "width": "fill_container",
+              "height": 5
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "c4",
+          "layout": "none",
+          "width": "fit_content(33)",
+          "children": [
+            {
+              "type": "rectangle",
+              "id": "c4a",
+              "x": 2,
+              "y": 3,
+              "width": "fill_container(44)",
+              "height": -5
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "c5",
+          "padding": [
+            1,
+            2,
+            3
+          ],
+          "children": [
+            {
+              "type": "rectangle",
+              "id": "c5a",
+              "width": 9,
+              "height": 9
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "around",
+      "x": 0,
+      "y": 400,
+      "width": 300,
+      "justifyContent": "space_around",
+      "gap": 50,
+      "children": [
+        {
+          "type": "rectangle",
+          "width": 20,
+          "height": 5,
+          "id": "reahv"
+        },
+        {
+          "type": "rectangle",
+          "width": 20,
+          "height": 15,
+          "id": "4RMXH"
+        },
+        {
+          "type": "rectangle",
+          "width": 20,
+          "height": 25,
+          "id": "LP4m0"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "between",
+      "x": 0,
+      "y": 500,
+      "width": 50,
+      "justifyContent": "space_between",
+      "children": [
+        {
+          "type": "rectangle",
+          "width": 20,
+          "height": 5,
+          "id": "OUoR4"
+        },
+        {
+          "type": "rectangle",
+          "width": 20,
+          "height": 15,
+          "id": "vcmYr"
+        },
+        {
+          "type": "rectangle",
+          "width": 20,
+          "height": 25,
+          "id": "WhWMb"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "clip",
+      "x": 0,
+      "y": 600,
+      "width": 100,
+      "height": 100,
+      "layout": "none",
+      "clip": true,
+      "children": [
+        {
+          "type": "rectangle",
+          "id": "inside",
+          "x": 10,
+          "y": 10,
+          "width": 20,
+          "height": 20
+        },
+        {
+          "type": "rectangle",
+          "id": "edge",
+          "x": 90,
+          "y": 90,
+          "width": 20,
+          "height": 20
+        },
+        {
+          "type": "rectangle",
+          "id": "out",
+          "x": 200,
+          "y": 0,
+          "width": 20,
+          "height": 20
+        },
+        {
+          "type": "rectangle",
+          "id": "zero",
+          "x": 200,
+          "y": 0,
+          "width": 0,
+          "height": 20
+        },
+        {
+          "type": "ellipse",
+          "id": "spun",
+          "x": 50,
+          "y": 50,
+          "width": 80,
+          "height": 20,
+          "rotation": 30
+        }
+      ]
+    },
+    {
+      "type": "group",
+      "id": "grp",
+      "x": 600,
+      "y": 600,
+      "rotation": 90,
+      "children": [
+        {
+          "type": "rectangle",
+          "id": "g1",
+          "x": -10,
+          "y": 5,
+          "width": 30,
+          "height": 10
+        },
+        {
+          "type": "group",
+          "id": "g2",
+          "x": 40,
+          "y": 40,
+          "children": [
+            {
+              "type": "polygon",
+              "id": "g2a",
+              "x": 5,
+              "y": -5,
+              "width": 10,
+              "height": 10,
+              "polygonCount": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "hug",
+      "x": 800,
+      "y": 0,
+      "layout": "vertical",
+      "gap": 12,
+      "padding": [
+        6,
+        8
+      ],
+      "children": [
+        {
+          "type": "group",
+          "id": "hg",
+          "children": [
+            {
+              "type": "rectangle",
+              "id": "hg1",
+              "x": -7,
+              "y": 3,
+              "width": 10,
+              "height": 10
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "hr",
+          "gap": 3,
+          "children": [
+            {
+              "type": "line",
+              "id": "hl",
+              "width": 25,
+              "height": 1
+            },
+            {
+              "type": "icon",
+              "id": "hi",
+              "icon": "x",
+              "width": 16,
+              "height": 16
+            }
+          ]
+        },
+        {
+          "type": "path",
+          "id": "hp",
+          "geometry": "M0 0L10 10",
+          "width": "fill_container",
+          "height": 12.25
+        },
+        {
+          "type": "browser",
+          "id": "hb",
+          "url": "example.com",
+          "width": 100
+        }
+      ]
+    }
+  ]
+}

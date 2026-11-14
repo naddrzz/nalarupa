@@ -1,0 +1,95 @@
+[
+  {
+    "id": "list",
+    "type": "frame",
+    "x": 0.0,
+    "y": 0.0,
+    "w": 70.0,
+    "h": 60.0,
+    "problem": null,
+    "children": [
+      {
+        "id": "r1",
+        "type": "rectangle",
+        "x": 0.0,
+        "y": 0.0,
+        "w": 50.0,
+        "h": 20.0,
+        "problem": null,
+        "children": []
+      },
+      {
+        "id": "r3",
+        "type": "rectangle",
+        "x": 0.0,
+        "y": 30.0,
+        "w": 70.0,
+        "h": 20.0,
+        "problem": null,
+        "children": []
+      },
+      {
+        "id": "g",
+        "type": "group",
+        "x": 0.0,
+        "y": 60.0,
+        "w": 0.0,
+        "h": 0.0,
+        "problem": null,
+        "children": []
+      }
+    ]
+  },
+  {
+    "id": "comp",
+    "type": "frame",
+    "x": 200.0,
+    "y": 0.0,
+    "w": 76.0,
+    "h": 30.0,
+    "problem": null,
+    "children": [
+      {
+        "id": "c1",
+        "type": "rectangle",
+        "x": 200.0,
+        "y": 0.0,
+        "w": 30.0,
+        "h": 30.0,
+        "problem": null,
+        "children": []
+      },
+      {
+        "id": "c2",
+        "type": "rectangle",
+        "x": 236.0,
+        "y": 0.0,
+        "w": 40.0,
+        "h": 30.0,
+        "problem": null,
+        "children": []
+      }
+    ]
+  },
+  {
+    "id": "inst",
+    "type": "frame",
+    "x": 200.0,
+    "y": 100.0,
+    "w": 40.0,
+    "h": 30.0,
+    "problem": null,
+    "children": [
+      {
+        "id": "inst/c2",
+        "type": "rectangle",
+        "x": 200.0,
+        "y": 100.0,
+        "w": 40.0,
+        "h": 30.0,
+        "problem": null,
+        "children": []
+      }
+    ]
+  }
+]

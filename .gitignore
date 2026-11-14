@@ -6,3 +6,4 @@ app/screenshots/
 docs/screenshots/live/
 *.log
 app/.qa/
+core-go/.parity-live

@@ -4,9 +4,12 @@
 //!   nalarupa-cli html <doc.pen> <node-id> <out.html>
 //!   nalarupa-cli exec <doc.pen> <script.js> [--save]
 //!   nalarupa-cli mcp                                    serve MCP until Ctrl+C
+//!   nalarupa-cli layout <doc.pen> [<saved.pen>]         laid-out tree of every top-level node as JSON
+//!                                                       (the Go port's parity oracle); saves the opened document
 
 use nalarupa_core::engine::engine;
-use serde_json::json;
+use nalarupa_core::resolve::RNode;
+use serde_json::{json, Value};
 use std::path::Path;
 
 fn main() {
@@ -81,6 +84,30 @@ fn run(args: &[String]) -> Result<(), String> {
                 std::thread::park();
             }
         }
+        "layout" => {
+            // Opened as `Engine::open` does (migrate, repair ids), without imports, recents or the data folder.
+            let mut doc = nalarupa_core::doc::Doc::load(Path::new(arg(2)?))?;
+            nalarupa_core::resolve::migrate(&mut doc.root);
+            doc.ensure_ids();
+            if let Some(out) = args.get(3) {
+                doc.save(Path::new(out))?;
+            }
+            let empty = serde_json::Map::new();
+            let r = nalarupa_core::resolve::Resolver::new(&doc.root, &[], &empty);
+            let mut fonts = nalarupa_core::text::Fonts::new(std::env::temp_dir().join("nalarupa-cli-fonts"));
+            fonts.online = false;
+            let trees: Vec<Value> = doc.children().iter().filter_map(|n| r.resolve(n)).map(|mut n| {
+                nalarupa_core::layout::layout(&mut n, &mut fonts);
+                dump(&n)
+            }).collect();
+            println!("{}", serde_json::to_string_pretty(&trees).map_err(|e| e.to_string())?);
+            Ok(())
+        }
         other => Err(format!("unknown command '{other}'")),
     }
+}
+
+fn dump(n: &RNode) -> Value {
+    json!({"id": n.id, "type": n.ty, "x": n.x, "y": n.y, "w": n.w, "h": n.h, "problem": n.problem,
+           "children": n.kids.iter().map(dump).collect::<Vec<_>>()})
 }
