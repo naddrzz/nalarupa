@@ -6,6 +6,8 @@
 //!   nalarupa-cli mcp                                    serve MCP until Ctrl+C
 //!   nalarupa-cli layout <doc.pen> [<saved.pen>]         laid-out tree of every top-level node as JSON
 //!                                                       (the Go port's parity oracle); saves the opened document
+//!   nalarupa-cli measure <cases.json> [<font-cache>]    metrics, width and wrapped lines of each {text, style, maxW?}
+//!                                                       (the Go port's text oracle), offline
 
 use nalarupa_core::engine::engine;
 use nalarupa_core::resolve::RNode;
@@ -101,6 +103,35 @@ fn run(args: &[String]) -> Result<(), String> {
                 dump(&n)
             }).collect();
             println!("{}", serde_json::to_string_pretty(&trees).map_err(|e| e.to_string())?);
+            Ok(())
+        }
+        "measure" => {
+            // No maxW wraps at an infinite width (only `\n` breaks).
+            let src = std::fs::read_to_string(arg(2)?).map_err(|e| e.to_string())?;
+            let cases: Vec<Value> = serde_json::from_str(&src).map_err(|e| e.to_string())?;
+            let cache = args.get(3).map(std::path::PathBuf::from).unwrap_or_else(|| std::env::temp_dir().join("nalarupa-cli-fonts"));
+            let mut fonts = nalarupa_core::text::Fonts::new(cache);
+            fonts.online = false;
+            let out: Vec<Value> = cases.iter().map(|c| {
+                let s = &c["style"];
+                let st = nalarupa_core::text::TextStyle {
+                    family: s["family"].as_str().unwrap_or("Inter").to_string(),
+                    size: s["size"].as_f64().unwrap_or(14.0),
+                    weight: s["weight"].as_u64().unwrap_or(400) as u16,
+                    italic: s["italic"].as_bool().unwrap_or(false),
+                    letter_spacing: s["letterSpacing"].as_f64().unwrap_or(0.0),
+                    line_height: s["lineHeight"].as_f64(),
+                };
+                let text = c["text"].as_str().unwrap_or("");
+                let m = fonts.metrics(&st);
+                let lines = fonts.wrap(text, c["maxW"].as_f64().unwrap_or(f64::INFINITY), &st);
+                json!({
+                    "metrics": {"ascent": m.ascent, "descent": m.descent, "lineH": m.line_h, "baseline": m.baseline},
+                    "width": fonts.width(text, &st),
+                    "lines": lines.iter().map(|l| json!({"text": l.text, "width": l.width, "soft": l.soft})).collect::<Vec<_>>(),
+                })
+            }).collect();
+            println!("{}", serde_json::to_string_pretty(&out).map_err(|e| e.to_string())?);
             Ok(())
         }
         other => Err(format!("unknown command '{other}'")),

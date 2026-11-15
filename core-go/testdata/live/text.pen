@@ -1,0 +1,25 @@
+{
+  "version": "2.19",
+  "children": [
+    {"type": "frame", "id": "card", "x": 0, "y": 0, "width": 320, "layout": "vertical", "gap": 8, "padding": [16, 20], "children": [
+      {"type": "text", "id": "title", "content": "Quarterly AVATAR report", "fontFamily": "Arial", "fontSize": 24, "fontWeight": "bold"},
+      {"type": "text", "id": "body", "content": "The quick brown fox jumps over the lazy dog, then keeps running far into the distance while everyone watches.", "textGrowth": "fixed-width", "width": "fill_container", "fontFamily": "Arial", "fontSize": 14, "lineHeight": 1.4},
+      {"type": "text", "id": "inter", "content": "Inter falls back here", "fontSize": 13, "letterSpacing": 0.5},
+      {"type": "text", "id": "lines", "content": "First line\nSecond, longer line\r\nThird", "fontFamily": "Segoe UI", "fontSize": 15, "fontWeight": "600"},
+      {"type": "text", "id": "mixed", "content": "Hello 漢字かな مرحبا 😀 ok", "textGrowth": "fixed-width", "width": 90, "fontFamily": "Noto Sans", "fontSize": 16},
+      {"type": "text", "id": "zero", "content": "one word per line", "textGrowth": "fixed-width", "fontSize": 12},
+      {"type": "text", "id": "fixed", "content": "Fixed width and height may overflow", "textGrowth": "fixed-width-height", "width": 80, "height": 30, "fontSize": 18, "fontStyle": "italic"},
+      {"type": "frame", "id": "row", "width": "fill_container", "gap": 6, "alignItems": "center", "children": [
+        {"type": "text", "id": "tag1", "content": "Design", "fontFamily": "Times New Roman", "fontSize": 11},
+        {"type": "text", "id": "tag2", "content": "Missing family", "fontFamily": "Nalarupa Missing Family", "fontSize": 11, "fontWeight": "300"},
+        {"type": "text", "id": "grow", "content": "Fills the rest and wraps when it has to", "textGrowth": "fixed-width", "width": "fill_container", "fontSize": 10}
+      ]}
+    ]},
+    {"type": "frame", "id": "hug", "x": 400, "y": 0, "gap": 4, "padding": 8, "children": [
+      {"type": "text", "id": "h1", "content": "Hug", "fontSize": 40, "fontWeight": "900"},
+      {"type": "text", "id": "h2", "content": "  spaced  ", "fontSize": 9, "lineHeight": 2}
+    ]},
+    {"type": "note", "id": "note", "x": 0, "y": 500, "width": 200, "height": 120, "content": "A note's body wraps inside its padding, which the layout does too."},
+    {"type": "text", "id": "loose", "x": 400, "y": 200, "content": "Top-level text", "fontFamily": "DejaVu Sans", "fontSize": 20}
+  ]
+}

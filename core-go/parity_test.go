@@ -2,7 +2,8 @@
 // out, and the result compared with what the Rust CLI produces (`nalarupa-cli layout <doc> <saved>`).
 // Without NALARUPA_CLI the comparison is with the committed goldens (*.layout.json, *.saved.json); with it,
 // with the CLI's live output, so drift shows whenever Rust changes. NALARUPA_UPDATE_GOLDEN=1 (with
-// NALARUPA_CLI) rewrites the goldens from the CLI.
+// NALARUPA_CLI) rewrites the goldens from the CLI. The fixtures in testdata/live hold text, whose layout
+// depends on the installed fonts: they are compared live only, laid out with the real text.Fonts.
 package core_test
 
 import (
@@ -20,6 +21,7 @@ import (
 	"github.com/naddrzz/nalarupa/core-go/doc"
 	"github.com/naddrzz/nalarupa/core-go/layout"
 	"github.com/naddrzz/nalarupa/core-go/resolve"
+	"github.com/naddrzz/nalarupa/core-go/text"
 )
 
 // box is one node of the CLI's laid-out tree.
@@ -53,7 +55,7 @@ func (noText) Width(string, layout.TextStyle) float64                { panic("pa
 func (noText) Wrap(string, float64, layout.TextStyle) []resolve.Line { return nil } // notes only
 
 // open does what `nalarupa-cli layout` does: load, migrate, repair ids, save, lay out every top-level node.
-func open(t *testing.T, path, saved string) []box {
+func open(t *testing.T, path, saved string, m layout.TextMeasurer) []box {
 	t.Helper()
 	d, err := doc.Load(path)
 	if err != nil {
@@ -68,7 +70,7 @@ func open(t *testing.T, path, saved string) []box {
 	trees := []box{}
 	for _, n := range d.Children() {
 		if rn := r.Resolve(n); rn != nil {
-			layout.Layout(rn, noText{})
+			layout.Layout(rn, m)
 			trees = append(trees, dump(rn))
 		}
 	}
@@ -125,18 +127,7 @@ func TestParity(t *testing.T) {
 			goldenSaved := filepath.Join("testdata", name+".saved.json")
 			var wantLayout, wantSaved []byte
 			if cli != "" {
-				rustSaved := filepath.Join(t.TempDir(), "rust.pen")
-				var stderr bytes.Buffer
-				cmd := exec.Command(cli, "layout", f, rustSaved)
-				cmd.Stderr = &stderr
-				out, err := cmd.Output()
-				if err != nil {
-					t.Fatalf("%s layout %s: %v\n%s", cli, f, err, stderr.String())
-				}
-				if wantSaved, err = os.ReadFile(rustSaved); err != nil {
-					t.Fatal(err)
-				}
-				wantLayout = out
+				wantLayout, wantSaved = rustLayout(t, cli, f)
 				if update {
 					if os.WriteFile(goldenLayout, wantLayout, 0o666) != nil || os.WriteFile(goldenSaved, wantSaved, 0o666) != nil {
 						t.Fatal("cannot write goldens")
@@ -151,7 +142,61 @@ func TestParity(t *testing.T) {
 				}
 			}
 			saved := filepath.Join(t.TempDir(), "go.pen")
-			got := open(t, f, saved)
+			got := open(t, f, saved, noText{})
+			gotSaved, err := os.ReadFile(saved)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(gotSaved, wantSaved) {
+				t.Errorf("saved document differs from Rust:\n%s", firstDiff(gotSaved, wantSaved))
+			}
+			var want []box
+			if err := json.Unmarshal(wantLayout, &want); err != nil {
+				t.Fatal(err)
+			}
+			sameBoxes(t, got, want, name)
+		})
+	}
+}
+
+// rustLayout runs `nalarupa-cli layout` on a fixture: the laid-out trees and the saved document.
+func rustLayout(t *testing.T, cli, fixture string) (layout, saved []byte) {
+	t.Helper()
+	rustSaved := filepath.Join(t.TempDir(), "rust.pen")
+	var stderr bytes.Buffer
+	cmd := exec.Command(cli, "layout", fixture, rustSaved)
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("%s layout %s: %v\n%s", cli, fixture, err, stderr.String())
+	}
+	if saved, err = os.ReadFile(rustSaved); err != nil {
+		t.Fatal(err)
+	}
+	return out, saved
+}
+
+// Text fixtures are laid out with the fonts of this machine, so they are compared with the CLI only. Both
+// sides use the CLI's font cache folder (`nalarupa-cli-fonts` in the temp folder).
+func TestParityLiveText(t *testing.T) {
+	cli := os.Getenv("NALARUPA_CLI")
+	if cli == "" {
+		t.Skip("text layout parity is live only: set NALARUPA_CLI to the release nalarupa-cli")
+	}
+	if err := os.WriteFile(".parity-live", nil, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	fixtures, err := filepath.Glob(filepath.Join("testdata", "live", "*.pen"))
+	if err != nil || len(fixtures) == 0 {
+		t.Fatal("no live fixtures", err)
+	}
+	fonts := text.New(filepath.Join(os.TempDir(), "nalarupa-cli-fonts"))
+	for _, f := range fixtures {
+		name := strings.TrimSuffix(filepath.Base(f), ".pen")
+		t.Run(name, func(t *testing.T) {
+			wantLayout, wantSaved := rustLayout(t, cli, f)
+			saved := filepath.Join(t.TempDir(), "go.pen")
+			got := open(t, f, saved, fonts)
 			gotSaved, err := os.ReadFile(saved)
 			if err != nil {
 				t.Fatal(err)
