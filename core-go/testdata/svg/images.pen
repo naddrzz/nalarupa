@@ -1,0 +1,31 @@
+{
+  "version": "2.19",
+  "children": [
+    {"type": "frame", "id": "imgs", "x": 0, "y": 0, "width": 400, "height": 300, "layout": "none", "children": [
+      {"type": "rectangle", "id": "i1", "x": 10, "y": 10, "width": 80, "height": 60, "fill": {"type": "image", "url": "tiny.png", "mode": "fill"}},
+      {"type": "rectangle", "id": "i2", "x": 100, "y": 10, "width": 80, "height": 60, "fill": {"type": "image", "url": "./shallow.svg", "mode": "fit", "opacity": 0.5}},
+      {"type": "rectangle", "id": "i3", "x": 190, "y": 10, "width": 80, "height": 60, "fill": {"type": "image", "url": "pic.svgz"}, "stroke": {"type": "image", "url": "tiny.png"}, "strokeWidth": 4, "strokeAlignment": "outer"},
+      {"type": "ellipse", "id": "i4", "x": 280, "y": 10, "width": 80, "height": 60, "fill": {"type": "image", "url": "huge.png"}},
+      {"type": "rectangle", "id": "i5", "x": 10, "y": 80, "width": 80, "height": 60, "fill": {"type": "image", "url": "deep.svg"}},
+      {"type": "rectangle", "id": "i6", "x": 100, "y": 80, "width": 80, "height": 60, "fill": [{"type": "image", "url": "missing.png"}, "#00000020"], "cornerRadius": 8},
+      {"type": "rectangle", "id": "i7", "x": 190, "y": 80, "width": 80, "height": 60, "fill": {"type": "image", "url": "https://example.invalid/photo.jpg"}},
+      {"type": "rectangle", "id": "i9", "x": 10, "y": 150, "width": 80, "height": 60, "fill": {"type": "image", "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==", "mode": "fit"}},
+      {"type": "rectangle", "id": "i10", "x": 100, "y": 150, "width": 80, "height": 60, "fill": {"type": "image", "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAdTAAAHUwCAYAAAA="}},
+      {"type": "rectangle", "id": "i11", "x": 190, "y": 150, "width": 80, "height": 60, "fill": {"type": "image", "url": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='4'%3E%3Crect width='4' height='4' fill='%23f00'/%3E%3C/svg%3E"}},
+      {"type": "frame", "id": "i12", "x": 280, "y": 150, "width": 80, "height": 60, "fill": {"type": "image", "url": "tiny.png", "enabled": false}},
+      {"type": "line", "id": "i13", "x": 10, "y": 240, "width": 100, "height": 0, "fill": {"type": "image", "url": "missing.png"}, "stroke": "#000", "strokeWidth": 1}
+    ]},
+    {"type": "frame", "id": "shader", "x": 450, "y": 0, "width": 200, "height": 120, "layout": "none", "fill": {"type": "shader", "url": "missing.glsl", "uniforms": {"speed": 1}}, "children": [
+      {"type": "ellipse", "id": "sh1", "x": 20, "y": 20, "width": 60, "height": 60, "fill": [{"type": "shader", "url": "missing.frag"}, "#fff8"], "stroke": {"type": "shader", "url": "nope.glsl"}, "strokeWidth": 2}
+    ]},
+    {"type": "frame", "id": "icons", "x": 700, "y": 0, "width": 200, "height": 120, "layout": "none", "children": [
+      {"type": "icon", "id": "ic1", "x": 10, "y": 10, "width": 24, "height": 24, "icon": "star", "library": "lucide", "fill": "#f80"},
+      {"type": "icon", "id": "ic2", "x": 40, "y": 10, "width": 48, "height": 24, "icon": "dot", "fill": [{"type": "gradient", "colors": [{"color": "#f00", "position": 0}, {"color": "#00f", "position": 1}]}, {"type": "color", "color": "#0f08", "blendMode": "multiply"}], "effect": {"type": "shadow", "blur": 2}},
+      {"type": "icon", "id": "ic3", "x": 100, "y": 10, "width": 24, "height": 24, "icon": "zap", "fill": "#c00"},
+      {"type": "icon", "id": "ic4", "x": 130, "y": 10, "width": 24, "height": 24, "icon": "house-fill", "library": "phosphor", "fill": {"type": "gradient", "colors": [{"color": "#f00", "position": 0}]}},
+      {"type": "icon", "id": "ic5", "x": 10, "y": 50, "width": 24, "height": 24, "icon": "home", "library": "Material Symbols Rounded", "weight": 470, "fill": "#09f"},
+      {"type": "icon", "id": "ic6", "x": 40, "y": 50, "width": 24, "height": 24, "icon": "x", "library": "feather"},
+      {"type": "icon", "id": "ic7", "x": 70, "y": 50, "width": 0, "height": 24, "icon": "star", "fill": "#000"}
+    ]}
+  ]
+}

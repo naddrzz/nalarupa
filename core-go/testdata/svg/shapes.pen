@@ -1,0 +1,39 @@
+{
+  "version": "2.19",
+  "children": [
+    {"type": "frame", "id": "basic", "x": 0, "y": 0, "width": 400, "height": 300, "layout": "none", "fill": "#f4f4f5", "cornerRadius": 12, "children": [
+      {"type": "rectangle", "id": "r1", "x": 10, "y": 10, "width": 80, "height": 40, "fill": "#ff000080", "cornerRadius": [30, 30, 0, 0]},
+      {"type": "rectangle", "id": "r2", "x": 100, "y": 10, "width": 60, "height": 40, "fill": ["#00ff00", {"type": "color", "color": "#0000ff", "opacity": 0.5, "blendMode": "multiply"}, {"type": "color", "color": "#123", "enabled": false}], "cornerRadius": 50},
+      {"type": "ellipse", "id": "e1", "x": 170, "y": 10, "width": 50, "height": 30, "fill": "#abc"},
+      {"type": "ellipse", "id": "e2", "x": 230, "y": 10, "width": 50, "height": 50, "fill": "#c0ffee", "innerRadius": 0.5},
+      {"type": "ellipse", "id": "e3", "x": 290, "y": 10, "width": 60, "height": 40, "fill": "#ff8800", "startAngle": 30, "sweepAngle": 250},
+      {"type": "ellipse", "id": "e4", "x": 10, "y": 70, "width": 60, "height": 60, "fill": "#8800ff", "startAngle": -45, "sweepAngle": -120, "innerRadius": 0.3},
+      {"type": "polygon", "id": "p1", "x": 80, "y": 70, "width": 50, "height": 50, "fill": "#222", "polygonCount": 5},
+      {"type": "polygon", "id": "p2", "x": 140, "y": 70, "width": 60, "height": 50, "fill": "#444", "polygonCount": 3, "cornerRadius": 6},
+      {"type": "polygon", "id": "p3", "x": 210, "y": 70, "width": 40, "height": 40, "fill": "#666", "polygonCount": 7, "cornerRadius": [3]},
+      {"type": "path", "id": "pa1", "x": 260, "y": 70, "width": 60, "height": 50, "fill": "#0a0", "geometry": "M0 0 L10 0 Q20 10 10 20 T0 40 C5 45 10 50 20 45 S30 30 40 40 H50 V0 h-5 v5 z"},
+      {"type": "path", "id": "pa2", "x": 330, "y": 70, "width": 50, "height": 50, "fill": "#a0a", "fillRule": "evenodd", "geometry": "M1 5 A5 5 0 0 1 3 1 s3 2 8 2 a4 3 30 1 0 2 6 Z m2 2 l1 1 1-1z"},
+      {"type": "path", "id": "pa3", "x": 10, "y": 150, "width": 80, "height": 30, "stroke": "#000", "strokeWidth": 3, "strokeLinecap": "round", "strokeLinejoin": "round", "viewBox": [0, 0, 100, 50], "geometry": "M0 0L100 50M0 50L50 0"},
+      {"type": "line", "id": "l1", "x": 100, "y": 160, "width": 80, "height": 0, "stroke": {"type": "gradient", "gradientType": "linear", "rotation": 90, "colors": [{"color": "#f00", "position": 0}, {"color": "#00f", "position": 1}]}, "strokeWidth": 4},
+      {"type": "line", "id": "l2", "x": 190, "y": 150, "width": 0, "height": 60, "stroke": {"type": "gradient", "gradientType": "radial", "colors": [{"color": "#0f0", "position": 0}, {"color": "#00f", "position": 1}]}, "strokeWidth": 2}
+    ]},
+    {"type": "frame", "id": "fills", "x": 450, "y": 0, "width": 400, "height": 300, "layout": "none", "children": [
+      {"type": "rectangle", "id": "g1", "x": 10, "y": 10, "width": 120, "height": 80, "fill": {"type": "gradient", "gradientType": "linear", "rotation": 30, "colors": [{"color": "#ff0000", "position": 0}, {"color": "#0000ff00", "position": 1}]}},
+      {"type": "rectangle", "id": "g2", "x": 140, "y": 10, "width": 120, "height": 80, "fill": {"type": "gradient", "gradientType": "radial", "rotation": 90, "center": {"x": 0.3, "y": 0.6}, "size": {"width": 0.8, "height": 0.4}, "colors": [{"color": "#fff", "position": 0.8}, {"color": "#000", "position": 0.1}, {"color": "#f0f8", "position": 0.5}]}, "opacity": 0.7},
+      {"type": "rectangle", "id": "g3", "x": 270, "y": 10, "width": 120, "height": 80, "fill": {"type": "gradient", "colors": [{"color": "#123456", "position": 0}, {"color": "bogus", "position": 1}], "opacity": 0.4, "blendMode": "screen"}},
+      {"type": "rectangle", "id": "g4", "x": 10, "y": 100, "width": 100, "height": 60, "fill": {"type": "gradient", "colors": []}},
+      {"type": "frame", "id": "s1", "x": 120, "y": 100, "width": 80, "height": 60, "fill": "#eee", "stroke": "#f00", "strokeWidth": 4, "strokeAlignment": "inner", "cornerRadius": 8},
+      {"type": "frame", "id": "s2", "x": 210, "y": 100, "width": 80, "height": 60, "fill": "#eee", "stroke": "#0f0", "strokeWidth": 4, "strokeAlignment": "outer", "cornerRadius": [8, 0, 16, 2]},
+      {"type": "rectangle", "id": "s3", "x": 300, "y": 100, "width": 80, "height": 60, "fill": "#eee", "stroke": ["#00f", {"type": "color", "color": "#f0f", "blendMode": "difference"}], "strokeWidth": {"top": 1, "right": 6, "bottom": 3, "left": 0}, "strokeAlignment": "center"},
+      {"type": "rectangle", "id": "s4", "x": 10, "y": 180, "width": 80, "height": 60, "stroke": "#000", "strokeWidth": 10, "strokeAlignment": "inside", "cornerRadius": 3, "strokeLinejoin": "round"},
+      {"type": "rectangle", "id": "s5", "x": 100, "y": 180, "width": 80, "height": 60, "stroke": {"type": "color", "color": "#09f", "blendMode": "overlay"}, "strokeWidth": 6, "strokeAlignment": "inner"},
+      {"type": "ellipse", "id": "s6", "x": 190, "y": 180, "width": 60, "height": 60, "fill": "#fe0", "stroke": "#333", "strokeWidth": 5, "strokeAlignment": "outside"},
+      {"type": "polygon", "id": "s7", "x": 260, "y": 180, "width": 60, "height": 60, "polygonCount": 6, "stroke": "#333", "strokeWidth": 2, "strokeAlignment": "inner"},
+      {"type": "path", "id": "s8", "x": 330, "y": 180, "width": 60, "height": 60, "geometry": "M0 0L10 10L20 0", "stroke": "#c00", "strokeWidth": 3, "strokeAlignment": "outer"},
+      {"type": "rectangle", "id": "s9", "x": 10, "y": 250, "width": 100, "height": 40, "stroke": {"type": "gradient", "gradientType": "angular", "colors": [{"color": "#f00", "position": 0}, {"color": "#00f", "position": 1}]}, "strokeWidth": 4, "strokeAlignment": "outer"}
+    ]},
+    {"type": "rectangle", "id": "turned", "x": 900, "y": 40, "width": 100, "height": 60, "fill": "#09c", "rotation": 30, "flipX": true},
+    {"type": "ellipse", "id": "flipped", "x": 1050, "y": 40, "width": 100, "height": 60, "fill": "#c90", "flipY": true, "stroke": "#000", "strokeWidth": 2},
+    {"type": "frame", "id": "slotted", "x": 1200, "y": 0, "width": 120, "height": 90, "slot": ["a"], "cornerRadius": 14, "fill": "#fff"}
+  ]
+}

@@ -1,6 +1,6 @@
 //! Headless Nalarupa: render/export documents, run execute scripts, serve MCP.
 //!   nalarupa-cli render <doc.pen> <out-dir> [scale]   one PNG per top-level node
-//!   nalarupa-cli svg <doc.pen> <node-id> <out.svg>
+//!   nalarupa-cli svg <doc.pen> <node-id> <out.svg> [--offline]
 //!   nalarupa-cli html <doc.pen> <node-id> <out.html>
 //!   nalarupa-cli exec <doc.pen> <script.js> [--save]
 //!   nalarupa-cli mcp                                    serve MCP until Ctrl+C
@@ -42,6 +42,10 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         "svg" => {
             let mut e = engine();
+            // `--offline`: no font or asset downloads (the Go port's svg parity oracle).
+            if args.iter().skip(5).any(|a| a == "--offline") {
+                e.offline();
+            }
             e.open(Path::new(arg(2)?))?;
             let (svg, embedded) = e.ctx().export_svg(arg(3)?).ok_or("node not found")?;
             drop(e);

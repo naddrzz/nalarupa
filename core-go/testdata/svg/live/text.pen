@@ -1,0 +1,21 @@
+{
+  "version": "2.19",
+  "children": [
+    {"type": "frame", "id": "texts", "x": 0, "y": 0, "width": 600, "height": 500, "layout": "none", "fill": "#fff", "children": [
+      {"type": "text", "id": "t1", "x": 10, "y": 10, "content": "Hello, World & <friends>", "fontFamily": "Arial", "fontSize": 18, "fill": "#111"},
+      {"type": "text", "id": "t2", "x": 10, "y": 40, "content": "Bold and spaced", "fontFamily": "Arial", "fontSize": 16, "fontWeight": "bold", "letterSpacing": 1.5, "fill": "#333", "underline": true},
+      {"type": "text", "id": "t3", "x": 10, "y": 70, "width": 200, "textGrowth": "fixed-width", "content": "Centred text that wraps across a few lines in a fixed width box", "fontFamily": "Arial", "fontSize": 14, "lineHeight": 1.6, "textAlign": "center", "fill": "#06c"},
+      {"type": "text", "id": "t4", "x": 230, "y": 70, "width": 160, "textGrowth": "fixed-width", "content": "Right aligned words\nwith a hard break", "fontFamily": "Arial", "fontSize": 13, "textAlign": "right", "fill": ["#c00", {"type": "color", "color": "#00f8", "blendMode": "multiply"}], "strikethrough": true},
+      {"type": "text", "id": "t5", "x": 400, "y": 70, "width": 180, "height": 60, "textGrowth": "fixed-width-height", "content": "Justified paragraph text that keeps on going past its box", "fontFamily": "Arial", "fontSize": 12, "textAlign": "justify", "textAlignVertical": "bottom", "fill": "#222"},
+      {"type": "text", "id": "t6", "x": 10, "y": 200, "content": "Italic light", "fontFamily": "Arial", "fontSize": 20, "fontStyle": "italic", "fontWeight": 300, "fill": {"type": "gradient", "colors": [{"color": "#f00", "position": 0}, {"color": "#00f", "position": 1}]}},
+      {"type": "text", "id": "t7", "x": 200, "y": 200, "content": "Outlined", "fontFamily": "Arial", "fontSize": 28, "fill": "#ff0", "stroke": "#000", "strokeWidth": 2, "strokeAlignment": "outer", "effect": {"type": "shadow", "offset": {"x": 2, "y": 2}, "blur": 3}},
+      {"type": "text", "id": "t8", "x": 350, "y": 200, "content": "Inner", "fontFamily": "Arial", "fontSize": 28, "stroke": {"type": "color", "color": "#0a0", "blendMode": "darken"}, "strokeWidth": 3, "strokeAlignment": "inner", "effect": {"type": "shadow", "shadowType": "inner", "blur": 2}},
+      {"type": "text", "id": "t9", "x": 450, "y": 200, "content": "Center", "fontFamily": "Arial", "fontSize": 24, "fill": "#eee", "stroke": "#333", "strokeWidth": 1, "strokeLinejoin": "round"},
+      {"type": "text", "id": "t10", "x": 10, "y": 260, "width": 120, "height": 50, "textGrowth": "fixed-width-height", "content": "Middle", "fontFamily": "Arial", "fontSize": 16, "textAlignVertical": "middle", "fill": "#000", "rotation": 10, "effect": {"type": "background_blur", "radius": 4}},
+      {"type": "note", "id": "n1", "x": 150, "y": 260, "width": 160, "height": 80, "content": "A sticky note with some words"},
+      {"type": "prompt", "id": "n2", "x": 330, "y": 260, "width": 120, "height": 60},
+      {"type": "browser", "id": "br", "x": 10, "y": 360, "width": 260, "height": 80, "url": "https://example.com"}
+    ]},
+    {"type": "text", "id": "solo", "x": 700, "y": 0, "content": "Solo & alone", "fontFamily": "Segoe UI", "fontSize": 15, "fill": "#123456", "opacity": 0.8}
+  ]
+}

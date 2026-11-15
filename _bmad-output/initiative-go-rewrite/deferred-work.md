@@ -43,3 +43,24 @@
 - source_plan: `_bmad-output/initiative-go-rewrite/plan-go-rewrite-2-text-shaping.md`
   summary: core-go/text/fontconfig.go does not reproduce fontconfig-parser's abort-the-rest-of-the-file on an unparsable <match>, <selectfont> or <config>, and was not run against Rust on Linux in this phase's local checks.
   evidence: Only directories, includes and aliases matter to fontdb; a file where fontconfig-parser fails mid-way would give Rust fewer directories than Go. CI's Linux job runs the live text parity.
+- source_plan: `_bmad-output/initiative-go-rewrite/plan-go-rewrite-4a-svg-emitter.md`
+  summary: Renderer slice 4b - Go raster core porting the tiny-skia 0.12 (+ tiny-skia-path) subset resvg uses (AA fills nonzero/evenodd, hairlines, stroker with dashes, solid/linear/two-point radial/pattern shaders, 16 blend modes incl. the vendored highp ClipColor patch, alpha/luminance masks, draw_pixmap), tested with ported unit tests and pixel goldens.
+  evidence: The renderer was split into slices after investigation; 4b is independent of 4a and feeds 4d.
+- source_plan: `_bmad-output/initiative-go-rewrite/plan-go-rewrite-4a-svg-emitter.md`
+  summary: Renderer slice 4c - Go usvg subset (XML, styles, units, paths, transforms, paint servers, use, clip/mask/filter structure, images incl. nested SVG, bboxes, text layout and flattening with core-go/text shaping and go-text glyph outlines, the vendored layout.rs patch), tested by structural diff against the vendored usvg CLI.
+  evidence: Every render parses the svg.rs string with usvg; there is no direct document-to-pixels path.
+- source_plan: `_bmad-output/initiative-go-rewrite/plan-go-rewrite-4a-svg-emitter.md`
+  summary: Renderer slice 4d - Go resvg renderer and filters (render, clip/mask, box/IIR blur, offset, flood, composite, the four vendored resvg patches, render_node) plus encode_tree PNG/JPEG/lossless WebP export, tested by image diff against `nalarupa-cli render` and the vendored resvg CLI.
+  evidence: Depends on 4b and 4c.
+- source_plan: `_bmad-output/initiative-go-rewrite/plan-go-rewrite-4a-svg-emitter.md`
+  summary: Renderer slice 4e - Go canvas renderer porting render.rs (layers, sync hashing, dirty rects, goroutine bands, view cache, slides, overlays, find_empty_space, Flat lists) and hit.rs hit testing on the resvg path (vello/raster.rs dropped), with a Rust `canvas` CLI oracle run under NALARUPA_RASTER=resvg.
+  evidence: Depends on 4d; hit testing needs render.rs's Flat lists.
+- source_plan: `_bmad-output/initiative-go-rewrite/plan-go-rewrite-4a-svg-emitter.md`
+  summary: Renderer slice 4f - Go PDF writer replacing krilla/krilla-svg (one page per tree, 1px = 1pt, paths, shadings, image XObjects, soft masks, clips, ExtGState opacity/blend, rasterised filters, subset fonts with ToUnicode), tested by rasterising and text extraction against a Rust `pdf` CLI subcommand.
+  evidence: Depends on 4c (usvg tree) and 4d.
+- source_plan: `_bmad-output/initiative-go-rewrite/plan-go-rewrite-4a-svg-emitter.md`
+  summary: Trig-derived SVG numbers (ellipse arcs, polygons, path arcs, gradient and turn matrices) can differ from Rust in the last ulp, because Go's math sin/cos/tan/acos/atan2 differ from the C library's; svg parity compares numbers within 1e-12. Bit parity would need CRT-matching trig (cgo, or a port of the CRT's algorithms).
+  evidence: A 28 000-input sweep on Windows: Go's math differs from the UCRT on 23-32 % of inputs, a correctly rounded version still on 3-7 %. Only the polygon fixture hits it; a conic seam through pixel centres can flip one pixel column.
+- source_plan: `_bmad-output/initiative-go-rewrite/plan-go-rewrite-4a-svg-emitter.md`
+  summary: svg.Export resolves without libs (`imports`) and skips the engine's open steps (`drop_pending`, `drop_placeholder`) and `expand_scripts`; wire them in with the engine port, and port usvg's `image_href_resolver` depth budget for data-URL SVGs inside SVG images with slice 4c.
+  evidence: The CLI oracle runs `Engine::open`, which clears unknown pending urls, so the parity fixtures avoid pending urls, imports and script nodes.
