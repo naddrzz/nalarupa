@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="200">
+  <g color="#00ff0080">
+    <rect x="10" y="10" width="50" height="40" fill="blue" filter="drop-shadow(2px 3px)"/>
+    <rect x="70" y="10" width="50" height="40" fill="blue" filter="drop-shadow(red 1mm 2em 3px)"/>
+  </g>
+  <rect x="130" y="10" width="50" height="40" fill="blue" filter="drop-shadow(-2px -3px -4px)" font-size="20"/>
+  <rect x="10" y="60" width="50" height="40" fill="blue" filter="drop-shadow(1px 1px 5% blue)"/>
+  <rect x="70" y="60" width="50" height="40" fill="blue" filter="blur(5%)"/>
+  <rect x="130" y="60" width="50" height="40" fill="blue" filter="blur(-3px)"/>
+</svg>

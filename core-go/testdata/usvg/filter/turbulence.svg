@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="200">
+  <filter id="f1"><feTurbulence/></filter>
+  <filter id="f2"><feTurbulence type="fractalNoise" baseFrequency="0.01 0.05" numOctaves="3" seed="7.8" stitchTiles="stitch"/></filter>
+  <filter id="f3"><feTurbulence baseFrequency="-0.1" numOctaves="-2" seed="-3.7" stitchTiles="noStitch"/></filter>
+  <filter id="f4"><feTurbulence baseFrequency="0.1 0.2 0.3" numOctaves="2.5" seed="1e12"/></filter>
+  <filter id="f5"><feTurbulence baseFrequency="" numOctaves="3.5" type="bogus"/></filter>
+  <filter id="f6"><feTurbulence baseFrequency="0.02 -0" numOctaves="-0" seed="-1e12"/></filter>
+  <rect x="10" y="10" width="50" height="40" fill="blue" filter="url(#f1)"/>
+  <rect x="70" y="10" width="50" height="40" fill="blue" filter="url(#f2)"/>
+  <rect x="130" y="10" width="50" height="40" fill="blue" filter="url(#f3)"/>
+  <rect x="10" y="60" width="50" height="40" fill="blue" filter="url(#f4)"/>
+  <rect x="70" y="60" width="50" height="40" fill="blue" filter="url(#f5)"/>
+  <rect x="130" y="60" width="50" height="40" fill="blue" filter="url(#f6)"/>
+</svg>

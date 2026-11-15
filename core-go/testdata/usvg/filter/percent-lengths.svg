@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="300" height="150" viewBox="0 0 600 300">
+  <filter id="f1" filterUnits="userSpaceOnUse" x="10%" y="5mm" width="50%" height="2in"><feOffset x="1em" dx="1"/></filter>
+  <rect x="10" y="10" width="50" height="40" fill="blue" filter="url(#f1)" font-size="12"/>
+</svg>

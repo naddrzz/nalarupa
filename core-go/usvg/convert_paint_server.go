@@ -439,7 +439,16 @@ func nodeToUserCoordinates(node Node, contextTransform skia.Transform, contextBB
 				updatePaintServers(&sub.root, contextTransform, contextBBox, nil, cache)
 			}
 		}
-		// Filter image primitives are visited here once filters are ported (slice 4c3).
+		for _, fl := range n.filters {
+			if !cache.getMut(fl) {
+				continue
+			}
+			for i := range fl.primitives {
+				if image, ok := fl.primitives[i].kind.(*FeImage); ok {
+					updatePaintServers(&image.root, contextTransform, contextBBox, nil, cache)
+				}
+			}
+		}
 		updatePaintServers(n, contextTransform, contextBBox, textBBox, cache)
 	case *Path:
 		// Paths inside Text.flattened use the text's bounding box instead of their own.

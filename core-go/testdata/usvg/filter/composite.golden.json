@@ -1,0 +1,422 @@
+{
+  "size": [
+    1128792064,
+    1128792064
+  ],
+  "root": {
+    "kind": "group",
+    "id": "",
+    "transform": [
+      1065353216,
+      0,
+      0,
+      1065353216,
+      0,
+      0
+    ],
+    "absTransform": [
+      1065353216,
+      0,
+      0,
+      1065353216,
+      0,
+      0
+    ],
+    "opacity": 1065353216,
+    "blendMode": "normal",
+    "isolate": false,
+    "clipPath": null,
+    "mask": null,
+    "filters": [],
+    "bbox": [
+      1092616192,
+      1092616192,
+      1121714176,
+      1119092736
+    ],
+    "absBbox": [
+      1092616192,
+      1092616192,
+      1121714176,
+      1119092736
+    ],
+    "strokeBbox": [
+      1092616192,
+      1092616192,
+      1121714176,
+      1119092736
+    ],
+    "absStrokeBbox": [
+      1092616192,
+      1092616192,
+      1121714176,
+      1119092736
+    ],
+    "layerBbox": [
+      0,
+      1073741824,
+      1123024897,
+      1120141312
+    ],
+    "absLayerBbox": [
+      0,
+      1073741824,
+      1123024897,
+      1120141312
+    ],
+    "children": [
+      {
+        "kind": "group",
+        "id": "",
+        "transform": [
+          1065353216,
+          0,
+          0,
+          1065353216,
+          0,
+          0
+        ],
+        "absTransform": [
+          1065353216,
+          0,
+          0,
+          1065353216,
+          0,
+          0
+        ],
+        "opacity": 1065353216,
+        "blendMode": "normal",
+        "isolate": false,
+        "clipPath": null,
+        "mask": null,
+        "filters": [
+          {
+            "id": "f1",
+            "rect": [
+              0,
+              1073741824,
+              1123024897,
+              1120141312
+            ],
+            "primitives": [
+              {
+                "rect": [
+                  0,
+                  1073741824,
+                  1123024897,
+                  1120141312
+                ],
+                "colorInterpolation": "linearRGB",
+                "result": "flood",
+                "kind": {
+                  "type": "flood",
+                  "color": [
+                    255,
+                    0,
+                    0
+                  ],
+                  "opacity": 1056997505
+                }
+              },
+              {
+                "rect": [
+                  0,
+                  1073741824,
+                  1123024897,
+                  1120141312
+                ],
+                "colorInterpolation": "linearRGB",
+                "result": "result2",
+                "kind": {
+                  "type": "composite",
+                  "in1": "SourceGraphic",
+                  "in2": {
+                    "ref": "flood"
+                  },
+                  "operator": "over",
+                  "k": null
+                }
+              },
+              {
+                "rect": [
+                  0,
+                  1073741824,
+                  1123024897,
+                  1120141312
+                ],
+                "colorInterpolation": "linearRGB",
+                "result": "result3",
+                "kind": {
+                  "type": "composite",
+                  "in1": {
+                    "ref": "result2"
+                  },
+                  "in2": "SourceAlpha",
+                  "operator": "in",
+                  "k": null
+                }
+              },
+              {
+                "rect": [
+                  0,
+                  1073741824,
+                  1123024897,
+                  1120141312
+                ],
+                "colorInterpolation": "linearRGB",
+                "result": "result4",
+                "kind": {
+                  "type": "composite",
+                  "in1": {
+                    "ref": "result3"
+                  },
+                  "in2": {
+                    "ref": "result3"
+                  },
+                  "operator": "out",
+                  "k": null
+                }
+              },
+              {
+                "rect": [
+                  0,
+                  1073741824,
+                  1123024897,
+                  1120141312
+                ],
+                "colorInterpolation": "linearRGB",
+                "result": "result5",
+                "kind": {
+                  "type": "composite",
+                  "in1": {
+                    "ref": "result4"
+                  },
+                  "in2": {
+                    "ref": "result4"
+                  },
+                  "operator": "atop",
+                  "k": null
+                }
+              },
+              {
+                "rect": [
+                  0,
+                  1073741824,
+                  1123024897,
+                  1120141312
+                ],
+                "colorInterpolation": "linearRGB",
+                "result": "result6",
+                "kind": {
+                  "type": "composite",
+                  "in1": {
+                    "ref": "result5"
+                  },
+                  "in2": {
+                    "ref": "result5"
+                  },
+                  "operator": "xor",
+                  "k": null
+                }
+              },
+              {
+                "rect": [
+                  0,
+                  1073741824,
+                  1123024897,
+                  1120141312
+                ],
+                "colorInterpolation": "linearRGB",
+                "result": "result7",
+                "kind": {
+                  "type": "composite",
+                  "in1": {
+                    "ref": "flood"
+                  },
+                  "in2": "SourceGraphic",
+                  "operator": "arithmetic",
+                  "k": [
+                    1056964608,
+                    1065353216,
+                    3212836864,
+                    1048576000
+                  ]
+                }
+              },
+              {
+                "rect": [
+                  0,
+                  1073741824,
+                  1123024897,
+                  1120141312
+                ],
+                "colorInterpolation": "linearRGB",
+                "result": "result8",
+                "kind": {
+                  "type": "composite",
+                  "in1": {
+                    "ref": "result7"
+                  },
+                  "in2": {
+                    "ref": "result7"
+                  },
+                  "operator": "arithmetic",
+                  "k": [
+                    0,
+                    0,
+                    0,
+                    0
+                  ]
+                }
+              },
+              {
+                "rect": [
+                  0,
+                  1073741824,
+                  1123024897,
+                  1120141312
+                ],
+                "colorInterpolation": "linearRGB",
+                "result": "result9",
+                "kind": {
+                  "type": "composite",
+                  "in1": {
+                    "ref": "result8"
+                  },
+                  "in2": {
+                    "ref": "result8"
+                  },
+                  "operator": "over",
+                  "k": null
+                }
+              }
+            ]
+          }
+        ],
+        "bbox": [
+          1092616192,
+          1092616192,
+          1121714176,
+          1119092736
+        ],
+        "absBbox": [
+          1092616192,
+          1092616192,
+          1121714176,
+          1119092736
+        ],
+        "strokeBbox": [
+          1092616192,
+          1092616192,
+          1121714176,
+          1119092736
+        ],
+        "absStrokeBbox": [
+          1092616192,
+          1092616192,
+          1121714176,
+          1119092736
+        ],
+        "layerBbox": [
+          0,
+          1073741824,
+          1123024897,
+          1120141312
+        ],
+        "absLayerBbox": [
+          0,
+          1073741824,
+          1123024897,
+          1120141312
+        ],
+        "children": [
+          {
+            "kind": "path",
+            "id": "",
+            "visible": true,
+            "fill": {
+              "paint": {
+                "type": "color",
+                "color": [
+                  0,
+                  128,
+                  0
+                ]
+              },
+              "opacity": 1065353216,
+              "rule": "nonzero"
+            },
+            "stroke": null,
+            "paintOrder": "fill-and-stroke",
+            "renderingMode": "geometric-precision",
+            "absTransform": [
+              1065353216,
+              0,
+              0,
+              1065353216,
+              0,
+              0
+            ],
+            "bbox": [
+              1092616192,
+              1092616192,
+              1121714176,
+              1119092736
+            ],
+            "absBbox": [
+              1092616192,
+              1092616192,
+              1121714176,
+              1119092736
+            ],
+            "strokeBbox": [
+              1092616192,
+              1092616192,
+              1121714176,
+              1119092736
+            ],
+            "absStrokeBbox": [
+              1092616192,
+              1092616192,
+              1121714176,
+              1119092736
+            ],
+            "segments": [
+              [
+                "M",
+                1092616192,
+                1092616192
+              ],
+              [
+                "L",
+                1121714176,
+                1092616192
+              ],
+              [
+                "L",
+                1121714176,
+                1119092736
+              ],
+              [
+                "L",
+                1092616192,
+                1119092736
+              ],
+              [
+                "Z"
+              ]
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "linearGradients": [],
+  "radialGradients": [],
+  "patterns": [],
+  "clipPaths": [],
+  "masks": [],
+  "filters": [
+    "f1"
+  ]
+}

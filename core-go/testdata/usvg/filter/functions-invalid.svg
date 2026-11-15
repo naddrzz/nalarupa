@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="200">
+  <filter id="f1"><feFlood/></filter>
+  <rect x="10" y="10" width="50" height="40" fill="blue" filter="blur(2px) grayscale(nope)"/>
+  <rect x="70" y="10" width="50" height="40" fill="blue" filter="url(#f1) bogus(1)"/>
+  <rect x="130" y="10" width="50" height="40" fill="blue" filter="blur(2px) url(#f1) blur(1px)"/>
+  <rect x="10" y="60" width="50" height="40" fill="blue" filter="url(#missing) saturate(0.5)"/>
+  <rect x="70" y="60" width="50" height="40" fill="blue" filter="saturate(-1)"/>
+  <rect x="130" y="60" width="50" height="40" fill="blue" filter="blur(1px)blur(2px)"/>
+</svg>

@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="200">
+  <filter id="f1">
+    <feOffset in="later" dx="1" result="first"/>
+    <feGaussianBlur in="first" stdDeviation="1" result="later"/>
+    <feOffset in="unknown"/>
+    <feOffset/>
+    <feFlood result="result5"/>
+    <feOffset/>
+    <feOffset in="result5"/>
+    <feOffset result=""/>
+    <feOffset in=""/>
+    <feOffset in="BackgroundImage"/>
+    <feOffset in="BackgroundAlpha"/>
+    <feOffset in="FillPaint"/>
+    <feOffset in="StrokePaint"/>
+    <feOffset in="SourceAlpha" result="first"/>
+    <feOffset in="first"/>
+  </filter>
+  <filter id="f2"><feOffset in="SourceAlpha" in2="x"/><feOffset result="result2"/><feOffset/><feOffset/></filter>
+  <rect x="10" y="10" width="50" height="40" fill="blue" filter="url(#f1)"/>
+  <rect x="70" y="10" width="50" height="40" fill="blue" filter="url(#f2)"/>
+</svg>

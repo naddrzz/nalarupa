@@ -1,4 +1,5 @@
-// Tree parity with usvg 0.47: each document in testdata/usvg is parsed here and by `nalarupa-cli usvg-tree`
+// Tree parity with usvg 0.47: each document in testdata/usvg (and testdata/usvg/filter, whose documents
+// are filter-centric) is parsed here and by `nalarupa-cli usvg-tree`
 // (see its doc in core/src/bin/cli.rs) with the options render.rs uses, and the trees are compared as JSON
 // with every f32 as its bit pattern. Without NALARUPA_CLI the comparison is with the committed goldens
 // (<stem>.golden.json); with it, with the CLI's live output. NALARUPA_UPDATE_GOLDEN=1 (with NALARUPA_CLI)
@@ -25,7 +26,12 @@ import (
 
 var corpus = filepath.Join("..", "testdata", "usvg")
 
-func TestParity(t *testing.T) {
+func TestParity(t *testing.T) { parity(t, corpus, 60) }
+
+func TestFilterParity(t *testing.T) { parity(t, filepath.Join(corpus, "filter"), 40) }
+
+// parity compares the trees of the documents in dir (at least minDocs), with dir as the resources dir.
+func parity(t *testing.T, dir string, minDocs int) {
 	cli := os.Getenv("NALARUPA_CLI")
 	update := os.Getenv("NALARUPA_UPDATE_GOLDEN") != ""
 	if update && cli == "" {
@@ -40,22 +46,22 @@ func TestParity(t *testing.T) {
 	}
 	var docs []string
 	for _, ext := range []string{"*.svg", "*.svgz"} {
-		m, err := filepath.Glob(filepath.Join(corpus, ext))
+		m, err := filepath.Glob(filepath.Join(dir, ext))
 		if err != nil {
 			t.Fatal(err)
 		}
 		docs = append(docs, m...)
 	}
-	if len(docs) < 60 {
-		t.Fatalf("%d documents in %s, want at least 60", len(docs), corpus)
+	if len(docs) < minDocs {
+		t.Fatalf("%d documents in %s, want at least %d", len(docs), dir, minDocs)
 	}
 	for _, doc := range docs {
 		stem := strings.TrimSuffix(strings.TrimSuffix(filepath.Base(doc), ".svgz"), ".svg")
 		t.Run(stem, func(t *testing.T) {
-			golden := filepath.Join(corpus, stem+".golden.json")
+			golden := filepath.Join(dir, stem+".golden.json")
 			var want []byte
 			if cli != "" {
-				out, err := exec.Command(cli, "usvg-tree", doc, "--resources", corpus).Output()
+				out, err := exec.Command(cli, "usvg-tree", doc, "--resources", dir).Output()
 				if err != nil {
 					t.Fatalf("%s usvg-tree: %v", cli, err)
 				}
@@ -76,7 +82,7 @@ func TestParity(t *testing.T) {
 				t.Fatal(err)
 			}
 			opt := usvg.DefaultOptions()
-			opt.ResourcesDir = corpus
+			opt.ResourcesDir = dir
 			opt.ImageHrefResolver = svg.ImageHrefResolver()
 			var got any
 			if tree, err := usvg.FromData(data, &opt); err != nil {
@@ -207,7 +213,7 @@ func dumpSize(s skia.Size) any { return []any{dumpF(s.Width()), dumpF(s.Height()
 func dumpGroup(g *usvg.Group) map[string]any {
 	filters := make([]any, len(g.Filters()))
 	for i, f := range g.Filters() {
-		filters[i] = f.ID()
+		filters[i] = dumpFilter(f)
 	}
 	children := make([]any, len(g.Children()))
 	for i, c := range g.Children() {
@@ -409,4 +415,155 @@ func dumpMask(m *usvg.Mask) map[string]any {
 	}
 	return map[string]any{"id": m.ID(), "rect": dumpNZ(m.Rect()), "kind": maskKinds[m.Kind()], "mask": sub,
 		"root": dumpGroup(m.Root())}
+}
+
+var (
+	colorInterpolations = [...]string{"sRGB", "linearRGB"}
+	compositeOps        = [...]string{"over", "in", "out", "atop", "xor", "arithmetic"}
+	edgeModes           = [...]string{"none", "duplicate", "wrap"}
+	colorChannels       = [...]string{"R", "G", "B", "A"}
+	morphologyOps       = [...]string{"erode", "dilate"}
+	turbulenceKinds     = [...]string{"fractalNoise", "turbulence"}
+)
+
+func dumpFilter(f *usvg.Filter) map[string]any {
+	primitives := make([]any, len(f.Primitives()))
+	for i := range f.Primitives() {
+		p := &f.Primitives()[i]
+		primitives[i] = map[string]any{
+			"rect":               dumpNZ(p.Rect()),
+			"colorInterpolation": colorInterpolations[p.ColorInterpolation()],
+			"result":             p.Result(),
+			"kind":               dumpFilterKind(p.Kind()),
+		}
+	}
+	return map[string]any{"id": f.ID(), "rect": dumpNZ(f.Rect()), "primitives": primitives}
+}
+
+func dumpInput(in usvg.FilterInput) any {
+	switch in.Kind {
+	case usvg.FilterInputSourceGraphic:
+		return "SourceGraphic"
+	case usvg.FilterInputSourceAlpha:
+		return "SourceAlpha"
+	}
+	return map[string]any{"ref": in.Name}
+}
+
+func dumpRGB(c usvg.Color) any { return []any{c.Red, c.Green, c.Blue} }
+
+func dumpTransfer(f usvg.TransferFunction) map[string]any {
+	switch f := f.(type) {
+	case usvg.TransferIdentity:
+		return map[string]any{"type": "identity"}
+	case usvg.TransferTable:
+		return map[string]any{"type": "table", "values": dumpFloats(f)}
+	case usvg.TransferDiscrete:
+		return map[string]any{"type": "discrete", "values": dumpFloats(f)}
+	case usvg.TransferLinear:
+		return map[string]any{"type": "linear", "slope": dumpF(f.Slope), "intercept": dumpF(f.Intercept)}
+	case usvg.TransferGamma:
+		return map[string]any{"type": "gamma", "amplitude": dumpF(f.Amplitude), "exponent": dumpF(f.Exponent),
+			"offset": dumpF(f.Offset)}
+	}
+	panic(fmt.Sprintf("unknown transfer function %T", f))
+}
+
+func dumpLight(l usvg.LightSource) map[string]any {
+	switch l := l.(type) {
+	case usvg.DistantLight:
+		return map[string]any{"type": "distant", "azimuth": dumpF(l.Azimuth), "elevation": dumpF(l.Elevation)}
+	case usvg.PointLight:
+		return map[string]any{"type": "point", "x": dumpF(l.X), "y": dumpF(l.Y), "z": dumpF(l.Z)}
+	case usvg.SpotLight:
+		var cone any
+		if l.HasLimitingConeAngle {
+			cone = dumpF(l.LimitingConeAngle)
+		}
+		return map[string]any{"type": "spot", "x": dumpF(l.X), "y": dumpF(l.Y), "z": dumpF(l.Z),
+			"pointsAtX": dumpF(l.PointsAtX), "pointsAtY": dumpF(l.PointsAtY), "pointsAtZ": dumpF(l.PointsAtZ),
+			"specularExponent": dumpF(l.SpecularExponent), "limitingConeAngle": cone}
+	}
+	panic(fmt.Sprintf("unknown light source %T", l))
+}
+
+func dumpFilterKind(k usvg.FilterKind) map[string]any {
+	switch fe := k.(type) {
+	case *usvg.FeBlend:
+		return map[string]any{"type": "blend", "in1": dumpInput(fe.Input1()), "in2": dumpInput(fe.Input2()),
+			"mode": fe.Mode().String()}
+	case *usvg.FeColorMatrix:
+		var m map[string]any
+		switch v := fe.Kind().(type) {
+		case usvg.ColorMatrixMatrix:
+			m = map[string]any{"type": "matrix", "values": dumpFloats(v)}
+		case usvg.ColorMatrixSaturate:
+			m = map[string]any{"type": "saturate", "value": dumpF(float32(v))}
+		case usvg.ColorMatrixHueRotate:
+			m = map[string]any{"type": "hueRotate", "value": dumpF(float32(v))}
+		case usvg.ColorMatrixLuminanceToAlpha:
+			m = map[string]any{"type": "luminanceToAlpha"}
+		}
+		return map[string]any{"type": "colorMatrix", "in": dumpInput(fe.Input()), "matrix": m}
+	case *usvg.FeComponentTransfer:
+		return map[string]any{"type": "componentTransfer", "in": dumpInput(fe.Input()),
+			"r": dumpTransfer(fe.FuncR()), "g": dumpTransfer(fe.FuncG()), "b": dumpTransfer(fe.FuncB()),
+			"a": dumpTransfer(fe.FuncA())}
+	case *usvg.FeComposite:
+		op := fe.Operator()
+		var k any
+		if op.Op == usvg.CompositeArithmetic {
+			k = dumpFloats([]float32{op.K1, op.K2, op.K3, op.K4})
+		}
+		return map[string]any{"type": "composite", "in1": dumpInput(fe.Input1()), "in2": dumpInput(fe.Input2()),
+			"operator": compositeOps[op.Op], "k": k}
+	case *usvg.FeConvolveMatrix:
+		m := fe.Matrix()
+		return map[string]any{"type": "convolveMatrix", "in": dumpInput(fe.Input()),
+			"targetX": m.TargetX(), "targetY": m.TargetY(), "columns": m.Columns(), "rows": m.Rows(),
+			"data": dumpFloats(m.Data()), "divisor": dumpF(fe.Divisor()), "bias": dumpF(fe.Bias()),
+			"edgeMode": edgeModes[fe.EdgeMode()], "preserveAlpha": fe.PreserveAlpha()}
+	case *usvg.FeDiffuseLighting:
+		return map[string]any{"type": "diffuseLighting", "in": dumpInput(fe.Input()),
+			"surfaceScale": dumpF(fe.SurfaceScale()), "diffuseConstant": dumpF(fe.DiffuseConstant()),
+			"lightingColor": dumpRGB(fe.LightingColor()), "light": dumpLight(fe.LightSource())}
+	case *usvg.FeDisplacementMap:
+		return map[string]any{"type": "displacementMap", "in1": dumpInput(fe.Input1()), "in2": dumpInput(fe.Input2()),
+			"scale": dumpF(fe.Scale()), "xChannel": colorChannels[fe.XChannelSelector()],
+			"yChannel": colorChannels[fe.YChannelSelector()]}
+	case *usvg.FeDropShadow:
+		return map[string]any{"type": "dropShadow", "in": dumpInput(fe.Input()), "dx": dumpF(fe.Dx()),
+			"dy": dumpF(fe.Dy()), "stdDevX": dumpF(fe.StdDevX()), "stdDevY": dumpF(fe.StdDevY()),
+			"color": dumpRGB(fe.Color()), "opacity": dumpF(fe.Opacity())}
+	case *usvg.FeFlood:
+		return map[string]any{"type": "flood", "color": dumpRGB(fe.Color()), "opacity": dumpF(fe.Opacity())}
+	case *usvg.FeGaussianBlur:
+		return map[string]any{"type": "gaussianBlur", "in": dumpInput(fe.Input()),
+			"stdDevX": dumpF(fe.StdDevX()), "stdDevY": dumpF(fe.StdDevY())}
+	case *usvg.FeImage:
+		return map[string]any{"type": "image", "root": dumpGroup(fe.Root())}
+	case *usvg.FeMerge:
+		inputs := make([]any, len(fe.Inputs()))
+		for i, in := range fe.Inputs() {
+			inputs[i] = dumpInput(in)
+		}
+		return map[string]any{"type": "merge", "inputs": inputs}
+	case *usvg.FeMorphology:
+		return map[string]any{"type": "morphology", "in": dumpInput(fe.Input()),
+			"operator": morphologyOps[fe.Operator()], "radiusX": dumpF(fe.RadiusX()), "radiusY": dumpF(fe.RadiusY())}
+	case *usvg.FeOffset:
+		return map[string]any{"type": "offset", "in": dumpInput(fe.Input()), "dx": dumpF(fe.Dx()), "dy": dumpF(fe.Dy())}
+	case *usvg.FeSpecularLighting:
+		return map[string]any{"type": "specularLighting", "in": dumpInput(fe.Input()),
+			"surfaceScale": dumpF(fe.SurfaceScale()), "specularConstant": dumpF(fe.SpecularConstant()),
+			"specularExponent": dumpF(fe.SpecularExponent()), "lightingColor": dumpRGB(fe.LightingColor()),
+			"light": dumpLight(fe.LightSource())}
+	case *usvg.FeTile:
+		return map[string]any{"type": "tile", "in": dumpInput(fe.Input())}
+	case *usvg.FeTurbulence:
+		return map[string]any{"type": "turbulence", "baseFrequencyX": dumpF(fe.BaseFrequencyX()),
+			"baseFrequencyY": dumpF(fe.BaseFrequencyY()), "numOctaves": fe.NumOctaves(), "seed": fe.Seed(),
+			"stitchTiles": fe.StitchTiles(), "kind": turbulenceKinds[fe.Kind()]}
+	}
+	panic(fmt.Sprintf("unknown filter primitive %T", k))
 }

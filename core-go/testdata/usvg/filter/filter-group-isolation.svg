@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="200">
+  <filter id="f1"><feOffset dx="5"/></filter>
+  <g filter="url(#f1)"><rect x="10" y="10" width="20" height="20"/><rect x="40" y="10" width="20" height="20" opacity="0.5"/></g>
+  <g filter="url(#f1)" opacity="0.5" transform="matrix(1 0.2 0 1 0 50)"><circle cx="30" cy="30" r="15"/></g>
+  <switch><rect x="100" y="10" width="40" height="40" filter="url(#f1)" requiredFeatures="http://www.w3.org/TR/SVG11/feature#Filter"/></switch>
+</svg>

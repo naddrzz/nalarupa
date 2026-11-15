@@ -1,6 +1,6 @@
 // Package usvg is a Go port of usvg 0.47 (core/vendor/usvg): it parses SVG into a simplified tree of
 // groups, paths, images and text (laid out and flattened into paths), with styles, references, `use`,
-// units and paint servers resolved. Filters are placeholders until slice 4c3.
+// units, paint servers and filters resolved.
 //
 // Floating-point products are wrapped in explicit float32/float64 conversions, which the Go spec says
 // prevents fusing them into a multiply-add, so results do not depend on GOAMD64 or the architecture.
@@ -33,6 +33,31 @@ func maxF64(a, b float64) float64 {
 		return b
 	}
 	return a
+}
+
+// asI32 is Rust's `x as i32` for a float (f32 converts to f64 exactly): truncated, saturating, NaN
+// gives 0.
+func asI32(x float64) int32 {
+	switch {
+	case x != x:
+		return 0
+	case x >= math.MaxInt32:
+		return math.MaxInt32
+	case x <= math.MinInt32:
+		return math.MinInt32
+	}
+	return int32(x)
+}
+
+// asU32 is Rust's `x as u32` for a float: truncated, saturating, NaN and negatives give 0.
+func asU32(x float64) uint32 {
+	switch {
+	case x != x || x <= 0:
+		return 0
+	case x >= math.MaxUint32:
+		return math.MaxUint32
+	}
+	return uint32(x)
 }
 
 func isFiniteF32(x float32) bool { return math.Float32bits(x)&0x7f800000 != 0x7f800000 }

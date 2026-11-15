@@ -1,13 +1,14 @@
 package usvg
 
 // Arc strong-count emulation. update_paint_servers uses Arc::get_mut, which succeeds only for an Arc
-// with no other strong reference, to update gradients, patterns and masks in place (keeping their id)
-// instead of copying them (with a generated id); which branch runs decides ids and output. The cache's
-// rc map holds the strong count of each tracked gradient, pattern and mask:
+// with no other strong reference, to update gradients, patterns, masks and filters (their feImage roots)
+// in place (keeping their id) instead of copying them (with a generated id) or skipping them; which
+// branch runs decides ids and output. The cache's rc map holds the strong count of each tracked
+// gradient, pattern, mask and filter:
 //
 //   - After conversion, rcInit counts every reference reachable from the tree, which is all that Rust
-//     holds once the cache is cleared. Clip paths and filters are not tracked: they are never updated
-//     in place and hold nothing that is.
+//     holds once the cache is cleared. Clip paths are not tracked: they are never updated in place and
+//     hold nothing that is.
 //   - During conversion (marker context paint in convertPath) the cache, the state and the parent path
 //     hold every existing paint server, so only objects processPaint itself creates are unshared:
 //     convertPath empties rc first, and anything untracked counts as shared.
@@ -19,7 +20,8 @@ package usvg
 // getMut is Arc::get_mut's condition: x is tracked with a single strong reference.
 func (c *converterCache) getMut(x any) bool { return c.rc[x] == 1 }
 
-// trackable is a reference whose count matters: a gradient, pattern or mask (as any, nil otherwise).
+// trackable is a reference whose count matters: a gradient, pattern, mask or filter (as any, nil
+// otherwise).
 func trackable(x any) any {
 	switch v := x.(type) {
 	case *LinearGradient:
@@ -35,6 +37,10 @@ func trackable(x any) any {
 			return v
 		}
 	case *Mask:
+		if v != nil {
+			return v
+		}
+	case *Filter:
 		if v != nil {
 			return v
 		}
@@ -72,6 +78,17 @@ func (c *converterCache) decRef(x any) {
 	case *Mask:
 		c.decRef(v.mask)
 		c.groupRefs(&v.root, c.decRef)
+	case *Filter:
+		c.filterRefs(v, c.decRef)
+	}
+}
+
+// filterRefs calls groupRefs for the root of each of the filter's feImage primitives.
+func (c *converterCache) filterRefs(fl *Filter, f func(any)) {
+	for i := range fl.primitives {
+		if image, ok := fl.primitives[i].kind.(*FeImage); ok {
+			c.groupRefs(&image.root, f)
+		}
 	}
 }
 
@@ -90,6 +107,9 @@ func (c *converterCache) replacePaint(paint *Paint, replacement Paint) {
 func (c *converterCache) groupRefs(g *Group, f func(any)) {
 	if g.mask != nil {
 		f(g.mask)
+	}
+	for _, fl := range g.filters {
+		f(fl)
 	}
 	for _, child := range g.children {
 		switch n := child.(type) {
@@ -224,6 +244,9 @@ func (c *converterCache) treeRefs(t *Tree, f func(any)) {
 	for _, m := range t.masks {
 		f(m)
 	}
+	for _, fl := range t.filters {
+		f(fl)
+	}
 }
 
 // rcInit counts the references reachable from tree; the contents of each object are counted once.
@@ -246,6 +269,8 @@ func (c *converterCache) rcInit(tree *Tree) {
 		case *Mask:
 			visit(v.mask)
 			c.groupRefs(&v.root, visit)
+		case *Filter:
+			c.filterRefs(v, visit)
 		}
 	}
 	c.groupRefs(&tree.root, visit)
@@ -256,6 +281,9 @@ func (c *converterCache) rcInit(tree *Tree) {
 func (c *converterCache) cloneGroup(g *Group) Group {
 	out := *g
 	out.filters = append([]*Filter(nil), g.filters...)
+	for _, fl := range g.filters {
+		c.incRef(fl)
+	}
 	if g.mask != nil {
 		c.incRef(g.mask)
 	}
@@ -314,6 +342,9 @@ func (c *converterCache) cloneTree(t *Tree) *Tree {
 	}
 	for _, m := range t.masks {
 		c.incRef(m)
+	}
+	for _, fl := range t.filters {
+		c.incRef(fl)
 	}
 	return &out
 }

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="200">
+  <filter id="f1"><feFlood/></filter>
+  <filter id="f2"><feFlood flood-color="hsla(120, 50%, 50%, 0.3)" flood-opacity="0.5"/></filter>
+  <filter id="f3"><feFlood flood-color="bad" flood-opacity="-1"/></filter>
+  <filter id="f4" primitiveUnits="objectBoundingBox"><feFlood x="0.25" y="0.25" width="0.5" height="0.5" flood-color="teal"/></filter>
+  <filter id="f5" primitiveUnits="objectBoundingBox"><feFlood flood-color="teal"/></filter>
+  <rect x="10" y="10" width="50" height="40" fill="blue" filter="url(#f1)"/>
+  <rect x="70" y="10" width="50" height="40" fill="blue" filter="url(#f2)"/>
+  <rect x="130" y="10" width="50" height="40" fill="blue" filter="url(#f3)"/>
+  <rect x="10" y="60" width="80" height="40" fill="blue" filter="url(#f4)"/>
+  <rect x="100" y="60" width="80" height="40" fill="blue" filter="url(#f5)"/>
+</svg>

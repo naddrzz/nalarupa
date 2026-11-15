@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="200">
+  <filter id="f1"><feImage xlink:href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAIAAAASFvFNAAAAEklEQVR4nGP4z8AAQVDqPwMDAEHSBfsl0XwmAAAAAElFTkSuQmCC"/></filter>
+  <filter id="f2"><feImage href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAIAAAASFvFNAAAAEklEQVR4nGP4z8AAQVDqPwMDAEHSBfsl0XwmAAAAAElFTkSuQmCC" preserveAspectRatio="xMaxYMin slice" image-rendering="optimizeSpeed" x="5" y="5" width="30" height="40"/></filter>
+  <filter id="f3" primitiveUnits="objectBoundingBox"><feImage href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAIAAAASFvFNAAAAEklEQVR4nGP4z8AAQVDqPwMDAEHSBfsl0XwmAAAAAElFTkSuQmCC" preserveAspectRatio="none" x="0.1" y="0.1" width="0.5" height="0.8"/></filter>
+  <filter id="f4"><feImage href="data:image/png;base64,AAAA"/></filter>
+  <filter id="f5"><feImage/></filter>
+  <rect x="10" y="10" width="50" height="40" fill="blue" filter="url(#f1)"/>
+  <rect x="70" y="10" width="50" height="40" fill="blue" filter="url(#f2)" style="image-rendering:pixelated"/>
+  <rect x="130" y="10" width="50" height="40" fill="blue" filter="url(#f3)"/>
+  <rect x="10" y="60" width="50" height="40" fill="blue" filter="url(#f4)"/>
+  <rect x="70" y="60" width="50" height="40" fill="blue" filter="url(#f5)"/>
+</svg>

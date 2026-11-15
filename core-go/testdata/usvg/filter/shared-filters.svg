@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="200">
+  <filter id="user" filterUnits="userSpaceOnUse" x="0" y="0" width="200" height="200"><feGaussianBlur stdDeviation="2"/></filter>
+  <filter id="obb"><feGaussianBlur stdDeviation="2"/></filter>
+  <filter id="filter1"><feFlood/></filter>
+  <rect x="10" y="10" width="50" height="40" fill="blue" filter="url(#user)"/>
+  <rect x="70" y="10" width="50" height="40" fill="blue" filter="url(#user)"/>
+  <rect x="130" y="10" width="50" height="40" fill="blue" filter="url(#obb)"/>
+  <rect x="10" y="60" width="50" height="40" fill="blue" filter="url(#obb)"/>
+  <rect x="70" y="60" width="50" height="40" fill="blue" filter="url(#obb) blur(1px)"/>
+  <rect x="130" y="60" width="50" height="40" fill="blue" filter="url(#filter1)"/>
+  <rect x="10" y="110" width="50" height="40" fill="blue" filter="url(#filter1)"/>
+</svg>

@@ -44,9 +44,9 @@
 //	LineJoin (style.rs)        attrLineJoin   LineJoin
 //	FillRule (style.rs)        attrFillRule   FillRule
 //	Isolation (converter.rs)   attrIsolation  svgIsolation
+//	filter::ColorInterpolation attrColorInterpolation ColorInterpolation (parser/filter.rs)
 //
-// The text-only impls (parser/text.rs) and filter::ColorInterpolation (parser/filter.rs) belong to
-// slices 4c2 and 4c3, whose types do not exist yet.
+// The text-only impls (parser/text.rs) live in text_parse.go.
 
 package usvg
 
@@ -854,6 +854,16 @@ func svgParseIsolation(_ svgNode, _ aid, v string) (svgIsolation, bool) {
 	return 0, false
 }
 
+func svgParseColorInterpolation(_ svgNode, _ aid, v string) (ColorInterpolation, bool) {
+	switch v {
+	case "sRGB":
+		return ColorInterpolationSRGB, true
+	case "linearRGB":
+		return ColorInterpolationLinearRGB, true
+	}
+	return 0, false
+}
+
 func (n svgNode) attrStr(a aid) (string, bool)      { return svgAttr(n, a, svgParseStr) }
 func (n svgNode) attrF32(a aid) (float32, bool)     { return svgAttr(n, a, svgParseF32) }
 func (n svgNode) attrLength(a aid) (stLength, bool) { return svgAttr(n, a, svgParseLength) }
@@ -901,3 +911,6 @@ func (n svgNode) attrLineCap(a aid) (LineCap, bool)        { return svgAttr(n, a
 func (n svgNode) attrLineJoin(a aid) (LineJoin, bool)      { return svgAttr(n, a, svgParseLineJoin) }
 func (n svgNode) attrFillRule(a aid) (FillRule, bool)      { return svgAttr(n, a, svgParseFillRule) }
 func (n svgNode) attrIsolation(a aid) (svgIsolation, bool) { return svgAttr(n, a, svgParseIsolation) }
+func (n svgNode) attrColorInterpolation(a aid) (ColorInterpolation, bool) {
+	return svgAttr(n, a, svgParseColorInterpolation)
+}

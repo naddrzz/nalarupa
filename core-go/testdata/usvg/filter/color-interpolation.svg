@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="200">
+  <filter id="f1" color-interpolation-filters="sRGB"><feFlood/><feOffset color-interpolation-filters="linearRGB"/><feOffset color-interpolation-filters="auto"/><feOffset color-interpolation-filters="inherit"/></filter>
+  <g color-interpolation-filters="sRGB">
+    <filter id="f2"><feFlood/><feOffset color-interpolation-filters="bogus"/></filter>
+  </g>
+  <filter id="f3" style="color-interpolation-filters: linearRGB"><feFlood style="color-interpolation-filters: sRGB"/><feFlood/></filter>
+  <rect x="10" y="10" width="50" height="40" fill="blue" filter="url(#f1)"/>
+  <rect x="70" y="10" width="50" height="40" fill="blue" filter="url(#f2)" color-interpolation-filters="sRGB"/>
+  <rect x="130" y="10" width="50" height="40" fill="blue" filter="url(#f3)"/>
+</svg>

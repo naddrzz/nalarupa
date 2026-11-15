@@ -76,3 +76,6 @@
 - source_plan: `_bmad-output/initiative-go-rewrite/plan-go-rewrite-4c1-usvg-core.md`
   summary: Renderer slice 4c3 - usvg filters in core-go/usvg (parser/filter.rs, tree/filter.rs: regions, units, primitives incl. the feGaussianBlur/feOffset/feFlood/feComposite svg.rs emits and the rest usvg models), replacing 4c1's Filter placeholder, parity against the usvg-tree CLI.
   evidence: Split from 4c with 4c2; resvg filter rendering itself is slice 4d.
+- source_plan: `_bmad-output/initiative-go-rewrite/plan-go-rewrite-4c3-usvg-filters.md`
+  summary: In the engine/C ABI phase, wrap every exported Go entry point in recover() returning "internal error (panic)" as core/src/lib.rs does with catch_unwind (lib.rs:543, 574), and add transitive recursion guards for pattern href cycles and feImage→group→filter cycles, which currently overflow the stack fatally in Go and Rust.
+  evidence: The usvg port mirrors Rust unwrap panics deliberately (mustPositiveF32, unreachable!), and Go stack overflows cannot be recovered, so containment and recursion guards are needed before untrusted imported SVGs reach core-go.

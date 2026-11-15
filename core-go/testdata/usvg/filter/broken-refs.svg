@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="200">
+  <filter id="good"><feFlood/></filter>
+  <linearGradient id="lg"/>
+  <filter id="empty"/>
+  <filter id="no-prims"><desc>none</desc><title>t</title></filter>
+  <filter id="base"><feGaussianBlur stdDeviation="2"/><feOffset dx="1"/></filter>
+  <filter id="child" xlink:href="#base" x="0" width="2"/>
+  <filter id="grandchild" xlink:href="#child" filterUnits="userSpaceOnUse"/>
+  <filter id="to-grad" xlink:href="#lg"/>
+  <filter id="own-prims" xlink:href="#base"><feFlood/></filter>
+  <rect x="10" y="10" width="50" height="40" fill="blue" filter="url(#missing)"/>
+  <rect x="70" y="10" width="50" height="40" fill="blue" filter="url(#missing) url(#good)"/>
+  <rect x="130" y="10" width="50" height="40" fill="blue" filter="url(#lg)"/>
+  <rect x="10" y="60" width="50" height="40" fill="blue" filter="url(#empty)"/>
+  <rect x="70" y="60" width="50" height="40" fill="blue" filter="url(#no-prims)"/>
+  <rect x="130" y="60" width="50" height="40" fill="blue" filter="url(#child)"/>
+  <rect x="10" y="110" width="50" height="40" fill="blue" filter="url(#grandchild)"/>
+  <rect x="70" y="110" width="50" height="40" fill="blue" filter="url(#to-grad)"/>
+  <rect x="130" y="110" width="50" height="40" fill="blue" filter="url(#own-prims)"/>
+  <rect x="10" y="160" width="50" height="30" fill="blue" filter="none"/>
+  <rect x="70" y="160" width="50" height="30" fill="blue" filter="url(#good) url(#good)"/>
+</svg>

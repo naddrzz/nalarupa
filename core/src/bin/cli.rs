@@ -741,8 +741,22 @@ mod skia_raster {
 ///          (the collections as id lists), or {"error": usvg::Error variant} plus "xml": roxmltree::Error variant
 ///          for ParsingFailed; parse errors are output, not CLI failures
 ///   G      {"kind":"group","id","transform","absTransform","opacity","blendMode","isolate","clipPath":C|null,
-///          "mask":M|null,"filters":[ids],"bbox","absBbox","strokeBbox","absStrokeBbox","layerBbox","absLayerBbox",
+///          "mask":M|null,"filters":[FL],"bbox","absBbox","strokeBbox","absStrokeBbox","layerBbox","absLayerBbox",
 ///          "children":[node...]}
+///   FL     {"id","rect","primitives":[{"rect","colorInterpolation":"sRGB"|"linearRGB","result","kind":K}]}
+///   K      {"type", then per type: blend "in1","in2","mode" | colorMatrix "in","matrix":{"type":"matrix","values"
+///          |"saturate","value"|"hueRotate","value"|"luminanceToAlpha"} | componentTransfer "in","r","g","b","a" (each
+///          {"type":"identity"|"table","values"|"discrete","values"|"linear","slope","intercept"|"gamma","amplitude",
+///          "exponent","offset"}) | composite "in1","in2","operator","k":[k1..k4]|null | convolveMatrix "in","targetX",
+///          "targetY","columns","rows","data","divisor","bias","edgeMode","preserveAlpha" | diffuseLighting "in",
+///          "surfaceScale","diffuseConstant","lightingColor","light":L | displacementMap "in1","in2","scale","xChannel",
+///          "yChannel" | dropShadow "in","dx","dy","stdDevX","stdDevY","color","opacity" | flood "color","opacity" |
+///          gaussianBlur "in","stdDevX","stdDevY" | image "root":G | merge "inputs" | morphology "in","operator",
+///          "radiusX","radiusY" | offset "in","dx","dy" | specularLighting "in","surfaceScale","specularConstant",
+///          "specularExponent","lightingColor","light":L | tile "in" | turbulence "baseFrequencyX","baseFrequencyY",
+///          "numOctaves","seed","stitchTiles","kind"};  an input is "SourceGraphic", "SourceAlpha" or {"ref":name}
+///   L      {"type":"distant","azimuth","elevation"} | {"type":"point","x","y","z"} | {"type":"spot","x","y","z",
+///          "pointsAtX","pointsAtY","pointsAtZ","specularExponent","limitingConeAngle":bits|null}
 ///   path   {"kind":"path","id","visible","fill":F|null,"stroke":S|null,"paintOrder","renderingMode","absTransform",
 ///          "bbox","absBbox","strokeBbox","absStrokeBbox","segments":[["M",x,y] ["L",x,y] ["Q",..] ["C",..] ["Z"]]}
 ///   image  {"kind":"image","id","visible","size","renderingMode","absTransform","bbox","absBbox","format",
@@ -767,7 +781,7 @@ mod skia_raster {
 mod usvg_tree {
     use resvg::tiny_skia::{NonZeroRect, Rect, Size, Transform};
     use resvg::usvg::tiny_skia_path::PathSegment;
-    use resvg::usvg::{self, BaseGradient, ClipPath, Group, ImageKind, ImageRendering, Mask, Node, Paint, Tree};
+    use resvg::usvg::{self, filter, BaseGradient, ClipPath, Group, ImageKind, ImageRendering, Mask, Node, Paint, Tree};
     use serde_json::{json, Value};
 
     thread_local! {
@@ -854,7 +868,7 @@ mod usvg_tree {
             "isolate": g.isolate(),
             "clipPath": g.clip_path().map(clip),
             "mask": g.mask().map(mask),
-            "filters": g.filters().iter().map(|x| x.id()).collect::<Vec<_>>(),
+            "filters": g.filters().iter().map(|x| filter(x)).collect::<Vec<_>>(),
             "bbox": rect(g.bounding_box()),
             "absBbox": rect(g.abs_bounding_box()),
             "strokeBbox": rect(g.stroke_bounding_box()),
@@ -1127,5 +1141,149 @@ mod usvg_tree {
     fn mask(m: &Mask) -> Value {
         let kind = match m.kind() { usvg::MaskType::Luminance => "luminance", usvg::MaskType::Alpha => "alpha" };
         json!({"id": m.id(), "rect": nz(m.rect()), "kind": kind, "mask": m.mask().map(mask), "root": group(m.root())})
+    }
+
+    fn filter(fl: &filter::Filter) -> Value {
+        let primitives: Vec<Value> = fl.primitives().iter().map(|p| json!({
+            "rect": nz(p.rect()),
+            "colorInterpolation": match p.color_interpolation() {
+                filter::ColorInterpolation::SRGB => "sRGB",
+                filter::ColorInterpolation::LinearRGB => "linearRGB",
+            },
+            "result": p.result(),
+            "kind": filter_kind(p.kind()),
+        })).collect();
+        json!({"id": fl.id(), "rect": nz(fl.rect()), "primitives": primitives})
+    }
+
+    fn input(i: &filter::Input) -> Value {
+        match i {
+            filter::Input::SourceGraphic => json!("SourceGraphic"),
+            filter::Input::SourceAlpha => json!("SourceAlpha"),
+            filter::Input::Reference(name) => json!({"ref": name}),
+        }
+    }
+
+    fn floats(v: &[f32]) -> Value {
+        json!(v.iter().map(|x| x.to_bits()).collect::<Vec<_>>())
+    }
+
+    fn rgb(c: usvg::Color) -> Value {
+        json!([c.red, c.green, c.blue])
+    }
+
+    fn transfer(t: &filter::TransferFunction) -> Value {
+        use filter::TransferFunction as T;
+        match t {
+            T::Identity => json!({"type": "identity"}),
+            T::Table(v) => json!({"type": "table", "values": floats(v)}),
+            T::Discrete(v) => json!({"type": "discrete", "values": floats(v)}),
+            T::Linear { slope, intercept } => json!({"type": "linear", "slope": f(*slope), "intercept": f(*intercept)}),
+            T::Gamma { amplitude, exponent, offset } => {
+                json!({"type": "gamma", "amplitude": f(*amplitude), "exponent": f(*exponent), "offset": f(*offset)})
+            }
+        }
+    }
+
+    fn light(l: filter::LightSource) -> Value {
+        match l {
+            filter::LightSource::DistantLight(d) => json!({"type": "distant", "azimuth": f(d.azimuth), "elevation": f(d.elevation)}),
+            filter::LightSource::PointLight(p) => json!({"type": "point", "x": f(p.x), "y": f(p.y), "z": f(p.z)}),
+            filter::LightSource::SpotLight(s) => json!({
+                "type": "spot", "x": f(s.x), "y": f(s.y), "z": f(s.z),
+                "pointsAtX": f(s.points_at_x), "pointsAtY": f(s.points_at_y), "pointsAtZ": f(s.points_at_z),
+                "specularExponent": f(s.specular_exponent.get()),
+                "limitingConeAngle": s.limiting_cone_angle.map(f),
+            }),
+        }
+    }
+
+    fn channel(c: filter::ColorChannel) -> &'static str {
+        match c { filter::ColorChannel::R => "R", filter::ColorChannel::G => "G", filter::ColorChannel::B => "B", filter::ColorChannel::A => "A" }
+    }
+
+    fn filter_kind(k: &filter::Kind) -> Value {
+        use filter::Kind;
+        match k {
+            Kind::Blend(fe) => json!({"type": "blend", "in1": input(fe.input1()), "in2": input(fe.input2()), "mode": fe.mode().to_string()}),
+            Kind::ColorMatrix(fe) => {
+                let matrix = match fe.kind() {
+                    filter::ColorMatrixKind::Matrix(v) => json!({"type": "matrix", "values": floats(v)}),
+                    filter::ColorMatrixKind::Saturate(v) => json!({"type": "saturate", "value": f(v.get())}),
+                    filter::ColorMatrixKind::HueRotate(v) => json!({"type": "hueRotate", "value": f(*v)}),
+                    filter::ColorMatrixKind::LuminanceToAlpha => json!({"type": "luminanceToAlpha"}),
+                };
+                json!({"type": "colorMatrix", "in": input(fe.input()), "matrix": matrix})
+            }
+            Kind::ComponentTransfer(fe) => json!({
+                "type": "componentTransfer", "in": input(fe.input()),
+                "r": transfer(fe.func_r()), "g": transfer(fe.func_g()), "b": transfer(fe.func_b()), "a": transfer(fe.func_a()),
+            }),
+            Kind::Composite(fe) => {
+                use filter::CompositeOperator as O;
+                let (op, k) = match fe.operator() {
+                    O::Over => ("over", Value::Null),
+                    O::In => ("in", Value::Null),
+                    O::Out => ("out", Value::Null),
+                    O::Atop => ("atop", Value::Null),
+                    O::Xor => ("xor", Value::Null),
+                    O::Arithmetic { k1, k2, k3, k4 } => ("arithmetic", floats(&[k1, k2, k3, k4])),
+                };
+                json!({"type": "composite", "in1": input(fe.input1()), "in2": input(fe.input2()), "operator": op, "k": k})
+            }
+            Kind::ConvolveMatrix(fe) => {
+                let m = fe.matrix();
+                json!({
+                    "type": "convolveMatrix", "in": input(fe.input()),
+                    "targetX": m.target_x(), "targetY": m.target_y(), "columns": m.columns(), "rows": m.rows(),
+                    "data": floats(m.data()), "divisor": f(fe.divisor().get()), "bias": f(fe.bias()),
+                    "edgeMode": match fe.edge_mode() {
+                        filter::EdgeMode::None => "none",
+                        filter::EdgeMode::Duplicate => "duplicate",
+                        filter::EdgeMode::Wrap => "wrap",
+                    },
+                    "preserveAlpha": fe.preserve_alpha(),
+                })
+            }
+            Kind::DiffuseLighting(fe) => json!({
+                "type": "diffuseLighting", "in": input(fe.input()), "surfaceScale": f(fe.surface_scale()),
+                "diffuseConstant": f(fe.diffuse_constant()), "lightingColor": rgb(fe.lighting_color()),
+                "light": light(fe.light_source()),
+            }),
+            Kind::DisplacementMap(fe) => json!({
+                "type": "displacementMap", "in1": input(fe.input1()), "in2": input(fe.input2()), "scale": f(fe.scale()),
+                "xChannel": channel(fe.x_channel_selector()), "yChannel": channel(fe.y_channel_selector()),
+            }),
+            Kind::DropShadow(fe) => json!({
+                "type": "dropShadow", "in": input(fe.input()), "dx": f(fe.dx()), "dy": f(fe.dy()),
+                "stdDevX": f(fe.std_dev_x().get()), "stdDevY": f(fe.std_dev_y().get()),
+                "color": rgb(fe.color()), "opacity": f(fe.opacity().get()),
+            }),
+            Kind::Flood(fe) => json!({"type": "flood", "color": rgb(fe.color()), "opacity": f(fe.opacity().get())}),
+            Kind::GaussianBlur(fe) => json!({
+                "type": "gaussianBlur", "in": input(fe.input()),
+                "stdDevX": f(fe.std_dev_x().get()), "stdDevY": f(fe.std_dev_y().get()),
+            }),
+            Kind::Image(fe) => json!({"type": "image", "root": group(fe.root())}),
+            Kind::Merge(fe) => json!({"type": "merge", "inputs": fe.inputs().iter().map(input).collect::<Vec<_>>()}),
+            Kind::Morphology(fe) => json!({
+                "type": "morphology", "in": input(fe.input()),
+                "operator": match fe.operator() { filter::MorphologyOperator::Erode => "erode", filter::MorphologyOperator::Dilate => "dilate" },
+                "radiusX": f(fe.radius_x().get()), "radiusY": f(fe.radius_y().get()),
+            }),
+            Kind::Offset(fe) => json!({"type": "offset", "in": input(fe.input()), "dx": f(fe.dx()), "dy": f(fe.dy())}),
+            Kind::SpecularLighting(fe) => json!({
+                "type": "specularLighting", "in": input(fe.input()), "surfaceScale": f(fe.surface_scale()),
+                "specularConstant": f(fe.specular_constant()), "specularExponent": f(fe.specular_exponent()),
+                "lightingColor": rgb(fe.lighting_color()), "light": light(fe.light_source()),
+            }),
+            Kind::Tile(fe) => json!({"type": "tile", "in": input(fe.input())}),
+            Kind::Turbulence(fe) => json!({
+                "type": "turbulence", "baseFrequencyX": f(fe.base_frequency_x().get()),
+                "baseFrequencyY": f(fe.base_frequency_y().get()), "numOctaves": fe.num_octaves(), "seed": fe.seed(),
+                "stitchTiles": fe.stitch_tiles(),
+                "kind": match fe.kind() { filter::TurbulenceKind::FractalNoise => "fractalNoise", filter::TurbulenceKind::Turbulence => "turbulence" },
+            }),
+        }
     }
 }

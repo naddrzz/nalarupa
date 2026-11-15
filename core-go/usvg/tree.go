@@ -460,8 +460,8 @@ type Node interface {
 	// AbsLayerBoundingBox is the group's abs layer bounding box, else the abs bounding box when it is
 	// not zero-sized.
 	AbsLayerBoundingBox() (skia.NonZeroRect, bool)
-	// Subroots calls f for each subtree the node holds: clip paths, masks, patterns, SVG images and
-	// flattened text.
+	// Subroots calls f for each subtree the node holds: clip paths, masks, feImage primitives, patterns,
+	// SVG images and flattened text.
 	Subroots(f func(*Group))
 }
 
@@ -551,8 +551,8 @@ func (g *Group) FiltersBoundingBox() (skia.NonZeroRect, bool) {
 	return full.toNonZeroRect()
 }
 
-// Subroots calls f for the clip path and mask roots (and their nested clip path and mask). Filter
-// image primitives are not visited until filters are ported (slice 4c3).
+// Subroots calls f for the clip path and mask roots (and their nested clip path and mask) and the roots
+// of the filters' feImage primitives.
 func (g *Group) Subroots(f func(*Group)) {
 	if clip := g.clipPath; clip != nil {
 		f(&clip.root)
@@ -564,6 +564,13 @@ func (g *Group) Subroots(f func(*Group)) {
 		f(&mask.root)
 		if sub := mask.mask; sub != nil {
 			f(&sub.root)
+		}
+	}
+	for _, filter := range g.filters {
+		for i := range filter.primitives {
+			if image, ok := filter.primitives[i].kind.(*FeImage); ok {
+				f(&image.root)
+			}
 		}
 	}
 }
@@ -1033,13 +1040,3 @@ func (g *Group) calculateBoundingBoxes() bool {
 	g.absLayerBoundingBox = r
 	return true
 }
-
-// Filter is a placeholder for usvg's filter::Filter until slice 4c3 ports tree/filter.rs: only the id
-// and the filter region, which FiltersBoundingBox needs. Group.Subroots does not visit filters yet.
-type Filter struct {
-	id   string
-	rect skia.NonZeroRect
-}
-
-func (f *Filter) ID() string             { return f.id }
-func (f *Filter) Rect() skia.NonZeroRect { return f.rect }

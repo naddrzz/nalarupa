@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="200">
+  <filter id="f1"><feDropShadow/></filter>
+  <filter id="f2"><feDropShadow dx="-3" dy="5.5" stdDeviation="4 1" flood-color="#ff000080" flood-opacity="0.5" in="SourceAlpha"/></filter>
+  <filter id="f3"><feDropShadow stdDeviation="1 2 3"/></filter>
+  <filter id="f4"><feDropShadow stdDeviation="3 x"/></filter>
+  <filter id="f5"><feDropShadow stdDeviation="-2 4" flood-opacity="150%"/></filter>
+  <filter id="f6" primitiveUnits="objectBoundingBox"><feDropShadow dx="0.1" dy="0.05" stdDeviation="0.02"/></filter>
+  <filter id="f7"><feDropShadow flood-color="currentColor" color="lime" stdDeviation="-0"/></filter>
+  <rect x="10" y="10" width="50" height="40" fill="blue" filter="url(#f1)"/>
+  <rect x="70" y="10" width="50" height="40" fill="blue" filter="url(#f2)"/>
+  <rect x="130" y="10" width="50" height="40" fill="blue" filter="url(#f3)"/>
+  <rect x="10" y="60" width="50" height="40" fill="blue" filter="url(#f4)"/>
+  <rect x="70" y="60" width="50" height="40" fill="blue" filter="url(#f5)"/>
+  <rect x="130" y="60" width="60" height="30" fill="blue" filter="url(#f6)"/>
+  <rect x="10" y="110" width="50" height="40" fill="blue" filter="url(#f7)"/>
+</svg>

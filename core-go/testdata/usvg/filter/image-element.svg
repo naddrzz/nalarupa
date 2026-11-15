@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="200">
+  <defs>
+    <rect id="r1" x="5" y="5" width="20" height="10" fill="orange"/>
+    <g id="g1" opacity="0.5"><circle id="c1" cx="10" cy="10" r="8" fill="purple"/><rect x="0" y="0" width="5" height="5"/></g>
+    <linearGradient id="lg" x1="0" x2="1"><stop offset="0" stop-color="red"/><stop offset="1" stop-color="blue"/></linearGradient>
+    <rect id="r2" x="0" y="0" width="30" height="20" fill="url(#lg)" transform="translate(3 4)"/>
+    <image id="im" x="0" y="0" width="6" height="4" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAIAAAASFvFNAAAAEklEQVR4nGP4z8AAQVDqPwMDAEHSBfsl0XwmAAAAAElFTkSuQmCC"/>
+  </defs>
+  <filter id="f1"><feImage xlink:href="#r1"/></filter>
+  <filter id="f2"><feImage xlink:href="#g1"/><feOffset dx="2"/></filter>
+  <filter id="f3"><feImage xlink:href="#r2"/></filter>
+  <filter id="f4"><feImage xlink:href="#missing"/></filter>
+  <filter id="f5"><feImage xlink:href="#im" x="10" y="10"/></filter>
+  <rect x="10" y="10" width="50" height="40" fill="blue" filter="url(#f1)"/>
+  <rect x="70" y="10" width="50" height="40" fill="blue" filter="url(#f2)"/>
+  <rect x="130" y="10" width="50" height="40" fill="blue" filter="url(#f3)"/>
+  <rect x="10" y="60" width="50" height="40" fill="blue" filter="url(#f4)"/>
+  <rect x="70" y="60" width="50" height="40" fill="blue" filter="url(#f5)"/>
+</svg>
