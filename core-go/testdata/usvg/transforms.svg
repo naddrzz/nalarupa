@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200">
+  <rect id="matrix" width="10" height="10" transform="matrix(1 0.5 -0.5 1 10 20)"/>
+  <rect id="matrix-commas" width="10" height="10" transform="matrix(1,0,0,1,30,0)"/>
+  <rect id="translate1" width="10" height="10" transform="translate(50)"/>
+  <rect id="scale1" width="10" height="10" transform="translate(70 0) scale(2)"/>
+  <rect id="scale2" width="10" height="10" transform="translate(100,0)scale(1.5,0.5)"/>
+  <rect id="rotate" width="10" height="10" transform="rotate(30)"/>
+  <rect id="rotate-c" width="10" height="10" transform="rotate(-45 125 5)"/>
+  <rect id="skewx" y="50" width="10" height="10" transform="skewX(30)"/>
+  <rect id="skewy" x="40" y="50" width="10" height="10" transform="skewY(-20)"/>
+  <rect id="list" x="0" y="0" width="10" height="10" transform="translate(150 50) rotate(90) scale(1 2) skewX(10)"/>
+  <rect id="invalid" x="200" width="10" height="10" transform="translate(10 10) bogus(5)"/>
+  <rect id="singular" x="200" y="50" width="10" height="10" transform="scale(0)"/>
+  <g transform="rotate(10 50 50)"><g transform="translate(5,5)"><rect id="nested" x="60" y="100" width="10" height="10" transform="scale(1.1)"/></g></g>
+  <rect id="style-transform" x="250" width="10" height="10" style="transform: translate(5px, 5px) rotate(15deg)"/>
+</svg>

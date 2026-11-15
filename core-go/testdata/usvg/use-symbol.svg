@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="300" height="100">
+  <defs>
+    <symbol id="s" viewBox="0 0 20 10"><rect width="20" height="10" fill="#0a0"/><circle cx="10" cy="5" r="8" fill="#a00"/></symbol>
+    <symbol id="s-none" viewBox="0 0 20 10" preserveAspectRatio="none"><rect width="20" height="10"/></symbol>
+    <symbol id="s-slice" viewBox="0 0 20 10" preserveAspectRatio="xMinYMin slice"><rect width="20" height="10"/></symbol>
+    <symbol id="s-max" viewBox="0 0 20 10" preserveAspectRatio="xMaxYMax meet"><rect width="20" height="10"/></symbol>
+    <symbol id="s-midslice" viewBox="0 0 20 10" preserveAspectRatio="xMidYMax slice" overflow="visible"><rect width="20" height="10"/></symbol>
+    <symbol id="s-noview" x="5" y="5"><rect width="20" height="10" fill="#00a"/></symbol>
+  </defs>
+  <use id="a" href="#s" x="0" y="0" width="40" height="40"/>
+  <use id="b" href="#s-none" x="50" y="0" width="40" height="40"/>
+  <use id="c" href="#s-slice" x="100" y="0" width="40" height="40"/>
+  <use id="d" href="#s-max" x="150" y="0" width="40" height="40"/>
+  <use id="e" href="#s-midslice" x="200" y="0" width="40" height="40"/>
+  <use id="f" href="#s" x="0" y="50"/>
+  <use id="g" href="#s-noview" x="50" y="50"/>
+  <use id="h" href="#s" x="100" y="50" width="0" height="40"/>
+</svg>

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+  <defs>
+    <marker id="dot" markerWidth="4" markerHeight="4" refX="2" refY="2"><circle cx="2" cy="2" r="2" fill="#c00"/></marker>
+    <marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#00c"/></marker>
+  </defs>
+  <path id="all" d="M10 50 L50 10 L90 50 L130 10" fill="none" stroke="#000" stroke-width="2" marker-start="url(#dot)" marker-mid="url(#dot)" marker-end="url(#arrow)"/>
+  <path id="curve" d="M10 90 C30 60 60 60 80 90 Q100 110 120 90" fill="none" stroke="#000" marker-mid="url(#arrow)" marker-end="url(#arrow)"/>
+  <path id="closed" d="M150 20 h30 v30 z" fill="#eee" stroke="#000" marker-start="url(#arrow)" marker-mid="url(#dot)" marker-end="url(#dot)"/>
+  <path id="no-stroke" d="M150 70 h30" marker-end="url(#dot)"/>
+</svg>

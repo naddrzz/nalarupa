@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+  <defs>
+    <mask id="default"><rect width="200" height="100" fill="#fff"/><circle cx="25" cy="20" r="10" fill="#000"/></mask>
+    <mask id="user" maskUnits="userSpaceOnUse" x="50" y="0" width="30" height="40"><rect width="200" height="100" fill="#888"/></mask>
+    <mask id="content-obb" maskContentUnits="objectBoundingBox"><rect x="0.25" y="0.25" width="0.5" height="0.5" fill="#fff"/></mask>
+    <mask id="both-obb" x="0" y="0" width="0.5" height="1" maskContentUnits="objectBoundingBox"><circle cx="0.5" cy="0.5" r="0.5" fill="#fff"/></mask>
+    <mask id="pct" maskUnits="userSpaceOnUse" x="10%" y="50%" width="25%" height="25%"><rect width="200" height="100" fill="#fff"/></mask>
+  </defs>
+  <rect id="r-default" x="5" y="5" width="40" height="30" fill="#c00" mask="url(#default)"/>
+  <rect id="r-user" x="50" y="5" width="40" height="30" fill="#0a0" mask="url(#user)"/>
+  <rect id="r-content-obb" x="95" y="5" width="40" height="30" fill="#00c" mask="url(#content-obb)"/>
+  <rect id="r-both" x="140" y="5" width="40" height="30" fill="#a0a" mask="url(#both-obb)"/>
+  <g mask="url(#pct)" opacity="0.5"><rect id="r-pct" x="0" y="50" width="100" height="50"/></g>
+</svg>

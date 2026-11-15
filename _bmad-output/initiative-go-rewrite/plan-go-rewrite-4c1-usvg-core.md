@@ -3,21 +3,35 @@ title: 'Go rewrite phase 4c1: SVG parser core (usvg port, no text or filters)'
 type: 'refactor'
 ticket: ''
 created: '2026-11-15'
-status: 'in-progress'
-baseline_revision: 'f20ad6f5ce52089d7d7b9e1a246d3d6b2c0c8492'
+status: 'built'
+baseline_revision: '4769701dc649a66e59755382d561751c7e11e97e'
 route: 'full'
 route_source: 'auto'
 risk: 'medium'
-review: ''
-review_source: ''
-lenses_ran: []
+review: 'quick'
+review_source: 'pinned'
+lenses_ran: ['quick']
 review_loop_iteration: 0
 followup_review_recommended: false
 context:
   - '{project-root}/_bmad-output/initiative-go-rewrite/decisions.md'
   - '{project-root}/_bmad-output/initiative-go-rewrite/plan-go-rewrite-4b1-skia-path.md'
 warnings: ['oversized']
-deferred: []
+deferred:
+  - summary: >-
+      An feImage whose href is an image file or data URL does not use up the generated image and clip-path ids that Rust's image::convert_inner takes (a clipPath id for preserveAspectRatio slice), so later generated ids shift.
+    evidence: |-
+      Review repro against the live CLI: with a sliced data-URL feImage followed by a sliced <image>, Go gives clipPath1 where Rust gives clipPath2. The filter placeholder only checks that a primitive exists. svg.rs never emits feImage. The fix belongs with the filter primitives in slice 4c3.
+    location: >-
+      core-go/usvg/convert_filter.go (hasFilterPrimitives)
+    severity: low
+  - summary: >-
+      A pattern cycle through href (p5 href=#p6, whose child fills with url(#p5)) recurses until a fatal stack overflow in both Go and Rust, so an untrusted imported SVG can kill the process.
+    evidence: |-
+      This comes from the port source: parse.rs find_recursive_pattern never follows the pattern's own href, and the release CLI also crashes (0xc00000fd). Go matches Rust, but it is a crash on untrusted input. Fix by following href links in the recursive-pattern check, in Go (and ideally Rust), with a test.
+    location: >-
+      core-go/usvg/svgtree_parse.go (recursive pattern check), convert_paint_server.go (convertPattern)
+    severity: medium
 ---
 
 <intent-contract>
@@ -84,14 +98,14 @@ Text elements are parsed into a placeholder `Text` node and filters into a place
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `core/src/bin/cli.rs` -- add `usvg-tree <file.svg> [--resources <dir>]`. It parses with the same `Options` as `render.rs`, fonts offline, and prints the tree as JSON: per node the kind, id, rel/abs transform, bounding boxes (f32 bits), and for paths their segments, fill and stroke (paint, opacity, rule, width, caps, joins, dash). It also gives clip/mask/marker subtrees and image kind/size/view box, with a placeholder for text and filters. A parse error prints its kind.
-- [ ] `core-go/usvg/xml.go` -- XML with roxmltree semantics.
-- [ ] `core-go/usvg/svgtypes*.go` -- the value parsers.
-- [ ] `core-go/usvg/svgtree*.go`, `css.go` -- the svgtree and styles.
-- [ ] `core-go/usvg/convert*.go` (converter, shapes, use, switch, clip, mask, marker, paint server, image, units) -- conversion into the tree.
-- [ ] `core-go/usvg/tree.go` -- the tree types, bounding boxes and `Options`.
-- [ ] `core-go/usvg/*_test.go` -- the ported unit tests of the files listed above.
-- [ ] `core-go/usvg/parity_test.go`, `core-go/testdata/usvg/*.svg` plus goldens -- at least 60 documents covering every matrix row, including the 4a fixture exports with text and filters removed. Goldens are used without the CLI, live output with it.
+- [x] `core/src/bin/cli.rs` -- add `usvg-tree <file.svg> [--resources <dir>]`. It parses with the same `Options` as `render.rs`, fonts offline, and prints the tree as JSON: per node the kind, id, rel/abs transform, bounding boxes (f32 bits), and for paths their segments, fill and stroke (paint, opacity, rule, width, caps, joins, dash). It also gives clip/mask/marker subtrees and image kind/size/view box, with a placeholder for text and filters. A parse error prints its kind.
+- [x] `core-go/usvg/xml.go` -- XML with roxmltree semantics.
+- [x] `core-go/usvg/svgtypes*.go` -- the value parsers.
+- [x] `core-go/usvg/svgtree*.go`, `css.go` -- the svgtree and styles.
+- [x] `core-go/usvg/convert*.go` (converter, shapes, use, switch, clip, mask, marker, paint server, image, units) -- conversion into the tree.
+- [x] `core-go/usvg/tree.go` -- the tree types, bounding boxes and `Options`.
+- [x] `core-go/usvg/*_test.go` -- the ported unit tests of the files listed above.
+- [x] `core-go/usvg/parity_test.go`, `core-go/testdata/usvg/*.svg` plus goldens -- at least 60 documents covering every matrix row, including the 4a fixture exports with text and filters removed. Goldens are used without the CLI, live output with it.
 
 **Acceptance Criteria:**
 - Given only Go, when `go test ./usvg/` runs (also with `GOAMD64=v3`), then the unit tests and golden tree parity pass.
@@ -100,9 +114,52 @@ Text elements are parsed into a placeholder `Text` node and filters into a place
 
 ## Implementation Notes
 
+- One package, prefixed by origin: `xml*` (roxmltree 0.21.1), `st*` (svgtypes), `css*` (simplecss 0.2.2), `kurbo*` (kurbo 0.13.1 arc to cubic, shared by svgtypes paths and usvg shapes), `imgsz*` (imagesize 0.14), `svg*`/`eid`/`aid` (svgtree), unprefixed tree and converter code. Shared float helpers live in `f32.go`.
+- Tree fields are unexported, as Rust's `pub(crate)`; the public API is the getters. `Paint` is an interface over `Color`, `*LinearGradient`, `*RadialGradient`, `*Pattern`, so `==` matches Rust's `PartialEq` (Arc identity). `refcount.go` reproduces the `Arc::get_mut` checks `update_paint_servers` makes, so a server is edited in place or copied under a generated id exactly as in Rust.
+- sin, cos, tan and atan2 are evaluated in double-double and rounded once (`svgtypes_math.go`): they matched the MSVC libm on every corpus document, where Go's `math` functions drift by an ulp.
+- Placeholders: `<text>` becomes a `*Text` with its id and absolute transform and zero bounding boxes (slice 4c2); `convertFilters` keeps filter.rs's Ok/Err outcomes, ids and filter regions (so layer boxes match) but no primitives (slice 4c3). The oracle has no fonts, so Rust drops text nodes; documents with text differ until 4c2.
+- `core-go/svg/resolver.go` adds `svg.ImageHrefResolver()`, the port of svg.rs `image_href_resolver` (depth-limited nested SVG data urls) plugged into `Options.ImageHrefResolver`, as `render.rs` does. It counts depth per resolver instead of per thread, so each parse needs its own.
+- The parity test (`package usvg_test`) dumps the tree through the public getters only, in the CLI's JSON shape, and reports the JSON path of the first difference. 96 documents in `core-go/testdata/usvg` (`res/` holds the referenced images and nested SVGs); roxmltree's ast fixtures are in `core-go/testdata/usvg-xml`.
+
 ## Plan Change Log
 
+- usvg 0.47 depends on svgtypes 0.16.1, not 0.15 as the Code Map said; 0.16.1 is ported.
+- usvg defines `Error::ElementsLimitReached` but never returns it: the 1,000,000-node and depth limits surface as `ParsingFailed` with roxmltree's `NodesLimitReached`, and the Go port does the same (corpus `elements-limit`, `depth-limit`).
+
 ## Review Triage Log
+
+### 2026-11-15 — Review pass
+- verdicts: 2 findings — high 0, medium 1, low 1, false 0, maybe-false 0
+- findings:
+  - `[low]` `[defer]` A data-URL or file `feImage` doesn't use up the generated image and clip-path ids that Rust's `image::convert_inner` takes, so later ids shift (reproduced: `clipPath1` vs `clipPath2`). — The intent excludes filter primitives. Deferred to slice 4c3 (frontmatter `deferred`).
+  - `[medium]` `[defer]` A pattern cycle through `href` overflows the stack, fatally, in both Go and Rust. — Pre-existing: it comes from `find_recursive_pattern` in the port source, and the Rust CLI crashes the same way. Deferred as a crash on untrusted input (frontmatter `deferred`).
+
+## Auto Run Result
+
+- **Summary:** `core-go/usvg` ports the vendored usvg 0.47 parser without text and filter primitives:
+  - XML (roxmltree 0.21.1) and value parsers (svgtypes 0.16.1, which usvg 0.47 actually uses)
+  - CSS (simplecss), kurbo arc-to-cubic and imagesize
+  - svgtree, the converters (shapes, use, switch, clip, mask, marker, paint servers, images, units), the tree with bounding boxes, and `Options`/`ImageHrefResolver`
+
+  Text and filters are placeholders for 4c2 and 4c3. `core-go/svg/resolver.go` adds the svg.rs image-href resolver, and Rust gains a test-only `usvg-tree` oracle.
+- **Files:**
+  - `core-go/usvg/*.go`: the port, about 22k lines with tests
+  - `core-go/svg/resolver.go`: the resolver
+  - `core-go/testdata/usvg/` (96 documents with goldens) and `core-go/testdata/usvg-xml/`: fixtures
+  - `core/src/bin/cli.rs`: the oracle
+- **Review:**
+  - Patches applied: 0.
+  - Deferred: 2 (one low, handled by 4c3; one medium, a pre-existing pattern-cycle crash).
+  - Rejected: none.
+- **Follow-up review recommended:** false (no patches).
+- **Verification:**
+  - `go vet` and `go test` pass, and so does `GOAMD64=v3 go test ./usvg/`.
+  - All 96 documents match the release CLI bit for bit, live.
+  - `cargo test --release` passes, 292 tests.
+- **Residual risks:**
+  - On Linux, a live run may drift by 1 ulp in arcs and rotations: Go's trig is correctly rounded, glibc's differs, and the test compares exactly.
+  - `svg.ImageHrefResolver()` keeps per-instance depth state, so each concurrent parse needs its own resolver.
+  - Rust panics such as `unreachable!()` are mirrored.
 
 ## Verification
 
@@ -110,3 +167,5 @@ Text elements are parsed into a placeholder `Text` node and filters into a place
 - `cd core-go && go vet ./... && go test -count=1 ./... && GOAMD64=v3 go test -count=1 ./usvg/` -- expected: pass
 - `cd core-go && NALARUPA_CLI=<target>/release/nalarupa-cli go test -count=1 ./usvg/` -- expected: pass, live
 - `cd core && cargo test --release` -- expected: pass (separate `CARGO_TARGET_DIR`; on this machine cargo is at `~/.rustup/toolchains/stable-x86_64-pc-windows-msvc/bin`)
+
+**Results (2026-11-15, Windows):** `go vet ./...` and `go test ./...` pass; `GOAMD64=v3 go test ./usvg/` passes; live parity matches the release CLI bit for bit on all 96 documents; `cargo test --release` passes (292 tests). Not run on Linux.

@@ -1,0 +1,217 @@
+{
+  "size": [
+    1120403456,
+    1109393408
+  ],
+  "root": {
+    "kind": "group",
+    "id": "",
+    "transform": [
+      1065353216,
+      0,
+      0,
+      1065353216,
+      0,
+      0
+    ],
+    "absTransform": [
+      1065353216,
+      0,
+      0,
+      1065353216,
+      0,
+      0
+    ],
+    "opacity": 1065353216,
+    "blendMode": "normal",
+    "isolate": false,
+    "clipPath": null,
+    "mask": null,
+    "filters": [],
+    "bbox": [
+      0,
+      0,
+      1120403456,
+      1120403456
+    ],
+    "absBbox": [
+      0,
+      0,
+      1120403456,
+      1120403456
+    ],
+    "strokeBbox": [
+      0,
+      0,
+      1120403456,
+      1120403456
+    ],
+    "absStrokeBbox": [
+      0,
+      0,
+      1120403456,
+      1120403456
+    ],
+    "layerBbox": [
+      0,
+      0,
+      1120403456,
+      1120403456
+    ],
+    "absLayerBbox": [
+      0,
+      0,
+      1120403456,
+      1120403456
+    ],
+    "children": [
+      {
+        "kind": "group",
+        "id": "",
+        "transform": [
+          1084227584,
+          0,
+          0,
+          1084227584,
+          0,
+          2147483648
+        ],
+        "absTransform": [
+          1084227584,
+          0,
+          0,
+          1084227584,
+          0,
+          2147483648
+        ],
+        "opacity": 1065353216,
+        "blendMode": "normal",
+        "isolate": false,
+        "clipPath": null,
+        "mask": null,
+        "filters": [],
+        "bbox": [
+          0,
+          0,
+          1101004800,
+          1101004800
+        ],
+        "absBbox": [
+          0,
+          0,
+          1120403456,
+          1120403456
+        ],
+        "strokeBbox": [
+          0,
+          0,
+          1101004800,
+          1101004800
+        ],
+        "absStrokeBbox": [
+          0,
+          0,
+          1120403456,
+          1120403456
+        ],
+        "layerBbox": [
+          0,
+          0,
+          1101004800,
+          1101004800
+        ],
+        "absLayerBbox": [
+          0,
+          0,
+          1120403456,
+          1120403456
+        ],
+        "children": [
+          {
+            "kind": "path",
+            "id": "",
+            "visible": true,
+            "fill": {
+              "paint": {
+                "type": "color",
+                "color": [
+                  0,
+                  170,
+                  0
+                ]
+              },
+              "opacity": 1065353216,
+              "rule": "nonzero"
+            },
+            "stroke": null,
+            "paintOrder": "fill-and-stroke",
+            "renderingMode": "geometric-precision",
+            "absTransform": [
+              1084227584,
+              0,
+              0,
+              1084227584,
+              0,
+              2147483648
+            ],
+            "bbox": [
+              0,
+              0,
+              1101004800,
+              1101004800
+            ],
+            "absBbox": [
+              0,
+              0,
+              1120403456,
+              1120403456
+            ],
+            "strokeBbox": [
+              0,
+              0,
+              1101004800,
+              1101004800
+            ],
+            "absStrokeBbox": [
+              0,
+              0,
+              1120403456,
+              1120403456
+            ],
+            "segments": [
+              [
+                "M",
+                0,
+                0
+              ],
+              [
+                "L",
+                1101004800,
+                0
+              ],
+              [
+                "L",
+                1101004800,
+                1101004800
+              ],
+              [
+                "L",
+                0,
+                1101004800
+              ],
+              [
+                "Z"
+              ]
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "linearGradients": [],
+  "radialGradients": [],
+  "patterns": [],
+  "clipPaths": [],
+  "masks": [],
+  "filters": []
+}

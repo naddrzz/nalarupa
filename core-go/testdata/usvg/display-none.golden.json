@@ -1,0 +1,343 @@
+{
+  "size": [
+    1120403456,
+    1120403456
+  ],
+  "root": {
+    "kind": "group",
+    "id": "",
+    "transform": [
+      1065353216,
+      0,
+      0,
+      1065353216,
+      0,
+      0
+    ],
+    "absTransform": [
+      1065353216,
+      0,
+      0,
+      1065353216,
+      0,
+      0
+    ],
+    "opacity": 1065353216,
+    "blendMode": "normal",
+    "isolate": false,
+    "clipPath": null,
+    "mask": null,
+    "filters": [],
+    "bbox": [
+      0,
+      0,
+      1112014848,
+      1109393408
+    ],
+    "absBbox": [
+      0,
+      0,
+      1112014848,
+      1092616192
+    ],
+    "strokeBbox": [
+      0,
+      0,
+      1112014848,
+      1109393408
+    ],
+    "absStrokeBbox": [
+      0,
+      0,
+      1112014848,
+      1092616192
+    ],
+    "layerBbox": [
+      0,
+      0,
+      1112014848,
+      1109655552
+    ],
+    "absLayerBbox": [
+      0,
+      0,
+      1112014848,
+      1109655552
+    ],
+    "children": [
+      {
+        "kind": "group",
+        "id": "",
+        "transform": [
+          1065353216,
+          0,
+          0,
+          1065353216,
+          0,
+          0
+        ],
+        "absTransform": [
+          1065353216,
+          0,
+          0,
+          1065353216,
+          0,
+          0
+        ],
+        "opacity": 1065353216,
+        "blendMode": "normal",
+        "isolate": false,
+        "clipPath": null,
+        "mask": null,
+        "filters": [],
+        "bbox": [
+          1109393408,
+          0,
+          1112014848,
+          1092616192
+        ],
+        "absBbox": [
+          1109393408,
+          0,
+          1112014848,
+          1092616192
+        ],
+        "strokeBbox": [
+          1109393408,
+          0,
+          1112014848,
+          1092616192
+        ],
+        "absStrokeBbox": [
+          1109393408,
+          0,
+          1112014848,
+          1092616192
+        ],
+        "layerBbox": [
+          1109393408,
+          0,
+          1112014848,
+          1092616192
+        ],
+        "absLayerBbox": [
+          1109393408,
+          0,
+          1112014848,
+          1092616192
+        ],
+        "children": [
+          {
+            "kind": "path",
+            "id": "shown",
+            "visible": true,
+            "fill": {
+              "paint": {
+                "type": "color",
+                "color": [
+                  0,
+                  0,
+                  0
+                ]
+              },
+              "opacity": 1065353216,
+              "rule": "nonzero"
+            },
+            "stroke": null,
+            "paintOrder": "fill-and-stroke",
+            "renderingMode": "geometric-precision",
+            "absTransform": [
+              1065353216,
+              0,
+              0,
+              1065353216,
+              0,
+              0
+            ],
+            "bbox": [
+              1109393408,
+              0,
+              1112014848,
+              1092616192
+            ],
+            "absBbox": [
+              1109393408,
+              0,
+              1112014848,
+              1092616192
+            ],
+            "strokeBbox": [
+              1109393408,
+              0,
+              1112014848,
+              1092616192
+            ],
+            "absStrokeBbox": [
+              1109393408,
+              0,
+              1112014848,
+              1092616192
+            ],
+            "segments": [
+              [
+                "M",
+                1109393408,
+                0
+              ],
+              [
+                "L",
+                1112014848,
+                0
+              ],
+              [
+                "L",
+                1112014848,
+                1092616192
+              ],
+              [
+                "L",
+                1109393408,
+                1092616192
+              ],
+              [
+                "Z"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "kind": "group",
+        "id": "use-hidden-src",
+        "transform": [
+          1065353216,
+          0,
+          0,
+          1065353216,
+          0,
+          1101004800
+        ],
+        "absTransform": [
+          1065353216,
+          0,
+          0,
+          1065353216,
+          0,
+          1101004800
+        ],
+        "opacity": 1065353216,
+        "blendMode": "normal",
+        "isolate": false,
+        "clipPath": null,
+        "mask": null,
+        "filters": [],
+        "bbox": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "absBbox": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "strokeBbox": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "absStrokeBbox": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "layerBbox": [
+          0,
+          0,
+          1065353216,
+          1065353216
+        ],
+        "absLayerBbox": [
+          0,
+          0,
+          1065353216,
+          1065353216
+        ],
+        "children": []
+      },
+      {
+        "kind": "group",
+        "id": "use-gsrc",
+        "transform": [
+          1065353216,
+          0,
+          0,
+          1065353216,
+          0,
+          1109393408
+        ],
+        "absTransform": [
+          1065353216,
+          0,
+          0,
+          1065353216,
+          0,
+          1109393408
+        ],
+        "opacity": 1065353216,
+        "blendMode": "normal",
+        "isolate": false,
+        "clipPath": null,
+        "mask": null,
+        "filters": [],
+        "bbox": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "absBbox": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "strokeBbox": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "absStrokeBbox": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "layerBbox": [
+          0,
+          0,
+          1065353216,
+          1065353216
+        ],
+        "absLayerBbox": [
+          0,
+          0,
+          1065353216,
+          1065353216
+        ],
+        "children": []
+      }
+    ]
+  },
+  "linearGradients": [],
+  "radialGradients": [],
+  "patterns": [],
+  "clipPaths": [],
+  "masks": [],
+  "filters": []
+}

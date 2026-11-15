@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd" [
+  <!ENTITY red "#cc0000">
+  <!ENTITY size "20">
+  <!ENTITY Rect "<rect id='from-entity' x='40' y='5' width='10' height='10' fill='#00a'/>">
+  <!ENTITY ns_svg "http://www.w3.org/2000/svg">
+]>
+<svg xmlns="&ns_svg;" width="100" height="50">
+  <!-- comment -->
+  <?pi ignored?>
+  <rect id="attr-entity" x="5" y="5" width="&size;" height="10" fill="&red;"/>
+  &Rect;
+  <rect id="char-ref" x="60" y="5" width="10" height="10" fill="&#x23;0a0"/>
+</svg>

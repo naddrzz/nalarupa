@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="100">
+  <defs>
+    <linearGradient id="stops"><stop offset="0" stop-color="#ff0"/><stop offset="1" stop-color="#00f"/></linearGradient>
+    <radialGradient id="plain" xlink:href="#stops"/>
+    <radialGradient id="focal" href="#stops" fx="0.3" fy="0.3" fr="0.1" r="0.6"/>
+    <radialGradient id="focal-out" href="#stops" cx="0.5" cy="0.5" r="0.2" fx="0.95" fy="0.5"/>
+    <radialGradient id="zero-r" href="#stops" r="0"/>
+    <radialGradient id="neg-r" href="#stops" r="-0.5"/>
+    <radialGradient id="fr-big" href="#stops" r="0.3" fr="0.5"/>
+    <radialGradient id="user" href="#stops" gradientUnits="userSpaceOnUse" cx="70" cy="70" r="20" spreadMethod="repeat" gradientTransform="scale(1 0.5)"/>
+    <radialGradient id="inherit-r" href="#focal" cx="0.4"/>
+    <linearGradient id="lin-from-radial" href="#focal" x1="0.2"/>
+  </defs>
+  <rect id="r-plain" x="5" y="5" width="40" height="30" fill="url(#plain)"/>
+  <rect id="r-focal" x="50" y="5" width="40" height="30" fill="url(#focal)"/>
+  <rect id="r-focal-out" x="95" y="5" width="40" height="30" fill="url(#focal-out)"/>
+  <rect id="r-zero-r" x="140" y="5" width="40" height="30" fill="url(#zero-r)"/>
+  <rect id="r-neg-r" x="5" y="50" width="40" height="30" fill="url(#neg-r)"/>
+  <rect id="r-fr-big" x="50" y="50" width="40" height="30" fill="url(#fr-big)"/>
+  <rect id="r-user" x="95" y="50" width="40" height="30" fill="url(#user)"/>
+  <rect id="r-inherit-r" x="140" y="50" width="25" height="30" fill="url(#inherit-r)"/>
+  <rect id="r-lin" x="170" y="50" width="25" height="30" fill="url(#lin-from-radial)"/>
+</svg>

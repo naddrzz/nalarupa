@@ -1,0 +1,1114 @@
+{
+  "size": [
+    1128792064,
+    1120403456
+  ],
+  "root": {
+    "kind": "group",
+    "id": "",
+    "transform": [
+      1065353216,
+      0,
+      0,
+      1065353216,
+      0,
+      0
+    ],
+    "absTransform": [
+      1065353216,
+      0,
+      0,
+      1065353216,
+      0,
+      0
+    ],
+    "opacity": 1065353216,
+    "blendMode": "normal",
+    "isolate": false,
+    "clipPath": null,
+    "mask": null,
+    "filters": [],
+    "bbox": [
+      1092616192,
+      1092616192,
+      1128136704,
+      1119092736
+    ],
+    "absBbox": [
+      1092616192,
+      1092616192,
+      1128136704,
+      1119092736
+    ],
+    "strokeBbox": [
+      1088421888,
+      1085815881,
+      1128136704,
+      1119370782
+    ],
+    "absStrokeBbox": [
+      1088421888,
+      1085815881,
+      1128136704,
+      1119370782
+    ],
+    "layerBbox": [
+      1088421888,
+      1085815881,
+      1128136704,
+      1119370782
+    ],
+    "absLayerBbox": [
+      1088421888,
+      1085815881,
+      1128136704,
+      1119370782
+    ],
+    "children": [
+      {
+        "kind": "path",
+        "id": "butt",
+        "visible": true,
+        "fill": null,
+        "stroke": {
+          "paint": {
+            "type": "color",
+            "color": [
+              0,
+              68,
+              136
+            ]
+          },
+          "dasharray": null,
+          "dashoffset": 0,
+          "miterlimit": 1082130432,
+          "opacity": 1065353216,
+          "width": 1086324736,
+          "linecap": "butt",
+          "linejoin": "miter"
+        },
+        "paintOrder": "fill-and-stroke",
+        "renderingMode": "geometric-precision",
+        "absTransform": [
+          1065353216,
+          0,
+          0,
+          1065353216,
+          0,
+          0
+        ],
+        "bbox": [
+          1092616192,
+          1092616192,
+          1112014848,
+          1092616192
+        ],
+        "absBbox": [
+          1092616192,
+          1092616192,
+          1112014848,
+          1092616192
+        ],
+        "strokeBbox": [
+          1092616192,
+          1088421888,
+          1112014848,
+          1095761920
+        ],
+        "absStrokeBbox": [
+          1092616192,
+          1088421888,
+          1112014848,
+          1095761920
+        ],
+        "segments": [
+          [
+            "M",
+            1092616192,
+            1092616192
+          ],
+          [
+            "L",
+            1112014848,
+            1092616192
+          ]
+        ]
+      },
+      {
+        "kind": "path",
+        "id": "round",
+        "visible": true,
+        "fill": null,
+        "stroke": {
+          "paint": {
+            "type": "color",
+            "color": [
+              0,
+              68,
+              136
+            ]
+          },
+          "dasharray": null,
+          "dashoffset": 0,
+          "miterlimit": 1082130432,
+          "opacity": 1065353216,
+          "width": 1086324736,
+          "linecap": "round",
+          "linejoin": "miter"
+        },
+        "paintOrder": "fill-and-stroke",
+        "renderingMode": "geometric-precision",
+        "absTransform": [
+          1065353216,
+          0,
+          0,
+          1065353216,
+          0,
+          0
+        ],
+        "bbox": [
+          1092616192,
+          1103626240,
+          1112014848,
+          1103626240
+        ],
+        "absBbox": [
+          1092616192,
+          1103626240,
+          1112014848,
+          1103626240
+        ],
+        "strokeBbox": [
+          1088421888,
+          1102053376,
+          1112801280,
+          1105199104
+        ],
+        "absStrokeBbox": [
+          1088421888,
+          1102053376,
+          1112801280,
+          1105199104
+        ],
+        "segments": [
+          [
+            "M",
+            1092616192,
+            1103626240
+          ],
+          [
+            "L",
+            1112014848,
+            1103626240
+          ]
+        ]
+      },
+      {
+        "kind": "path",
+        "id": "square",
+        "visible": true,
+        "fill": null,
+        "stroke": {
+          "paint": {
+            "type": "color",
+            "color": [
+              0,
+              68,
+              136
+            ]
+          },
+          "dasharray": null,
+          "dashoffset": 0,
+          "miterlimit": 1082130432,
+          "opacity": 1065353216,
+          "width": 1086324736,
+          "linecap": "square",
+          "linejoin": "miter"
+        },
+        "paintOrder": "fill-and-stroke",
+        "renderingMode": "geometric-precision",
+        "absTransform": [
+          1065353216,
+          0,
+          0,
+          1065353216,
+          0,
+          0
+        ],
+        "bbox": [
+          1092616192,
+          1109393408,
+          1112014848,
+          1109393408
+        ],
+        "absBbox": [
+          1092616192,
+          1109393408,
+          1112014848,
+          1109393408
+        ],
+        "strokeBbox": [
+          1088421888,
+          1108606976,
+          1112801280,
+          1110179840
+        ],
+        "absStrokeBbox": [
+          1088421888,
+          1108606976,
+          1112801280,
+          1110179840
+        ],
+        "segments": [
+          [
+            "M",
+            1092616192,
+            1109393408
+          ],
+          [
+            "L",
+            1112014848,
+            1109393408
+          ]
+        ]
+      },
+      {
+        "kind": "path",
+        "id": "bad-cap",
+        "visible": true,
+        "fill": null,
+        "stroke": {
+          "paint": {
+            "type": "color",
+            "color": [
+              0,
+              68,
+              136
+            ]
+          },
+          "dasharray": null,
+          "dashoffset": 0,
+          "miterlimit": 1082130432,
+          "opacity": 1065353216,
+          "width": 1086324736,
+          "linecap": "butt",
+          "linejoin": "miter"
+        },
+        "paintOrder": "fill-and-stroke",
+        "renderingMode": "geometric-precision",
+        "absTransform": [
+          1065353216,
+          0,
+          0,
+          1065353216,
+          0,
+          0
+        ],
+        "bbox": [
+          1092616192,
+          1113325568,
+          1112014848,
+          1113325568
+        ],
+        "absBbox": [
+          1092616192,
+          1113325568,
+          1112014848,
+          1113325568
+        ],
+        "strokeBbox": [
+          1092616192,
+          1112539136,
+          1112014848,
+          1114112000
+        ],
+        "absStrokeBbox": [
+          1092616192,
+          1112539136,
+          1112014848,
+          1114112000
+        ],
+        "segments": [
+          [
+            "M",
+            1092616192,
+            1113325568
+          ],
+          [
+            "L",
+            1112014848,
+            1113325568
+          ]
+        ]
+      },
+      {
+        "kind": "path",
+        "id": "miter",
+        "visible": true,
+        "fill": null,
+        "stroke": {
+          "paint": {
+            "type": "color",
+            "color": [
+              0,
+              68,
+              136
+            ]
+          },
+          "dasharray": null,
+          "dashoffset": 0,
+          "miterlimit": 1092616192,
+          "opacity": 1065353216,
+          "width": 1086324736,
+          "linecap": "butt",
+          "linejoin": "miter"
+        },
+        "paintOrder": "fill-and-stroke",
+        "renderingMode": "geometric-precision",
+        "absTransform": [
+          1065353216,
+          0,
+          0,
+          1065353216,
+          0,
+          0
+        ],
+        "bbox": [
+          1114636288,
+          1092616192,
+          1120403456,
+          1106247680
+        ],
+        "absBbox": [
+          1114636288,
+          1092616192,
+          1120403456,
+          1106247680
+        ],
+        "strokeBbox": [
+          1114080197,
+          1085815881,
+          1120681502,
+          1107328059
+        ],
+        "absStrokeBbox": [
+          1114080197,
+          1085815881,
+          1120681502,
+          1107328059
+        ],
+        "segments": [
+          [
+            "M",
+            1114636288,
+            1106247680
+          ],
+          [
+            "L",
+            1117782016,
+            1092616192
+          ],
+          [
+            "L",
+            1120403456,
+            1106247680
+          ]
+        ]
+      },
+      {
+        "kind": "path",
+        "id": "miter-clip",
+        "visible": true,
+        "fill": null,
+        "stroke": {
+          "paint": {
+            "type": "color",
+            "color": [
+              0,
+              68,
+              136
+            ]
+          },
+          "dasharray": null,
+          "dashoffset": 0,
+          "miterlimit": 1082130432,
+          "opacity": 1065353216,
+          "width": 1086324736,
+          "linecap": "butt",
+          "linejoin": "miter-clip"
+        },
+        "paintOrder": "fill-and-stroke",
+        "renderingMode": "geometric-precision",
+        "absTransform": [
+          1065353216,
+          0,
+          0,
+          1065353216,
+          0,
+          0
+        ],
+        "bbox": [
+          1121714176,
+          1092616192,
+          1125515264,
+          1106247680
+        ],
+        "absBbox": [
+          1121714176,
+          1092616192,
+          1125515264,
+          1106247680
+        ],
+        "strokeBbox": [
+          1121436130,
+          1085815881,
+          1125654287,
+          1107328059
+        ],
+        "absStrokeBbox": [
+          1121436130,
+          1085815881,
+          1125654287,
+          1107328059
+        ],
+        "segments": [
+          [
+            "M",
+            1121714176,
+            1106247680
+          ],
+          [
+            "L",
+            1124204544,
+            1092616192
+          ],
+          [
+            "L",
+            1125515264,
+            1106247680
+          ]
+        ]
+      },
+      {
+        "kind": "path",
+        "id": "j-round",
+        "visible": true,
+        "fill": null,
+        "stroke": {
+          "paint": {
+            "type": "color",
+            "color": [
+              0,
+              68,
+              136
+            ]
+          },
+          "dasharray": null,
+          "dashoffset": 0,
+          "miterlimit": 1082130432,
+          "opacity": 1065353216,
+          "width": 1086324736,
+          "linecap": "butt",
+          "linejoin": "round"
+        },
+        "paintOrder": "fill-and-stroke",
+        "renderingMode": "geometric-precision",
+        "absTransform": [
+          1065353216,
+          0,
+          0,
+          1065353216,
+          0,
+          0
+        ],
+        "bbox": [
+          1114636288,
+          1109393408,
+          1120403456,
+          1114636288
+        ],
+        "absBbox": [
+          1114636288,
+          1109393408,
+          1120403456,
+          1114636288
+        ],
+        "strokeBbox": [
+          1114080197,
+          1108606975,
+          1120681502,
+          1115192379
+        ],
+        "absStrokeBbox": [
+          1114080197,
+          1108606975,
+          1120681502,
+          1115192379
+        ],
+        "segments": [
+          [
+            "M",
+            1114636288,
+            1114636288
+          ],
+          [
+            "L",
+            1117782016,
+            1109393408
+          ],
+          [
+            "L",
+            1120403456,
+            1114636288
+          ]
+        ]
+      },
+      {
+        "kind": "path",
+        "id": "j-bevel",
+        "visible": true,
+        "fill": null,
+        "stroke": {
+          "paint": {
+            "type": "color",
+            "color": [
+              0,
+              68,
+              136
+            ]
+          },
+          "dasharray": null,
+          "dashoffset": 0,
+          "miterlimit": 1082130432,
+          "opacity": 1065353216,
+          "width": 1086324736,
+          "linecap": "butt",
+          "linejoin": "bevel"
+        },
+        "paintOrder": "fill-and-stroke",
+        "renderingMode": "geometric-precision",
+        "absTransform": [
+          1065353216,
+          0,
+          0,
+          1065353216,
+          0,
+          0
+        ],
+        "bbox": [
+          1121714176,
+          1109393408,
+          1125515264,
+          1114636288
+        ],
+        "absBbox": [
+          1121714176,
+          1109393408,
+          1125515264,
+          1114636288
+        ],
+        "strokeBbox": [
+          1121436130,
+          1108837317,
+          1125654287,
+          1115192379
+        ],
+        "absStrokeBbox": [
+          1121436130,
+          1108837317,
+          1125654287,
+          1115192379
+        ],
+        "segments": [
+          [
+            "M",
+            1121714176,
+            1114636288
+          ],
+          [
+            "L",
+            1124204544,
+            1109393408
+          ],
+          [
+            "L",
+            1125515264,
+            1114636288
+          ]
+        ]
+      },
+      {
+        "kind": "path",
+        "id": "j-arcs",
+        "visible": true,
+        "fill": null,
+        "stroke": {
+          "paint": {
+            "type": "color",
+            "color": [
+              0,
+              68,
+              136
+            ]
+          },
+          "dasharray": null,
+          "dashoffset": 0,
+          "miterlimit": 1082130432,
+          "opacity": 1065353216,
+          "width": 1086324736,
+          "linecap": "butt",
+          "linejoin": "miter"
+        },
+        "paintOrder": "fill-and-stroke",
+        "renderingMode": "geometric-precision",
+        "absTransform": [
+          1065353216,
+          0,
+          0,
+          1065353216,
+          0,
+          0
+        ],
+        "bbox": [
+          1126170624,
+          1109393408,
+          1127481344,
+          1114636288
+        ],
+        "absBbox": [
+          1126170624,
+          1109393408,
+          1127481344,
+          1114636288
+        ],
+        "strokeBbox": [
+          1125994772,
+          1107634893,
+          1127657196,
+          1114987991
+        ],
+        "absStrokeBbox": [
+          1125994772,
+          1107634893,
+          1127657196,
+          1114987991
+        ],
+        "segments": [
+          [
+            "M",
+            1126170624,
+            1114636288
+          ],
+          [
+            "L",
+            1126825984,
+            1109393408
+          ],
+          [
+            "L",
+            1127481344,
+            1114636288
+          ]
+        ]
+      },
+      {
+        "kind": "path",
+        "id": "ml-low",
+        "visible": true,
+        "fill": null,
+        "stroke": {
+          "paint": {
+            "type": "color",
+            "color": [
+              0,
+              68,
+              136
+            ]
+          },
+          "dasharray": null,
+          "dashoffset": 0,
+          "miterlimit": 1065353216,
+          "opacity": 1065353216,
+          "width": 1086324736,
+          "linecap": "butt",
+          "linejoin": "miter"
+        },
+        "paintOrder": "fill-and-stroke",
+        "renderingMode": "geometric-precision",
+        "absTransform": [
+          1065353216,
+          0,
+          0,
+          1065353216,
+          0,
+          0
+        ],
+        "bbox": [
+          1114636288,
+          1116471296,
+          1120403456,
+          1119092736
+        ],
+        "absBbox": [
+          1114636288,
+          1116471296,
+          1120403456,
+          1119092736
+        ],
+        "strokeBbox": [
+          1114080197,
+          1116193250,
+          1120681502,
+          1119370782
+        ],
+        "absStrokeBbox": [
+          1114080197,
+          1116193250,
+          1120681502,
+          1119370782
+        ],
+        "segments": [
+          [
+            "M",
+            1114636288,
+            1119092736
+          ],
+          [
+            "L",
+            1117782016,
+            1116471296
+          ],
+          [
+            "L",
+            1120403456,
+            1119092736
+          ]
+        ]
+      },
+      {
+        "kind": "path",
+        "id": "ml-one",
+        "visible": true,
+        "fill": null,
+        "stroke": {
+          "paint": {
+            "type": "color",
+            "color": [
+              0,
+              68,
+              136
+            ]
+          },
+          "dasharray": null,
+          "dashoffset": 0,
+          "miterlimit": 1065353216,
+          "opacity": 1065353216,
+          "width": 1086324736,
+          "linecap": "butt",
+          "linejoin": "miter"
+        },
+        "paintOrder": "fill-and-stroke",
+        "renderingMode": "geometric-precision",
+        "absTransform": [
+          1065353216,
+          0,
+          0,
+          1065353216,
+          0,
+          0
+        ],
+        "bbox": [
+          1121714176,
+          1116471296,
+          1125515264,
+          1119092736
+        ],
+        "absBbox": [
+          1121714176,
+          1116471296,
+          1125515264,
+          1119092736
+        ],
+        "strokeBbox": [
+          1121436130,
+          1116193250,
+          1125654287,
+          1119370782
+        ],
+        "absStrokeBbox": [
+          1121436130,
+          1116193250,
+          1125654287,
+          1119370782
+        ],
+        "segments": [
+          [
+            "M",
+            1121714176,
+            1119092736
+          ],
+          [
+            "L",
+            1124204544,
+            1116471296
+          ],
+          [
+            "L",
+            1125515264,
+            1119092736
+          ]
+        ]
+      },
+      {
+        "kind": "path",
+        "id": "w-zero",
+        "visible": false,
+        "fill": null,
+        "stroke": null,
+        "paintOrder": "fill-and-stroke",
+        "renderingMode": "geometric-precision",
+        "absTransform": [
+          1065353216,
+          0,
+          0,
+          1065353216,
+          0,
+          0
+        ],
+        "bbox": [
+          1092616192,
+          1116471296,
+          1112014848,
+          1116471296
+        ],
+        "absBbox": [
+          1092616192,
+          1116471296,
+          1112014848,
+          1116471296
+        ],
+        "strokeBbox": [
+          1092616192,
+          1116471296,
+          1112014848,
+          1116471296
+        ],
+        "absStrokeBbox": [
+          1092616192,
+          1116471296,
+          1112014848,
+          1116471296
+        ],
+        "segments": [
+          [
+            "M",
+            1092616192,
+            1116471296
+          ],
+          [
+            "L",
+            1112014848,
+            1116471296
+          ]
+        ]
+      },
+      {
+        "kind": "path",
+        "id": "w-neg",
+        "visible": false,
+        "fill": null,
+        "stroke": null,
+        "paintOrder": "fill-and-stroke",
+        "renderingMode": "geometric-precision",
+        "absTransform": [
+          1065353216,
+          0,
+          0,
+          1065353216,
+          0,
+          0
+        ],
+        "bbox": [
+          1092616192,
+          1117782016,
+          1112014848,
+          1117782016
+        ],
+        "absBbox": [
+          1092616192,
+          1117782016,
+          1112014848,
+          1117782016
+        ],
+        "strokeBbox": [
+          1092616192,
+          1117782016,
+          1112014848,
+          1117782016
+        ],
+        "absStrokeBbox": [
+          1092616192,
+          1117782016,
+          1112014848,
+          1117782016
+        ],
+        "segments": [
+          [
+            "M",
+            1092616192,
+            1117782016
+          ],
+          [
+            "L",
+            1112014848,
+            1117782016
+          ]
+        ]
+      },
+      {
+        "kind": "path",
+        "id": "w-pct",
+        "visible": true,
+        "fill": null,
+        "stroke": {
+          "paint": {
+            "type": "color",
+            "color": [
+              0,
+              68,
+              136
+            ]
+          },
+          "dasharray": null,
+          "dashoffset": 0,
+          "miterlimit": 1082130432,
+          "opacity": 1056964608,
+          "width": 1078616769,
+          "linecap": "butt",
+          "linejoin": "miter"
+        },
+        "paintOrder": "fill-and-stroke",
+        "renderingMode": "geometric-precision",
+        "absTransform": [
+          1065353216,
+          0,
+          0,
+          1065353216,
+          0,
+          0
+        ],
+        "bbox": [
+          1092616192,
+          1119092736,
+          1112014848,
+          1119092736
+        ],
+        "absBbox": [
+          1092616192,
+          1119092736,
+          1112014848,
+          1119092736
+        ],
+        "strokeBbox": [
+          1092616192,
+          1118885493,
+          1112014848,
+          1119299979
+        ],
+        "absStrokeBbox": [
+          1092616192,
+          1118885493,
+          1112014848,
+          1119299979
+        ],
+        "segments": [
+          [
+            "M",
+            1092616192,
+            1119092736
+          ],
+          [
+            "L",
+            1112014848,
+            1119092736
+          ]
+        ]
+      },
+      {
+        "kind": "path",
+        "id": "so-over",
+        "visible": true,
+        "fill": null,
+        "stroke": {
+          "paint": {
+            "type": "color",
+            "color": [
+              0,
+              68,
+              136
+            ]
+          },
+          "dasharray": null,
+          "dashoffset": 0,
+          "miterlimit": 1082130432,
+          "opacity": 1065353216,
+          "width": 1077936128,
+          "linecap": "butt",
+          "linejoin": "miter"
+        },
+        "paintOrder": "fill-and-stroke",
+        "renderingMode": "geometric-precision",
+        "absTransform": [
+          1065353216,
+          0,
+          0,
+          1065353216,
+          0,
+          0
+        ],
+        "bbox": [
+          1126170624,
+          1119092736,
+          1128136704,
+          1119092736
+        ],
+        "absBbox": [
+          1126170624,
+          1119092736,
+          1128136704,
+          1119092736
+        ],
+        "strokeBbox": [
+          1126170624,
+          1118896128,
+          1128136704,
+          1119289344
+        ],
+        "absStrokeBbox": [
+          1126170624,
+          1118896128,
+          1128136704,
+          1119289344
+        ],
+        "segments": [
+          [
+            "M",
+            1126170624,
+            1119092736
+          ],
+          [
+            "L",
+            1128136704,
+            1119092736
+          ]
+        ]
+      }
+    ]
+  },
+  "linearGradients": [],
+  "radialGradients": [],
+  "patterns": [],
+  "clipPaths": [],
+  "masks": [],
+  "filters": []
+}

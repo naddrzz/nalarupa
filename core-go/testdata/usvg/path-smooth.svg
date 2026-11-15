@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="60">
+  <path id="s-first" d="M10 30 S30 10 40 30" fill="none" stroke="#000"/>
+  <path id="s-after-q" d="M50 30 Q55 10 60 30 S80 50 90 30" fill="none" stroke="#000"/>
+  <path id="t-first" d="M100 30 T120 30" fill="none" stroke="#000"/>
+  <path id="t-after-c" d="M130 30 C135 10 140 10 145 30 T160 30" fill="none" stroke="#000"/>
+  <path id="t-chain" d="M10 50 Q15 40 20 50 t10 0 t10 0 t10 0" fill="none" stroke="#000"/>
+  <path id="s-chain-rel" d="M70 50 c5 -10 10 -10 15 0 s10 10 15 0 s10 -10 15 0" fill="none" stroke="#000"/>
+  <path id="s-after-move" d="M130 50 C135 40 140 40 145 50 M150 50 S160 40 170 50" fill="none" stroke="#000"/>
+</svg>

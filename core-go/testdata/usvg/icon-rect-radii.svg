@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+  <rect id="plain" x="5" y="5" width="30" height="20"/>
+  <rect id="rx-only" x="45" y="5" width="30" height="20" rx="5"/>
+  <rect id="ry-only" x="85" y="5" width="30" height="20" ry="6"/>
+  <rect id="rx-big" x="125" y="5" width="30" height="20" rx="40"/>
+  <rect id="rx-neg" x="165" y="5" width="30" height="20" rx="-4"/>
+  <rect id="rx-ry" x="5" y="40" width="40" height="20" rx="8" ry="3"/>
+  <rect id="rx-neg-ry" x="55" y="40" width="40" height="20" rx="-1" ry="5"/>
+  <rect id="ry-auto" x="105" y="40" width="40" height="20" rx="4" ry="auto"/>
+  <rect id="zero-w" x="155" y="40" width="0" height="20" fill="#f00"/>
+  <rect id="neg-h" x="5" y="70" width="20" height="-10" fill="#f00"/>
+  <rect id="pct" x="10%" y="70" width="10%" height="20%" rx="5%"/>
+</svg>

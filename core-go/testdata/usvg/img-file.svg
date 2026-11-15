@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="60">
+  <image id="png" x="5" y="5" width="30" height="20" href="res/red-3x2.png"/>
+  <image id="jpeg" x="40" y="5" width="25" height="20" xlink:href="res/tile-5x4.jpg"/>
+  <image id="gif" x="70" y="5" width="20" height="30" href="res/dot-2x3.gif"/>
+  <image id="webp" x="95" y="5" width="35" height="25" href="res/pix-7x5.webp"/>
+  <image id="missing" x="135" y="5" width="20" height="20" href="res/nope.png"/>
+  <image id="not-image" x="160" y="5" width="20" height="20" href="res/notes.txt"/>
+  <image id="url" x="5" y="35" width="20" height="20" href="https://example.org/a.png"/>
+  <image id="intrinsic" x="30" y="35" href="res/pix-7x5.webp"/>
+</svg>

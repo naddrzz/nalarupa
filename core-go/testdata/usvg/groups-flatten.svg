@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+  <g><rect id="in-plain-g" width="10" height="10"/></g>
+  <g id="named"><rect x="15" width="10" height="10"/></g>
+  <g transform="translate(30 0)"><rect id="in-transformed" width="10" height="10"/></g>
+  <g transform="translate(5 5)"><g transform="scale(2)"><rect id="double" x="20" y="5" width="5" height="5"/></g></g>
+  <g></g>
+  <g id="empty-named"/>
+  <g opacity="1" id="op1"><rect x="45" width="10" height="10"/></g>
+  <g opacity="0"><rect id="op0" x="60" width="10" height="10"/></g>
+  <a href="https://example.org"><rect id="in-link" x="75" width="10" height="10"/></a>
+  <g><g><g><rect id="deep" y="40" width="10" height="10"/></g></g></g>
+  <g><desc>d</desc><title>t</title><metadata/></g>
+</svg>

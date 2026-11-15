@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="10cm" height="2in" font-size="10">
+  <rect id="px" x="1px" y="1px" width="10px" height="10px"/>
+  <rect id="pt" x="15pt" y="1" width="10pt" height="10pt"/>
+  <rect id="pc" x="3pc" y="1" width="1pc" height="1pc"/>
+  <rect id="mm" x="20mm" y="1" width="5mm" height="5mm"/>
+  <rect id="cm" x="3cm" y="1" width="0.5cm" height="0.5cm"/>
+  <rect id="in" x="1.5in" y="1" width="0.2in" height="0.2in"/>
+  <rect id="em" x="18em" y="1" width="1em" height="2em" font-size="12"/>
+  <rect id="ex" x="20em" y="1" width="2ex" height="2ex"/>
+  <rect id="pct" x="10%" y="50%" width="10%" height="10%"/>
+  <circle id="r-pct" cx="50%" cy="80%" r="5%"/>
+  <rect id="stroke-units" x="5" y="120" width="20" height="20" fill="none" stroke="#000" stroke-width="1mm"/>
+  <g font-size="20px"><rect id="em-inh" x="0" y="150" width="1em" height="0.5em"/></g>
+  <rect id="bad-unit" x="5furlongs" y="40" width="10" height="10"/>
+  <rect id="sci" x="1e1" y="4.5E1" width=".5e2" height="1e+1"/>
+</svg>

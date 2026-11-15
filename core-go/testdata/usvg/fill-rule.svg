@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="60">
+  <path id="nonzero" d="M10 10h40v40h-40z M20 20h20v20h-20z" fill-rule="nonzero"/>
+  <path id="evenodd" d="M60 10h40v40h-40z M70 20h20v20h-20z" fill-rule="evenodd"/>
+  <g fill-rule="evenodd"><path id="inherited" d="M110 10h40v40h-40z M120 20h20v20h-20z"/></g>
+  <path id="invalid" d="M160 10h30v30h-30z" fill-rule="bogus"/>
+  <path id="css" d="M160 45h30v10h-30z" style="fill-rule:evenodd" fill-rule="nonzero"/>
+</svg>

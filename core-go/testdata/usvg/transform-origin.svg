@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+  <rect id="px" x="10" y="10" width="20" height="20" transform="rotate(45)" transform-origin="20 20"/>
+  <rect id="kw" x="50" y="10" width="20" height="20" transform="scale(2)" transform-origin="center"/>
+  <rect id="kw2" x="90" y="10" width="20" height="20" transform="scale(0.5)" transform-origin="right bottom"/>
+  <rect id="pct" x="130" y="10" width="20" height="20" transform="rotate(30)" transform-origin="50% 50%"/>
+  <rect id="style" x="10" y="50" width="20" height="20" style="transform-origin: 20px 60px" transform="rotate(90)"/>
+  <g transform="scale(2)" transform-origin="50 75"><rect id="on-group" x="40" y="40" width="10" height="10"/></g>
+  <rect id="no-transform" x="130" y="50" width="20" height="20" transform-origin="10 10"/>
+</svg>

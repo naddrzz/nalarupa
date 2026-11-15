@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120" viewBox="700 0 200 120">
+  <g transform="matrix(3 0 0 3 740 10)" fill="#000">
+    <svg viewBox="0,0,16,8"><circle cx="8" cy="4" r="3"/></svg>
+  </g>
+  <svg id="sized" x="710" y="50" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ff8800" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l3 7h7l-5.5 4.5L18 21l-6-4-6 4 1.5-7.5L2 9h7z"/></svg>
+  <svg id="noview" x="760" y="50" width="30" height="30"><rect width="50" height="50" fill="#06c"/></svg>
+</svg>

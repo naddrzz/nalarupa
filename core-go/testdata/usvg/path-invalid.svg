@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="60">
+  <path id="stops-at-error" d="M10 10 L30 10 L30 30 X L10 30 Z"/>
+  <path id="bad-number" d="M40 10 L60 10 L60 30 L40 3-0-x"/>
+  <path id="no-move" d="L10 40 L30 40 L20 50"/>
+  <path id="empty" d=""/>
+  <path id="move-only" d="M100 10"/>
+  <path id="missing-coord" d="M110 10 L130 10 L130"/>
+  <path id="no-d"/>
+  <path id="comma-start" d=",M140 10 L150 10 L150 20"/>
+  <path id="trailing-comma" d="M160 10 L180 10, L180 30,"/>
+  <path id="nan" d="M10 50 L20 NaN L30 50"/>
+</svg>

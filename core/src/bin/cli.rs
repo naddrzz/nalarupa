@@ -14,6 +14,9 @@
 //!   nalarupa-cli skia-raster <scenes.json> <out-dir>    tiny-skia pixels of each scene (pixmap and mask ops) as raw
 //!                                                       bytes plus index.json (the Go port's raster oracle, see
 //!                                                       skia_raster below)
+//!   nalarupa-cli usvg-tree <file.svg> [--resources <dir>]  the usvg tree of an SVG as JSON with f32 values as bit
+//!                                                       patterns, offline fonts (the Go port's usvg oracle, see
+//!                                                       usvg_tree below)
 
 use nalarupa_core::engine::engine;
 use nalarupa_core::resolve::RNode;
@@ -152,6 +155,10 @@ fn run(args: &[String]) -> Result<(), String> {
             Ok(())
         }
         "skia-raster" => skia_raster::run(arg(2)?, arg(3)?),
+        "usvg-tree" => {
+            let resources = args.iter().position(|a| a == "--resources").map(|i| arg(i + 1)).transpose()?;
+            usvg_tree::run(arg(2)?, resources)
+        }
         other => Err(format!("unknown command '{other}'")),
     }
 }
@@ -721,5 +728,243 @@ mod skia_raster {
         }
         let index = serde_json::to_string_pretty(&Value::Object(index)).map_err(|e| e.to_string())?;
         std::fs::write(out.join("index.json"), index + "\n").map_err(|e| e.to_string())
+    }
+}
+
+/// The Go port's usvg oracle: the tree `resvg::usvg::Tree::from_data` builds from an SVG file, as JSON. Options
+/// are `tree_options` (render.rs) with offline fonts: the default empty fontdb and font resolver, svg.rs's image
+/// href resolver, and `resources_dir` from `--resources` (None without it). Every f32 is its bit pattern (a u32);
+/// a transform T is [sx,ky,kx,sy,tx,ty], a rect R is [left,top,right,bottom] and a size is [w,h], all as bits.
+///   tree   {"size","root":G,"linearGradients","radialGradients","patterns","clipPaths","masks","filters"}
+///          (the collections as id lists), or {"error": usvg::Error variant} plus "xml": roxmltree::Error variant
+///          for ParsingFailed; parse errors are output, not CLI failures
+///   G      {"kind":"group","id","transform","absTransform","opacity","blendMode","isolate","clipPath":C|null,
+///          "mask":M|null,"filters":[ids],"bbox","absBbox","strokeBbox","absStrokeBbox","layerBbox","absLayerBbox",
+///          "children":[node...]}
+///   path   {"kind":"path","id","visible","fill":F|null,"stroke":S|null,"paintOrder","renderingMode","absTransform",
+///          "bbox","absBbox","strokeBbox","absStrokeBbox","segments":[["M",x,y] ["L",x,y] ["Q",..] ["C",..] ["Z"]]}
+///   image  {"kind":"image","id","visible","size","renderingMode","absTransform","bbox","absBbox","format",
+///          "dataLen" (jpeg|png|gif|webp) or "tree" (svg: a nested tree object)}
+///   text   {"kind":"text","id"} (placeholder)
+///   F      {"paint":P,"opacity","rule"};  S {"paint":P,"dasharray":[..]|null,"dashoffset","miterlimit","opacity",
+///          "width","linecap","linejoin"}
+///   P      {"type":"color","color":[r,g,b]} | {"type":"linear","id","x1","y1","x2","y2","transform","spread","stops"}
+///          | {"type":"radial","id","cx","cy","r","fx","fy","fr","transform","spread","stops"}
+///          | {"type":"pattern","id","transform","rect","root":G};  stop {"offset","color","opacity"}
+///   C      {"id","transform","clipPath":C|null,"root":G};  M {"id","rect","kind","mask":M|null,"root":G}
+mod usvg_tree {
+    use resvg::tiny_skia::{NonZeroRect, Rect, Size, Transform};
+    use resvg::usvg::tiny_skia_path::PathSegment;
+    use resvg::usvg::{self, BaseGradient, ClipPath, Group, ImageKind, ImageRendering, Mask, Node, Paint, Tree};
+    use serde_json::{json, Value};
+
+    pub(super) fn run(file: &str, resources: Option<&str>) -> Result<(), String> {
+        let bytes = std::fs::read(file).map_err(|e| e.to_string())?;
+        let opt = usvg::Options {
+            image_href_resolver: nalarupa_core::svg::image_href_resolver(),
+            resources_dir: resources.map(std::path::PathBuf::from),
+            ..usvg::Options::default()
+        };
+        let out = match Tree::from_data(&bytes, &opt) {
+            Ok(tree) => tree_json(&tree),
+            Err(e) => error(&e),
+        };
+        println!("{}", serde_json::to_string_pretty(&out).map_err(|e| e.to_string())?);
+        Ok(())
+    }
+
+    fn error(e: &usvg::Error) -> Value {
+        match e {
+            usvg::Error::NotAnUtf8Str => json!({"error": "NotAnUtf8Str"}),
+            usvg::Error::MalformedGZip => json!({"error": "MalformedGZip"}),
+            usvg::Error::ElementsLimitReached => json!({"error": "ElementsLimitReached"}),
+            usvg::Error::InvalidSize => json!({"error": "InvalidSize"}),
+            usvg::Error::ParsingFailed(x) => {
+                let dbg = format!("{x:?}");
+                let name = dbg.split(['(', ' ', '{']).next().unwrap_or_default();
+                json!({"error": "ParsingFailed", "xml": name})
+            }
+        }
+    }
+
+    fn tree_json(t: &Tree) -> Value {
+        json!({
+            "size": size(t.size()),
+            "root": group(t.root()),
+            "linearGradients": t.linear_gradients().iter().map(|g| g.id()).collect::<Vec<_>>(),
+            "radialGradients": t.radial_gradients().iter().map(|g| g.id()).collect::<Vec<_>>(),
+            "patterns": t.patterns().iter().map(|p| p.id()).collect::<Vec<_>>(),
+            "clipPaths": t.clip_paths().iter().map(|c| c.id()).collect::<Vec<_>>(),
+            "masks": t.masks().iter().map(|m| m.id()).collect::<Vec<_>>(),
+            "filters": t.filters().iter().map(|f| f.id()).collect::<Vec<_>>(),
+        })
+    }
+
+    fn f(x: f32) -> Value {
+        json!(x.to_bits())
+    }
+
+    fn ts(t: Transform) -> Value {
+        json!([t.sx, t.ky, t.kx, t.sy, t.tx, t.ty].map(f32::to_bits))
+    }
+
+    fn rect(r: Rect) -> Value {
+        json!([r.left(), r.top(), r.right(), r.bottom()].map(f32::to_bits))
+    }
+
+    fn nz(r: NonZeroRect) -> Value {
+        json!([r.left(), r.top(), r.right(), r.bottom()].map(f32::to_bits))
+    }
+
+    fn size(s: Size) -> Value {
+        json!([s.width(), s.height()].map(f32::to_bits))
+    }
+
+    fn group(g: &Group) -> Value {
+        json!({
+            "kind": "group",
+            "id": g.id(),
+            "transform": ts(g.transform()),
+            "absTransform": ts(g.abs_transform()),
+            "opacity": f(g.opacity().get()),
+            "blendMode": g.blend_mode().to_string(),
+            "isolate": g.isolate(),
+            "clipPath": g.clip_path().map(clip),
+            "mask": g.mask().map(mask),
+            "filters": g.filters().iter().map(|x| x.id()).collect::<Vec<_>>(),
+            "bbox": rect(g.bounding_box()),
+            "absBbox": rect(g.abs_bounding_box()),
+            "strokeBbox": rect(g.stroke_bounding_box()),
+            "absStrokeBbox": rect(g.abs_stroke_bounding_box()),
+            "layerBbox": nz(g.layer_bounding_box()),
+            "absLayerBbox": nz(g.abs_layer_bounding_box()),
+            "children": g.children().iter().map(node).collect::<Vec<_>>(),
+        })
+    }
+
+    fn node(n: &Node) -> Value {
+        match n {
+            Node::Group(g) => group(g),
+            Node::Path(p) => {
+                let segments: Vec<Value> = p.data().segments().map(|s| match s {
+                    PathSegment::MoveTo(a) => json!(["M", f(a.x), f(a.y)]),
+                    PathSegment::LineTo(a) => json!(["L", f(a.x), f(a.y)]),
+                    PathSegment::QuadTo(a, b) => json!(["Q", f(a.x), f(a.y), f(b.x), f(b.y)]),
+                    PathSegment::CubicTo(a, b, c) => json!(["C", f(a.x), f(a.y), f(b.x), f(b.y), f(c.x), f(c.y)]),
+                    PathSegment::Close => json!(["Z"]),
+                }).collect();
+                json!({
+                    "kind": "path",
+                    "id": p.id(),
+                    "visible": p.is_visible(),
+                    "fill": p.fill().map(|x| json!({
+                        "paint": paint(x.paint()),
+                        "opacity": f(x.opacity().get()),
+                        "rule": match x.rule() { usvg::FillRule::NonZero => "nonzero", usvg::FillRule::EvenOdd => "evenodd" },
+                    })),
+                    "stroke": p.stroke().map(|s| json!({
+                        "paint": paint(s.paint()),
+                        "dasharray": s.dasharray().map(|d| d.iter().map(|&x| f(x)).collect::<Vec<_>>()),
+                        "dashoffset": f(s.dashoffset()),
+                        "miterlimit": f(s.miterlimit().get()),
+                        "opacity": f(s.opacity().get()),
+                        "width": f(s.width().get()),
+                        "linecap": match s.linecap() { usvg::LineCap::Butt => "butt", usvg::LineCap::Round => "round", usvg::LineCap::Square => "square" },
+                        "linejoin": match s.linejoin() {
+                            usvg::LineJoin::Miter => "miter",
+                            usvg::LineJoin::MiterClip => "miter-clip",
+                            usvg::LineJoin::Round => "round",
+                            usvg::LineJoin::Bevel => "bevel",
+                        },
+                    })),
+                    "paintOrder": match p.paint_order() { usvg::PaintOrder::FillAndStroke => "fill-and-stroke", usvg::PaintOrder::StrokeAndFill => "stroke-and-fill" },
+                    "renderingMode": match p.rendering_mode() {
+                        usvg::ShapeRendering::OptimizeSpeed => "optimize-speed",
+                        usvg::ShapeRendering::CrispEdges => "crisp-edges",
+                        usvg::ShapeRendering::GeometricPrecision => "geometric-precision",
+                    },
+                    "absTransform": ts(p.abs_transform()),
+                    "bbox": rect(p.bounding_box()),
+                    "absBbox": rect(p.abs_bounding_box()),
+                    "strokeBbox": rect(p.stroke_bounding_box()),
+                    "absStrokeBbox": rect(p.abs_stroke_bounding_box()),
+                    "segments": segments,
+                })
+            }
+            Node::Image(i) => {
+                let mut v = json!({
+                    "kind": "image",
+                    "id": i.id(),
+                    "visible": i.is_visible(),
+                    "size": size(i.size()),
+                    "renderingMode": match i.rendering_mode() {
+                        ImageRendering::OptimizeQuality => "optimize-quality",
+                        ImageRendering::OptimizeSpeed => "optimize-speed",
+                        ImageRendering::Smooth => "smooth",
+                        ImageRendering::HighQuality => "high-quality",
+                        ImageRendering::CrispEdges => "crisp-edges",
+                        ImageRendering::Pixelated => "pixelated",
+                    },
+                    "absTransform": ts(i.abs_transform()),
+                    "bbox": rect(i.bounding_box()),
+                    "absBbox": rect(i.abs_bounding_box()),
+                });
+                let (format, data) = match i.kind() {
+                    ImageKind::JPEG(d) => ("jpeg", d),
+                    ImageKind::PNG(d) => ("png", d),
+                    ImageKind::GIF(d) => ("gif", d),
+                    ImageKind::WEBP(d) => ("webp", d),
+                    ImageKind::SVG(t) => {
+                        v["format"] = json!("svg");
+                        v["tree"] = tree_json(t);
+                        return v;
+                    }
+                };
+                v["format"] = json!(format);
+                v["dataLen"] = json!(data.len());
+                v
+            }
+            Node::Text(t) => json!({"kind": "text", "id": t.id()}),
+        }
+    }
+
+    fn paint(p: &Paint) -> Value {
+        match p {
+            Paint::Color(c) => json!({"type": "color", "color": [c.red, c.green, c.blue]}),
+            Paint::LinearGradient(g) => {
+                let mut v = json!({"type": "linear", "id": g.id(), "x1": f(g.x1()), "y1": f(g.y1()), "x2": f(g.x2()), "y2": f(g.y2())});
+                gradient(&mut v, g);
+                v
+            }
+            Paint::RadialGradient(g) => {
+                let mut v = json!({"type": "radial", "id": g.id(), "cx": f(g.cx()), "cy": f(g.cy()), "r": f(g.r().get()),
+                                   "fx": f(g.fx()), "fy": f(g.fy()), "fr": f(g.fr().get())});
+                gradient(&mut v, g);
+                v
+            }
+            Paint::Pattern(p) => json!({"type": "pattern", "id": p.id(), "transform": ts(p.transform()), "rect": nz(p.rect()), "root": group(p.root())}),
+        }
+    }
+
+    fn gradient(v: &mut Value, g: &BaseGradient) {
+        v["transform"] = ts(g.transform());
+        v["spread"] = json!(match g.spread_method() {
+            usvg::SpreadMethod::Pad => "pad",
+            usvg::SpreadMethod::Reflect => "reflect",
+            usvg::SpreadMethod::Repeat => "repeat",
+        });
+        v["stops"] = g.stops().iter().map(|s| {
+            let c = s.color();
+            json!({"offset": f(s.offset().get()), "color": [c.red, c.green, c.blue], "opacity": f(s.opacity().get())})
+        }).collect();
+    }
+
+    fn clip(c: &ClipPath) -> Value {
+        json!({"id": c.id(), "transform": ts(c.transform()), "clipPath": c.clip_path().map(clip), "root": group(c.root())})
+    }
+
+    fn mask(m: &Mask) -> Value {
+        let kind = match m.kind() { usvg::MaskType::Luminance => "luminance", usvg::MaskType::Alpha => "alpha" };
+        json!({"id": m.id(), "rect": nz(m.rect()), "kind": kind, "mask": m.mask().map(mask), "root": group(m.root())})
     }
 }

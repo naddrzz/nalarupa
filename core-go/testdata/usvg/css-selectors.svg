@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+  <style>
+    * { stroke-width: 3 }
+    rect { fill: #111 }
+    .a { fill: #a00 }
+    #b { fill: #0a0 }
+    [data-k] { fill: #00a }
+    [data-k="v"] { stroke: #f0f }
+    g > circle { fill: #aa0 }
+    g circle.deep { fill: #0aa }
+    rect:first-child { stroke: #888 }
+    .x.y { opacity: 0.5 }
+    path { not-a-property: 1; fill: #ccc }
+  </style>
+  <rect id="first" width="10" height="10"/>
+  <rect id="cls" class="a" x="15" width="10" height="10"/>
+  <rect id="b" x="30" width="10" height="10"/>
+  <rect id="attr" data-k="w" x="45" width="10" height="10"/>
+  <rect id="attr-v" data-k="v" x="60" width="10" height="10"/>
+  <g><circle id="child" cx="10" cy="40" r="5"/><g><circle id="desc" class="deep" cx="30" cy="40" r="5"/></g></g>
+  <rect id="two" class="x y" x="75" width="10" height="10"/>
+  <path id="p" d="M100 0h10v10z"/>
+</svg>

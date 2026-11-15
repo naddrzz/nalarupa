@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="60">
+  <defs>
+    <pattern id="pat" patternUnits="userSpaceOnUse" width="10" height="10"><rect width="5" height="5" fill="url(#pat)"/><rect x="5" y="5" width="5" height="5" fill="#00c"/></pattern>
+    <pattern id="pa" patternUnits="userSpaceOnUse" width="10" height="10"><rect width="5" height="5" fill="url(#pb)"/></pattern>
+    <pattern id="pb" patternUnits="userSpaceOnUse" width="10" height="10"><rect width="5" height="5" fill="url(#pa)"/></pattern>
+    <clipPath id="clip"><rect width="200" height="30" clip-path="url(#clip)"/></clipPath>
+    <mask id="mask"><rect width="200" height="60" fill="#fff" mask="url(#mask)"/></mask>
+    <marker id="mk" markerWidth="4" markerHeight="4"><path d="M0 2 H4" stroke="#000" marker-end="url(#mk)"/></marker>
+  </defs>
+  <rect id="r-pat" x="5" y="5" width="30" height="20" fill="url(#pat)"/>
+  <rect id="r-pa" x="40" y="5" width="30" height="20" fill="url(#pa)"/>
+  <rect id="r-clip" x="75" y="5" width="30" height="20" clip-path="url(#clip)"/>
+  <rect id="r-mask" x="110" y="5" width="30" height="20" mask="url(#mask)"/>
+  <path id="r-marker" d="M150 15 H190" stroke="#000" marker-end="url(#mk)"/>
+</svg>

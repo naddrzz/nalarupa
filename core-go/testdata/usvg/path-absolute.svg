@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+  <path id="lines" d="M10 10 L30 10 H50 V30 L10 30 Z"/>
+  <path id="curves" d="M60 10 C70 0 80 20 90 10 S110 20 120 10 Q130 0 140 10 T160 10 T180 10"/>
+  <path id="arcs" d="M10 50 A10 10 0 0 1 30 50 A10 5 30 1 0 50 50 Z"/>
+  <path id="multi" d="M60 50 L70 60 L60 70 Z M80 50 L90 60 L80 70 z M100 50 L110 50"/>
+  <path id="closed-then-line" d="M120 50 L140 50 L130 60 Z L150 70"/>
+</svg>

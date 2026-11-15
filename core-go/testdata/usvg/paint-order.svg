@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="40" fill="#fc0" stroke="#000" stroke-width="4">
+  <rect id="normal" x="5" y="5" width="20" height="20" paint-order="normal"/>
+  <rect id="stroke" x="35" y="5" width="20" height="20" paint-order="stroke"/>
+  <rect id="stroke-markers" x="65" y="5" width="20" height="20" paint-order="stroke markers"/>
+  <rect id="fill" x="95" y="5" width="20" height="20" paint-order="fill"/>
+  <rect id="markers-stroke" x="125" y="5" width="20" height="20" paint-order="markers stroke fill"/>
+  <g paint-order="stroke"><rect id="inherited" x="155" y="5" width="20" height="20"/></g>
+  <rect id="bogus" x="180" y="5" width="10" height="20" style="paint-order: stroke stroke"/>
+</svg>

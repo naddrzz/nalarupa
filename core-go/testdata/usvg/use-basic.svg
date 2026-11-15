@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="100">
+  <defs>
+    <rect id="r" width="10" height="10" fill="#c00"/>
+    <g id="pair"><use href="#r"/><use xlink:href="#r" x="12"/></g>
+  </defs>
+  <use id="u1" href="#r" x="5" y="5"/>
+  <use id="u2" href="#r" x="20" y="5" transform="rotate(45 25 10)"/>
+  <use id="u3" href="#pair" x="40" y="40" transform="scale(2)" fill="#00f"/>
+  <use id="u4" href="#u3" x="10" opacity="0.5"/>
+  <use id="u-missing" href="#nothing"/>
+  <use id="u-external" href="other.svg#r"/>
+  <use id="u-xlink-wins" xlink:href="#r" href="#pair" x="150" y="5"/>
+</svg>

@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100" fill="none" stroke="#048">
+  <path id="butt" d="M10 10H50" stroke-width="6" stroke-linecap="butt"/>
+  <path id="round" d="M10 25H50" stroke-width="6" stroke-linecap="round"/>
+  <path id="square" d="M10 40H50" stroke-width="6" stroke-linecap="square"/>
+  <path id="bad-cap" d="M10 55H50" stroke-width="6" stroke-linecap="triangle"/>
+  <path id="miter" d="M60 30 L80 10 L100 30" stroke-width="6" stroke-linejoin="miter" stroke-miterlimit="10"/>
+  <path id="miter-clip" d="M110 30 L130 10 L150 30" stroke-width="6" stroke-linejoin="miter-clip"/>
+  <path id="j-round" d="M60 60 L80 40 L100 60" stroke-width="6" stroke-linejoin="round"/>
+  <path id="j-bevel" d="M110 60 L130 40 L150 60" stroke-width="6" stroke-linejoin="bevel"/>
+  <path id="j-arcs" d="M160 60 L170 40 L180 60" stroke-width="6" stroke-linejoin="arcs"/>
+  <path id="ml-low" d="M60 90 L80 70 L100 90" stroke-width="6" stroke-miterlimit="0.5"/>
+  <path id="ml-one" d="M110 90 L130 70 L150 90" stroke-width="6" stroke-miterlimit="1"/>
+  <path id="w-zero" d="M10 70H50" stroke-width="0"/>
+  <path id="w-neg" d="M10 80H50" stroke-width="-2"/>
+  <path id="w-pct" d="M10 90H50" stroke-width="2%" stroke-opacity="0.5"/>
+  <path id="so-over" d="M160 90H190" stroke-opacity="7" stroke-width="3"/>
+</svg>

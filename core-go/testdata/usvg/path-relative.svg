@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+  <path id="rel" d="m10 10 l20 0 h20 v20 l-40 0 z"/>
+  <path id="implicit-lineto" d="m60 10 10 10 10 -10 10 10"/>
+  <path id="implicit-abs" d="M100 10 110 20 120 10"/>
+  <path id="implicit-curves" d="M10 50 c5 -10 10 10 15 0 5 -10 10 10 15 0 q5 -10 10 0 5 10 10 0"/>
+  <path id="rel-after-close" d="m80 50 h10 v10 z m20 0 h10 v10 z"/>
+  <path id="compact" d="M120,50l10-5.5.5.5-1e1,5e0zM140 50h-.5v.5Z"/>
+  <path id="h-v-repeat" d="M160 50 h5 5 v5 5 H160 V50"/>
+</svg>

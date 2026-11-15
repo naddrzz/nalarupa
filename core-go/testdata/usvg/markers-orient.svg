@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+  <defs>
+    <marker id="asr" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z"/></marker>
+    <marker id="deg" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="45"><path d="M0 0L10 5L0 10z" fill="#0a0"/></marker>
+    <marker id="rad" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="1.5rad"><path d="M0 0L10 5L0 10z" fill="#a0a"/></marker>
+    <marker id="user" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto"><rect width="8" height="8" fill="#08c"/></marker>
+    <marker id="overflow" markerWidth="4" markerHeight="4" refX="2" refY="2" overflow="visible"><circle cx="2" cy="2" r="5" fill="#c80"/></marker>
+    <marker id="par" viewBox="0 0 20 10" preserveAspectRatio="xMinYMax slice" markerWidth="4" markerHeight="4"><rect width="20" height="10" fill="#555"/></marker>
+    <marker id="zero" markerWidth="0" markerHeight="4"><rect width="4" height="4"/></marker>
+  </defs>
+  <g fill="none" stroke="#000" stroke-width="3">
+    <path id="p-asr" d="M10 20 L60 20 L90 40" marker-start="url(#asr)" marker-end="url(#asr)"/>
+    <path id="p-deg" d="M110 20 L160 20" marker-start="url(#deg)" marker-end="url(#rad)"/>
+    <path id="p-user" d="M10 60 L60 80" marker-start="url(#user)" marker-end="url(#user)"/>
+    <path id="p-overflow" d="M80 60 L120 60" marker-start="url(#overflow)" marker-end="url(#par)"/>
+    <path id="p-zero" d="M140 60 L180 60" marker-start="url(#zero)"/>
+    <path id="p-shorthand" d="M10 95 L50 95 L90 95" style="marker: url(#user)"/>
+  </g>
+</svg>

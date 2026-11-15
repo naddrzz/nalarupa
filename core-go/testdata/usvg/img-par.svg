@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="300" height="100">
+  <image id="meet" x="5" y="5" width="40" height="40" href="res/red-3x2.png"/>
+  <image id="none" x="50" y="5" width="40" height="40" preserveAspectRatio="none" href="res/red-3x2.png"/>
+  <image id="slice" x="95" y="5" width="40" height="40" preserveAspectRatio="xMinYMax slice" href="res/red-3x2.png"/>
+  <image id="max-meet" x="140" y="5" width="40" height="40" preserveAspectRatio="xMaxYMax" href="res/dot-2x3.gif"/>
+  <image id="svg-slice" x="185" y="5" width="40" height="40" preserveAspectRatio="xMidYMid slice" href="res/inner.svg"/>
+  <image id="svg-none" x="230" y="5" width="60" height="20" preserveAspectRatio="none" href="res/inner.svg"/>
+  <image id="r-speed" x="5" y="55" width="20" height="20" image-rendering="optimizeSpeed" href="res/red-3x2.png"/>
+  <image id="r-pixelated" x="30" y="55" width="20" height="20" style="image-rendering:pixelated" href="res/red-3x2.png"/>
+  <image id="r-crisp" x="55" y="55" width="20" height="20" style="image-rendering:crisp-edges" href="res/red-3x2.png"/>
+  <image id="r-smooth" x="80" y="55" width="20" height="20" image-rendering="smooth" href="res/red-3x2.png"/>
+  <image id="r-hq" x="105" y="55" width="20" height="20" image-rendering="high-quality" href="res/red-3x2.png"/>
+  <g image-rendering="optimizeSpeed"><image id="r-inherited" x="130" y="55" width="20" height="20" href="res/red-3x2.png"/></g>
+  <image id="r-auto" x="155" y="55" width="20" height="20" image-rendering="auto" href="res/red-3x2.png"/>
+  <image id="transformed" x="0" y="0" width="20" height="20" transform="translate(180 55) rotate(20)" opacity="0.5" href="res/tile-5x4.jpg"/>
+  <image id="zero-w" x="210" y="55" width="0" height="20" href="res/red-3x2.png"/>
+</svg>
