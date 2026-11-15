@@ -46,15 +46,6 @@ func i32(f float64) int32 {
 	return int32(f)
 }
 
-// fxhash is svg.rs `fxhash`: FNV-1a 64 of the string's bytes.
-func fxhash(s string) uint64 {
-	h := uint64(0xcbf29ce484222325)
-	for i := 0; i < len(s); i++ {
-		h = (h ^ uint64(s[i])) * 0x100000001b3
-	}
-	return h
-}
-
 func rotl(x uint64, k int) uint64 { return bits.RotateLeft64(x, k) }
 
 // ftoa is a float as text for signatures: only equality matters, as with Rust's Display.

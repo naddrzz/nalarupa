@@ -238,7 +238,7 @@ func (a *Assets) ImageUnscanned(url, base string) (string, bool) {
 		return "", false
 	}
 	if a.verify {
-		k := fxhash(href)
+		k := FxHash(href)
 		good, seen := a.decoded[k]
 		if !seen {
 			good = decodes(href)
@@ -261,7 +261,7 @@ func (a *Assets) ImageUnscanned(url, base string) (string, bool) {
 // withinPixelLimit reports whether a raster image's declared size is within MaxImagePixels.
 func (a *Assets) withinPixelLimit(href, url string) bool {
 	isData := strings.HasPrefix(href, "data:")
-	key := fxhash(href)
+	key := FxHash(href)
 	if isData {
 		if ok, seen := a.dataOK[key]; seen {
 			return ok
@@ -292,7 +292,7 @@ func (a *Assets) resolveImage(url, base string) (string, bool) {
 	if strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://") {
 		// resvg picks the decoder from the file extension, so cached files need one (extension-less files
 		// from older versions are renamed on first use).
-		stem := filepath.Join(a.dir, "images", fmt.Sprintf("%016x", fxhash(url)))
+		stem := filepath.Join(a.dir, "images", fmt.Sprintf("%016x", FxHash(url)))
 		file := ""
 		for _, e := range []string{"png", "jpg", "gif", "webp", "svg"} {
 			if exists(stem + "." + e) {
@@ -553,7 +553,7 @@ func imageSize(r io.ReadSeeker) (uint32, uint32, bool) {
 // or an `.svg` file (by path, stamped with its size and modification time).
 func deepKey(href string) (string, uint64, bool) {
 	if strings.HasPrefix(href, "data:") {
-		return fmt.Sprintf("%016x", fxhash(href)), 0, true
+		return fmt.Sprintf("%016x", FxHash(href)), 0, true
 	}
 	if !strings.HasSuffix(strings.ToLower(href), ".svg") {
 		return "", 0, false
@@ -778,8 +778,8 @@ func gunzipCapped(gz []byte) ([]byte, bool) {
 	return out, true
 }
 
-// fxhash is FNV-1a 64 of the string's bytes.
-func fxhash(s string) uint64 {
+// FxHash is svg.rs `fxhash`: FNV-1a 64 of the string's bytes.
+func FxHash(s string) uint64 {
 	h := uint64(0xcbf29ce484222325)
 	for i := 0; i < len(s); i++ {
 		h = (h ^ uint64(s[i])) * 0x100000001b3

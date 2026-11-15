@@ -113,7 +113,7 @@ func TestCachedWebImagesGetAnExtension(t *testing.T) {
 	a := NewAssets(dir)
 	a.Online = false
 	url := "https://example.com/photo"
-	legacy := filepath.Join(dir, "images", fmt.Sprintf("%016x", fxhash(url)))
+	legacy := filepath.Join(dir, "images", fmt.Sprintf("%016x", FxHash(url)))
 	os.WriteFile(legacy, []byte("\x89PNG\r\n\x1a\n rest"), 0o666)
 	path, ok := a.Image(url, "")
 	if !ok || !strings.HasSuffix(path, ".png") {
@@ -168,7 +168,7 @@ func TestWebImagesDownloadInTheBackground(t *testing.T) {
 	if a.Loading(url) || a.Generation != 1 {
 		t.Fatal("downloaded", a.Generation)
 	}
-	if p, ok := a.Image(url, ""); !ok || p != strings.ReplaceAll(filepath.Join(dir, "images", fmt.Sprintf("%016x.png", fxhash(url))), `\`, "/") {
+	if p, ok := a.Image(url, ""); !ok || p != strings.ReplaceAll(filepath.Join(dir, "images", fmt.Sprintf("%016x.png", FxHash(url))), `\`, "/") {
 		t.Fatal(p, ok)
 	}
 	missing := "http://127.0.0.1:1/b.png"

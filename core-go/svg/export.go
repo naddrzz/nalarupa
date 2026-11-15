@@ -105,26 +105,35 @@ func dataURI(href string) (string, bool) {
 	return "data:image/" + mime + ";base64," + base64.StdEncoding.EncodeToString(b), true
 }
 
+// Expand runs the script nodes of a laid-out top-level node (script.ExpandScripts, waiting for each run);
+// nil leaves them unrun.
+type Expand func(n *resolve.RNode, r *resolve.Resolver)
+
 // Export is the SVG file export of node id (possibly nested): its visual bounds, `ceil`ed, as the view.
 // The markup still holds the image tokens of the returned Embedded; pass both to InlineEmbedded.
-func Export(d *doc.Doc, id string, fonts layout.TextMeasurer, assets *Assets) (string, Embedded, bool) {
-	svg, _, embedded, ok := NodeSVGAt(d, id, 1, true, fonts, assets)
+func Export(d *doc.Doc, id string, fonts layout.TextMeasurer, assets *Assets, expand Expand) (string, Embedded, bool) {
+	svg, _, embedded, ok := NodeSVGAt(d, id, 1, true, fonts, assets, expand)
 	return svg, embedded, ok
 }
 
 // NodeSVGAt is render.rs `node_svg_at`: node id (possibly nested) as an SVG whose view is its visual bounds
 // (shadows, blur and outer stroke included) from their unrounded corner, ceil((max - min) * scale) pixels
 // in each axis at scale. With embed, image files are written as tokens of the returned Embedded.
-func NodeSVGAt(d *doc.Doc, id string, scale float64, embed bool, fonts layout.TextMeasurer, assets *Assets) (string, Rect, Embedded, bool) {
+func NodeSVGAt(d *doc.Doc, id string, scale float64, embed bool, fonts layout.TextMeasurer, assets *Assets, expand Expand) (string, Rect, Embedded, bool) {
 	top := topIndex(d, id)
 	if top < 0 {
 		return "", Rect{}, Embedded{}, false
 	}
-	root := resolve.New(d.Root, nil).Resolve(d.Children()[top])
+	r := resolve.New(d.Root, nil)
+	root := r.Resolve(d.Children()[top])
 	if root == nil {
 		return "", Rect{}, Embedded{}, false
 	}
 	layout.Layout(root, fonts)
+	if expand != nil {
+		// Script nodes need their laid-out size before they can run.
+		expand(root, r)
+	}
 	node := findRNode(root, id)
 	if node == nil {
 		return "", Rect{}, Embedded{}, false

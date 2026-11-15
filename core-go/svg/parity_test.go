@@ -67,7 +67,7 @@ func goExport(t *testing.T, fixture, id, data string, fonts layout.TextMeasurer)
 	d.EnsureIDs()
 	assets := svg.NewAssets(filepath.Join(data, "cache"))
 	assets.Online = false
-	out, embedded, ok := svg.Export(d, id, fonts, assets)
+	out, embedded, ok := svg.Export(d, id, fonts, assets, nil)
 	if !ok {
 		t.Fatalf("%s: node %s not exported", fixture, id)
 	}

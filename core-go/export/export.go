@@ -13,7 +13,9 @@ import (
 	"strings"
 
 	"github.com/naddrzz/nalarupa/core-go/doc"
+	"github.com/naddrzz/nalarupa/core-go/resolve"
 	"github.com/naddrzz/nalarupa/core-go/resvg"
+	"github.com/naddrzz/nalarupa/core-go/script"
 	"github.com/naddrzz/nalarupa/core-go/skia"
 	"github.com/naddrzz/nalarupa/core-go/svg"
 	"github.com/naddrzz/nalarupa/core-go/text"
@@ -26,6 +28,20 @@ type Ctx struct {
 	Doc    *doc.Doc
 	Fonts  *text.Fonts
 	Assets *svg.Assets
+	// Scripts runs the script nodes of the laid-out node; nil runs them with script.ExpandScripts, waiting for
+	// each run (or noting it in Runs).
+	Scripts svg.Expand
+	// Runs, when set, notes the script runs an export needs instead of waiting for them (record mode).
+	Runs *script.Runs
+}
+
+func (c *Ctx) expand() svg.Expand {
+	if c.Scripts != nil {
+		return c.Scripts
+	}
+	return func(n *resolve.RNode, r *resolve.Resolver) {
+		script.ExpandScripts(n, r, c.Fonts, c.Doc.Dir(), c.Doc.Path, false, c.Runs)
+	}
 }
 
 // TreeOptions is render.rs `tree_options`: the machine's fonts, the depth-limited image resolver and the
@@ -53,7 +69,7 @@ func (c *Ctx) Missing(id string) string {
 
 // NodeTreeAt is the usvg tree of node id's SVG at scale (see svg.NodeSVGAt).
 func (c *Ctx) NodeTreeAt(id string, scale float64) (*usvg.Tree, error) {
-	markup, _, _, ok := svg.NodeSVGAt(c.Doc, id, scale, false, c.Fonts, c.Assets)
+	markup, _, _, ok := svg.NodeSVGAt(c.Doc, id, scale, false, c.Fonts, c.Assets, c.expand())
 	if !ok {
 		return nil, errors.New(c.Missing(id))
 	}

@@ -83,7 +83,7 @@ func prepareLayer(cx *Ctx, resolver *resolve.Resolver, index int, hash, finished
 			FlipX: n.B("flipX"), FlipY: n.B("flipY"),
 			Clip:  n.Type == "frame" && n.B("clip"),
 			shape: ShapeOf(n),
-			sig:   fxhash(sig.String()),
+			sig:   svg.FxHash(sig.String()),
 		}
 		f.Rotation, _ = n.F("rotation")
 		if len(stack) > 0 {

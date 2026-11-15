@@ -19,6 +19,7 @@ import (
 	"github.com/naddrzz/nalarupa/core-go/jsonv"
 	"github.com/naddrzz/nalarupa/core-go/layout"
 	"github.com/naddrzz/nalarupa/core-go/resolve"
+	"github.com/naddrzz/nalarupa/core-go/script"
 	"github.com/naddrzz/nalarupa/core-go/svg"
 	"github.com/naddrzz/nalarupa/core-go/text"
 	"github.com/naddrzz/nalarupa/core-go/usvg"
@@ -40,18 +41,29 @@ type Ctx struct {
 	Libs   []resolve.Lib
 	Fonts  *text.Fonts
 	Assets *svg.Assets
-	// Scripts runs the script nodes of a laid-out top-level node (script::expand_scripts; live: a run not
-	// finished shows its previous output and finishes in the background). nil leaves them unrun (phase 5).
+	// Scripts runs the script nodes of a laid-out top-level node (live: a run not finished shows its previous
+	// output and finishes in the background). nil runs them with script.ExpandScripts.
 	Scripts func(n *resolve.RNode, r *resolve.Resolver, live bool)
-	// Finished counts the background script runs that have finished (script::finished); nil counts none.
+	// Runs, when set, notes the script runs a layout that is not live needs instead of waiting for them
+	// (script::record_runs): they draw as running until script.Runs.Run has run them.
+	Runs *script.Runs
+	// Finished counts the background script runs that have finished; nil is script.Finished.
 	Finished func() uint64
 }
 
 func (c *Ctx) finished() uint64 {
 	if c.Finished == nil {
-		return 0
+		return script.Finished()
 	}
 	return c.Finished()
+}
+
+func (c *Ctx) expandScripts(n *resolve.RNode, r *resolve.Resolver, live bool) {
+	if c.Scripts != nil {
+		c.Scripts(n, r, live)
+		return
+	}
+	script.ExpandScripts(n, r, c.Fonts, c.Doc.Dir(), c.Doc.Path, live, c.Runs)
 }
 
 // LaidOut resolves and lays out the top-level node at index; script nodes run to completion first.
@@ -77,9 +89,8 @@ func (c *Ctx) laidOutIn(r *resolve.Resolver, index int, live bool) *resolve.RNod
 		return nil
 	}
 	layout.Layout(n, c.Fonts)
-	if c.Scripts != nil {
-		c.Scripts(n, r, live)
-	}
+	// Script nodes need their laid-out size before they can run.
+	c.expandScripts(n, r, live)
 	return n
 }
 
@@ -312,7 +323,7 @@ func sharedHash(d *doc.Doc, libs []resolve.Lib, fonts uint64) uint64 {
 		}
 	}
 	s.WriteString(d.Dir())
-	return fxhash(s.String())
+	return svg.FxHash(s.String())
 }
 
 func ftoaU(v uint64) string { return string(jsonv.Int(int64(v))) }
@@ -345,11 +356,11 @@ func (r *Renderer) Sync(cx *Ctx) []string {
 	resolver := resolve.New(cx.Doc.Root, cx.Libs)
 	for i, node := range cx.Doc.Children() {
 		id := jsonv.StrOr(jsonv.Get(node, "id"))
-		hash := fxhash(string(jsonv.Marshal(node))) ^ rotl(shared, 17)
+		hash := svg.FxHash(string(jsonv.Marshal(node))) ^ rotl(shared, 17)
 		// A node starting or ending its slide rebuilds its layer.
 		for h := range hidden {
 			if doc.FindIn([]jsonv.Value{node}, h) != nil {
-				hash ^= rotl(fxhash(h), 29)
+				hash ^= rotl(svg.FxHash(h), 29)
 			}
 		}
 		l, had := r.Layers[id]

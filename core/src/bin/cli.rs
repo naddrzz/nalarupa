@@ -4,8 +4,10 @@
 //!   nalarupa-cli html <doc.pen> <node-id> <out.html>
 //!   nalarupa-cli exec <doc.pen> <script.js> [--save]
 //!   nalarupa-cli mcp                                    serve MCP until Ctrl+C
-//!   nalarupa-cli layout <doc.pen> [<saved.pen>]         laid-out tree of every top-level node as JSON
-//!                                                       (the Go port's parity oracle); saves the opened document
+//!   nalarupa-cli layout <doc.pen> [<saved.pen>] [--scripts]
+//!                                                       laid-out tree of every top-level node as JSON
+//!                                                       (the Go port's parity oracle); saves the opened document;
+//!                                                       `--scripts` runs script nodes and dumps their status
 //!   nalarupa-cli measure <cases.json> [<font-cache>]    metrics, width and wrapped lines of each {text, style, maxW?}
 //!                                                       (the Go port's text oracle), offline
 //!   nalarupa-cli skia-path <cases.json>                 tiny-skia path geometry of each case (build, transform,
@@ -121,10 +123,14 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         "layout" => {
             // Opened as `Engine::open` does (migrate, repair ids), without imports, recents or the data folder.
+            // `--scripts`: script nodes run (waiting for each, as an export does) and their `__status` is dumped as
+            // "status" (the Go port's script-node oracle).
+            let scripts = args.iter().skip(3).any(|a| a == "--scripts");
             let mut doc = nalarupa_core::doc::Doc::load(Path::new(arg(2)?))?;
+            let (dir, path) = (doc.dir(), doc.path.clone());
             nalarupa_core::resolve::migrate(&mut doc.root);
             doc.ensure_ids();
-            if let Some(out) = args.get(3) {
+            if let Some(out) = args.get(3).filter(|a| *a != "--scripts") {
                 doc.save(Path::new(out))?;
             }
             let empty = serde_json::Map::new();
@@ -133,6 +139,9 @@ fn run(args: &[String]) -> Result<(), String> {
             fonts.online = false;
             let trees: Vec<Value> = doc.children().iter().filter_map(|n| r.resolve(n)).map(|mut n| {
                 nalarupa_core::layout::layout(&mut n, &mut fonts);
+                if scripts {
+                    nalarupa_core::script::expand_scripts(&mut n, &r, &mut fonts, dir.as_deref(), path.as_deref(), false);
+                }
                 dump(&n)
             }).collect();
             println!("{}", serde_json::to_string_pretty(&trees).map_err(|e| e.to_string())?);
@@ -229,8 +238,12 @@ fn run(args: &[String]) -> Result<(), String> {
 }
 
 fn dump(n: &RNode) -> Value {
-    json!({"id": n.id, "type": n.ty, "x": n.x, "y": n.y, "w": n.w, "h": n.h, "problem": n.problem,
-           "children": n.kids.iter().map(dump).collect::<Vec<_>>()})
+    let mut v = json!({"id": n.id, "type": n.ty, "x": n.x, "y": n.y, "w": n.w, "h": n.h, "problem": n.problem,
+           "children": n.kids.iter().map(dump).collect::<Vec<_>>()});
+    if let Some(status) = n.p.get("__status") {
+        v["status"] = status.clone();
+    }
+    v
 }
 
 /// The Go port's tiny-skia path oracle. Each case is an object:
