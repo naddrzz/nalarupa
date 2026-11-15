@@ -70,3 +70,9 @@
 - source_plan: `_bmad-output/initiative-go-rewrite/plan-go-rewrite-4b1-skia-path.md`
   summary: Guard core-go/svg, core-go/layout and core-go/text against FMA fusion with explicit float conversions of products (as core-go/skia now does), and run their parity under GOAMD64=v3 / arm64.
   evidence: 4b1 review showed plain a*b+c drifts 1-8 ulps under GOAMD64=v3; svg parity tolerates only 1e-12, so a fused build could fail it.
+- source_plan: `_bmad-output/initiative-go-rewrite/plan-go-rewrite-4c1-usvg-core.md`
+  summary: Renderer slice 4c2 - usvg text in core-go/usvg (parser/text.rs, tree/text.rs, text/layout.rs with the vendored linear code-point patch, text/flatten.rs; fallback via core-go/text's Noto-first resolver, shaping via core-go/text, glyph outlines with wght from go-text; colr skipped), replacing 4c1's Text placeholder, parity against the usvg-tree CLI with text flattened.
+  evidence: 4c was split three ways after sizing usvg (13.5k lines without writer/main/colr) plus roxmltree/svgtypes/simplecss/kurbo.
+- source_plan: `_bmad-output/initiative-go-rewrite/plan-go-rewrite-4c1-usvg-core.md`
+  summary: Renderer slice 4c3 - usvg filters in core-go/usvg (parser/filter.rs, tree/filter.rs: regions, units, primitives incl. the feGaussianBlur/feOffset/feFlood/feComposite svg.rs emits and the rest usvg models), replacing 4c1's Filter placeholder, parity against the usvg-tree CLI.
+  evidence: Split from 4c with 4c2; resvg filter rendering itself is slice 4d.
