@@ -64,3 +64,9 @@
 - source_plan: `_bmad-output/initiative-go-rewrite/plan-go-rewrite-4a-svg-emitter.md`
   summary: svg.Export resolves without libs (`imports`) and skips the engine's open steps (`drop_pending`, `drop_placeholder`) and `expand_scripts`; wire them in with the engine port, and port usvg's `image_href_resolver` depth budget for data-URL SVGs inside SVG images with slice 4c.
   evidence: The CLI oracle runs `Engine::open`, which clears unknown pending urls, so the parity fixtures avoid pending urls, imports and script nodes.
+- source_plan: `_bmad-output/initiative-go-rewrite/plan-go-rewrite-4b1-skia-path.md`
+  summary: Renderer slice 4b2 - rasterisation half of the tiny-skia 0.12 port in core-go/skia (edges, edge clipping, AA/hairline scan conversion, alpha runs, blitters, lowp/highp pipelines with the vendored highp ClipColor patch, solid/linear/two-point radial/pattern shaders with filter qualities, 16 blend modes, Mask alpha/luminance, Pixmap/PixmapMut, Painter fill_path/stroke_path/fill_rect/draw_pixmap/apply_mask), parity by pixel against a Rust `skia-raster` CLI oracle.
+  evidence: 4b was split in two after sizing the vendored tiny-skia (15.5k lines) plus tiny-skia-path (7.1k lines).
+- source_plan: `_bmad-output/initiative-go-rewrite/plan-go-rewrite-4b1-skia-path.md`
+  summary: Guard core-go/svg, core-go/layout and core-go/text against FMA fusion with explicit float conversions of products (as core-go/skia now does), and run their parity under GOAMD64=v3 / arm64.
+  evidence: 4b1 review showed plain a*b+c drifts 1-8 ulps under GOAMD64=v3; svg parity tolerates only 1e-12, so a fused build could fail it.
