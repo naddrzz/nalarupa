@@ -7,10 +7,10 @@ import (
 	"strings"
 
 	"github.com/naddrzz/nalarupa/core-go/skia"
+	"github.com/naddrzz/nalarupa/core-go/text"
 )
 
-// Options are the processing options (usvg::Options). The font database and font resolver arrive with
-// text in slice 4c2; FontFamily and FontSize are kept for it.
+// Options are the processing options (usvg::Options).
 type Options struct {
 	// ResourcesDir is the directory relative paths are resolved against; empty is None. Expected to be
 	// the directory that holds the SVG file. Default: None.
@@ -38,6 +38,10 @@ type Options struct {
 	// Option<String>). Default: None.
 	StyleSheet    string
 	HasStyleSheet bool
+	// FontDB is the font database text resolves against; nil is an empty one. Default: empty.
+	FontDB *text.Database
+	// FontResolver selects fonts and fallback fonts for text. Default: DefaultFontResolver.
+	FontResolver FontResolver
 }
 
 // DefaultOptions is Options::default().
@@ -54,6 +58,8 @@ func DefaultOptions() Options {
 		ImageRendering:    ImageRenderingOptimizeQuality,
 		DefaultSize:       size,
 		ImageHrefResolver: DefaultImageHrefResolver(),
+		FontDB:            text.NewDatabase(),
+		FontResolver:      DefaultFontResolver(),
 	}
 }
 

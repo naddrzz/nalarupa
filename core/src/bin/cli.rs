@@ -14,9 +14,9 @@
 //!   nalarupa-cli skia-raster <scenes.json> <out-dir>    tiny-skia pixels of each scene (pixmap and mask ops) as raw
 //!                                                       bytes plus index.json (the Go port's raster oracle, see
 //!                                                       skia_raster below)
-//!   nalarupa-cli usvg-tree <file.svg> [--resources <dir>]  the usvg tree of an SVG as JSON with f32 values as bit
-//!                                                       patterns, offline fonts (the Go port's usvg oracle, see
-//!                                                       usvg_tree below)
+//!   nalarupa-cli usvg-tree <file.svg> [--resources <dir>] [--fonts <cache-dir>]
+//!                                                       the usvg tree of an SVG as JSON with f32 values as bit
+//!                                                       patterns (the Go port's usvg oracle, see usvg_tree below)
 
 use nalarupa_core::engine::engine;
 use nalarupa_core::resolve::RNode;
@@ -157,7 +157,8 @@ fn run(args: &[String]) -> Result<(), String> {
         "skia-raster" => skia_raster::run(arg(2)?, arg(3)?),
         "usvg-tree" => {
             let resources = args.iter().position(|a| a == "--resources").map(|i| arg(i + 1)).transpose()?;
-            usvg_tree::run(arg(2)?, resources)
+            let fonts = args.iter().position(|a| a == "--fonts").map(|i| arg(i + 1)).transpose()?;
+            usvg_tree::run(arg(2)?, resources, fonts)
         }
         other => Err(format!("unknown command '{other}'")),
     }
@@ -732,8 +733,9 @@ mod skia_raster {
 }
 
 /// The Go port's usvg oracle: the tree `resvg::usvg::Tree::from_data` builds from an SVG file, as JSON. Options
-/// are `tree_options` (render.rs) with offline fonts: the default empty fontdb and font resolver, svg.rs's image
-/// href resolver, and `resources_dir` from `--resources` (None without it). Every f32 is its bit pattern (a u32);
+/// are `tree_options` (render.rs): svg.rs's image href resolver, `resources_dir` from `--resources` (None without
+/// it), and with `--fonts <cache-dir>` the fontdb and resolver of `Fonts::new(cache-dir)` with `online = false`
+/// (without it, the default empty fontdb and resolver, so text is dropped). Every f32 is its bit pattern (a u32);
 /// a transform T is [sx,ky,kx,sy,tx,ty], a rect R is [left,top,right,bottom] and a size is [w,h], all as bits.
 ///   tree   {"size","root":G,"linearGradients","radialGradients","patterns","clipPaths","masks","filters"}
 ///          (the collections as id lists), or {"error": usvg::Error variant} plus "xml": roxmltree::Error variant
@@ -745,7 +747,17 @@ mod skia_raster {
 ///          "bbox","absBbox","strokeBbox","absStrokeBbox","segments":[["M",x,y] ["L",x,y] ["Q",..] ["C",..] ["Z"]]}
 ///   image  {"kind":"image","id","visible","size","renderingMode","absTransform","bbox","absBbox","format",
 ///          "dataLen" (jpeg|png|gif|webp) or "tree" (svg: a nested tree object)}
-///   text   {"kind":"text","id"} (placeholder)
+///   text   {"kind":"text","id","renderingMode","writingMode","dx","dy","rotate" (bits),"absTransform","bbox","absBbox",
+///          "strokeBbox","absStrokeBbox","chunks":[chunk...],"layouted":[span...],"flattened":G}
+///   chunk  {"x","y" (bits|null),"anchor","text","textFlow":null|{"id","startOffset","segments"},"spans":[tspan...]}
+///   tspan  {"start","end","fill":F|null,"stroke":S|null,"paintOrder","font":{"families":[..],"style","stretch",
+///          "weight","variations":[[tag,bits]..]},"fontSize","smallCaps","applyKerning","opticalSizing",
+///          "decoration":{"underline"|"overline"|"lineThrough": {"fill","stroke"}|null},"dominantBaseline",
+///          "alignmentBaseline","baselineShift":["baseline"|"sub"|"super"|bits..],"visible","letterSpacing",
+///          "wordSpacing","textLength":bits|null,"lengthAdjust"}
+///   span   {"fill","stroke","paintOrder","fontSize","variations","opticalSizing","visible","glyphs":[glyph...],
+///          "underline","overline","lineThrough": path|null};  glyph {"id","text","font":{"family","file","index"},
+///          "fontSize","transform","outlineTransform"} (file: the font file name, "" for font data)
 ///   F      {"paint":P,"opacity","rule"};  S {"paint":P,"dasharray":[..]|null,"dashoffset","miterlimit","opacity",
 ///          "width","linecap","linejoin"}
 ///   P      {"type":"color","color":[r,g,b]} | {"type":"linear","id","x1","y1","x2","y2","transform","spread","stops"}
@@ -758,13 +770,24 @@ mod usvg_tree {
     use resvg::usvg::{self, BaseGradient, ClipPath, Group, ImageKind, ImageRendering, Mask, Node, Paint, Tree};
     use serde_json::{json, Value};
 
-    pub(super) fn run(file: &str, resources: Option<&str>) -> Result<(), String> {
+    thread_local! {
+        static FONTDB: std::cell::RefCell<Option<std::sync::Arc<usvg::fontdb::Database>>> = const { std::cell::RefCell::new(None) };
+    }
+
+    pub(super) fn run(file: &str, resources: Option<&str>, fonts: Option<&str>) -> Result<(), String> {
         let bytes = std::fs::read(file).map_err(|e| e.to_string())?;
-        let opt = usvg::Options {
+        let mut opt = usvg::Options {
             image_href_resolver: nalarupa_core::svg::image_href_resolver(),
             resources_dir: resources.map(std::path::PathBuf::from),
             ..usvg::Options::default()
         };
+        if let Some(cache) = fonts {
+            let mut fonts = nalarupa_core::text::Fonts::new(std::path::PathBuf::from(cache));
+            fonts.online = false;
+            opt.fontdb = std::sync::Arc::clone(&fonts.db);
+            opt.font_resolver = fonts.resolver();
+        }
+        FONTDB.with(|db| *db.borrow_mut() = Some(std::sync::Arc::clone(&opt.fontdb)));
         let out = match Tree::from_data(&bytes, &opt) {
             Ok(tree) => tree_json(&tree),
             Err(e) => error(&e),
@@ -845,52 +868,7 @@ mod usvg_tree {
     fn node(n: &Node) -> Value {
         match n {
             Node::Group(g) => group(g),
-            Node::Path(p) => {
-                let segments: Vec<Value> = p.data().segments().map(|s| match s {
-                    PathSegment::MoveTo(a) => json!(["M", f(a.x), f(a.y)]),
-                    PathSegment::LineTo(a) => json!(["L", f(a.x), f(a.y)]),
-                    PathSegment::QuadTo(a, b) => json!(["Q", f(a.x), f(a.y), f(b.x), f(b.y)]),
-                    PathSegment::CubicTo(a, b, c) => json!(["C", f(a.x), f(a.y), f(b.x), f(b.y), f(c.x), f(c.y)]),
-                    PathSegment::Close => json!(["Z"]),
-                }).collect();
-                json!({
-                    "kind": "path",
-                    "id": p.id(),
-                    "visible": p.is_visible(),
-                    "fill": p.fill().map(|x| json!({
-                        "paint": paint(x.paint()),
-                        "opacity": f(x.opacity().get()),
-                        "rule": match x.rule() { usvg::FillRule::NonZero => "nonzero", usvg::FillRule::EvenOdd => "evenodd" },
-                    })),
-                    "stroke": p.stroke().map(|s| json!({
-                        "paint": paint(s.paint()),
-                        "dasharray": s.dasharray().map(|d| d.iter().map(|&x| f(x)).collect::<Vec<_>>()),
-                        "dashoffset": f(s.dashoffset()),
-                        "miterlimit": f(s.miterlimit().get()),
-                        "opacity": f(s.opacity().get()),
-                        "width": f(s.width().get()),
-                        "linecap": match s.linecap() { usvg::LineCap::Butt => "butt", usvg::LineCap::Round => "round", usvg::LineCap::Square => "square" },
-                        "linejoin": match s.linejoin() {
-                            usvg::LineJoin::Miter => "miter",
-                            usvg::LineJoin::MiterClip => "miter-clip",
-                            usvg::LineJoin::Round => "round",
-                            usvg::LineJoin::Bevel => "bevel",
-                        },
-                    })),
-                    "paintOrder": match p.paint_order() { usvg::PaintOrder::FillAndStroke => "fill-and-stroke", usvg::PaintOrder::StrokeAndFill => "stroke-and-fill" },
-                    "renderingMode": match p.rendering_mode() {
-                        usvg::ShapeRendering::OptimizeSpeed => "optimize-speed",
-                        usvg::ShapeRendering::CrispEdges => "crisp-edges",
-                        usvg::ShapeRendering::GeometricPrecision => "geometric-precision",
-                    },
-                    "absTransform": ts(p.abs_transform()),
-                    "bbox": rect(p.bounding_box()),
-                    "absBbox": rect(p.abs_bounding_box()),
-                    "strokeBbox": rect(p.stroke_bounding_box()),
-                    "absStrokeBbox": rect(p.abs_stroke_bounding_box()),
-                    "segments": segments,
-                })
-            }
+            Node::Path(p) => path_json(p),
             Node::Image(i) => {
                 let mut v = json!({
                     "kind": "image",
@@ -924,8 +902,191 @@ mod usvg_tree {
                 v["dataLen"] = json!(data.len());
                 v
             }
-            Node::Text(t) => json!({"kind": "text", "id": t.id()}),
+            Node::Text(t) => text_json(t),
         }
+    }
+
+    fn segments(p: &resvg::usvg::tiny_skia_path::Path) -> Vec<Value> {
+        p.segments().map(|s| match s {
+            PathSegment::MoveTo(a) => json!(["M", f(a.x), f(a.y)]),
+            PathSegment::LineTo(a) => json!(["L", f(a.x), f(a.y)]),
+            PathSegment::QuadTo(a, b) => json!(["Q", f(a.x), f(a.y), f(b.x), f(b.y)]),
+            PathSegment::CubicTo(a, b, c) => json!(["C", f(a.x), f(a.y), f(b.x), f(b.y), f(c.x), f(c.y)]),
+            PathSegment::Close => json!(["Z"]),
+        }).collect()
+    }
+
+    fn fill_json(x: &usvg::Fill) -> Value {
+        json!({
+            "paint": paint(x.paint()),
+            "opacity": f(x.opacity().get()),
+            "rule": match x.rule() { usvg::FillRule::NonZero => "nonzero", usvg::FillRule::EvenOdd => "evenodd" },
+        })
+    }
+
+    fn stroke_json(s: &usvg::Stroke) -> Value {
+        json!({
+            "paint": paint(s.paint()),
+            "dasharray": s.dasharray().map(|d| d.iter().map(|&x| f(x)).collect::<Vec<_>>()),
+            "dashoffset": f(s.dashoffset()),
+            "miterlimit": f(s.miterlimit().get()),
+            "opacity": f(s.opacity().get()),
+            "width": f(s.width().get()),
+            "linecap": match s.linecap() { usvg::LineCap::Butt => "butt", usvg::LineCap::Round => "round", usvg::LineCap::Square => "square" },
+            "linejoin": match s.linejoin() {
+                usvg::LineJoin::Miter => "miter",
+                usvg::LineJoin::MiterClip => "miter-clip",
+                usvg::LineJoin::Round => "round",
+                usvg::LineJoin::Bevel => "bevel",
+            },
+        })
+    }
+
+    fn paint_order(o: usvg::PaintOrder) -> &'static str {
+        match o { usvg::PaintOrder::FillAndStroke => "fill-and-stroke", usvg::PaintOrder::StrokeAndFill => "stroke-and-fill" }
+    }
+
+    fn path_json(p: &usvg::Path) -> Value {
+        let segments = segments(p.data());
+        json!({
+            "kind": "path",
+            "id": p.id(),
+            "visible": p.is_visible(),
+            "fill": p.fill().map(fill_json),
+            "stroke": p.stroke().map(stroke_json),
+            "paintOrder": paint_order(p.paint_order()),
+            "renderingMode": match p.rendering_mode() {
+                usvg::ShapeRendering::OptimizeSpeed => "optimize-speed",
+                usvg::ShapeRendering::CrispEdges => "crisp-edges",
+                usvg::ShapeRendering::GeometricPrecision => "geometric-precision",
+            },
+            "absTransform": ts(p.abs_transform()),
+            "bbox": rect(p.bounding_box()),
+            "absBbox": rect(p.abs_bounding_box()),
+            "strokeBbox": rect(p.stroke_bounding_box()),
+            "absStrokeBbox": rect(p.abs_stroke_bounding_box()),
+            "segments": segments,
+        })
+    }
+
+    fn face_json(id: usvg::fontdb::ID) -> Value {
+        FONTDB.with(|db| {
+            let db = db.borrow();
+            let Some(face) = db.as_ref().and_then(|db| db.face(id)) else { return Value::Null };
+            let file = match &face.source {
+                usvg::fontdb::Source::File(p) => p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+                usvg::fontdb::Source::SharedFile(p, _) => p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+                usvg::fontdb::Source::Binary(_) => String::new(),
+            };
+            json!({"family": face.families[0].0, "file": file, "index": face.index})
+        })
+    }
+
+    fn variations(v: &[usvg::FontVariation]) -> Value {
+        json!(v.iter().map(|v| json!([String::from_utf8_lossy(&v.tag), f(v.value)])).collect::<Vec<_>>())
+    }
+
+    fn optical_sizing(o: usvg::FontOpticalSizing) -> &'static str {
+        match o { usvg::FontOpticalSizing::Auto => "auto", usvg::FontOpticalSizing::None => "none" }
+    }
+
+    fn deco(d: Option<&usvg::TextDecorationStyle>) -> Value {
+        match d {
+            Some(d) => json!({"fill": d.fill().map(fill_json), "stroke": d.stroke().map(stroke_json)}),
+            None => Value::Null,
+        }
+    }
+
+    fn text_json(t: &usvg::Text) -> Value {
+        let chunks: Vec<Value> = t.chunks().iter().map(|c| {
+            let spans: Vec<Value> = c.spans().iter().map(|s| {
+                let font = s.font();
+                json!({
+                    "start": s.start(),
+                    "end": s.end(),
+                    "fill": s.fill().map(fill_json),
+                    "stroke": s.stroke().map(stroke_json),
+                    "paintOrder": paint_order(s.paint_order()),
+                    "font": {
+                        "families": font.families().iter().map(|f| f.to_string()).collect::<Vec<_>>(),
+                        "style": format!("{:?}", font.style()),
+                        "stretch": format!("{:?}", font.stretch()),
+                        "weight": font.weight(),
+                        "variations": variations(font.variations()),
+                    },
+                    "fontSize": f(s.font_size().get()),
+                    "smallCaps": s.small_caps(),
+                    "applyKerning": s.apply_kerning(),
+                    "opticalSizing": optical_sizing(s.font_optical_sizing()),
+                    "decoration": {
+                        "underline": deco(s.decoration().underline()),
+                        "overline": deco(s.decoration().overline()),
+                        "lineThrough": deco(s.decoration().line_through()),
+                    },
+                    "dominantBaseline": format!("{:?}", s.dominant_baseline()),
+                    "alignmentBaseline": format!("{:?}", s.alignment_baseline()),
+                    "baselineShift": s.baseline_shift().iter().map(|b| match b {
+                        usvg::BaselineShift::Baseline => json!("baseline"),
+                        usvg::BaselineShift::Subscript => json!("sub"),
+                        usvg::BaselineShift::Superscript => json!("super"),
+                        usvg::BaselineShift::Number(n) => f(*n),
+                    }).collect::<Vec<_>>(),
+                    "visible": s.is_visible(),
+                    "letterSpacing": f(s.letter_spacing()),
+                    "wordSpacing": f(s.word_spacing()),
+                    "textLength": s.text_length().map(f),
+                    "lengthAdjust": format!("{:?}", s.length_adjust()),
+                })
+            }).collect();
+            json!({
+                "x": c.x().map(f),
+                "y": c.y().map(f),
+                "anchor": format!("{:?}", c.anchor()),
+                "text": c.text(),
+                "textFlow": match c.text_flow() {
+                    usvg::TextFlow::Linear => Value::Null,
+                    usvg::TextFlow::Path(p) => json!({"id": p.id(), "startOffset": f(p.start_offset()), "segments": segments(p.path())}),
+                },
+                "spans": spans,
+            })
+        }).collect();
+        let layouted: Vec<Value> = t.layouted().iter().map(|s| json!({
+            "fill": s.fill.as_ref().map(fill_json),
+            "stroke": s.stroke.as_ref().map(stroke_json),
+            "paintOrder": paint_order(s.paint_order),
+            "fontSize": f(s.font_size.get()),
+            "variations": variations(&s.variations),
+            "opticalSizing": optical_sizing(s.font_optical_sizing),
+            "visible": s.visible,
+            "glyphs": s.positioned_glyphs.iter().map(|g| json!({
+                "id": g.id.0,
+                "text": g.text,
+                "font": face_json(g.font),
+                "fontSize": f(g.font_size()),
+                "transform": ts(g.transform()),
+                "outlineTransform": ts(g.outline_transform()),
+            })).collect::<Vec<_>>(),
+            "underline": s.underline.as_ref().map(path_json),
+            "overline": s.overline.as_ref().map(path_json),
+            "lineThrough": s.line_through.as_ref().map(path_json),
+        })).collect();
+        json!({
+            "kind": "text",
+            "id": t.id(),
+            "renderingMode": format!("{:?}", t.rendering_mode()),
+            "writingMode": format!("{:?}", t.writing_mode()),
+            "dx": t.dx().iter().map(|&x| f(x)).collect::<Vec<_>>(),
+            "dy": t.dy().iter().map(|&x| f(x)).collect::<Vec<_>>(),
+            "rotate": t.rotate().iter().map(|&x| f(x)).collect::<Vec<_>>(),
+            "absTransform": ts(t.abs_transform()),
+            "bbox": rect(t.bounding_box()),
+            "absBbox": rect(t.abs_bounding_box()),
+            "strokeBbox": rect(t.stroke_bounding_box()),
+            "absStrokeBbox": rect(t.abs_stroke_bounding_box()),
+            "chunks": chunks,
+            "layouted": layouted,
+            "flattened": group(t.flattened()),
+        })
     }
 
     fn paint(p: &Paint) -> Value {

@@ -454,10 +454,43 @@ func nodeToUserCoordinates(node Node, contextTransform skia.Transform, contextBB
 			updatePaintServers(&svg.Tree.root, contextTransform, contextBBox, nil, cache)
 		}
 	case *Text:
-		// Placeholder until slice 4c2: Rust also updates the chunks' and the layouted spans' styles
-		// with the text's bbox.
+		// A tspan has no bbox of its own and uses the text's: for the chunks' styles, the laid-out
+		// spans' and the flattened paths'.
+		bbox := n.boundingBox
+		// Decoration styles may be shared between spans (Rust clones them): replace, never modify.
+		processDeco := func(d **TextDecorationStyle) {
+			if *d != nil {
+				*d = &TextDecorationStyle{
+					fill:   processFill((*d).fill, skia.Identity(), skia.Identity(), nil, bbox, cache),
+					stroke: processStroke((*d).stroke, skia.Identity(), skia.Identity(), nil, bbox, cache),
+				}
+			}
+		}
+		for ci := range n.chunks {
+			for si := range n.chunks[ci].spans {
+				sp := &n.chunks[ci].spans[si]
+				sp.fill = processFill(sp.fill, n.absTransform, contextTransform, contextBBox, bbox, cache)
+				sp.stroke = processStroke(sp.stroke, n.absTransform, contextTransform, contextBBox, bbox, cache)
+				processDeco(&sp.decoration.underline)
+				processDeco(&sp.decoration.overline)
+				processDeco(&sp.decoration.lineThrough)
+			}
+		}
+		processPath := func(p *Path) {
+			if p != nil {
+				p.fill = processFill(p.fill, n.absTransform, contextTransform, contextBBox, bbox, cache)
+				p.stroke = processStroke(p.stroke, n.absTransform, contextTransform, contextBBox, bbox, cache)
+			}
+		}
+		for si := range n.layouted {
+			sp := &n.layouted[si]
+			sp.fill = processFill(sp.fill, n.absTransform, contextTransform, contextBBox, bbox, cache)
+			sp.stroke = processStroke(sp.stroke, n.absTransform, contextTransform, contextBBox, bbox, cache)
+			processPath(sp.overline)
+			processPath(sp.underline)
+			processPath(sp.lineThrough)
+		}
 		if n.flattened != nil {
-			bbox := n.boundingBox
 			updatePaintServers(n.flattened, contextTransform, contextBBox, &bbox, cache)
 		}
 	}

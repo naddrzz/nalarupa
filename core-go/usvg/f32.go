@@ -1,6 +1,6 @@
 // Package usvg is a Go port of usvg 0.47 (core/vendor/usvg): it parses SVG into a simplified tree of
-// groups, paths and images, with styles, references, `use`, units and paint servers resolved. Text and
-// filters are placeholders until slices 4c2 and 4c3.
+// groups, paths, images and text (laid out and flattened into paths), with styles, references, `use`,
+// units and paint servers resolved. Filters are placeholders until slice 4c3.
 //
 // Floating-point products are wrapped in explicit float32/float64 conversions, which the Go spec says
 // prevents fusing them into a multiply-add, so results do not depend on GOAMD64 or the architecture.

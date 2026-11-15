@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="400" height="200">
+<text x="10" y="40" font-family="NoSuchFamily" font-size="20">Missing family</text>
+<text x="10" y="80" font-family="NoSuchFamily, monospace" font-size="20">Generic fallback</text>
+</svg>

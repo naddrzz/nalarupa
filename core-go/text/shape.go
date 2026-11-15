@@ -186,6 +186,9 @@ func (f *Fonts) cachedFallback(c rune, used []faceID) (faceID, bool) {
 // pickFallback prefers Noto faces with c (same style first, then the nearest weight), then usvg's
 // default selector: the first face, in database order, that has c.
 func (f *Fonts) pickFallback(c rune, used []faceID) (faceID, bool) {
+	if len(used) == 0 {
+		return 0, false
+	}
 	base := f.db.face(used[0])
 	if base == nil {
 		return 0, false
@@ -225,18 +228,7 @@ func (f *Fonts) pickFallback(c rune, used []faceID) (faceID, bool) {
 	if best != nil {
 		return best.id, true
 	}
-	for _, x := range f.db.faces() {
-		if isUsed(x.id) {
-			continue
-		}
-		if base.style != x.style && base.weight != x.weight && base.stretch != x.stretch {
-			continue
-		}
-		if x.hasChar(c) {
-			return x.id, true
-		}
-	}
-	return 0, false
+	return f.db.defaultFallback(c, used)
 }
 
 // notoFamily is the fallback library for a character's script. Emoji come from monochrome Noto Emoji.

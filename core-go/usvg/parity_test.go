@@ -284,14 +284,32 @@ func dumpNode(n usvg.Node) map[string]any {
 		}
 		return v
 	case *usvg.Text:
-		return map[string]any{"kind": "text", "id": n.ID()}
+		return dumpText(n)
 	}
 	panic(fmt.Sprintf("unknown node %T", n))
 }
 
 func dumpPath(n *usvg.Path) map[string]any {
+	return map[string]any{
+		"kind":          "path",
+		"id":            n.ID(),
+		"visible":       n.IsVisible(),
+		"fill":          dumpFill(n.Fill()),
+		"stroke":        dumpStroke(n.Stroke()),
+		"paintOrder":    paintOrders[n.PaintOrder()],
+		"renderingMode": shapeModes[n.RenderingMode()],
+		"absTransform":  dumpTS(n.AbsTransform()),
+		"bbox":          dumpRect(n.BoundingBox()),
+		"absBbox":       dumpRect(n.AbsBoundingBox()),
+		"strokeBbox":    dumpRect(n.StrokeBoundingBox()),
+		"absStrokeBbox": dumpRect(n.AbsStrokeBoundingBox()),
+		"segments":      pathSegments(n.Data()),
+	}
+}
+
+func pathSegments(p *skia.Path) []any {
 	segments := []any{}
-	it := n.Data().Segments()
+	it := p.Segments()
 	for {
 		s, ok := it.Next()
 		if !ok {
@@ -312,44 +330,39 @@ func dumpPath(n *usvg.Path) map[string]any {
 			segments = append(segments, []any{"Z"})
 		}
 	}
-	var fill, stroke any
-	if f := n.Fill(); f != nil {
-		fill = map[string]any{"paint": dumpPaint(f.Paint()), "opacity": dumpF(f.Opacity()), "rule": fillRules[f.Rule()]}
+	return segments
+}
+
+// dumpFill is the CLI's JSON for a fill; nil is null.
+func dumpFill(f *usvg.Fill) any {
+	if f == nil {
+		return nil
 	}
-	if s := n.Stroke(); s != nil {
-		var dash any
-		if s.Dasharray() != nil {
-			d := make([]any, len(s.Dasharray()))
-			for i, v := range s.Dasharray() {
-				d[i] = dumpF(v)
-			}
-			dash = d
+	return map[string]any{"paint": dumpPaint(f.Paint()), "opacity": dumpF(f.Opacity()), "rule": fillRules[f.Rule()]}
+}
+
+// dumpStroke is the CLI's JSON for a stroke; nil is null.
+func dumpStroke(s *usvg.Stroke) any {
+	if s == nil {
+		return nil
+	}
+	var dash any
+	if s.Dasharray() != nil {
+		d := make([]any, len(s.Dasharray()))
+		for i, v := range s.Dasharray() {
+			d[i] = dumpF(v)
 		}
-		stroke = map[string]any{
-			"paint":      dumpPaint(s.Paint()),
-			"dasharray":  dash,
-			"dashoffset": dumpF(s.Dashoffset()),
-			"miterlimit": dumpF(s.Miterlimit().Get()),
-			"opacity":    dumpF(s.Opacity()),
-			"width":      dumpF(s.Width()),
-			"linecap":    lineCaps[s.Linecap()],
-			"linejoin":   lineJoins[s.Linejoin()],
-		}
+		dash = d
 	}
 	return map[string]any{
-		"kind":          "path",
-		"id":            n.ID(),
-		"visible":       n.IsVisible(),
-		"fill":          fill,
-		"stroke":        stroke,
-		"paintOrder":    paintOrders[n.PaintOrder()],
-		"renderingMode": shapeModes[n.RenderingMode()],
-		"absTransform":  dumpTS(n.AbsTransform()),
-		"bbox":          dumpRect(n.BoundingBox()),
-		"absBbox":       dumpRect(n.AbsBoundingBox()),
-		"strokeBbox":    dumpRect(n.StrokeBoundingBox()),
-		"absStrokeBbox": dumpRect(n.AbsStrokeBoundingBox()),
-		"segments":      segments,
+		"paint":      dumpPaint(s.Paint()),
+		"dasharray":  dash,
+		"dashoffset": dumpF(s.Dashoffset()),
+		"miterlimit": dumpF(s.Miterlimit().Get()),
+		"opacity":    dumpF(s.Opacity()),
+		"width":      dumpF(s.Width()),
+		"linecap":    lineCaps[s.Linecap()],
+		"linejoin":   lineJoins[s.Linejoin()],
 	}
 }
 

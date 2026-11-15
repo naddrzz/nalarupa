@@ -73,6 +73,7 @@ type Fonts struct {
 	shaped   map[shapeKey][]cluster
 	fallback map[string]maybeFace
 	shapers  map[weightKey]*harfbuzz.Font
+	svgDB    *Database // the view usvg reads, created on first use
 	// Generation goes up when Downloaded adds a font; the renderer rebuilds every layer when it changes.
 	Generation uint64
 }

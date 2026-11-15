@@ -107,11 +107,106 @@ func (c *converterCache) groupRefs(g *Group, f func(any)) {
 				c.treeRefs(svg.Tree, f)
 			}
 		case *Text:
-			if n.flattened != nil {
-				c.groupRefs(n.flattened, f)
+			c.textRefs(n, f)
+		}
+	}
+}
+
+// textRefs calls f for each Arc a text node holds: the fills and strokes of its chunk spans and their
+// decorations, of its laid-out spans and decoration paths, and those under its flattened group.
+func (c *converterCache) textRefs(t *Text, f func(any)) {
+	style := func(fill *Fill, stroke *Stroke) {
+		if fill != nil {
+			f(fill.paint)
+		}
+		if stroke != nil {
+			f(stroke.paint)
+		}
+	}
+	for ci := range t.chunks {
+		for si := range t.chunks[ci].spans {
+			sp := &t.chunks[ci].spans[si]
+			style(sp.fill, sp.stroke)
+			for _, d := range []*TextDecorationStyle{sp.decoration.underline, sp.decoration.overline, sp.decoration.lineThrough} {
+				if d != nil {
+					style(d.fill, d.stroke)
+				}
 			}
 		}
 	}
+	for si := range t.layouted {
+		sp := &t.layouted[si]
+		style(sp.fill, sp.stroke)
+		for _, p := range []*Path{sp.underline, sp.overline, sp.lineThrough} {
+			if p != nil {
+				style(p.fill, p.stroke)
+			}
+		}
+	}
+	if t.flattened != nil {
+		c.groupRefs(t.flattened, f)
+	}
+}
+
+// cloneText is Text::clone: a deep copy of the chunks, laid-out spans and flattened group, sharing the
+// Arcs, whose counts go up.
+func (c *converterCache) cloneText(t *Text) *Text {
+	nt := *t
+	cloneFill := func(fill *Fill) *Fill {
+		if fill == nil {
+			return nil
+		}
+		x := *fill
+		c.incRef(x.paint)
+		return &x
+	}
+	cloneStroke := func(stroke *Stroke) *Stroke {
+		if stroke == nil {
+			return nil
+		}
+		x := *stroke
+		c.incRef(x.paint)
+		return &x
+	}
+	cloneDeco := func(d *TextDecorationStyle) *TextDecorationStyle {
+		if d == nil {
+			return nil
+		}
+		return &TextDecorationStyle{fill: cloneFill(d.fill), stroke: cloneStroke(d.stroke)}
+	}
+	clonePath := func(p *Path) *Path {
+		if p == nil {
+			return nil
+		}
+		x := *p
+		x.fill, x.stroke = cloneFill(p.fill), cloneStroke(p.stroke)
+		return &x
+	}
+	nt.chunks = make([]TextChunk, len(t.chunks))
+	for ci, ch := range t.chunks {
+		ch.spans = append([]TextSpan(nil), ch.spans...)
+		for si := range ch.spans {
+			sp := &ch.spans[si]
+			sp.fill, sp.stroke = cloneFill(sp.fill), cloneStroke(sp.stroke)
+			sp.decoration = TextDecoration{
+				underline:   cloneDeco(sp.decoration.underline),
+				overline:    cloneDeco(sp.decoration.overline),
+				lineThrough: cloneDeco(sp.decoration.lineThrough),
+			}
+		}
+		nt.chunks[ci] = ch
+	}
+	nt.layouted = append([]Span(nil), t.layouted...)
+	for si := range nt.layouted {
+		sp := &nt.layouted[si]
+		sp.fill, sp.stroke = cloneFill(sp.fill), cloneStroke(sp.stroke)
+		sp.underline, sp.overline, sp.lineThrough = clonePath(sp.underline), clonePath(sp.overline), clonePath(sp.lineThrough)
+	}
+	if t.flattened != nil {
+		fg := c.cloneGroup(t.flattened)
+		nt.flattened = &fg
+	}
+	return &nt
 }
 
 // treeRefs is groupRefs for a whole tree: its root and its collected lists.
@@ -190,12 +285,7 @@ func (c *converterCache) cloneGroup(g *Group) Group {
 			}
 			out.children[i] = &ni
 		case *Text:
-			nt := *n
-			if n.flattened != nil {
-				fg := c.cloneGroup(n.flattened)
-				nt.flattened = &fg
-			}
-			out.children[i] = &nt
+			out.children[i] = c.cloneText(n)
 		default:
 			out.children[i] = child
 		}

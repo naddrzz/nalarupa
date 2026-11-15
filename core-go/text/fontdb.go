@@ -76,6 +76,8 @@ type faceInfo struct {
 	cmap     []byte // read for character lookups
 	shaper   *font.Font
 	noShaper bool
+	outl     *outlineFace // glyph outline tables, parsed on first use
+	noOutl   bool
 }
 
 func (f *faceInfo) hasName(name string) bool {
@@ -392,13 +394,18 @@ func (db *fontDB) loadNoFontconfig() {
 	}
 }
 
-// query is fontdb's CSS matching: the first family with any face wins, then stretch, style and weight
-// narrow its faces. Families name faces exactly (case-sensitive); "" never matches.
+// query is fontdb's CSS matching for a normal-width face, see queryStyle.
 func (db *fontDB) query(families []string, weight uint16, italic bool) (faceID, bool) {
 	want := styleNormal
 	if italic {
 		want = styleItalic
 	}
+	return db.queryStyle(families, weight, 5, want)
+}
+
+// queryStyle is fontdb's Database::query: the first family with any face that matches wins; stretch,
+// style and weight narrow its faces. Families name faces exactly (case-sensitive); "" never matches.
+func (db *fontDB) queryStyle(families []string, weight, stretch uint16, want style) (faceID, bool) {
 	for _, name := range families {
 		var cands []*faceInfo
 		for _, f := range db.faces() {
@@ -407,7 +414,7 @@ func (db *fontDB) query(families []string, weight uint16, italic bool) (faceID, 
 			}
 		}
 		if len(cands) > 0 {
-			if f := bestMatch(cands, weight, want); f != nil {
+			if f := bestMatch(cands, weight, stretch, want); f != nil {
 				return f.id, true
 			}
 		}
@@ -415,9 +422,9 @@ func (db *fontDB) query(families []string, weight uint16, italic bool) (faceID, 
 	return 0, false
 }
 
-// bestMatch is fontdb `find_best_match` for a normal-width query
-// (https://www.w3.org/TR/2018/REC-css-fonts-3-20180920/#font-style-matching).
-func bestMatch(cands []*faceInfo, weight uint16, want style) *faceInfo {
+// bestMatch is fontdb `find_best_match`
+// (https://www.w3.org/TR/2018/REC-css-fonts-3-20180920/#font-style-matching). Ties go to the first face.
+func bestMatch(cands []*faceInfo, weight, stretch uint16, want style) *faceInfo {
 	keep := func(ok func(*faceInfo) bool) {
 		out := cands[:0:0]
 		for _, f := range cands {
@@ -427,33 +434,46 @@ func bestMatch(cands []*faceInfo, weight uint16, want style) *faceInfo {
 		}
 		cands = out
 	}
-	// font-stretch: normal (5), else the closest narrower, else the closest wider.
-	const normal = 5
-	stretch := uint16(0)
+	// closest picks the first candidate with the smallest distance among those ok accepts.
+	closest := func(ok func(*faceInfo) bool, dist func(*faceInfo) uint16) (*faceInfo, bool) {
+		var best *faceInfo
+		for _, f := range cands {
+			if ok(f) && (best == nil || dist(f) < dist(best)) {
+				best = f
+			}
+		}
+		return best, best != nil
+	}
+	all := func(*faceInfo) bool { return true }
+
+	// font-stretch: exact, else the closest narrower (wider) first for a narrow (wide) query.
+	exact := false
 	for _, f := range cands {
-		if f.stretch == normal {
-			stretch = normal
-		}
+		exact = exact || f.stretch == stretch
 	}
-	if stretch == 0 {
-		for _, f := range cands {
-			if f.stretch < normal && (stretch == 0 || normal-f.stretch < normal-stretch) {
-				stretch = f.stretch
+	match := stretch
+	if !exact {
+		var f *faceInfo
+		var ok bool
+		if stretch <= 5 {
+			if f, ok = closest(func(f *faceInfo) bool { return f.stretch < stretch }, func(f *faceInfo) uint16 { return stretch - f.stretch }); !ok {
+				f, _ = closest(all, func(f *faceInfo) uint16 { return f.stretch - stretch })
+			}
+		} else {
+			if f, ok = closest(func(f *faceInfo) bool { return f.stretch > stretch }, func(f *faceInfo) uint16 { return f.stretch - stretch }); !ok {
+				f, _ = closest(all, func(f *faceInfo) uint16 { return stretch - f.stretch })
 			}
 		}
+		match = f.stretch
 	}
-	if stretch == 0 {
-		for _, f := range cands {
-			if stretch == 0 || f.stretch-normal < stretch-normal {
-				stretch = f.stretch
-			}
-		}
-	}
-	keep(func(f *faceInfo) bool { return f.stretch == stretch })
+	keep(func(f *faceInfo) bool { return f.stretch == match })
 
 	prefs := []style{styleNormal, styleOblique, styleItalic}
-	if want == styleItalic {
+	switch want {
+	case styleItalic:
 		prefs = []style{styleItalic, styleOblique, styleNormal}
+	case styleOblique:
+		prefs = []style{styleOblique, styleItalic, styleNormal}
 	}
 	found := false
 	for _, s := range prefs {
@@ -479,20 +499,6 @@ func bestMatch(cands []*faceInfo, weight uint16, want style) *faceInfo {
 		}
 		return false
 	}
-	// closest picks the first candidate with the smallest distance among those ok accepts.
-	closest := func(ok func(*faceInfo) bool, dist func(*faceInfo) uint16) (uint16, bool) {
-		var best *faceInfo
-		for _, f := range cands {
-			if ok(f) && (best == nil || dist(f) < dist(best)) {
-				best = f
-			}
-		}
-		if best == nil {
-			return 0, false
-		}
-		return best.weight, true
-	}
-	all := func(*faceInfo) bool { return true }
 	var w uint16
 	switch {
 	case has(weight):
@@ -502,15 +508,17 @@ func bestMatch(cands []*faceInfo, weight uint16, want style) *faceInfo {
 	case weight >= 450 && weight <= 500 && has(400):
 		w = 400
 	case weight <= 500:
-		var ok bool
-		if w, ok = closest(func(f *faceInfo) bool { return f.weight <= weight }, func(f *faceInfo) uint16 { return weight - f.weight }); !ok {
-			w, _ = closest(all, func(f *faceInfo) uint16 { return f.weight - weight })
+		f, ok := closest(func(f *faceInfo) bool { return f.weight <= weight }, func(f *faceInfo) uint16 { return weight - f.weight })
+		if !ok {
+			f, _ = closest(all, func(f *faceInfo) uint16 { return f.weight - weight })
 		}
+		w = f.weight
 	default:
-		var ok bool
-		if w, ok = closest(func(f *faceInfo) bool { return f.weight >= weight }, func(f *faceInfo) uint16 { return f.weight - weight }); !ok {
-			w, _ = closest(all, func(f *faceInfo) uint16 { return weight - f.weight })
+		f, ok := closest(func(f *faceInfo) bool { return f.weight >= weight }, func(f *faceInfo) uint16 { return f.weight - weight })
+		if !ok {
+			f, _ = closest(all, func(f *faceInfo) uint16 { return weight - f.weight })
 		}
+		w = f.weight
 	}
 	for _, f := range cands {
 		if f.weight == w {

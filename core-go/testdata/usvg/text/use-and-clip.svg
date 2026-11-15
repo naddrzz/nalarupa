@@ -1,0 +1,3 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="400" height="200">
+<defs><text id="src" x="10" y="40" font-family="Arial" font-size="24">Used text</text><clipPath id="cp"><text x="10" y="120" font-family="Arial" font-size="60">CLIP</text></clipPath></defs><use xlink:href="#src" x="20" y="10"/><rect x="0" y="60" width="400" height="80" fill="orange" clip-path="url(#cp)"/>
+</svg>

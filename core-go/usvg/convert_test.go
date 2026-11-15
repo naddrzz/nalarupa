@@ -404,17 +404,6 @@ func TestFilterPlaceholder(t *testing.T) {
 	}
 }
 
-func TestTextPlaceholder(t *testing.T) {
-	tree := parse(t, svgDoc(`<g transform="translate(5 6)"><text id="t">hi</text></g><text/>`))
-	txt := child[*Text](t, child[*Group](t, &tree.root, 0), 0)
-	if txt.id != "t" || txt.absTransform != skia.TransformFromTranslate(5, 6) {
-		t.Errorf("text %q %v", txt.id, txt.absTransform)
-	}
-	if !tree.HasTextNodes() {
-		t.Error("HasTextNodes")
-	}
-}
-
 func TestGroupFlattening(t *testing.T) {
 	tree := parse(t, svgDoc(`<g><g opacity="1"><rect width="1" height="1"/></g></g>
 		<svg x="5"><rect width="1" height="1"/></svg>

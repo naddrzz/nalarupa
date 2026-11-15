@@ -1,0 +1,3 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="400" height="200">
+<g transform="translate(20 10) scale(1.5) rotate(10)"><text id="t1" x="10" y="40" font-family="Arial" font-size="16" transform="skewX(15)">Transformed text</text></g>
+</svg>

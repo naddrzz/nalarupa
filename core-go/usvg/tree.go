@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/naddrzz/nalarupa/core-go/skia"
+	"github.com/naddrzz/nalarupa/core-go/text"
 )
 
 // The output tree (tree/mod.rs). Rust's pub(crate) fields are unexported and set directly by the
@@ -772,9 +773,10 @@ func (i *Image) Subroots(f func(*Group)) {
 	}
 }
 
-// Tree is a converted SVG document. There is no font database until text is ported (slice 4c2).
+// Tree is a converted SVG document.
 type Tree struct {
 	size            skia.Size
+	fontdb          *text.Database
 	root            Group
 	linearGradients []*LinearGradient
 	radialGradients []*RadialGradient
@@ -789,6 +791,9 @@ func (t *Tree) Size() skia.Size { return t.size }
 
 // Root is the root element.
 func (t *Tree) Root() *Group { return &t.root }
+
+// FontDB is the font database every text node's glyphs refer to.
+func (t *Tree) FontDB() *text.Database { return t.fontdb }
 
 // NodeByID returns a renderable node by ID, or nil; an empty id always gives nil.
 func (t *Tree) NodeByID(id string) Node {
@@ -1027,39 +1032,6 @@ func (g *Group) calculateBoundingBoxes() bool {
 	}
 	g.absLayerBoundingBox = r
 	return true
-}
-
-// Text is a placeholder for usvg's text node until slice 4c2 ports tree/text.rs: it carries only the
-// fields the tree needs. flattened stays nil until text layout exists, so Subroots does nothing.
-type Text struct {
-	id                   string
-	absTransform         skia.Transform
-	boundingBox          skia.Rect
-	absBoundingBox       skia.Rect
-	strokeBoundingBox    skia.Rect
-	absStrokeBoundingBox skia.Rect
-	flattened            *Group
-}
-
-func (t *Text) ID() string                      { return t.id }
-func (t *Text) AbsTransform() skia.Transform    { return t.absTransform }
-func (t *Text) BoundingBox() skia.Rect          { return t.boundingBox }
-func (t *Text) AbsBoundingBox() skia.Rect       { return t.absBoundingBox }
-func (t *Text) StrokeBoundingBox() skia.Rect    { return t.strokeBoundingBox }
-func (t *Text) AbsStrokeBoundingBox() skia.Rect { return t.absStrokeBoundingBox }
-
-// Flattened is the text converted to paths, or nil in this placeholder.
-func (t *Text) Flattened() *Group { return t.flattened }
-
-func (t *Text) AbsLayerBoundingBox() (skia.NonZeroRect, bool) {
-	return t.absBoundingBox.ToNonZeroRect()
-}
-
-// Subroots calls f for the flattened group, once it exists.
-func (t *Text) Subroots(f func(*Group)) {
-	if t.flattened != nil {
-		f(t.flattened)
-	}
 }
 
 // Filter is a placeholder for usvg's filter::Filter until slice 4c3 ports tree/filter.rs: only the id

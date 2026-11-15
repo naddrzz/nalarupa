@@ -27,7 +27,8 @@ func FromData(data []byte, opt *Options) (*Tree, error) {
 
 // FromDataNested is FromData for an SVG loaded by an `image` element: images linking to external files
 // are ignored, as the SVG spec requires (Tree::from_data_nested). Only the DPI, font size, languages,
-// rendering modes, default size and the data resolver carry over; the rest is default.
+// rendering modes, default size, the data resolver, the font database and the font resolver carry
+// over; the rest is default.
 func FromDataNested(data []byte, opt *Options) (*Tree, error) {
 	nested := DefaultOptions()
 	nested.DPI = opt.DPI
@@ -37,6 +38,8 @@ func FromDataNested(data []byte, opt *Options) (*Tree, error) {
 	nested.TextRendering = opt.TextRendering
 	nested.ImageRendering = opt.ImageRendering
 	nested.DefaultSize = opt.DefaultSize
+	nested.FontDB = opt.FontDB
+	nested.FontResolver = opt.FontResolver
 	resolveData := opt.ImageHrefResolver.ResolveData
 	nested.ImageHrefResolver = ImageHrefResolver{
 		ResolveData: func(mime string, data []byte, o *Options) (ImageKind, bool) {

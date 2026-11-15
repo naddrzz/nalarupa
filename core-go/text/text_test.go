@@ -196,6 +196,18 @@ func TestNoFaces(t *testing.T) {
 	}
 }
 
+// A fallback with no used face finds none, as Rust's `used.first()?` does, rather than panicking.
+func TestFallbackWithoutUsedFaces(t *testing.T) {
+	f := New(t.TempDir())
+	f.Online = false
+	if id, ok := f.Fallback('a', nil); ok {
+		t.Fatalf("fallback %d without used faces", id)
+	}
+	if id, ok := f.Database().DefaultFallback('a', nil); ok {
+		t.Fatalf("default fallback %d without used faces", id)
+	}
+}
+
 // Broken font files are skipped; the other faces of the folder still load.
 func TestCorruptFontSkipped(t *testing.T) {
 	probe := fonts(t)
