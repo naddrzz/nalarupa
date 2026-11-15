@@ -191,6 +191,7 @@ func TestParityLiveText(t *testing.T) {
 		t.Fatal("no live fixtures", err)
 	}
 	fonts := text.New(filepath.Join(os.TempDir(), "nalarupa-cli-fonts"))
+	fonts.Online = false // as the CLI
 	for _, f := range fixtures {
 		name := strings.TrimSuffix(filepath.Base(f), ".pen")
 		t.Run(name, func(t *testing.T) {

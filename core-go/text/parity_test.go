@@ -160,7 +160,7 @@ func TestParityMeasure(t *testing.T) {
 		t.Fatal(err)
 	}
 	cache := t.TempDir()
-	sameMeasures(t, cases, measureGo(New(cache), cases), measureRust(t, cli, cases, cache))
+	sameMeasures(t, cases, measureGo(offline(cache), cases), measureRust(t, cli, cases, cache))
 }
 
 // A variable font in the cache's var/ folder replaces the installed copies of its family and serves every
@@ -169,7 +169,7 @@ func TestParityMeasure(t *testing.T) {
 func TestParityVariableFont(t *testing.T) {
 	cli := liveCLI(t)
 	var family, path string
-	faces := New(t.TempDir()).db.faces()
+	faces := offline(t.TempDir()).db.faces()
 	if path = os.Getenv("NALARUPA_VARIABLE_FONT"); path != "" {
 		db := newDB()
 		db.loadFile(path)
@@ -205,7 +205,7 @@ func TestParityVariableFont(t *testing.T) {
 		c.Style.Family, c.Style.Size, c.Style.Weight = family, 18, w
 		cases = append(cases, c)
 	}
-	got := measureGo(New(cache), cases)
+	got := measureGo(offline(cache), cases)
 	if got[0].Width == got[2].Width {
 		t.Fatalf("%s measures the same at 300 and 700 (%v)", family, got[0].Width)
 	}

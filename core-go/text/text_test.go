@@ -19,9 +19,16 @@ var shared *Fonts
 func fonts(t *testing.T) *Fonts {
 	t.Helper()
 	if shared == nil {
-		shared = New(filepath.Join(os.TempDir(), "nalarupa-test-fonts"))
+		shared = offline(filepath.Join(os.TempDir(), "nalarupa-test-fonts"))
 	}
 	return shared
+}
+
+// offline is New with Online off, like the Rust CLI and tests: nothing is downloaded.
+func offline(cache string) *Fonts {
+	f := New(cache)
+	f.Online = false
+	return f
 }
 
 func arial(size float64) layout.TextStyle {
@@ -54,7 +61,7 @@ func systemFace(t *testing.T, f *Fonts) (string, uint16, []byte) {
 // A font that arrives in the cache is loaded when Downloaded reports it, never while text is laid out.
 func TestDownloadedFontLoadsFromCache(t *testing.T) {
 	cache := t.TempDir()
-	f := New(cache)
+	f := offline(cache)
 	family, weight, data := systemFace(t, f)
 	for _, x := range f.db.faces() {
 		if x.hasName(family) {
@@ -65,7 +72,7 @@ func TestDownloadedFontLoadsFromCache(t *testing.T) {
 		t.Fatal("family still loaded")
 	}
 	st := layout.TextStyle{Family: family, Size: 16, Weight: weight}
-	f.ensure(st)
+	f.Ensure(st)
 	if f.HasFamily(family) || f.Generation != 0 {
 		t.Fatal("nothing on disk: text falls back, no block")
 	}
@@ -205,7 +212,7 @@ func TestCorruptFontSkipped(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	f := New(cache)
+	f := offline(cache)
 	n := 0
 	for _, x := range f.db.faces() {
 		if filepath.Dir(x.src.path) == cache {

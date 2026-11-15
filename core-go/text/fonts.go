@@ -1,7 +1,7 @@
-// Package text finds fonts, shapes text and wraps lines as the Rust core's text.rs does, offline: system
+// Package text finds fonts, shapes text and wraps lines as the Rust core's text.rs does: system
 // fonts plus the font cache folder, Noto-first fallback, shaping with the `wght` axis, SkParagraph line
-// heights and UAX #14 wrapping. Fonts implements layout.TextMeasurer. Downloading missing families from
-// Google Fonts is not ported yet: a family is used once its file is in the cache (see Downloaded).
+// heights and UAX #14 wrapping. Fonts implements layout.TextMeasurer. Online, a family missing from disk is
+// downloaded from Google Fonts in the background (see Ensure, OnReady and Downloaded).
 package text
 
 import (
@@ -45,11 +45,27 @@ type maybeFace struct {
 	ok bool
 }
 
-// Fonts is the font database with its measuring memos. It is not safe for concurrent use.
+// loadKey is a download in flight: lowercase family, weight and italic.
+type loadKey struct {
+	family string
+	weight uint16
+	italic bool
+}
+
+// Fonts is the font database with its measuring memos. It is not safe for concurrent use: downloads run
+// on their own goroutines and report through OnReady, and the owner then calls Downloaded.
 type Fonts struct {
 	db    *fontDB
 	cache string
 	tried map[string]bool
+	// Online lets a style missing from disk start a download (New sets it).
+	Online bool
+	// OnReady is called on the download's goroutine when a download finishes or fails; the owner then
+	// calls Downloaded with the same arguments on the goroutine that uses Fonts. Without it, a style
+	// stays Loading until Downloaded is called.
+	OnReady func(family string, weight uint16, italic bool)
+	loading map[loadKey]bool
+	dl      *downloader
 	// Memos, cleared whenever a font is added: primary face per style, vertical metrics per face and
 	// weight (em), shaped clusters per face, weight and text, fallback face per character and faces tried.
 	faces    map[faceKey]maybeFace
@@ -77,7 +93,13 @@ func New(cache string) *Fonts {
 		}
 	}
 	preferVariable(db, cache)
-	f := &Fonts{db: db, cache: cache, tried: map[string]bool{}, shapers: map[weightKey]*harfbuzz.Font{}}
+	f := newFonts(db, cache)
+	f.Online = true
+	return f
+}
+
+func newFonts(db *fontDB, cache string) *Fonts {
+	f := &Fonts{db: db, cache: cache, tried: map[string]bool{}, loading: map[loadKey]bool{}, dl: defaultDownloader, shapers: map[weightKey]*harfbuzz.Font{}}
 	f.fontsChanged()
 	return f
 }
@@ -96,9 +118,11 @@ func (f *Fonts) HasFamily(family string) bool {
 	return anyFace(f.db, func(x *faceInfo) bool { return x.hasNameFold(family) })
 }
 
-// Downloaded loads a font file of this family that has arrived in the cache since the start; true when a
-// font was added, which bumps Generation. A family still missing falls back to a cached Noto Sans.
+// Downloaded reports that a download finished (or failed) and loads what it cached, or any font file of
+// this family that has arrived in the cache since the start; true when a font was added, which bumps
+// Generation. A family still missing falls back to Noto Sans.
 func (f *Fonts) Downloaded(family string, weight uint16, italic bool) bool {
+	delete(f.loading, loadKey{strings.ToLower(family), weight, italic})
 	before := f.db.len()
 	f.loadCached(family, weight, italic)
 	if !f.HasFamily(family) && !asciiFold(family, "Noto Sans") {
@@ -111,22 +135,49 @@ func (f *Fonts) Downloaded(family string, weight uint16, italic bool) bool {
 	return added
 }
 
-// ensure makes the family available from the cache, falling back to a cached Noto Sans.
-func (f *Fonts) ensure(st layout.TextStyle) {
-	if f.fetch(st.Family, st.Weight, st.Italic) && !asciiFold(st.Family, "Noto Sans") && !f.HasFamily(st.Family) {
+// Ensure makes the style available: loaded from the cache now, or downloaded in the background while
+// text falls back to Noto Sans. A family that is neither on disk nor loading falls back to Noto Sans.
+func (f *Fonts) Ensure(st layout.TextStyle) {
+	if f.fetch(st.Family, st.Weight, st.Italic) && !asciiFold(st.Family, "Noto Sans") && !f.HasFamily(st.Family) && !f.Loading(st.Family) {
 		f.fetch("Noto Sans", st.Weight, st.Italic)
 	}
 }
 
-// fetch loads a style from the cache once; false when it was already handled. (Rust also starts a
-// download here when the cache has nothing.)
+// Loading reports whether a download of this family (any weight or style) is still running.
+func (f *Fonts) Loading(family string) bool {
+	family = strings.ToLower(family)
+	for k := range f.loading {
+		if k.family == family {
+			return true
+		}
+	}
+	return false
+}
+
+// fetch loads a style from the cache once, starting a download when the cache has nothing and Online is
+// set; false when the style was already handled.
 func (f *Fonts) fetch(family string, weight uint16, italic bool) bool {
 	key := family + "|" + strconv.Itoa(int(weight)) + "|" + strconv.FormatBool(italic)
 	if f.tried[key] {
 		return false
 	}
 	f.tried[key] = true
-	f.loadCached(family, weight, italic)
+	if f.loadCached(family, weight, italic) || !f.Online {
+		return true
+	}
+	k := loadKey{strings.ToLower(family), weight, italic}
+	if f.loading[k] {
+		return true
+	}
+	f.loading[k] = true
+	// The goroutine gets copies: it never touches Fonts.
+	dl, cache, ready := f.dl, f.cache, f.OnReady
+	go func() {
+		dl.download(cache, family, weight, italic)
+		if ready != nil {
+			ready(family, weight, italic)
+		}
+	}()
 	return true
 }
 
@@ -168,16 +219,21 @@ func (f *Fonts) fontsChanged() {
 
 // varFile is the family's variable font in the cache (every axis, used at its default except `wght`).
 func varFile(cache, family string, italic bool) string {
-	compact := strings.Map(func(r rune) rune {
+	compact := compactFamily(family)
+	if italic {
+		compact += "-Italic"
+	}
+	return filepath.Join(cache, "var", compact+".ttf")
+}
+
+// compactFamily is the family name without whitespace, as Google Fonts names its files.
+func compactFamily(family string) string {
+	return strings.Map(func(r rune) rune {
 		if unicode.IsSpace(r) {
 			return -1
 		}
 		return r
 	}, family)
-	if italic {
-		compact += "-Italic"
-	}
-	return filepath.Join(cache, "var", compact+".ttf")
 }
 
 func staticFile(cache, family string, weight uint16, italic bool) string {
@@ -195,7 +251,7 @@ func (f *Fonts) face(st layout.TextStyle) (faceID, bool) {
 	if hit, ok := f.faces[key]; ok {
 		return hit.id, hit.ok
 	}
-	f.ensure(st)
+	f.Ensure(st)
 	id, ok := f.db.query([]string{st.Family, "Noto Sans", f.db.sansSerif, f.db.serif}, st.Weight, st.Italic)
 	f.faces[key] = maybeFace{id, ok}
 	return id, ok
