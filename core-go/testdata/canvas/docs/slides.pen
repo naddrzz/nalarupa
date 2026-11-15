@@ -1,0 +1,125 @@
+{
+ "version": "2.19",
+ "children": [
+  {
+   "type": "frame",
+   "id": "col",
+   "x": 0,
+   "y": 0,
+   "width": 400,
+   "height": 500,
+   "layout": "vertical",
+   "justifyContent": "center",
+   "alignItems": "center",
+   "gap": 10,
+   "fill": "#ffffff",
+   "children": [
+    {
+     "type": "rectangle",
+     "id": "s1",
+     "width": 120,
+     "height": 80,
+     "fill": "#ef4444"
+    },
+    {
+     "type": "rectangle",
+     "id": "n1",
+     "width": 160,
+     "height": 60,
+     "fill": "#f59e0b",
+     "enabled": false
+    },
+    {
+     "type": "frame",
+     "id": "s2",
+     "width": 200,
+     "height": 100,
+     "layout": "none",
+     "fill": "#3b82f6",
+     "clip": true,
+     "children": [
+      {
+       "type": "rectangle",
+       "id": "s3",
+       "x": 150,
+       "y": 50,
+       "width": 100,
+       "height": 80,
+       "fill": "#22c55e"
+      },
+      {
+       "type": "rectangle",
+       "id": "n2",
+       "x": 20,
+       "y": 20,
+       "width": 60,
+       "height": 40,
+       "fill": "#ec4899",
+       "enabled": false
+      }
+     ]
+    },
+    {
+     "type": "rectangle",
+     "id": "m1",
+     "width": 100,
+     "height": 50,
+     "fill": "#6366f1",
+     "enabled": false
+    }
+   ]
+  },
+  {
+   "type": "frame",
+   "id": "free",
+   "x": 450,
+   "y": 0,
+   "width": 400,
+   "height": 400,
+   "layout": "none",
+   "fill": "#fefce8",
+   "rotation": 10,
+   "children": [
+    {
+     "type": "rectangle",
+     "id": "f1",
+     "x": 50,
+     "y": 50,
+     "width": 150,
+     "height": 100,
+     "fill": "#a855f7"
+    },
+    {
+     "type": "ellipse",
+     "id": "n3",
+     "x": 150,
+     "y": 150,
+     "width": 120,
+     "height": 120,
+     "fill": "#10b981",
+     "enabled": false
+    },
+    {
+     "type": "rectangle",
+     "id": "cover",
+     "x": 200,
+     "y": 200,
+     "width": 100,
+     "height": 60,
+     "fill": "#0ea5e9",
+     "enabled": false
+    }
+   ]
+  },
+  {
+   "type": "frame",
+   "id": "over",
+   "x": 600,
+   "y": 200,
+   "width": 300,
+   "height": 300,
+   "layout": "none",
+   "fill": "#0f172a80"
+  }
+ ]
+}

@@ -814,6 +814,9 @@ func blursBackdrop(effect jsonv.Value, present bool) bool {
 	return present && is(effect)
 }
 
+// HasBackdropBlur reports whether n or a descendant shows a background blur.
+func HasBackdropBlur(n *resolve.RNode) bool { return hasBackdropBlur(n) }
+
 func hasBackdropBlur(n *resolve.RNode) bool {
 	v, ok := n.P.Get("effect")
 	if blursBackdrop(v, ok) {

@@ -23,6 +23,10 @@
 //!                                                       see resvg_render below)
 //!   nalarupa-cli image <doc.pen> <node-id> <png|jpeg|webp> <scale> <quality> <out> [--offline]
 //!                                                       `node_image` of one node (the Go port's export oracle)
+//!   nalarupa-cli canvas <doc.pen> <scenario.json> <out-dir>
+//!                                                       replays canvas steps on a resvg `Renderer` (offline, pinned
+//!                                                       clock): each render's RGB bytes as <step>.rgb plus log.json
+//!                                                       (the Go port's canvas oracle, see canvas below)
 
 use nalarupa_core::engine::engine;
 use nalarupa_core::resolve::RNode;
@@ -191,6 +195,7 @@ fn run(args: &[String]) -> Result<(), String> {
             let bytes = nalarupa_core::render::encode_tree(&tree, arg(4)?, scale, quality)?;
             std::fs::write(arg(7)?, bytes).map_err(|e| e.to_string())
         }
+        "canvas" => canvas::run(arg(2)?, arg(3)?, arg(4)?),
         other => Err(format!("unknown command '{other}'")),
     }
 }
@@ -1354,5 +1359,131 @@ mod resvg_render {
         };
         println!("{result}");
         Ok(())
+    }
+}
+
+/// The Go port's canvas oracle: a `Renderer` forced to `Raster::Resvg`, offline, with a pinned slide clock
+/// and pinned live-zoom cost, so every step is deterministic. The scenario is {"steps": [...]}, each step an
+/// object with "op":
+///   render {w, h, cam: [x, y], zoom, bg: [r, g, b], solo, sharp, slow}   writes <step>.rgb (`slow` takes the
+///                                                       scaled preview on a live zoom, else the viewport repaint)
+///   update {id, props} · insert {parent, node, index} · delete {id} · move {id, parent, index}   edit the doc
+///   sync                                                the engine's sync: shift_siblings, sync, settle_covered
+///                                                       (syncing again when any settled), refresh_slides
+///   slide {id}                                          the engine's slide_in (without the glass check)
+///   tick {ms}                                           advance the clock, then expire_slides
+///   hit {x, y} · empty {w, h, dir, pad, anchor} · flat · live
+/// log.json holds one entry per step.
+mod canvas {
+    use nalarupa_core::doc::{Doc, ROOT};
+    use nalarupa_core::render::{find_empty_space, hit_chain, Ctx, Raster, Renderer, Slide, MAX_SLIDES};
+    use nalarupa_core::svg::Assets;
+    use nalarupa_core::text::Fonts;
+    use serde_json::{json, Value};
+    use std::collections::HashSet;
+    use std::path::Path;
+    use std::time::{Duration, Instant};
+
+    fn slides(r: &Renderer) -> Value {
+        let now = r.now();
+        r.slides.iter().map(|s| json!({"id": s.id, "state": s.state(now)})).collect()
+    }
+
+    fn done(res: Result<Value, String>) -> Value {
+        match res {
+            Ok(v) => json!({"ok": v}),
+            Err(e) => json!({"error": e}),
+        }
+    }
+
+    pub(super) fn run(doc: &str, scenario: &str, out: &str) -> Result<(), String> {
+        let mut d = Doc::load(Path::new(doc))?;
+        nalarupa_core::resolve::migrate(&mut d.root);
+        d.ensure_ids();
+        let data = nalarupa_core::render::data_dir();
+        let mut fonts = Fonts::new(data.join("fonts"));
+        fonts.online = false;
+        let mut assets = Assets::new(data.join("cache"));
+        assets.online = false;
+        let src = std::fs::read_to_string(scenario).map_err(|e| e.to_string())?;
+        let sc: Value = serde_json::from_str(&src).map_err(|e| e.to_string())?;
+        let out = Path::new(out);
+        std::fs::create_dir_all(out).map_err(|e| e.to_string())?;
+        let mut r = Renderer::default();
+        (r.raster, r.clock) = (Raster::Resvg, Some(Instant::now()));
+        let mut slid: HashSet<String> = HashSet::new();
+        let mut log = Vec::new();
+        for (i, s) in sc["steps"].as_array().ok_or("scenario has no steps")?.iter().enumerate() {
+            let op = s["op"].as_str().unwrap_or_default();
+            let num = |k: &str, d: f64| s[k].as_f64().unwrap_or(d);
+            let id = s["id"].as_str().unwrap_or_default();
+            let index = s["index"].as_u64().map(|i| i as usize);
+            let entry = match op {
+                "render" => {
+                    let (w, h) = (num("w", 800.0) as u32, num("h", 600.0) as u32);
+                    let bg = s["bg"].as_array().map_or([255, 255, 255], |c| [0, 1, 2].map(|k| c.get(k).and_then(Value::as_u64).unwrap_or(0) as u8));
+                    r.ms_per_mp = if s["slow"] == true { 1e9 } else { 0.0 };
+                    let px = r.render(w, h, s["cam"][0].as_f64().unwrap_or(0.0), s["cam"][1].as_f64().unwrap_or(0.0), num("zoom", 1.0), bg, s["solo"].as_str(), s["sharp"] != false);
+                    let rgb: Vec<u8> = px.chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect();
+                    let file = format!("{i}.rgb");
+                    std::fs::write(out.join(&file), rgb).map_err(|e| e.to_string())?;
+                    json!({"width": w.clamp(1, 8192), "height": h.clamp(1, 8192), "file": file, "slides": slides(&r)})
+                }
+                "update" => done(d.update(id, &s["props"]).map(|_| Value::Null)),
+                "insert" => done(d.insert(s["parent"].as_str().unwrap_or(ROOT), s["node"].clone(), index).map(Value::from)),
+                "delete" => done(d.delete(id).map(|_| Value::Null)),
+                "move" => done(d.move_node(id, s["parent"].as_str(), index).map(|_| Value::Null)),
+                "sync" => {
+                    let (mut passes, mut settled, mut dropped) = (Vec::new(), false, false);
+                    loop {
+                        let mut cx = Ctx { doc: &d, libs: &[], fonts: &mut fonts, assets: &mut assets };
+                        let roots = r.shift_siblings(&mut cx);
+                        let rebuilt = r.sync(&mut cx);
+                        passes.push(rebuilt.clone());
+                        if !r.slides.is_empty() {
+                            if r.settle_covered() {
+                                settled = true;
+                                continue;
+                            }
+                            dropped = r.refresh_slides(&mut cx, &rebuilt, roots);
+                        }
+                        break;
+                    }
+                    json!({"rebuilt": passes, "settled": settled, "dropped": dropped, "dirty": r.dirty(), "order": r.order, "bounds": r.bounds(), "slides": slides(&r)})
+                }
+                "slide" => {
+                    let room = r.slides.len() < MAX_SLIDES && d.parent_of(id).is_some_and(|(p, _)| r.can_slide_into(&d, &p));
+                    let pushed = slid.insert(id.to_string()) && room;
+                    if pushed {
+                        r.slides.push(Slide::new_at(id, r.now()));
+                    }
+                    json!({"pushed": pushed, "slides": slides(&r)})
+                }
+                "tick" => {
+                    r.clock = Some(r.now() + Duration::from_millis(s["ms"].as_u64().unwrap_or(0)));
+                    json!({"expired": r.expire_slides(), "slides": slides(&r)})
+                }
+                "hit" => json!({"chain": hit_chain(&r, num("x", 0.0), num("y", 0.0))}),
+                "empty" => {
+                    let anchor = s["anchor"].as_str().and_then(|a| r.find(a));
+                    json!({"result": find_empty_space(&r, num("w", 0.0), num("h", 0.0), s["dir"].as_str().unwrap_or("right"), num("pad", 0.0), anchor)})
+                }
+                "flat" => {
+                    let flat: Vec<Value> = r.flat().map(|f| json!({"id": f.id, "name": f.name, "ty": f.ty, "x": f.x, "y": f.y, "w": f.w, "h": f.h, "depth": f.depth,
+                        "parent": f.parent, "problem": f.problem, "placeholder": f.placeholder, "pending": f.pending, "faded": f.faded, "m": f.m,
+                        "local": f.local, "radius": f.radius, "clip": f.clip})).collect();
+                    json!({"flat": flat})
+                }
+                "live" => {
+                    let live: Vec<Value> = r.live().into_iter().map(|(f, clip, cuts)| json!({"id": f.id, "clip": clip, "cuts": cuts})).collect();
+                    json!({"live": live})
+                }
+                other => return Err(format!("step {i}: unknown op '{other}'")),
+            };
+            let mut entry = entry;
+            entry["op"] = json!(op);
+            log.push(entry);
+        }
+        std::fs::write(out.join("log.json"), serde_json::to_string_pretty(&log).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
     }
 }

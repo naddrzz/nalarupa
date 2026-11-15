@@ -69,7 +69,12 @@ pub struct Slide {
 
 impl Slide {
     pub fn new(id: &str) -> Slide {
-        Slide { id: id.to_string(), added: Instant::now(), start: None, from: (0.0, SLIDE_OFFSET), fade: true, fresh: true, rest: 0.0, tree: None, lin: [1.0, 0.0, 0.0, 1.0], ancestors: Vec::new(), clips: Vec::new(), over: None, cache: None }
+        Slide::new_at(id, Instant::now())
+    }
+
+    /// `new`, inserted at `now` (a renderer's pinned `clock`).
+    pub fn new_at(id: &str, now: Instant) -> Slide {
+        Slide { id: id.to_string(), added: now, start: None, from: (0.0, SLIDE_OFFSET), fade: true, fresh: true, rest: 0.0, tree: None, lin: [1.0, 0.0, 0.0, 1.0], ancestors: Vec::new(), clips: Vec::new(), over: None, cache: None }
     }
 
     fn elapsed(&self, now: Instant) -> f64 {
@@ -77,7 +82,7 @@ impl Slide {
     }
 
     /// (offset x, offset y, opacity) now.
-    fn state(&self, now: Instant) -> (f64, f64, f64) {
+    pub fn state(&self, now: Instant) -> (f64, f64, f64) {
         let t = self.elapsed(now);
         let k = (-SLIDE_DECAY * (t - self.rest)).exp();
         (self.from.0 * k, self.from.1 * k, if self.fade { 1.0 - (-FADE_DECAY * t).exp() } else { 1.0 })
@@ -191,10 +196,13 @@ pub struct Renderer {
     pub raster: Raster,
     /// One reusable vello context per band.
     bands: Vec<raster::Band>,
-    /// Cost of the last full paint per megapixel (0 = not measured yet).
-    ms_per_mp: f64,
+    /// Cost of the last full paint per megapixel (0 = not measured yet). Public so a replay (the
+    /// CLI's `canvas`) can pin which path a live zoom frame takes.
+    pub ms_per_mp: f64,
     /// Agent-inserted nodes sliding into place.
     pub slides: Vec<Slide>,
+    /// Pinned "now" for the slide clocks (`None` = the real time), so a replay is deterministic.
+    pub clock: Option<Instant>,
 }
 
 /// Rasterize a node tree from `Ctx::node_tree_at(.., scale)`: needs no engine state, so callers
@@ -417,6 +425,16 @@ fn shared_hash(doc: &Doc, libs: &[(String, Value)], fonts: u64) -> u64 {
 }
 
 impl Renderer {
+    /// The slide clock: `clock` when pinned, else the real time.
+    pub fn now(&self) -> Instant {
+        self.clock.unwrap_or_else(Instant::now)
+    }
+
+    /// Doc-space areas changed since the cached view was painted (merged at the next `render`).
+    pub fn dirty(&self) -> &[Rect] {
+        &self.dirty
+    }
+
     /// Rebuild layers whose content changed since the last sync; returns their ids.
     pub fn sync(&mut self, cx: &mut Ctx) -> Vec<String> {
         let finished = crate::script::finished();
@@ -492,7 +510,7 @@ impl Renderer {
     pub fn shift_siblings(&mut self, cx: &mut Ctx) -> HashMap<usize, Option<RNode>> {
         let mut roots: HashMap<usize, Option<RNode>> = HashMap::new();
         let fresh: Vec<String> = self.slides.iter_mut().filter_map(|s| std::mem::take(&mut s.fresh).then(|| s.id.clone())).collect();
-        let now = Instant::now();
+        let now = self.now();
         // Each move is old layout to new, once: several inserts in one sync share siblings.
         let mut moved: HashSet<String> = HashSet::new();
         for id in &fresh {
@@ -537,7 +555,7 @@ impl Renderer {
                             s.start = None;
                         }
                     }
-                    None if room => self.slides.push(Slide { from: (dx, dy), fade: false, fresh: false, ..Slide::new(&k.id) }),
+                    None if room => self.slides.push(Slide { from: (dx, dy), fade: false, fresh: false, ..Slide::new_at(&k.id, now) }),
                     None => {}
                 }
             }
@@ -696,7 +714,7 @@ impl Renderer {
 
     /// Drop slides that have settled (or were never shown); true if any ended.
     pub fn expire_slides(&mut self) -> bool {
-        let now = Instant::now();
+        let now = self.now();
         let before = self.slides.len();
         self.slides.retain(|s| match s.start {
             Some(t) => now.duration_since(t) < s.duration(),
@@ -709,7 +727,7 @@ impl Renderer {
     /// With `solo` only the nodes inside that top-level frame paint; the cached view leaves
     /// every sliding node out, so skipping them would blank the presented slide.
     fn composite_slides(&mut self, w: u32, h: u32, cam_x: f64, cam_y: f64, zoom: f64, solo: Option<&str>) {
-        let now = Instant::now();
+        let now = self.now();
         let shown: Option<HashSet<&str>> = solo.map(|id| self.layers.get(id).into_iter().flat_map(|l| l.flat.iter().map(|f| f.id.as_str())).collect());
         // A slide in another frame keeps waiting: its clock starts when it is first on screen.
         for s in &mut self.slides {

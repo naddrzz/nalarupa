@@ -1,0 +1,1 @@
+{"threads":12,"log":[{"bounds":[0,0,1440,900],"dirty":[[-64,-64,1568,1028]],"dropped":false,"op":"sync","order":["frm01"],"rebuilt":[["frm01"]],"settled":false,"slides":[]},{"file":"1.rgb","height":300,"op":"render","slides":[],"width":400},{"file":"2.rgb","height":200,"op":"render","slides":[],"width":300}]}

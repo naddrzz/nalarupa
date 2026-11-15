@@ -1,0 +1,23 @@
+{
+  "version": "2.19",
+  "children": [
+    {"type": "frame", "id": "a", "x": 0, "y": 0, "width": 500, "height": 400, "layout": "none", "fill": "#ffffff", "children": [
+      {"type": "rectangle", "id": "a1", "x": 40, "y": 40, "width": 160, "height": 100, "fill": "#e11d48", "cornerRadius": 12},
+      {"type": "frame", "id": "a2", "x": 240, "y": 60, "width": 200, "height": 160, "layout": "none", "fill": "#0ea5e9", "clip": true, "children": [
+        {"type": "ellipse", "id": "a3", "x": 120, "y": 100, "width": 140, "height": 140, "fill": "#facc15"}
+      ]},
+      {"type": "group", "id": "a4", "x": 60, "y": 220, "effect": {"type": "shadow", "offset": {"x": 8, "y": 8}, "blur": 6, "color": "#00000080"}, "children": [
+        {"type": "rectangle", "id": "a5", "x": 0, "y": 0, "width": 80, "height": 60, "fill": "#22c55e"},
+        {"type": "rectangle", "id": "a6", "x": 100, "y": 30, "width": 60, "height": 60, "fill": "#8b5cf6", "stroke": "#111827", "strokeWidth": 4}
+      ]},
+      {"type": "path", "id": "a7", "x": 300, "y": 260, "width": 150, "height": 100, "geometry": "M0 0 L150 100", "stroke": "#111827", "strokeWidth": 3}
+    ]},
+    {"type": "frame", "id": "b", "x": 560, "y": 0, "width": 300, "height": 300, "layout": "vertical", "gap": 10, "padding": 20, "fill": "#f1f5f9", "children": [
+      {"type": "rectangle", "id": "b1", "width": 120, "height": 60, "fill": "#f97316"},
+      {"type": "rectangle", "id": "b2", "width": 160, "height": 40, "fill": "#14b8a6", "rotation": 10}
+    ]},
+    {"type": "frame", "id": "c", "x": 100, "y": 450, "width": 400, "height": 200, "layout": "none", "fill": "#1e293b", "rotation": 5, "children": [
+      {"type": "rectangle", "id": "c1", "x": 20, "y": 20, "width": 100, "height": 100, "fill": "#fde047", "flipX": true}
+    ]}
+  ]
+}

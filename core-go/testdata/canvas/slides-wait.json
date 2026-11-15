@@ -1,0 +1,132 @@
+{
+ "doc": "canvas/docs/slides.pen",
+ "steps": [
+  {
+   "op": "sync"
+  },
+  {
+   "op": "update",
+   "id": "m1",
+   "props": {
+    "enabled": true
+   }
+  },
+  {
+   "op": "slide",
+   "id": "m1"
+  },
+  {
+   "op": "sync"
+  },
+  {
+   "op": "render",
+   "w": 400,
+   "h": 300,
+   "cam": [
+    440,
+    0
+   ],
+   "zoom": 1,
+   "bg": [
+    30,
+    30,
+    30
+   ],
+   "solo": "free"
+  },
+  {
+   "op": "tick",
+   "ms": 1900
+  },
+  {
+   "op": "tick",
+   "ms": 200
+  },
+  {
+   "op": "sync"
+  },
+  {
+   "op": "render",
+   "w": 420,
+   "h": 520,
+   "cam": [
+    -10,
+    -10
+   ],
+   "zoom": 1,
+   "bg": [
+    30,
+    30,
+    30
+   ]
+  },
+  {
+   "op": "update",
+   "id": "n2",
+   "props": {
+    "enabled": true
+   }
+  },
+  {
+   "op": "slide",
+   "id": "n2"
+  },
+  {
+   "op": "update",
+   "id": "s2",
+   "props": {
+    "fill": {
+     "type": "color",
+     "color": "#3b82f6",
+     "blendMode": "multiply"
+    }
+   }
+  },
+  {
+   "op": "sync"
+  },
+  {
+   "op": "sync"
+  },
+  {
+   "op": "update",
+   "id": "n1",
+   "props": {
+    "enabled": true
+   }
+  },
+  {
+   "op": "slide",
+   "id": "n1"
+  },
+  {
+   "op": "insert",
+   "parent": "col",
+   "node": {
+    "type": "rectangle",
+    "id": "zz",
+    "width": 60,
+    "height": 30,
+    "fill": "#000"
+   }
+  },
+  {
+   "op": "sync"
+  },
+  {
+   "op": "render",
+   "w": 420,
+   "h": 520,
+   "cam": [
+    -10,
+    -10
+   ],
+   "zoom": 1,
+   "bg": [
+    30,
+    30,
+    30
+   ]
+  }
+ ]
+}
