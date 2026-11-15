@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180">
+<defs><linearGradient id="bg"><stop offset="0" stop-color="#f00"/><stop offset="0.5" stop-color="#0f0" stop-opacity="0.6"/><stop offset="1" stop-color="#00f"/></linearGradient>
+<linearGradient id="fg" x2="0" y2="1"><stop offset="0" stop-color="#ff0"/><stop offset="1" stop-color="#0ff" stop-opacity="0.3"/></linearGradient></defs>
+<rect width="320" height="180" fill="url(#bg)"/>
+<g opacity="0.40" style="mix-blend-mode:normal"><rect x="10" y="10" width="34" height="75" fill="url(#fg)"/><circle cx="27" cy="47" r="12" fill="#a05" fill-opacity="0.8"/></g>
+<g opacity="0.44" style="mix-blend-mode:multiply"><rect x="48" y="10" width="34" height="75" fill="url(#fg)"/><circle cx="65" cy="47" r="12" fill="#a05" fill-opacity="0.8"/></g>
+<g opacity="0.48" style="mix-blend-mode:screen"><rect x="86" y="10" width="34" height="75" fill="url(#fg)"/><circle cx="103" cy="47" r="12" fill="#a05" fill-opacity="0.8"/></g>
+<g opacity="0.52" style="mix-blend-mode:overlay"><rect x="124" y="10" width="34" height="75" fill="url(#fg)"/><circle cx="141" cy="47" r="12" fill="#a05" fill-opacity="0.8"/></g>
+<g opacity="0.56" style="mix-blend-mode:darken"><rect x="162" y="10" width="34" height="75" fill="url(#fg)"/><circle cx="179" cy="47" r="12" fill="#a05" fill-opacity="0.8"/></g>
+<g opacity="0.60" style="mix-blend-mode:lighten"><rect x="200" y="10" width="34" height="75" fill="url(#fg)"/><circle cx="217" cy="47" r="12" fill="#a05" fill-opacity="0.8"/></g>
+<g opacity="0.64" style="mix-blend-mode:color-dodge"><rect x="238" y="10" width="34" height="75" fill="url(#fg)"/><circle cx="255" cy="47" r="12" fill="#a05" fill-opacity="0.8"/></g>
+<g opacity="0.68" style="mix-blend-mode:color-burn"><rect x="276" y="10" width="34" height="75" fill="url(#fg)"/><circle cx="293" cy="47" r="12" fill="#a05" fill-opacity="0.8"/></g>
+<g opacity="0.72" style="mix-blend-mode:hard-light"><rect x="10" y="95" width="34" height="75" fill="url(#fg)"/><circle cx="27" cy="132" r="12" fill="#a05" fill-opacity="0.8"/></g>
+<g opacity="0.76" style="mix-blend-mode:soft-light"><rect x="48" y="95" width="34" height="75" fill="url(#fg)"/><circle cx="65" cy="132" r="12" fill="#a05" fill-opacity="0.8"/></g>
+<g opacity="0.80" style="mix-blend-mode:difference"><rect x="86" y="95" width="34" height="75" fill="url(#fg)"/><circle cx="103" cy="132" r="12" fill="#a05" fill-opacity="0.8"/></g>
+<g opacity="0.84" style="mix-blend-mode:exclusion"><rect x="124" y="95" width="34" height="75" fill="url(#fg)"/><circle cx="141" cy="132" r="12" fill="#a05" fill-opacity="0.8"/></g>
+<g opacity="0.88" style="mix-blend-mode:hue"><rect x="162" y="95" width="34" height="75" fill="url(#fg)"/><circle cx="179" cy="132" r="12" fill="#a05" fill-opacity="0.8"/></g>
+<g opacity="0.92" style="mix-blend-mode:saturation"><rect x="200" y="95" width="34" height="75" fill="url(#fg)"/><circle cx="217" cy="132" r="12" fill="#a05" fill-opacity="0.8"/></g>
+<g opacity="0.96" style="mix-blend-mode:color"><rect x="238" y="95" width="34" height="75" fill="url(#fg)"/><circle cx="255" cy="132" r="12" fill="#a05" fill-opacity="0.8"/></g>
+<g opacity="1.00" style="mix-blend-mode:luminosity"><rect x="276" y="95" width="34" height="75" fill="url(#fg)"/><circle cx="293" cy="132" r="12" fill="#a05" fill-opacity="0.8"/></g>
+</svg>

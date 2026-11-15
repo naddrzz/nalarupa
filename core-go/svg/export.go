@@ -108,27 +108,35 @@ func dataURI(href string) (string, bool) {
 // Export is the SVG file export of node id (possibly nested): its visual bounds, `ceil`ed, as the view.
 // The markup still holds the image tokens of the returned Embedded; pass both to InlineEmbedded.
 func Export(d *doc.Doc, id string, fonts layout.TextMeasurer, assets *Assets) (string, Embedded, bool) {
+	svg, _, embedded, ok := NodeSVGAt(d, id, 1, true, fonts, assets)
+	return svg, embedded, ok
+}
+
+// NodeSVGAt is render.rs `node_svg_at`: node id (possibly nested) as an SVG whose view is its visual bounds
+// (shadows, blur and outer stroke included) from their unrounded corner, ceil((max - min) * scale) pixels
+// in each axis at scale. With embed, image files are written as tokens of the returned Embedded.
+func NodeSVGAt(d *doc.Doc, id string, scale float64, embed bool, fonts layout.TextMeasurer, assets *Assets) (string, Rect, Embedded, bool) {
 	top := topIndex(d, id)
 	if top < 0 {
-		return "", Embedded{}, false
+		return "", Rect{}, Embedded{}, false
 	}
 	root := resolve.New(d.Root, nil).Resolve(d.Children()[top])
 	if root == nil {
-		return "", Embedded{}, false
+		return "", Rect{}, Embedded{}, false
 	}
 	layout.Layout(root, fonts)
 	node := findRNode(root, id)
 	if node == nil {
-		return "", Embedded{}, false
+		return "", Rect{}, Embedded{}, false
 	}
 	b := VisualBounds(node)
-	pw := fmax(math.Ceil((b.X+b.W)-b.X), 1)
-	ph := fmax(math.Ceil((b.Y+b.H)-b.Y), 1)
-	view := Rect{b.X, b.Y, pw, ph}
+	pw := fmax(math.Ceil(((b.X+b.W)-b.X)*scale), 1)
+	ph := fmax(math.Ceil(((b.Y+b.H)-b.Y)*scale), 1)
+	view := Rect{b.X, b.Y, pw / scale, ph / scale}
 	s := New(fonts, assets, d.Dir())
-	s.Embed = true
+	s.Embed = embed
 	s.Node(node)
-	return s.Finish(&view), s.Embedded, true
+	return s.Finish(&view), view, s.Embedded, true
 }
 
 // topIndex is the index of the top-level node that holds id (an instance path is looked up by its head).

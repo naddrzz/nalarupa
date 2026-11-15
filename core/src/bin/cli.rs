@@ -1,5 +1,5 @@
 //! Headless Nalarupa: render/export documents, run execute scripts, serve MCP.
-//!   nalarupa-cli render <doc.pen> <out-dir> [scale]   one PNG per top-level node
+//!   nalarupa-cli render <doc.pen> <out-dir> [scale] [--offline]   one PNG per top-level node
 //!   nalarupa-cli svg <doc.pen> <node-id> <out.svg> [--offline]
 //!   nalarupa-cli html <doc.pen> <node-id> <out.html>
 //!   nalarupa-cli exec <doc.pen> <script.js> [--save]
@@ -17,6 +17,12 @@
 //!   nalarupa-cli usvg-tree <file.svg> [--resources <dir>] [--fonts <cache-dir>]
 //!                                                       the usvg tree of an SVG as JSON with f32 values as bit
 //!                                                       patterns (the Go port's usvg oracle, see usvg_tree below)
+//!   nalarupa-cli resvg <file.svg> <out.rgba> [--fonts <cache-dir>] [--scale <s>]
+//!                                                       the SVG rendered by resvg as premultiplied RGBA bytes; prints
+//!                                                       {"width","height"} or {"error"} (the Go port's render oracle,
+//!                                                       see resvg_render below)
+//!   nalarupa-cli image <doc.pen> <node-id> <png|jpeg|webp> <scale> <quality> <out> [--offline]
+//!                                                       `node_image` of one node (the Go port's export oracle)
 
 use nalarupa_core::engine::engine;
 use nalarupa_core::resolve::RNode;
@@ -36,6 +42,10 @@ fn run(args: &[String]) -> Result<(), String> {
     match arg(1)? {
         "render" => {
             let mut e = engine();
+            // `--offline`: no font or asset downloads (the Go port's export parity oracle).
+            if args.iter().skip(4).any(|a| a == "--offline") {
+                e.offline();
+            }
             e.open(Path::new(arg(2)?))?;
             let out = Path::new(arg(3)?);
             std::fs::create_dir_all(out).map_err(|e| e.to_string())?;
@@ -159,6 +169,27 @@ fn run(args: &[String]) -> Result<(), String> {
             let resources = args.iter().position(|a| a == "--resources").map(|i| arg(i + 1)).transpose()?;
             let fonts = args.iter().position(|a| a == "--fonts").map(|i| arg(i + 1)).transpose()?;
             usvg_tree::run(arg(2)?, resources, fonts)
+        }
+        "resvg" => {
+            let fonts = args.iter().position(|a| a == "--fonts").map(|i| arg(i + 1)).transpose()?;
+            let scale = args.iter().position(|a| a == "--scale").map(|i| arg(i + 1)).transpose()?;
+            let scale: f32 = scale.map_or(Ok(1.0), |s| s.parse().map_err(|_| format!("bad scale {s}")))?;
+            resvg_render::run(arg(2)?, arg(3)?, fonts, scale)
+        }
+        "image" => {
+            let mut e = engine();
+            if args.iter().skip(8).any(|a| a == "--offline") {
+                e.offline();
+            }
+            e.open(Path::new(arg(2)?))?;
+            let scale: f64 = arg(5)?.parse().map_err(|_| "bad scale".to_string())?;
+            let quality: u8 = arg(6)?.parse().map_err(|_| "bad quality".to_string())?;
+            // `node_image`, with the engine released before rasterising.
+            let scale = scale.clamp(0.05, 8.0);
+            let tree = e.ctx().node_tree_at(arg(3)?, scale)?;
+            drop(e);
+            let bytes = nalarupa_core::render::encode_tree(&tree, arg(4)?, scale, quality)?;
+            std::fs::write(arg(7)?, bytes).map_err(|e| e.to_string())
         }
         other => Err(format!("unknown command '{other}'")),
     }
@@ -1285,5 +1316,43 @@ mod usvg_tree {
                 "kind": match fe.kind() { filter::TurbulenceKind::FractalNoise => "fractalNoise", filter::TurbulenceKind::Turbulence => "turbulence" },
             }),
         }
+    }
+}
+
+/// `resvg <file.svg> <out.rgba>`: the tree is parsed with the options `usvg_tree` uses (the file's folder as
+/// the resources dir), and rendered at `--scale` onto a pixmap of `size.to_int_size().scale_by(scale)` with
+/// `Transform::from_scale(scale, scale)`. The premultiplied RGBA bytes go to <out.rgba>; stdout gets
+/// {"width","height"}, or {"error"} when parsing fails or the pixmap cannot be allocated (no file then).
+mod resvg_render {
+    use resvg::tiny_skia::{Pixmap, Transform};
+    use resvg::usvg::{self, Tree};
+    use serde_json::json;
+
+    pub(super) fn run(file: &str, out: &str, fonts: Option<&str>, scale: f32) -> Result<(), String> {
+        let bytes = std::fs::read(file).map_err(|e| e.to_string())?;
+        let mut opt = usvg::Options {
+            image_href_resolver: nalarupa_core::svg::image_href_resolver(),
+            resources_dir: std::path::Path::new(file).parent().map(std::path::Path::to_path_buf),
+            ..usvg::Options::default()
+        };
+        if let Some(cache) = fonts {
+            let mut fonts = nalarupa_core::text::Fonts::new(std::path::PathBuf::from(cache));
+            fonts.online = false;
+            opt.fontdb = std::sync::Arc::clone(&fonts.db);
+            opt.font_resolver = fonts.resolver();
+        }
+        let result = match Tree::from_data(&bytes, &opt) {
+            Err(e) => json!({"error": e.to_string()}),
+            Ok(tree) => match tree.size().to_int_size().scale_by(scale).and_then(|s| Pixmap::new(s.width(), s.height())) {
+                None => json!({"error": "no pixmap"}),
+                Some(mut pm) => {
+                    resvg::render(&tree, Transform::from_scale(scale, scale), &mut pm.as_mut());
+                    std::fs::write(out, pm.data()).map_err(|e| e.to_string())?;
+                    json!({"width": pm.width(), "height": pm.height()})
+                }
+            },
+        };
+        println!("{result}");
+        Ok(())
     }
 }

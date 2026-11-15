@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="220">
+  <defs>
+    <filter id="dpoint" x="0" y="0" width="100%" height="100%"><feGaussianBlur in="SourceAlpha" stdDeviation="3" result="b"/>
+      <feDiffuseLighting in="b" surfaceScale="4" diffuseConstant="1.2" lighting-color="#fec"><fePointLight x="30" y="10" z="40"/></feDiffuseLighting></filter>
+    <filter id="dspot" x="0" y="0" width="100%" height="100%"><feGaussianBlur in="SourceAlpha" stdDeviation="2" result="b"/>
+      <feDiffuseLighting in="b" surfaceScale="6" lighting-color="#9cf"><feSpotLight x="140" y="10" z="60" pointsAtX="150" pointsAtY="60" pointsAtZ="0" specularExponent="3" limitingConeAngle="35"/></feDiffuseLighting></filter>
+    <filter id="sdist" x="0" y="0" width="100%" height="100%"><feGaussianBlur in="SourceAlpha" stdDeviation="2.5" result="b"/>
+      <feSpecularLighting in="b" surfaceScale="5" specularConstant="1" specularExponent="12" lighting-color="#fff" result="s"><feDistantLight azimuth="225" elevation="40"/></feSpecularLighting>
+      <feComposite in="s" in2="SourceAlpha" operator="in" result="lit"/><feComposite in="SourceGraphic" in2="lit" operator="arithmetic" k1="0" k2="1" k3="1" k4="0"/></filter>
+    <filter id="spoint" x="0" y="0" width="100%" height="100%"><feGaussianBlur in="SourceAlpha" stdDeviation="2" result="b"/>
+      <feSpecularLighting in="b" surfaceScale="3" specularConstant="0.8" specularExponent="1" lighting-color="#f8c"><fePointLight x="250" y="20" z="30"/></feSpecularLighting></filter>
+  </defs>
+  <rect width="320" height="220" fill="#222"/>
+  <g filter="url(#dpoint)"><circle cx="50" cy="50" r="35" fill="#fff"/><rect x="20" y="70" width="60" height="25"/></g>
+  <g filter="url(#dspot)"><rect x="110" y="20" width="80" height="80" rx="20" fill="#fff"/></g>
+  <g filter="url(#sdist)"><path d="M220 20 h80 v80 h-80 z M240 40 v40 h40 v-40 z" fill="#36c" fill-rule="evenodd"/></g>
+  <g filter="url(#spoint)" transform="translate(0 110) scale(1.2)"><circle cx="210" cy="40" r="30" fill="#fff"/></g>
+  <g filter="url(#dpoint)" transform="translate(20 120) rotate(15)"><rect x="10" y="10" width="70" height="70" fill="#fff"/></g>
+</svg>

@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="352" height="260">
+<rect width="352" height="260" fill="#e8f0ff"/>
+<image x="10" y="10" width="52" height="36" preserveAspectRatio="none" image-rendering="optimizeQuality" href="img/rgba.png"/>
+<image x="66" y="10" width="52" height="36" preserveAspectRatio="none" image-rendering="optimizeQuality" href="img/rgb.png"/>
+<image x="122" y="10" width="52" height="36" preserveAspectRatio="none" image-rendering="optimizeQuality" href="img/gray.png"/>
+<image x="178" y="10" width="52" height="36" preserveAspectRatio="none" image-rendering="optimizeQuality" href="img/graya.png"/>
+<image x="234" y="10" width="52" height="36" preserveAspectRatio="none" image-rendering="optimizeQuality" href="img/pal.png"/>
+<image x="290" y="10" width="52" height="36" preserveAspectRatio="none" image-rendering="optimizeQuality" href="img/rgba16.png"/>
+<image x="10" y="50" width="52" height="36" preserveAspectRatio="none" image-rendering="optimizeSpeed" href="img/rgba.png"/>
+<image x="66" y="50" width="52" height="36" preserveAspectRatio="none" image-rendering="optimizeSpeed" href="img/rgb.png"/>
+<image x="122" y="50" width="52" height="36" preserveAspectRatio="none" image-rendering="optimizeSpeed" href="img/gray.png"/>
+<image x="178" y="50" width="52" height="36" preserveAspectRatio="none" image-rendering="optimizeSpeed" href="img/graya.png"/>
+<image x="234" y="50" width="52" height="36" preserveAspectRatio="none" image-rendering="optimizeSpeed" href="img/pal.png"/>
+<image x="290" y="50" width="52" height="36" preserveAspectRatio="none" image-rendering="optimizeSpeed" href="img/rgba16.png"/>
+<image x="10" y="90" width="52" height="36" preserveAspectRatio="none" image-rendering="smooth" href="img/rgba.png" transform="rotate(7 36 108)"/>
+<image x="66" y="90" width="52" height="36" preserveAspectRatio="none" image-rendering="smooth" href="img/rgb.png" transform="rotate(7 92 108)"/>
+<image x="122" y="90" width="52" height="36" preserveAspectRatio="none" image-rendering="smooth" href="img/gray.png" transform="rotate(7 148 108)"/>
+<image x="178" y="90" width="52" height="36" preserveAspectRatio="none" image-rendering="smooth" href="img/graya.png" transform="rotate(7 204 108)"/>
+<image x="234" y="90" width="52" height="36" preserveAspectRatio="none" image-rendering="smooth" href="img/pal.png" transform="rotate(7 260 108)"/>
+<image x="290" y="90" width="52" height="36" preserveAspectRatio="none" image-rendering="smooth" href="img/rgba16.png" transform="rotate(7 316 108)"/>
+<image x="10" y="130" width="52" height="36" preserveAspectRatio="none" image-rendering="high-quality" href="img/rgba.png"/>
+<image x="66" y="130" width="52" height="36" preserveAspectRatio="none" image-rendering="high-quality" href="img/rgb.png"/>
+<image x="122" y="130" width="52" height="36" preserveAspectRatio="none" image-rendering="high-quality" href="img/gray.png"/>
+<image x="178" y="130" width="52" height="36" preserveAspectRatio="none" image-rendering="high-quality" href="img/graya.png"/>
+<image x="234" y="130" width="52" height="36" preserveAspectRatio="none" image-rendering="high-quality" href="img/pal.png"/>
+<image x="290" y="130" width="52" height="36" preserveAspectRatio="none" image-rendering="high-quality" href="img/rgba16.png"/>
+<image x="10" y="170" width="52" height="36" preserveAspectRatio="none" image-rendering="crisp-edges" href="img/rgba.png"/>
+<image x="66" y="170" width="52" height="36" preserveAspectRatio="none" image-rendering="crisp-edges" href="img/rgb.png"/>
+<image x="122" y="170" width="52" height="36" preserveAspectRatio="none" image-rendering="crisp-edges" href="img/gray.png"/>
+<image x="178" y="170" width="52" height="36" preserveAspectRatio="none" image-rendering="crisp-edges" href="img/graya.png"/>
+<image x="234" y="170" width="52" height="36" preserveAspectRatio="none" image-rendering="crisp-edges" href="img/pal.png"/>
+<image x="290" y="170" width="52" height="36" preserveAspectRatio="none" image-rendering="crisp-edges" href="img/rgba16.png"/>
+<image x="10" y="210" width="52" height="36" preserveAspectRatio="none" image-rendering="pixelated" href="img/rgba.png"/>
+<image x="66" y="210" width="52" height="36" preserveAspectRatio="none" image-rendering="pixelated" href="img/rgb.png"/>
+<image x="122" y="210" width="52" height="36" preserveAspectRatio="none" image-rendering="pixelated" href="img/gray.png"/>
+<image x="178" y="210" width="52" height="36" preserveAspectRatio="none" image-rendering="pixelated" href="img/graya.png"/>
+<image x="234" y="210" width="52" height="36" preserveAspectRatio="none" image-rendering="pixelated" href="img/pal.png"/>
+<image x="290" y="210" width="52" height="36" preserveAspectRatio="none" image-rendering="pixelated" href="img/rgba16.png"/>
+</svg>

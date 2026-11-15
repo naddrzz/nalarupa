@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200">
+  <defs>
+    <linearGradient id="fade"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#000"/></linearGradient>
+    <radialGradient id="spot"><stop offset="0" stop-color="#fff" stop-opacity="1"/><stop offset="1" stop-color="#f00" stop-opacity="0"/></radialGradient>
+    <mask id="lum"><rect x="0" y="0" width="140" height="90" fill="url(#fade)"/></mask>
+    <mask id="alpha" style="mask-type:alpha"><circle cx="220" cy="50" r="45" fill="url(#spot)"/></mask>
+    <mask id="inner"><rect x="10" y="100" width="70" height="90" fill="#fff"/></mask>
+    <mask id="outer" mask="url(#inner)"><circle cx="70" cy="145" r="45" fill="#ccc"/></mask>
+    <mask id="units" maskUnits="userSpaceOnUse" x="160" y="110" width="60" height="80" maskContentUnits="objectBoundingBox"><rect width="1" height="1" fill="#888"/></mask>
+    <mask id="empty"></mask>
+  </defs>
+  <rect width="300" height="200" fill="#dde"/>
+  <rect x="5" y="5" width="130" height="80" fill="#06c" mask="url(#lum)"/>
+  <rect x="170" y="5" width="110" height="90" fill="#c60" mask="url(#alpha)"/>
+  <g mask="url(#outer)"><rect x="10" y="100" width="130" height="90" fill="#393"/></g>
+  <rect x="150" y="105" width="140" height="90" fill="#939" mask="url(#units)"/>
+  <rect x="230" y="105" width="60" height="60" fill="#000" mask="url(#empty)"/>
+</svg>
