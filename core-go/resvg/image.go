@@ -157,6 +157,47 @@ func decodeWebP(data []byte) (*skia.Pixmap, bool) {
 	return pixmapFromRGBA(rgba, w, h)
 }
 
+// DecodeRGBA decodes a GIF or WebP image with the decoders resvg uses, before premultiplying: straight
+// RGBA rows, and whether the image has an alpha channel (a WebP without one decodes opaque; a GIF always
+// has one). PDF export embeds these pixels as krilla does.
+func DecodeRGBA(kind usvg.ImageKind) (rgba []byte, w, h int, alpha, ok bool) {
+	switch data := kind.(type) {
+	case usvg.ImageKindGIF:
+		img, err := gif.Decode(bytes.NewReader(data))
+		if err != nil {
+			return nil, 0, 0, false, false
+		}
+		rgba, w, h = straightRGBA8(img)
+		return rgba, w, h, true, true
+	case usvg.ImageKindWEBP:
+		img, err := webp.Decode(bytes.NewReader(data))
+		if err != nil {
+			return nil, 0, 0, false, false
+		}
+		switch m := img.(type) {
+		case *image.NYCbCrA:
+			rgba, w, h = webpFancyRGBA(&m.YCbCr), m.Rect.Dx(), m.Rect.Dy()
+			for y := 0; y < h; y++ {
+				for x := 0; x < w; x++ {
+					rgba[(y*w+x)*4+3] = m.A[y*m.AStride+x]
+				}
+			}
+		case *image.YCbCr:
+			rgba, w, h = webpFancyRGBA(m), m.Rect.Dx(), m.Rect.Dy()
+		default:
+			rgba, w, h = straightRGBA8(img)
+		}
+		alpha = webpHasAlpha(data)
+		if !alpha {
+			for i := 3; i < len(rgba); i += 4 {
+				rgba[i] = 255
+			}
+		}
+		return rgba, w, h, alpha, true
+	}
+	return nil, 0, 0, false, false
+}
+
 func pixmapFromRGBA(rgba []byte, w, h int) (*skia.Pixmap, bool) {
 	size, ok := skia.IntSizeFromWH(uint32(w), uint32(h))
 	if !ok {

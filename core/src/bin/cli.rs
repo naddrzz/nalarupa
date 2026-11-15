@@ -23,6 +23,12 @@
 //!                                                       see resvg_render below)
 //!   nalarupa-cli image <doc.pen> <node-id> <png|jpeg|webp> <scale> <quality> <out> [--offline]
 //!                                                       `node_image` of one node (the Go port's export oracle)
+//!   nalarupa-cli pdf <doc.pen> <out.pdf> <node-id>... [--offline]
+//!                                                       `pdf_trees` then `encode_pdf`: one page per node (the Go
+//!                                                       port's PDF oracle)
+//!   nalarupa-cli pdf-svg <file.svg> <out.pdf> [--fonts <cache-dir>]
+//!                                                       `encode_pdf` of one SVG file's usvg tree, with the options of
+//!                                                       `resvg` (the Go port's PDF text oracle)
 //!   nalarupa-cli canvas <doc.pen> <scenario.json> <out-dir>
 //!                                                       replays canvas steps on a resvg `Renderer` (offline, pinned
 //!                                                       clock): each render's RGB bytes as <step>.rgb plus log.json
@@ -194,6 +200,28 @@ fn run(args: &[String]) -> Result<(), String> {
             drop(e);
             let bytes = nalarupa_core::render::encode_tree(&tree, arg(4)?, scale, quality)?;
             std::fs::write(arg(7)?, bytes).map_err(|e| e.to_string())
+        }
+        "pdf" => {
+            let mut e = engine();
+            if args.iter().skip(4).any(|a| a == "--offline") {
+                e.offline();
+            }
+            e.open(Path::new(arg(2)?))?;
+            let ids: Vec<String> = args.iter().skip(4).filter(|a| *a != "--offline").cloned().collect();
+            if ids.is_empty() {
+                return Err("missing node id".into());
+            }
+            // `pdf_trees` under the engine, `encode_pdf` after releasing it (as html.rs does).
+            let trees = e.ctx().pdf_trees(&ids)?;
+            drop(e);
+            let bytes = nalarupa_core::render::encode_pdf(&trees)?;
+            std::fs::write(arg(3)?, bytes).map_err(|e| e.to_string())
+        }
+        "pdf-svg" => {
+            let fonts = args.iter().position(|a| a == "--fonts").map(|i| arg(i + 1)).transpose()?;
+            let tree = resvg_render::tree(arg(2)?, fonts)?;
+            let bytes = nalarupa_core::render::encode_pdf(&[tree])?;
+            std::fs::write(arg(3)?, bytes).map_err(|e| e.to_string())
         }
         "canvas" => canvas::run(arg(2)?, arg(3)?, arg(4)?),
         other => Err(format!("unknown command '{other}'")),
@@ -1333,8 +1361,13 @@ mod resvg_render {
     use resvg::usvg::{self, Tree};
     use serde_json::json;
 
-    pub(super) fn run(file: &str, out: &str, fonts: Option<&str>, scale: f32) -> Result<(), String> {
+    /// The usvg tree of an SVG file with the oracle's options (`pdf-svg`).
+    pub(super) fn tree(file: &str, fonts: Option<&str>) -> Result<Tree, String> {
         let bytes = std::fs::read(file).map_err(|e| e.to_string())?;
+        Tree::from_data(&bytes, &options(file, fonts)).map_err(|e| e.to_string())
+    }
+
+    fn options(file: &str, fonts: Option<&str>) -> usvg::Options<'static> {
         let mut opt = usvg::Options {
             image_href_resolver: nalarupa_core::svg::image_href_resolver(),
             resources_dir: std::path::Path::new(file).parent().map(std::path::Path::to_path_buf),
@@ -1346,6 +1379,12 @@ mod resvg_render {
             opt.fontdb = std::sync::Arc::clone(&fonts.db);
             opt.font_resolver = fonts.resolver();
         }
+        opt
+    }
+
+    pub(super) fn run(file: &str, out: &str, fonts: Option<&str>, scale: f32) -> Result<(), String> {
+        let bytes = std::fs::read(file).map_err(|e| e.to_string())?;
+        let opt = options(file, fonts);
         let result = match Tree::from_data(&bytes, &opt) {
             Err(e) => json!({"error": e.to_string()}),
             Ok(tree) => match tree.size().to_int_size().scale_by(scale).and_then(|s| Pixmap::new(s.width(), s.height())) {

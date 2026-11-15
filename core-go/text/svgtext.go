@@ -62,6 +62,9 @@ type Database struct {
 // NewDatabase is an empty database (fontdb::Database::new()).
 func NewDatabase() *Database { return &Database{db: newDB()} }
 
+// LoadFontData adds every face of a font file held in memory (fontdb's load_font_data).
+func (d *Database) LoadFontData(data []byte) { d.db.loadData(data) }
+
 // Database is the font database of f: the same faces, with Fonts' sans-serif family.
 func (f *Fonts) Database() *Database {
 	if f.svgDB == nil {
