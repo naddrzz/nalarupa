@@ -11,6 +11,9 @@
 //!   nalarupa-cli skia-path <cases.json>                 tiny-skia path geometry of each case (build, transform,
 //!                                                       dash, stroke) with f32 values as bit patterns (the Go
 //!                                                       port's path oracle, see skia_path below)
+//!   nalarupa-cli skia-raster <scenes.json> <out-dir>    tiny-skia pixels of each scene (pixmap and mask ops) as raw
+//!                                                       bytes plus index.json (the Go port's raster oracle, see
+//!                                                       skia_raster below)
 
 use nalarupa_core::engine::engine;
 use nalarupa_core::resolve::RNode;
@@ -148,6 +151,7 @@ fn run(args: &[String]) -> Result<(), String> {
             println!("{}", serde_json::to_string_pretty(&out).map_err(|e| e.to_string())?);
             Ok(())
         }
+        "skia-raster" => skia_raster::run(arg(2)?, arg(3)?),
         other => Err(format!("unknown command '{other}'")),
     }
 }
@@ -175,7 +179,7 @@ mod skia_path {
     use resvg::tiny_skia::{LineCap, LineJoin, Path, PathBuilder, PathSegment, PathStroker, Rect, Stroke, StrokeDash, Transform};
     use serde_json::{json, Map, Value};
 
-    fn num(v: &Value) -> Result<f32, String> {
+    pub(super) fn num(v: &Value) -> Result<f32, String> {
         match v {
             Value::Number(n) => n.as_f64().map(|n| n as f32).ok_or_else(|| format!("bad number {n}")),
             Value::String(s) => match s.as_str() {
@@ -188,7 +192,7 @@ mod skia_path {
         }
     }
 
-    fn nums(v: &[Value]) -> Result<Vec<f32>, String> {
+    pub(super) fn nums(v: &[Value]) -> Result<Vec<f32>, String> {
         v.iter().map(num).collect()
     }
 
@@ -199,11 +203,11 @@ mod skia_path {
         Ok((name, if numeric { nums(&a[1..])? } else { Vec::new() }))
     }
 
-    fn list(v: &Value) -> Result<&Vec<Value>, String> {
+    pub(super) fn list(v: &Value) -> Result<&Vec<Value>, String> {
         v.as_array().ok_or_else(|| format!("expected a list: {v}"))
     }
 
-    fn build(ops: &Value) -> Result<Option<Path>, String> {
+    pub(super) fn build(ops: &Value) -> Result<Option<Path>, String> {
         let mut pb = PathBuilder::new();
         for o in list(ops)? {
             if op(o, false)?.0 == "path" {
@@ -362,5 +366,360 @@ mod skia_path {
             out.insert("stroked".into(), stage(&path));
         }
         Ok(Value::Object(out))
+    }
+}
+
+/// The Go port's tiny-skia raster oracle. The scenes file is a list of scenes, run in order; each is an object:
+///   "name"            unique; the output file stem
+///   "kind"            "pixmap" (Pixmap::new) or "mask" (Mask::new)
+///   "width","height"  the size; a mask with "from": {"pixmap": name, "type": "alpha"|"luminance"} is instead
+///                     Mask::from_pixmap of an earlier pixmap scene, and its size is that pixmap's
+///   "ops": [op...]    run in order, each an object with "op":
+///     pixmap: {"op":"fill","color":C}
+///             {"op":"fill_rect","rect":[l,t,r,b],"paint":P,"transform":T,"mask":M}
+///             {"op":"fill_path","path":[...],"rule":R,"paint":P,"transform":T,"mask":M}
+///             {"op":"stroke_path","path":[...],"stroke":S,"paint":P,"transform":T,"mask":M}
+///             {"op":"draw_pixmap","pixmap":name,"x":i,"y":i,"paint":{"opacity":n,"blend":B,"quality":Q},
+///              "transform":T,"mask":M}
+///             {"op":"apply_mask","mask":name}
+///     mask:   {"op":"fill_path"|"intersect_path","path":[...],"rule":R,"aa":bool,"transform":T}
+///             {"op":"invert"}
+///   path  skia_path's builder ops: ["M",x,y] ["L",x,y] ["Q",...] ["C",...] ["Z"] ["rect",l,t,r,b] ["oval",l,t,r,b]
+///         ["circle",cx,cy,r]
+///   T     [sx,ky,kx,sy,tx,ty] (Transform::from_row), default identity
+///   M     an earlier mask scene, default none
+///   R     "winding" (default) or "evenodd"
+///   S     {"width","miterLimit","cap","join"} as in skia_path, plus "dash": {"array":[...],"offset":n}; the dash
+///         is StrokeDash::new's result as is, so an invalid one strokes undashed
+///   P     {"shader":SH (default black), "blend":B (default "source-over"), "aa":bool (default true),
+///          "hq":bool (force_hq_pipeline), "colorspace":"linear" (default)|"gamma2"|"simple-srgb"|"full-srgb"}
+///   SH    {"type":"solid","color":C}
+///         {"type":"linear","start":[x,y],"end":[x,y],"stops":ST,"mode":SP,"transform":T}
+///         {"type":"radial","start":[x,y],"startRadius":n,"end":[x,y],"endRadius":n,"stops":ST,"mode":SP,"transform":T}
+///         {"type":"sweep","center":[x,y],"startAngle":n,"endAngle":n,"stops":ST,"mode":SP,"transform":T}
+///         {"type":"pattern","pixmap":name,"mode":SP,"quality":Q,"opacity":n,"transform":T}
+///   C     [r,g,b,a] as u8 (Color::from_rgba8), or {"f":[r,g,b,a]} (Color::from_rgba, must be valid)
+///   ST    [[pos,C]...];  SP "pad" (default)|"reflect"|"repeat";  Q "nearest" (default)|"bilinear"|"bicubic"
+///   B     a BlendMode name in kebab case: "clear", "source-over", "color-dodge", "luminosity", ...
+/// Numbers are as in skia_path. Other keys ("tolerance", "why": read by the Go harness) are ignored. An op is
+/// skipped, as a caller would skip it, when its path, rect or shader constructor returns None (an empty path,
+/// a degenerate gradient). Writes <out-dir>/<name>.rgba (pixmap.data(): premultiplied RGBA) or <name>.a8
+/// (mask.data()), and <out-dir>/index.json mapping each name to {"kind","width","height"}, or to null where
+/// Pixmap::new or Mask::new returns None. Scenes may only reference earlier, non-null scenes.
+mod skia_raster {
+    use super::skia_path::{build, list, num, nums};
+    use resvg::tiny_skia::{
+        BlendMode, Color, ColorSpace, FillRule, FilterQuality, GradientStop, LineCap, LineJoin, LinearGradient, Mask, MaskType, Paint,
+        Pattern, Pixmap, PixmapPaint, Point, RadialGradient, Rect, Shader, SpreadMode, Stroke, StrokeDash, SweepGradient, Transform,
+    };
+    use serde_json::{json, Map, Value};
+    use std::collections::HashMap;
+
+    enum Out {
+        Pixmap(Pixmap),
+        Mask(Mask),
+    }
+
+    type Done = HashMap<String, Option<Out>>;
+
+    const BLEND_MODES: [(&str, BlendMode); 29] = [
+        ("clear", BlendMode::Clear),
+        ("source", BlendMode::Source),
+        ("destination", BlendMode::Destination),
+        ("source-over", BlendMode::SourceOver),
+        ("destination-over", BlendMode::DestinationOver),
+        ("source-in", BlendMode::SourceIn),
+        ("destination-in", BlendMode::DestinationIn),
+        ("source-out", BlendMode::SourceOut),
+        ("destination-out", BlendMode::DestinationOut),
+        ("source-atop", BlendMode::SourceAtop),
+        ("destination-atop", BlendMode::DestinationAtop),
+        ("xor", BlendMode::Xor),
+        ("plus", BlendMode::Plus),
+        ("modulate", BlendMode::Modulate),
+        ("screen", BlendMode::Screen),
+        ("overlay", BlendMode::Overlay),
+        ("darken", BlendMode::Darken),
+        ("lighten", BlendMode::Lighten),
+        ("color-dodge", BlendMode::ColorDodge),
+        ("color-burn", BlendMode::ColorBurn),
+        ("hard-light", BlendMode::HardLight),
+        ("soft-light", BlendMode::SoftLight),
+        ("difference", BlendMode::Difference),
+        ("exclusion", BlendMode::Exclusion),
+        ("multiply", BlendMode::Multiply),
+        ("hue", BlendMode::Hue),
+        ("saturation", BlendMode::Saturation),
+        ("color", BlendMode::Color),
+        ("luminosity", BlendMode::Luminosity),
+    ];
+
+    fn s<'v>(v: &'v Value, key: &str) -> Option<&'v str> {
+        v.get(key).and_then(Value::as_str)
+    }
+
+    fn opt_num(v: &Value, key: &str, default: f32) -> Result<f32, String> {
+        v.get(key).map(num).transpose().map(|n| n.unwrap_or(default))
+    }
+
+    fn flag(v: &Value, key: &str, default: bool) -> Result<bool, String> {
+        v.get(key).map_or(Some(default), Value::as_bool).ok_or_else(|| format!("bad {key} in {v}"))
+    }
+
+    fn get<'v>(v: &'v Value, key: &str) -> Result<&'v Value, String> {
+        v.get(key).ok_or_else(|| format!("missing {key} in {v}"))
+    }
+
+    fn pick<T: Copy>(v: &Value, key: &str, default: &str, names: &[(&str, T)]) -> Result<T, String> {
+        let name = s(v, key).unwrap_or(default);
+        names.iter().find(|n| n.0 == name).map(|n| n.1).ok_or_else(|| format!("bad {key} {name}"))
+    }
+
+    fn point(v: &Value, key: &str) -> Result<Point, String> {
+        let p = nums(list(get(v, key)?)?)?;
+        let &[x, y] = p.as_slice() else { return Err(format!("{key} needs 2 values")) };
+        Ok(Point::from_xy(x, y))
+    }
+
+    fn transform(v: &Value) -> Result<Transform, String> {
+        let Some(t) = v.get("transform") else { return Ok(Transform::identity()) };
+        let t = nums(list(t)?)?;
+        let &[sx, ky, kx, sy, tx, ty] = t.as_slice() else { return Err("a transform needs 6 values".into()) };
+        Ok(Transform::from_row(sx, ky, kx, sy, tx, ty))
+    }
+
+    fn color(v: &Value) -> Result<Color, String> {
+        if let Some(f) = v.get("f") {
+            let c = nums(list(f)?)?;
+            let &[r, g, b, a] = c.as_slice() else { return Err(format!("bad color {v}")) };
+            return Color::from_rgba(r, g, b, a).ok_or_else(|| format!("bad color {v}"));
+        }
+        let c: Option<Vec<u8>> = list(v)?.iter().map(|x| x.as_u64().and_then(|x| u8::try_from(x).ok())).collect();
+        let Some(&[r, g, b, a]) = c.as_deref() else { return Err(format!("bad color {v}")) };
+        Ok(Color::from_rgba8(r, g, b, a))
+    }
+
+    fn spread(v: &Value) -> Result<SpreadMode, String> {
+        pick(v, "mode", "pad", &[("pad", SpreadMode::Pad), ("reflect", SpreadMode::Reflect), ("repeat", SpreadMode::Repeat)])
+    }
+
+    fn quality(v: &Value) -> Result<FilterQuality, String> {
+        pick(v, "quality", "nearest", &[("nearest", FilterQuality::Nearest), ("bilinear", FilterQuality::Bilinear), ("bicubic", FilterQuality::Bicubic)])
+    }
+
+    fn rule(v: &Value) -> Result<FillRule, String> {
+        pick(v, "rule", "winding", &[("winding", FillRule::Winding), ("evenodd", FillRule::EvenOdd)])
+    }
+
+    fn pixmap<'a>(done: &'a Done, v: &Value) -> Result<&'a Pixmap, String> {
+        let name = s(v, "pixmap").ok_or_else(|| format!("missing pixmap in {v}"))?;
+        match done.get(name) {
+            Some(Some(Out::Pixmap(p))) => Ok(p),
+            _ => Err(format!("{name} is not an earlier, non-null pixmap scene")),
+        }
+    }
+
+    fn mask<'a>(done: &'a Done, v: &Value) -> Result<Option<&'a Mask>, String> {
+        let Some(name) = s(v, "mask") else { return Ok(None) };
+        match done.get(name) {
+            Some(Some(Out::Mask(m))) => Ok(Some(m)),
+            _ => Err(format!("{name} is not an earlier, non-null mask scene")),
+        }
+    }
+
+    fn stops(v: &Value) -> Result<Vec<GradientStop>, String> {
+        list(get(v, "stops")?)?
+            .iter()
+            .map(|st| match list(st)?.as_slice() {
+                [pos, c] => Ok(GradientStop::new(num(pos)?, color(c)?)),
+                _ => Err(format!("a stop is [pos, color]: {st}")),
+            })
+            .collect()
+    }
+
+    fn shader<'a>(v: &Value, done: &'a Done) -> Result<Option<Shader<'a>>, String> {
+        let ts = transform(v)?;
+        Ok(match s(v, "type") {
+            Some("solid") => Some(Shader::SolidColor(color(get(v, "color")?)?)),
+            Some("linear") => LinearGradient::new(point(v, "start")?, point(v, "end")?, stops(v)?, spread(v)?, ts),
+            Some("radial") => RadialGradient::new(
+                point(v, "start")?,
+                opt_num(v, "startRadius", 0.0)?,
+                point(v, "end")?,
+                opt_num(v, "endRadius", 0.0)?,
+                stops(v)?,
+                spread(v)?,
+                ts,
+            ),
+            Some("sweep") => SweepGradient::new(point(v, "center")?, opt_num(v, "startAngle", 0.0)?, opt_num(v, "endAngle", 360.0)?, stops(v)?, spread(v)?, ts),
+            Some("pattern") => Some(Pattern::new(pixmap(done, v)?.as_ref(), spread(v)?, quality(v)?, opt_num(v, "opacity", 1.0)?, ts)),
+            _ => return Err(format!("bad shader {v}")),
+        })
+    }
+
+    /// The op's paint, or None when its shader constructor returns None.
+    fn paint<'a>(o: &Value, done: &'a Done) -> Result<Option<Paint<'a>>, String> {
+        let p = o.get("paint").unwrap_or(&Value::Null);
+        let shader = match p.get("shader") {
+            Some(sh) => match shader(sh, done)? {
+                Some(sh) => sh,
+                None => return Ok(None),
+            },
+            None => Shader::SolidColor(Color::BLACK),
+        };
+        let colorspace = pick(
+            p,
+            "colorspace",
+            "linear",
+            &[("linear", ColorSpace::Linear), ("gamma2", ColorSpace::Gamma2), ("simple-srgb", ColorSpace::SimpleSRGB), ("full-srgb", ColorSpace::FullSRGBGamma)],
+        )?;
+        Ok(Some(Paint {
+            shader,
+            blend_mode: pick(p, "blend", "source-over", &BLEND_MODES)?,
+            anti_alias: flag(p, "aa", true)?,
+            colorspace,
+            force_hq_pipeline: flag(p, "hq", false)?,
+        }))
+    }
+
+    fn stroke(o: &Value) -> Result<Stroke, String> {
+        let st = get(o, "stroke")?;
+        let dash = match st.get("dash") {
+            Some(d) => StrokeDash::new(nums(list(get(d, "array")?)?)?, opt_num(d, "offset", 0.0)?),
+            None => None,
+        };
+        Ok(Stroke {
+            width: opt_num(st, "width", 1.0)?,
+            miter_limit: opt_num(st, "miterLimit", 4.0)?,
+            line_cap: pick(st, "cap", "butt", &[("butt", LineCap::Butt), ("round", LineCap::Round), ("square", LineCap::Square)])?,
+            line_join: pick(
+                st,
+                "join",
+                "miter",
+                &[("miter", LineJoin::Miter), ("miter-clip", LineJoin::MiterClip), ("round", LineJoin::Round), ("bevel", LineJoin::Bevel)],
+            )?,
+            dash,
+        })
+    }
+
+    fn int(o: &Value, key: &str) -> Result<i32, String> {
+        o.get(key).map_or(Some(0), |v| v.as_i64().and_then(|v| i32::try_from(v).ok())).ok_or_else(|| format!("bad {key} in {o}"))
+    }
+
+    fn pixmap_op(pm: &mut Pixmap, o: &Value, done: &Done) -> Result<(), String> {
+        let ts = transform(o)?;
+        let m = mask(done, o)?;
+        match s(o, "op") {
+            Some("fill") => pm.fill(color(get(o, "color")?)?),
+            Some("fill_rect") => {
+                let r = nums(list(get(o, "rect")?)?)?;
+                let &[l, t, r, b] = r.as_slice() else { return Err("a rect needs 4 values".into()) };
+                if let (Some(rect), Some(paint)) = (Rect::from_ltrb(l, t, r, b), paint(o, done)?) {
+                    pm.fill_rect(rect, &paint, ts, m);
+                }
+            }
+            Some("fill_path") => {
+                if let (Some(path), Some(paint)) = (build(get(o, "path")?)?, paint(o, done)?) {
+                    pm.fill_path(&path, &paint, rule(o)?, ts, m);
+                }
+            }
+            Some("stroke_path") => {
+                if let (Some(path), Some(paint)) = (build(get(o, "path")?)?, paint(o, done)?) {
+                    pm.stroke_path(&path, &paint, &stroke(o)?, ts, m);
+                }
+            }
+            Some("draw_pixmap") => {
+                let p = o.get("paint").unwrap_or(&Value::Null);
+                let paint = PixmapPaint { opacity: opt_num(p, "opacity", 1.0)?, blend_mode: pick(p, "blend", "source-over", &BLEND_MODES)?, quality: quality(p)? };
+                pm.draw_pixmap(int(o, "x")?, int(o, "y")?, pixmap(done, o)?.as_ref(), &paint, ts, m);
+            }
+            Some("apply_mask") => pm.apply_mask(m.ok_or("apply_mask needs a mask")?),
+            _ => return Err(format!("bad pixmap op {o}")),
+        }
+        Ok(())
+    }
+
+    fn mask_op(mk: &mut Mask, o: &Value) -> Result<(), String> {
+        match s(o, "op") {
+            Some("invert") => mk.invert(),
+            Some(name @ ("fill_path" | "intersect_path")) => {
+                if let Some(path) = build(get(o, "path")?)? {
+                    let (rule, aa, ts) = (rule(o)?, flag(o, "aa", true)?, transform(o)?);
+                    if name == "fill_path" {
+                        mk.fill_path(&path, rule, aa, ts);
+                    } else {
+                        mk.intersect_path(&path, rule, aa, ts);
+                    }
+                }
+            }
+            _ => return Err(format!("bad mask op {o}")),
+        }
+        Ok(())
+    }
+
+    fn size(sc: &Value, key: &str) -> Result<u32, String> {
+        sc.get(key).and_then(Value::as_u64).and_then(|v| u32::try_from(v).ok()).ok_or_else(|| format!("bad {key} in scene {sc}"))
+    }
+
+    pub fn run(scenes: &str, out: &str) -> Result<(), String> {
+        let src = std::fs::read_to_string(scenes).map_err(|e| e.to_string())?;
+        let scenes: Vec<Value> = serde_json::from_str(&src).map_err(|e| e.to_string())?;
+        let out = std::path::Path::new(out);
+        std::fs::create_dir_all(out).map_err(|e| e.to_string())?;
+        let mut done = Done::new();
+        let mut index = Map::new();
+        for sc in &scenes {
+            let name = s(sc, "name").ok_or_else(|| format!("a scene needs a name: {sc}"))?;
+            if done.contains_key(name) {
+                return Err(format!("duplicate scene {name}"));
+            }
+            let ops: &[Value] = match sc.get("ops") {
+                Some(ops) => list(ops)?,
+                None => &[],
+            };
+            let result = match s(sc, "kind") {
+                Some("pixmap") => match Pixmap::new(size(sc, "width")?, size(sc, "height")?) {
+                    Some(mut pm) => {
+                        for o in ops {
+                            pixmap_op(&mut pm, o, &done)?;
+                        }
+                        std::fs::write(out.join(format!("{name}.rgba")), pm.data()).map_err(|e| e.to_string())?;
+                        Some(Out::Pixmap(pm))
+                    }
+                    None => None,
+                },
+                Some("mask") => {
+                    let mk = match sc.get("from") {
+                        Some(f) => {
+                            let ty = pick(f, "type", "alpha", &[("alpha", MaskType::Alpha), ("luminance", MaskType::Luminance)])?;
+                            Some(Mask::from_pixmap(pixmap(&done, f)?.as_ref(), ty))
+                        }
+                        None => Mask::new(size(sc, "width")?, size(sc, "height")?),
+                    };
+                    match mk {
+                        Some(mut mk) => {
+                            for o in ops {
+                                mask_op(&mut mk, o)?;
+                            }
+                            std::fs::write(out.join(format!("{name}.a8")), mk.data()).map_err(|e| e.to_string())?;
+                            Some(Out::Mask(mk))
+                        }
+                        None => None,
+                    }
+                }
+                _ => return Err(format!("bad kind in scene {name}")),
+            };
+            index.insert(
+                name.to_string(),
+                match &result {
+                    Some(Out::Pixmap(p)) => json!({"kind": "pixmap", "width": p.width(), "height": p.height()}),
+                    Some(Out::Mask(m)) => json!({"kind": "mask", "width": m.width(), "height": m.height()}),
+                    None => Value::Null,
+                },
+            );
+            done.insert(name.to_string(), result);
+        }
+        let index = serde_json::to_string_pretty(&Value::Object(index)).map_err(|e| e.to_string())?;
+        std::fs::write(out.join("index.json"), index + "\n").map_err(|e| e.to_string())
     }
 }
