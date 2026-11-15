@@ -79,3 +79,9 @@
 - source_plan: `_bmad-output/initiative-go-rewrite/plan-go-rewrite-4c3-usvg-filters.md`
   summary: In the engine/C ABI phase, wrap every exported Go entry point in recover() returning "internal error (panic)" as core/src/lib.rs does with catch_unwind (lib.rs:543, 574), and add transitive recursion guards for pattern href cycles and feImage→group→filter cycles, which currently overflow the stack fatally in Go and Rust.
   evidence: The usvg port mirrors Rust unwrap panics deliberately (mustPositiveF32, unreachable!), and Go stack overflows cannot be recovered, so containment and recursion guards are needed before untrusted imported SVGs reach core-go.
+- source_plan: `_bmad-output/initiative-go-rewrite/plan-go-rewrite-5a-script-nodes.md`
+  summary: Phase 5b - execute sandbox core in core-go/script behind a Host interface (Doc, Changed, SlideIn, LaidOut, FindEmptySpace, Generate, per-run NewID): PRELUDE globals, the 15 natives, settle/limits/describe error strings, globals export/restore, apply_edits, Get/to_json, validate/issue_line, the exact success report text; tested with a fake host and a seeded `nalarupa-cli exec --seed` oracle.
+  evidence: script.rs split three ways after investigation; the sandbox core needs no engine beyond the Host interface.
+- source_plan: `_bmad-output/initiative-go-rewrite/plan-go-rewrite-5a-script-nodes.md`
+  summary: Phase 5c (with the engine phase) - execute transaction (rollback, history commit, editId store), execute_shared with EXECUTE_GATE and cancel, live streaming contexts and seeding (stream.rs complete_prefix), Generate downloads and pens, screenshots/exports through ToolOut::finish, and the app script-check/scriptnode-check.
+  evidence: These parts mutate engine state and run under the engine lock, so they belong with phase 8.
