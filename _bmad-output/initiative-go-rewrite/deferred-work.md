@@ -100,3 +100,9 @@
 - source_plan: `_bmad-output/initiative-go-rewrite/plan-go-rewrite-6b-shader-gpu.md`
   summary: Pin wgpu-native for macOS (darwin_arm64/amd64) and Windows arm64 in fetch_wgpu.go when those platforms are built; only windows_amd64 (MinGW) and linux_amd64 are pinned.
   evidence: Windows is the release platform and CI runs Linux and Windows x64 only.
+- source_plan: `_bmad-output/initiative-go-rewrite/plan-go-rewrite-7a-html-export.md`
+  summary: Phase 7b - Figma clipboard import in core-go (figma.rs decode: payload/base64, fig-kiwi archive, raw-deflate and zstd chunks with the 256 MB cap via github.com/klauspost/compress/zstd, kiwi binary schema decoder, Doc conversion with styles, variable bindings, instance expansion, sizing, text, paints, gradients, effects, vector networks), the 5 Rust tests on core/tests/figma-clipboard.html, plus a test-only `nalarupa-cli figma <html>` JSON oracle.
+  evidence: html.rs/figma.rs split after investigation; figma.rs is pure and independent of 7a.
+- source_plan: `_bmad-output/initiative-go-rewrite/plan-go-rewrite-7a-html-export.md`
+  summary: Phase 7c - export job on export.Ctx (plan_files for png/jpeg/webp/svg/pdf/html formats, ExportJob settle/replan/run with Waiter and PathPolicy hooks, the write mutex, script-file claims and file_stem/file_name), with html.rs's deck/PDF/raster/damaged-image/hidden tests; engine export() and ToolOut wiring stay with phase 8.
+  evidence: Export orchestration is engine-adjacent (downloads, script runs, agent path policy) and builds on 7a.
