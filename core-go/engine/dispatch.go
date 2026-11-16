@@ -7,6 +7,7 @@ import (
 
 	"github.com/naddrzz/nalarupa/core-go/doc"
 	"github.com/naddrzz/nalarupa/core-go/jsonv"
+	"github.com/naddrzz/nalarupa/core-go/model"
 	"github.com/naddrzz/nalarupa/core-go/render"
 )
 
@@ -15,21 +16,6 @@ var gated = []string{
 	"update", "move_by", "insert", "delete", "duplicate", "reorder", "reparent", "wrap", "unwrap", "add_layout", "set_layout",
 	"remove_layout", "align", "paste", "path_write", "drag_begin", "drag_end", "undo", "redo", "set_variable", "save",
 }
-
-// AgentUnavailable answers the commands of the built-in agent, its chats, providers' tests, Claude Code's sign-in
-// and the MCP server, which this core does not have yet.
-const AgentUnavailable = "The agent is not available in this core yet."
-
-// agentCommands are lib.rs's agent, chat, provider test, Claude Code account and MCP commands.
-var agentCommands = []string{
-	"agent_send", "agent_reset", "agent_instructions", "agent_permission", "provider_test",
-	"claude_auth_status", "claude_auth_login", "claude_auth_cancel", "claude_auth_logout",
-	"chat_list", "chat_load", "chat_delete", "chat_clear", "mcp_install",
-}
-
-// idleAgentCommands do nothing when no agent runs and answer true, as Rust does then: the app stops the agent
-// and flushes the chat (on exit) whatever is running.
-var idleAgentCommands = []string{"agent_stop", "chat_flush"}
 
 // Dispatch runs one UI command (lib.rs `dispatch`: the engine core's and the inline commands, and those added
 // with Handle), taking the edit gate and the engine lock as Rust does. `nr_call` and the replay answer with it.
@@ -56,17 +42,52 @@ func (e *Engine) Dispatch(req jsonv.Value) (jsonv.Value, error) {
 			return nil, err
 		}
 		return Strings(files), nil
-	case slices.Contains(agentCommands, cmd):
-		return nil, errors.New(AgentUnavailable)
-	case slices.Contains(idleAgentCommands, cmd):
+	case cmd == "provider_test":
+		// One tiny request in the background (a slow provider must not freeze the editor); the result arrives as a
+		// `provider_test` event: {id, ok, model, reply} or {id, ok: false, error}.
+		id, ok := jsonv.Str(arg("id"))
+		if !ok {
+			return nil, errors.New("id required")
+		}
+		var client model.Provider
+		var name string
+		var err error
+		e.Locked(func() { client, name, err = e.ProviderTest(id) })
+		if err != nil {
+			return nil, err
+		}
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					e.Locked(func() {
+						e.Emit(Object("type", "provider_test", "id", id, "ok", false, "model", name, "error", fmt.Sprintf("internal error (panic): %v", r)))
+					})
+				}
+			}()
+			ev := model.Test(client, id, name)
+			e.Locked(func() { e.Emit(ev) })
+		}()
 		return true, nil
+	case cmd == "init":
+		var start func() (uint16, error)
+		e.Locked(func() {
+			if e.MCPPort == 0 {
+				start = e.Hooks.StartMCP
+			}
+		})
+		if start != nil {
+			if port, err := start(); err == nil {
+				e.Locked(func() { e.MCPPort = port })
+			}
+		}
+	case unlocked[cmd] != nil:
+		return unlocked[cmd](e, req)
 	}
 	e.Lock()
 	defer e.Unlock()
 	num := func(k string) float64 { f, _ := jsonv.F64(arg(k)); return f }
 	switch cmd {
 	case "init":
-		// No MCP server is started: it comes with the agent, so the port stays 0.
 		recent, ok := e.Settings.Get("recent")
 		if !ok {
 			recent = jsonv.NewArray()

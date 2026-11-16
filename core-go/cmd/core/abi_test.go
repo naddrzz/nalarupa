@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image"
 	"image/png"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/naddrzz/nalarupa/core-go/agent"
 	"github.com/naddrzz/nalarupa/core-go/engine"
 	"github.com/naddrzz/nalarupa/core-go/jsonv"
 )
@@ -109,28 +111,53 @@ func TestEnvelope(t *testing.T) {
 	call(t, fmt.Sprintf(`{"cmd": "delete", "ids": [%q]}`, id))
 }
 
-func TestInitStartsNoMCPServer(t *testing.T) {
+// init starts the MCP server once, on a live port in its range, and reports it.
+func TestInitStartsTheMCPServer(t *testing.T) {
 	v := call(t, `{"cmd": "init"}`)
-	if jsonv.StrOr(jsonv.Get(v, "dataDir")) != os.Getenv("NALARUPA_DATA") || jsonv.StrOr(jsonv.Get(v, "mcpUrl")) != "http://127.0.0.1:0/mcp" {
-		t.Errorf("init: %s", jsonv.Marshal(v))
+	port, _ := jsonv.F64(jsonv.Get(v, "mcpPort"))
+	if jsonv.StrOr(jsonv.Get(v, "dataDir")) != os.Getenv("NALARUPA_DATA") || port < 47700 || port >= 47720 ||
+		jsonv.StrOr(jsonv.Get(v, "mcpUrl")) != fmt.Sprintf("http://127.0.0.1:%d/mcp", int(port)) {
+		t.Fatalf("init: %s", jsonv.Marshal(v))
 	}
-	if n, _ := jsonv.F64(jsonv.Get(v, "mcpPort")); n != 0 {
-		t.Errorf("init started an MCP server on %v", n)
+	res, err := http.Post(jsonv.StrOr(jsonv.Get(v, "mcpUrl")), "application/json", strings.NewReader(`{"jsonrpc":"2.0","id":7,"method":"ping"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if string(b) != `{"jsonrpc":"2.0","id":7,"result":{}}` {
+		t.Errorf("ping: %d %s", res.StatusCode, b)
+	}
+	if again := call(t, `{"cmd": "init"}`); !jsonv.Equal(jsonv.Get(again, "mcpPort"), jsonv.Get(v, "mcpPort")) {
+		t.Errorf("a second init moved the server: %s", jsonv.Marshal(again))
+	}
+	if p, _ := jsonv.F64(jsonv.Get(call(t, `{"cmd": "state"}`), "mcpPort")); p != port {
+		t.Errorf("state reports port %v", p)
 	}
 }
 
-func TestAgentCommandsAreNotAvailable(t *testing.T) {
-	for _, cmd := range []string{"agent_send", "agent_reset", "chat_list", "chat_load", "mcp_install", "provider_test", "claude_auth_status"} {
-		want := fmt.Sprintf(`{"ok":false,"error":%q}`, engine.AgentUnavailable)
-		if got := raw(t, []byte(fmt.Sprintf(`{"cmd": %q, "text": "hi", "id": "x"}`, cmd))); got != want {
-			t.Errorf("%s: %s", cmd, got)
+// The agent's commands are dispatched as lib.rs does, with its errors.
+func TestAgentCommands(t *testing.T) {
+	for _, c := range []struct{ req, want string }{
+		{`{"cmd": "agent_stop"}`, `{"ok":true,"data":true}`},
+		{`{"cmd": "chat_flush"}`, `{"ok":true,"data":true}`},
+		{`{"cmd": "chat_list"}`, `{"ok":true,"data":{"current":null,"chats":[]}}`},
+		{`{"cmd": "chat_load"}`, `{"ok":false,"error":"id required"}`},
+		{`{"cmd": "chat_delete", "id": "a-b"}`, `{"ok":false,"error":"invalid chat id: a-b"}`},
+		{`{"cmd": "agent_permission", "id": "x"}`, `{"ok":false,"error":"answer required: allow, deny or auto"}`},
+		{`{"cmd": "agent_permission", "id": "x", "answer": "allow"}`, `{"ok":false,"error":"This permission request is no longer waiting."}`},
+		{`{"cmd": "agent_instructions", "backend": "x"}`, `{"ok":false,"error":"unknown backend 'x': api, claude-code or provider"}`},
+		{`{"cmd": "mcp_install", "client": "vscode"}`, `{"ok":false,"error":"unknown client 'vscode' (claude-code, cursor, codex)"}`},
+		{`{"cmd": "provider_test"}`, `{"ok":false,"error":"id required"}`},
+		{`{"cmd": "provider_test", "id": "nope"}`, `{"ok":false,"error":"unknown provider"}`},
+		{`{"cmd": "agent_reset"}`, `{"ok":true,"data":true}`},
+	} {
+		if got := raw(t, []byte(c.req)); got != c.want {
+			t.Errorf("%s:\n got %s\nwant %s", c.req, got, c.want)
 		}
 	}
-	// With no agent running these do nothing and succeed, as in Rust (the app calls them on Stop and on exit).
-	for _, cmd := range []string{"agent_stop", "chat_flush"} {
-		if got := raw(t, []byte(fmt.Sprintf(`{"cmd": %q}`, cmd))); got != `{"ok":true,"data":true}` {
-			t.Errorf("%s: %s", cmd, got)
-		}
+	if got := jsonv.StrOr(call(t, `{"cmd": "agent_instructions", "backend": "provider"}`)); got != agent.Instructions("api") {
+		t.Error("a provider gets the API instructions")
 	}
 }
 

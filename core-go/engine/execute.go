@@ -12,7 +12,7 @@ import (
 )
 
 // AgentHooks are the built-in agent's parts of the engine (agent.rs), filled by package agent's Attach. A nil
-// hook is inert. Each is called under the engine lock.
+// hook is inert. Each is called under the engine lock, except StartMCP.
 type AgentHooks struct {
 	// Stop is the Stop signal of a call by agent (closed when the user stops it), or nil when Stop does not reach
 	// it: Rust raises it only for a running built-in agent's call.
@@ -26,6 +26,9 @@ type AgentHooks struct {
 	// SaveChat saves the current chat in the background (agent.rs `save_chat`): Emit calls it when an agent event
 	// ends a message or a turn.
 	SaveChat func() error
+	// StartMCP starts the MCP server and returns its port (mcp.rs `start`); `init` calls it, without the lock,
+	// while no server runs.
+	StartMCP func() (uint16, error)
 	// ExportAllowed is the path rule of a script's Export (agent.rs `path_allowed` for "Write" inside the export
 	// folder); nil is export.WritePolicy.
 	ExportAllowed export.PathPolicy

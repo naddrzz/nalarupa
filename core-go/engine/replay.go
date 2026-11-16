@@ -80,6 +80,13 @@ var commands = map[string]Command{}
 // Handle adds cmd to the dispatcher. Call it from an init function: the table is not locked.
 func Handle(cmd string, f Command) { commands[cmd] = f }
 
+// unlocked are the commands that lock the engine themselves (the agent's): they wait on the model, a process or
+// a file, which the lock must not be held across.
+var unlocked = map[string]Command{}
+
+// HandleUnlocked adds cmd to the dispatcher, run without the engine lock. Call it from an init function.
+func HandleUnlocked(cmd string, f Command) { unlocked[cmd] = f }
+
 // MatrixJSON is a painted transform as Rust writes `Option<[f64; 6]>`: null for the identity (nil).
 func MatrixJSON(m *[6]float64) jsonv.Value {
 	if m == nil {

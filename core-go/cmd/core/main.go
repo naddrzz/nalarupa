@@ -15,16 +15,22 @@ import "C"
 import (
 	"bytes"
 	"strings"
+	"sync"
 	"unicode/utf8"
 	"unsafe"
 
-	// The editor operations join the dispatcher.
+	// The agent's and the editor's operations join the dispatcher.
+	"github.com/naddrzz/nalarupa/core-go/agent"
 	_ "github.com/naddrzz/nalarupa/core-go/editor"
 	"github.com/naddrzz/nalarupa/core-go/engine"
 	"github.com/naddrzz/nalarupa/core-go/jsonv"
 )
 
 func main() {}
+
+// attach gives the process-wide engine its agent once, on the first call (not at load: the engine reads
+// NALARUPA_DATA when it is created).
+var attach sync.Once
 
 // respond is `nr_call`'s answer to req: the envelope `{"ok":true,"data":…}` or `{"ok":false,"error":…}`.
 func respond(req []byte) (out string) {
@@ -33,6 +39,7 @@ func respond(req []byte) (out string) {
 			out = `{"ok":false,"error":"internal error (panic)"}`
 		}
 	}()
+	attach.Do(func() { agent.Attach(engine.Global()) })
 	var env *jsonv.Object
 	if v, err := jsonv.Parse(req); err != nil {
 		env = engine.Object("ok", false, "error", "bad request: "+err.Error())

@@ -51,6 +51,22 @@ func fakeClaude(mode string) int {
 	case mode == "stderr":
 		fmt.Fprintln(os.Stderr, "boom")
 		return 3
+	case mode == "pen":
+		// The AI Pen's CLI draws the model it got.
+		m := ""
+		if i := slices.Index(args, "--model"); i >= 0 && i+1 < len(args) {
+			m = args[i+1]
+		}
+		out(string(jsonv.Marshal(engine.Object("type", "stream_event", "event", engine.Object("delta", engine.Object("type", "text_delta", "text", "model="+m))))))
+		return 0
+	case mode == "install":
+		return 0
+	case mode == "install-exists":
+		fmt.Fprintln(os.Stderr, "MCP server nalarupa already exists in user config")
+		return 1
+	case mode == "install-fail":
+		fmt.Fprintln(os.Stderr, "boom: not logged in")
+		return 1
 	case mode == "hang":
 		out(`{"type":"system","subtype":"init","session_id":"s-hang"}`)
 		time.Sleep(time.Minute)

@@ -53,10 +53,22 @@ const (
 )
 
 // Attach installs the agent's engine hooks: Stop reaching a running built-in agent's `execute`, the frames its
-// calls flag `placeholder`, and saving the chat when an agent event ends a message or a turn. The AI Pen
-// (StartPen) comes with phase 9c.
+// calls flag `placeholder`, the AI Pens they start, saving the chat when an agent event ends a message or a turn,
+// and the MCP server `init` starts.
 func Attach(e *engine.Engine) {
 	e.Locked(func() {
+		e.Hooks.StartPen = func(agent string, stops uint64, frame, prompt string, w, h float64) {
+			// Its own flag, set by Stop even after a later turn replaced the run's. It starts set when a Stop came
+			// while this script ran or its run is being stopped; an earlier Stop's flag does not stop a later
+			// call's pen.
+			cancel := engine.NewFlag()
+			if StoppedSince(e, stops, agent) {
+				cancel.Set()
+			}
+			e.Agent.Pens = append(e.Agent.Pens, engine.Pen{Frame: frame, Cancel: cancel})
+			startPen(e, frame, prompt, w, h, cancel)
+		}
+		e.Hooks.StartMCP = func() (uint16, error) { return StartMCP(e) }
 		e.Hooks.Stop = func(agent string) <-chan struct{} {
 			// Stop reaches a running built-in agent only; anyone else would see a stale flag.
 			if _, ok := e.Agent.Profile(agent); ok && e.Agent.Running {
