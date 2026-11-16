@@ -201,3 +201,11 @@ func stAtan2(y, x float64) float64 {
 	df := xd.mul(c).add(yd.mul(s))
 	return t.add(f.div(df).neg()).f64()
 }
+
+// Sin, Cos and Atan2 are stSin, stCos and stAtan2 for other ports that must match Rust's libm on any GOAMD64
+// (the Figma import).
+func Sin(x float64) float64 { return stSin(x) }
+
+func Cos(x float64) float64 { return stCos(x) }
+
+func Atan2(y, x float64) float64 { return stAtan2(y, x) }

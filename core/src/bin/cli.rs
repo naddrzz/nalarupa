@@ -50,6 +50,9 @@
 //!   nalarupa-cli shader-backdrop <doc.pen> <node-id> [--offline]
 //!                                                       the `@backdrop` SVGs the SVG export of a node builds, as a
 //!                                                       JSON array (the Go port's backdrop oracle)
+//!   nalarupa-cli figma <clipboard.html>                 `figma::decode` of a Figma clipboard as JSON: [[node, [x, y, w, h]], ...],
+//!                                                       null when it is not Figma data, or {"error"} (the Go port's
+//!                                                       Figma import oracle)
 
 use nalarupa_core::engine::engine;
 use nalarupa_core::resolve::RNode;
@@ -330,6 +333,15 @@ fn run(args: &[String]) -> Result<(), String> {
             e.ctx().export_svg(arg(3)?).ok_or("node not found")?;
             let svgs = nalarupa_core::shader::BACKDROP_TAP.take().unwrap_or_default();
             println!("{}", json!(svgs));
+            Ok(())
+        }
+        "figma" => {
+            // `[[node, [x, y, w, h]], ...]`, `null` when the HTML is not Figma data, `{"error"}` on bad data.
+            let html = std::fs::read_to_string(arg(2)?).map_err(|e| e.to_string())?;
+            match nalarupa_core::figma::decode(&html) {
+                Ok(nodes) => println!("{}", serde_json::to_string(&nodes).map_err(|e| e.to_string())?),
+                Err(e) => println!("{}", json!({"error": e})),
+            }
             Ok(())
         }
         other => Err(format!("unknown command '{other}'")),
