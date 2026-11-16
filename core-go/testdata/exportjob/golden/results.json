@@ -1,0 +1,258 @@
+{
+ "damaged-html": {
+  "files": [
+   "<W>\\doc\\damaged.html"
+  ]
+ },
+ "damaged-pdf": {
+  "files": [
+   "<W>\\doc\\damaged.pdf"
+  ]
+ },
+ "damaged-png": {
+  "files": [
+   "<W>\\doc\\out\\damaged.png"
+  ]
+ },
+ "damaged-svg": {
+  "files": [
+   "<W>\\doc\\out\\damaged.svg"
+  ]
+ },
+ "empty-pdf": {
+  "error": "nothing to export: the document has no visible top-level frames"
+ },
+ "empty-png": {},
+ "fmt-html": {
+  "files": [
+   "<W>\\doc\\page.html"
+  ]
+ },
+ "fmt-html-css": {
+  "files": [
+   "<W>\\doc\\page.html"
+  ]
+ },
+ "fmt-html-tailwind": {
+  "files": [
+   "<W>\\doc\\page.html"
+  ]
+ },
+ "fmt-jpeg@2": {
+  "files": [
+   "<W>\\doc\\out\\s3.jpeg"
+  ]
+ },
+ "fmt-jpg@1": {
+  "files": [
+   "<W>\\doc\\out\\s1.jpeg"
+  ]
+ },
+ "fmt-pdf": {
+  "files": [
+   "<W>\\doc\\one.pdf"
+  ]
+ },
+ "fmt-png@1": {
+  "files": [
+   "<W>\\doc\\out\\s1.png"
+  ]
+ },
+ "fmt-png@2": {
+  "files": [
+   "<W>\\doc\\out\\s1.png"
+  ]
+ },
+ "fmt-svg": {
+  "files": [
+   "<W>\\doc\\vec\\s1.svg",
+   "<W>\\doc\\vec\\s3.svg"
+  ]
+ },
+ "fmt-webp@1": {
+  "files": [
+   "<W>\\doc\\out\\s1.webp"
+  ]
+ },
+ "fmt-webp@2": {
+  "files": [
+   "<W>\\doc\\out\\s3.webp"
+  ]
+ },
+ "hidden-child-pdf": {
+  "error": "s2a is hidden (or inside a hidden layer); show it before exporting"
+ },
+ "hidden-child-png": {
+  "error": "s2a is hidden (or inside a hidden layer); show it before exporting"
+ },
+ "hidden-html": {
+  "error": "s2 is hidden (or inside a hidden layer); show it before exporting"
+ },
+ "hidden-instance-child": {
+  "error": "inst2/kid is hidden (or inside a hidden layer); show it before exporting"
+ },
+ "hidden-pdf": {
+  "error": "s2 is hidden (or inside a hidden layer); show it before exporting"
+ },
+ "hidden-png": {
+  "error": "s2 is hidden (or inside a hidden layer); show it before exporting"
+ },
+ "hidden-svg": {
+  "error": "s2 is hidden (or inside a hidden layer); show it before exporting"
+ },
+ "html-default-out": {
+  "files": [
+   "<W>\\doc\\export.html"
+  ]
+ },
+ "many-html": {
+  "files": [
+   "<W>\\doc\\many.html"
+  ]
+ },
+ "many-pdf": {
+  "files": [
+   "<W>\\doc\\many.pdf"
+  ]
+ },
+ "many-png": {
+  "files": [
+   "<W>\\doc\\many\\s1.png",
+   "<W>\\doc\\many\\s3.png",
+   "<W>\\doc\\many\\r.png",
+   "<W>\\doc\\many\\inst_kid.png",
+   "<W>\\doc\\many\\bar.png"
+  ]
+ },
+ "many-svg": {
+  "files": [
+   "<W>\\doc\\many\\r.svg",
+   "<W>\\doc\\many\\inst.svg",
+   "<W>\\doc\\many\\dot.svg"
+  ]
+ },
+ "missing-html": {
+  "error": "node not found: nope"
+ },
+ "missing-instance-child": {
+  "error": "node not found: inst/nope"
+ },
+ "missing-png": {
+  "error": "node not found: nope"
+ },
+ "pdf-default": {
+  "files": [
+   "<W>\\doc\\deck.pdf"
+  ]
+ },
+ "png-default-out": {
+  "files": [
+   "<W>\\doc\\exports\\r.png"
+  ]
+ },
+ "png-scale-clamped": {
+  "files": [
+   "<W>\\doc\\out\\bar.png"
+  ]
+ },
+ "relative-html-default": {
+  "files": [
+   "doc\\doc\\export.html"
+  ]
+ },
+ "relative-pdf-default": {
+  "files": [
+   "doc\\doc\\deck.pdf"
+  ]
+ },
+ "relative-png": {
+  "files": [
+   "doc\\out\\r.png"
+  ]
+ },
+ "relative-script-default": {
+  "files": [
+   "doc\\doc\\deck.pdf"
+  ]
+ },
+ "relative-script-new": {
+  "files": [
+   "doc\\shots\\s1.svg"
+  ]
+ },
+ "relative-script-not-pdf": {
+  "error": "'doc\\deck.txt' is not a pdf file name; use a .pdf path that does not start with a dot"
+ },
+ "relative-script-parent": {
+  "error": "Export writes only inside doc and never over the open document; ask the user to export elsewhere"
+ },
+ "script-dot-dir": {
+  "error": "'<W>\\doc\\.cache' is not a webp file name; use a .html path that does not start with a dot"
+ },
+ "script-dotfile": {
+  "error": "'<W>\\doc\\.page.html' is not a html file name; use a .html path that does not start with a dot"
+ },
+ "script-exists": {
+  "error": "<W>\\doc\\page.html already exists and Export did not write it; export under a new name, or ask the user before replacing it"
+ },
+ "script-exists-raster": {
+  "error": "<W>\\doc\\out\\r.png already exists and Export did not write it; export under a new name, or ask the user before replacing it"
+ },
+ "script-new": {
+  "files": [
+   "<W>\\doc\\shots\\s1.svg"
+  ]
+ },
+ "script-not-pdf": {
+  "error": "'<W>\\doc\\deck.txt' is not a pdf file name; use a .pdf path that does not start with a dot"
+ },
+ "script-outside": {
+  "error": "Export writes only inside <W>\\doc and never over the open document; ask the user to export elsewhere"
+ },
+ "script-over-doc": {
+  "error": "Export writes only inside <W>\\doc and never over the open document; ask the user to export elsewhere"
+ },
+ "script-parent": {
+  "error": "Export writes only inside <W>\\doc and never over the open document; ask the user to export elsewhere"
+ },
+ "script-pdf-default": {
+  "files": [
+   "<W>\\doc\\deck.pdf"
+  ]
+ },
+ "script-same-name": {
+  "files": [
+   "<W>\\doc\\twice\\s1.png",
+   "<W>\\doc\\twice\\s1.png"
+  ]
+ },
+ "script-upper-ext": {
+  "files": [
+   "<W>\\doc\\PAGE.HTM"
+  ]
+ },
+ "slash-pdf-default": {
+  "files": [
+   "<W>/doc\\deck.pdf"
+  ]
+ },
+ "slash-png": {
+  "files": [
+   "<W>/doc\\out\\s1.png"
+  ]
+ },
+ "slash-script-exists": {
+  "error": "<W>/doc\\out\\s1.svg already exists and Export did not write it; export under a new name, or ask the user before replacing it"
+ },
+ "slash-script-new": {
+  "files": [
+   "<W>/doc\\export.html"
+  ]
+ },
+ "slash-script-outside": {
+  "error": "Export writes only inside <W>/doc and never over the open document; ask the user to export elsewhere"
+ },
+ "unknown-format": {
+  "error": "unknown export format 'tiff' (use png, jpeg, webp, svg, pdf or html-css)"
+ }
+}

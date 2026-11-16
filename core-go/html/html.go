@@ -25,6 +25,9 @@ import (
 	"github.com/naddrzz/nalarupa/core-go/svg"
 )
 
+// The export job writes html-css, html-tailwind and html files through Document.
+func init() { export.HTMLDocument = Document }
+
 // font is a family and weight the page uses, for its Google Fonts links.
 type font struct {
 	family string

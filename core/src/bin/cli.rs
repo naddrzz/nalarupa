@@ -28,6 +28,11 @@
 //!   nalarupa-cli pdf <doc.pen> <out.pdf> <node-id>... [--offline]
 //!                                                       `pdf_trees` then `encode_pdf`: one page per node (the Go
 //!                                                       port's PDF oracle)
+//!   nalarupa-cli export <doc.pen> <format> <out> [<node-id>...] [--opts <json>] [--script] [--offline]
+//!                                                       `html::plan`, settled without waiting and planned again
+//!                                                       when stale, then `run`; prints the written paths, one per
+//!                                                       line. `--script` checks and claims as a script's `Export`
+//!                                                       does (the Go port's export job oracle)
 //!   nalarupa-cli pdf-svg <file.svg> <out.pdf> [--fonts <cache-dir>]
 //!                                                       `encode_pdf` of one SVG file's usvg tree, with the options of
 //!                                                       `resvg` (the Go port's PDF text oracle)
@@ -268,6 +273,40 @@ fn run(args: &[String]) -> Result<(), String> {
             drop(e);
             let bytes = nalarupa_core::render::encode_pdf(&trees)?;
             std::fs::write(arg(3)?, bytes).map_err(|e| e.to_string())
+        }
+        "export" => {
+            let mut e = engine();
+            let mut ids = Vec::new();
+            let (mut opts, mut script) = (json!({}), false);
+            let mut rest = args.iter().skip(5);
+            while let Some(a) = rest.next() {
+                match a.as_str() {
+                    "--offline" => e.offline(),
+                    "--script" => script = true,
+                    "--opts" => opts = serde_json::from_str(rest.next().ok_or("--opts needs a JSON value")?).map_err(|err| err.to_string())?,
+                    id => ids.push(id.to_string()),
+                }
+            }
+            e.open(Path::new(arg(2)?))?;
+            let (format, out) = (arg(3)?, arg(4)?);
+            if script {
+                nalarupa_core::html::check_script_export(&e, format, out)?;
+            }
+            let mut job = nalarupa_core::html::plan(&mut e, &ids, format, out, &opts)?;
+            if script {
+                nalarupa_core::html::claim_script_files(&mut job)?;
+            }
+            if job.stale() {
+                // No waiting: downloads are off, and script runs finish in `settle`.
+                job.settle(std::time::Instant::now());
+                let data_dir = e.data_dir.clone();
+                job = job.replan(&mut e.ctx(), &data_dir)?;
+            }
+            drop(e);
+            for file in job.run()? {
+                println!("{file}");
+            }
+            Ok(())
         }
         "pdf-svg" => {
             let fonts = args.iter().position(|a| a == "--fonts").map(|i| arg(i + 1)).transpose()?;

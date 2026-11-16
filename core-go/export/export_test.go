@@ -152,3 +152,15 @@ func TestEncodeTreeFormats(t *testing.T) {
 		t.Errorf("webp pixel %v", m.Pix[:4])
 	}
 }
+
+// PlannedSVG is the SVG markup a job planned for each file, as written before its images are inlined ("" for a
+// file that is not SVG), for the export job tests.
+func PlannedSVG(j *Job) []string {
+	out := make([]string, len(j.files))
+	for i, f := range j.files {
+		if f.svg != nil {
+			out[i] = *f.svg
+		}
+	}
+	return out
+}

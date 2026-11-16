@@ -86,6 +86,13 @@ func tolerances(t *testing.T) map[string]Tolerance {
 func dataDir(t *testing.T) string {
 	t.Helper()
 	data := t.TempDir()
+	fillDataDir(t, data)
+	return data
+}
+
+// fillDataDir puts the fixture icons in the asset cache of the data folder data.
+func fillDataDir(t *testing.T, data string) {
+	t.Helper()
 	icons := filepath.Join(data, "cache", "icons")
 	if err := os.MkdirAll(icons, 0o777); err != nil {
 		t.Fatal(err)
@@ -97,7 +104,6 @@ func dataDir(t *testing.T) string {
 			t.Fatal("cannot copy icon", f, err)
 		}
 	}
-	return data
 }
 
 func openCtx(t *testing.T, path, data string, fonts *text.Fonts) *export.Ctx {

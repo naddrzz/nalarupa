@@ -31,18 +31,19 @@ type Ctx struct {
 	Doc    *doc.Doc
 	Fonts  *text.Fonts
 	Assets *svg.Assets
-	// Scripts runs the script nodes of the laid-out node; nil runs them with script.ExpandScripts, waiting for
-	// each run (or noting it in Runs).
-	Scripts svg.Expand
+	// Scripts runs the script nodes of the laid-out node, noting the runs in rec instead of waiting for them
+	// when rec is not nil (record mode, Runs); nil runs them with script.ExpandScripts.
+	Scripts func(n *resolve.RNode, r *resolve.Resolver, rec *script.Runs)
 	// Runs, when set, notes the script runs an export needs instead of waiting for them (record mode).
 	Runs *script.Runs
 }
 
 func (c *Ctx) expand() svg.Expand {
-	if c.Scripts != nil {
-		return c.Scripts
-	}
 	return func(n *resolve.RNode, r *resolve.Resolver) {
+		if c.Scripts != nil {
+			c.Scripts(n, r, c.Runs)
+			return
+		}
 		script.ExpandScripts(n, r, c.Fonts, c.Doc.Dir(), c.Doc.Path, false, c.Runs)
 	}
 }

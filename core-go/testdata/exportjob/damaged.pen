@@ -1,0 +1,11 @@
+{
+  "version": "2.19",
+  "children": [
+    {"type": "frame", "id": "damaged", "x": 0, "y": 0, "width": 240, "height": 110, "layout": "none", "fill": "#f4f4f5", "children": [
+      {"type": "rectangle", "id": "solid", "x": 10, "y": 10, "width": 60, "height": 40, "fill": "#2563eb"},
+      {"type": "rectangle", "id": "ok", "x": 80, "y": 10, "width": 60, "height": 40, "fill": {"type": "image", "url": "ok.png", "mode": "fill"}},
+      {"type": "rectangle", "id": "cut", "x": 150, "y": 10, "width": 60, "height": 40, "fill": {"type": "image", "url": "cut.png", "mode": "fill"}},
+      {"type": "rectangle", "id": "crc", "x": 10, "y": 60, "width": 60, "height": 40, "fill": {"type": "image", "url": "crc.png", "mode": "fill"}}
+    ]}
+  ]
+}

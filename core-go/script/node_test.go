@@ -372,6 +372,12 @@ func TestCache(t *testing.T) {
 }
 
 func TestSlots(t *testing.T) {
+	// The cache is process-wide and keyed by the script text, not its folder: start from an empty one so a
+	// repeated run (-count) or another test cannot turn the first miss into a hit.
+	scripts.Lock()
+	scripts.cache = nil
+	delete(scripts.slots, "back-slot")
+	scripts.Unlock()
 	dir := scriptDir(t, map[string]string{
 		"slow.js": "/** @schema 2.19 */\nconst s = Date.now(); while (Date.now() - s < 300) {}\nreturn [{type: 'rectangle', width: nalarupa.width, height: 10}];",
 	})
