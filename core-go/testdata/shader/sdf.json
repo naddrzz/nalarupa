@@ -1,0 +1,12 @@
+[
+ {"name": "rrect-50", "outline": {"kind": "rrect", "radii": [12, 0, 25, 4]}, "w": 50, "h": 40, "dpi": 2},
+ {"name": "rrect-300", "outline": {"kind": "rrect", "radii": [40, 10, 0, 80]}, "w": 300, "h": 200, "dpi": 1},
+ {"name": "rrect-1500", "outline": {"kind": "rrect", "radii": [200, 50, 300, 0]}, "w": 1500, "h": 900, "dpi": 1},
+ {"name": "ellipse-50", "outline": {"kind": "ellipse"}, "w": 50, "h": 30, "dpi": 2},
+ {"name": "circle-300", "outline": {"kind": "ellipse"}, "w": 300, "h": 300, "dpi": 1},
+ {"name": "ellipse-1500", "outline": {"kind": "ellipse"}, "w": 1500, "h": 700, "dpi": 2},
+ {"name": "path-50", "outline": {"kind": "path", "d": "M100 50H150V100H100ZM115 65H135V85H115Z", "x": 100, "y": 50, "evenodd": true}, "w": 50, "h": 50, "dpi": 2},
+ {"name": "path-300", "outline": {"kind": "path", "d": "M150 0A150 100 0 1 0 150 200A150 100 0 1 0 150 0ZM150 50A50 50 0 1 1 150 150A50 50 0 1 1 150 50Z", "x": 0, "y": 0, "evenodd": true}, "w": 300, "h": 200, "dpi": 1},
+ {"name": "path-1500", "outline": {"kind": "path", "d": "M750 0L1191 1440L30 550H1470L309 1440ZM700 200Q750 100 800 200T900 200C950 300 550 300 600 200Z", "x": 0, "y": 0, "evenodd": true}, "w": 1500, "h": 1440, "dpi": 1},
+ {"name": "path-winding", "outline": {"kind": "path", "d": "M10 10H90V90H10ZM30 30H70V70H30Z", "x": 0, "y": 0, "evenodd": false}, "w": 100, "h": 100, "dpi": 1}
+]

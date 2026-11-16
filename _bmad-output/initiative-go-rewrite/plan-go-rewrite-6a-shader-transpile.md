@@ -3,14 +3,14 @@ title: 'Go rewrite phase 6a: shader transpile, SDF and backdrop plumbing'
 type: 'refactor'
 ticket: ''
 created: '2026-11-16'
-status: 'in-progress'
-baseline_revision: '6729d42a1e55525b75815ffa80f4b5204c8b6263'
+status: 'built'
+baseline_revision: '41974622007a1ba9d35dc4cdb0c784907bcaa366'
 route: 'full'
 route_source: 'auto'
 risk: 'medium'
-review: ''
-review_source: ''
-lenses_ran: []
+review: 'quick'
+review_source: 'pinned'
+lenses_ran: ['quick']
 review_loop_iteration: 0
 followup_review_recommended: false
 context:
@@ -78,13 +78,13 @@ Extend `svg.ShaderPainter` with the backdrop key and callback and a `UsesBackdro
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `core/src/bin/cli.rs` -- the three test-only oracles.
-- [ ] `core-go/shader/annotate.go`, `transpile.go` -- annotations, `kind`, `transpile`, errors.
-- [ ] `core-go/shader/layout.go` -- std140 layout and uniform packing, `f16`.
-- [ ] `core-go/shader/sdf.go` -- the outline SDF.
-- [ ] `core-go/svg/paint.go` (and its shader emission) -- the `ShaderPainter` backdrop extension and the backdrop SVG build, keeping the hatch path.
-- [ ] `core-go/shader/*_test.go` -- the ported Rust tests plus each matrix row.
-- [ ] `core-go/shader/parity_test.go`, `core-go/testdata/shader/` -- shader sources, outlines and a doc with a backdrop shader, compared with the three oracles (goldens without the CLI, live with it).
+- [x] `core/src/bin/cli.rs` -- the three test-only oracles.
+- [x] `core-go/shader/annotate.go`, `transpile.go` -- annotations, `kind`, `transpile`, errors.
+- [x] `core-go/shader/layout.go` -- std140 layout and uniform packing, `f16`.
+- [x] `core-go/shader/sdf.go` -- the outline SDF.
+- [x] `core-go/svg/paint.go` (and its shader emission) -- the `ShaderPainter` backdrop extension and the backdrop SVG build, keeping the hatch path.
+- [x] `core-go/shader/*_test.go` -- the ported Rust tests plus each matrix row.
+- [x] `core-go/shader/parity_test.go`, `core-go/testdata/shader/` -- shader sources, outlines and a doc with a backdrop shader, compared with the three oracles (goldens without the CLI, live with it).
 
 **Acceptance Criteria:**
 - Given MinGW gcc as `CC` (the module needs cgo since 5a2), when `go test ./...` runs (also with `GOAMD64=v3`), then it passes with golden shader parity.
@@ -94,9 +94,28 @@ Extend `svg.ShaderPainter` with the backdrop key and callback and a `UsesBackdro
 
 ## Implementation Notes
 
+- `core-go/shader` API for 6b: `Transpile(src)` (GLSL text and uniforms), `Parse(src) (*Program, error)` (transpile plus the std140 layout naga's GLSL front end computes, `_nrb` members renamed as `compile` does), `Program.Pack(uniforms, w, h, pw, ph)`, `Pixels(w, h, scale)`, `Program.UsesBackdrop`/`UsesBackdrop(src)`, `SDF(outline, w, h, dpi)` (size plus RGBA f16, rows bottom-up) and `F16`. `Kind` is a type tag plus `Def` and `Flag`, as `shader.rs` packs them into enum payloads.
+- `UsesBackdrop(src)` checks transpile only; Rust's also needs naga to accept the shader. 6b's painter decides through `svg.ShaderPainter.UsesBackdrop`, so it can add the compile check.
+- `svg.ShaderPainter` is now `UsesBackdrop(src) bool` plus `PNG(src, uniforms, w, h, outline, load, backdrop *Backdrop)`. `svg.Backdrop` carries `Key` (FxHash of the SVG, `svg.rs`'s cache key), `SVG` (the document, so tests and 6b's trace can see it) and `Paint func(w, h int) (*skia.Pixmap, bool)`, which parses with the emitter's fonts (when `Fonts` is a `*text.Fonts`), its folder and a fresh `ImageHrefResolver`, and renders with `core-go/resvg` at `pw/w`, `ph/h`. With no painter the hatch path is unchanged.
+- The path SDF needs svgtypes' "None on the first error" rule, so `usvg` gains `SimplifyPathChecked`; `SimplifyPath` wraps it.
+- f32 and f64 products that feed a sum are wrapped in explicit conversions, and the blur sums start at -0.0 as Rust 1.81+'s `Sum for f32` does (a zero texel keeps its sign through the f16 encoding). With that, SDF texels match Rust bit for bit on every fixture, at both GOAMD64=v1 and v3, though the comparison allows 1 ulp as stated.
+- Rust side, behaviour unchanged: `render`'s uniform packing moved into `pack` (with `pixels`), `sdf` into `sdf_texels` + `half_rows`, so the oracles reuse them; test-only `oracle_transpile`, `oracle_sdf` and the thread-local `BACKDROP_TAP` (empty unless the CLI sets it) are `#[doc(hidden)] pub`.
+
 ## Plan Change Log
 
+- `@min`/`@max` do not clamp: the matrix row says "clamped as Rust", but `shader.rs` only validates them (`notes` sets `range` and drops the values), and `components` never clamps. Go matches Rust (no clamping); `TestPack` and the `annotations` fixture pin it. Only `@color @default` components are clamped, as in Rust.
+- CLI arguments grew to carry what the oracles need: `shader-transpile <file.frag> [<uniforms.json> <w> <h> <scale>]` prints `{error}`, or `{glsl}` plus either `{compileError}` (naga's message, which only skips the layout check) or `{layout, ubo}`; `shader-sdf <outline.json> <w> <h> <dpi> <out>` writes `<out>.f32` (texels top row first) and `<out>.f16` (bottom row first) and prints the size; `shader-backdrop <doc> <id> [--offline]` prints the backdrop SVGs of the node's SVG export as a JSON array. Outline JSON: `{"kind": "rrect", "radii": [...]}`, `{"kind": "ellipse"}`, `{"kind": "path", "d", "x", "y", "evenodd"}`.
+- SDF goldens keep a 24×24 grid of sampled texels per case (`sdf.golden.json`, 181 KB); the full textures (up to 16 MB of f32 each) are compared live only.
+- The backdrop fixture keeps every shader fill that precedes a `@backdrop` fill out of its frame: an earlier shader's GPU PNG lands in the backdrop's `defs`, which Go cannot produce before 6b.
+
 ## Review Triage Log
+
+### 2026-11-16 — Review pass
+- verdicts: 3 findings — high 0, medium 0, low 3, false 0, maybe-false 0
+- findings:
+  - `[low]` `[reject]` The matrix expects an error for `gl_PointCoord`, but `Transpile` accepts it, and the change log doesn't record this. — Go matches Rust, whose `transpile` also leaves that check to naga (6b). The fix would be editing this plan's matrix.
+  - `[low]` `[patch]` The `pointcoord` fixture also declares `mat2`, so its golden records naga's mat2/std140 error and skips the layout check. — Fix: drop the mat2 uniform and regenerate from the CLI.
+  - `[low]` `[patch]` No fixture compares `bvec` uniforms (the block member, rename and layout path) with the oracle. — Fix: add a bvec2/3/4 fixture with packed bytes.
 
 ## Verification
 
@@ -104,3 +123,33 @@ Extend `svg.ShaderPainter` with the backdrop key and callback and a `UsesBackdro
 - `cd core-go && CGO_ENABLED=1 CC=<MinGW gcc> go vet ./... && CGO_ENABLED=1 CC=<MinGW gcc> go test -count=1 ./...` -- expected: pass
 - `cd core-go && CGO_ENABLED=1 CC=<MinGW gcc> NALARUPA_CLI=<target>/release/nalarupa-cli go test -count=1 ./...` -- expected: pass, live (on an idle machine)
 - `cd core && cargo test --release` -- expected: pass (separate `CARGO_TARGET_DIR`; on this machine cargo is at `~/.rustup/toolchains/stable-x86_64-pc-windows-msvc/bin`)
+
+## Auto Run Result
+
+- **Summary:** `core-go/shader` ports the CPU half of `shader.rs`:
+  - annotations and `kind`
+  - `Transpile` to GLSL 450 (renames, std140 `NrUniforms`, sampler pairs, wrapper `main`, line-preserving)
+  - the naga-style std140 layout and `Pack`/`Pixels`, `F16`
+  - the outline SDF (rect, ellipse, path via coverage, jump flood, blur, Scharr), with every error string
+
+  `svg.ShaderPainter` gains `UsesBackdrop` and a `*Backdrop` (key, SVG, `Paint` via core-go/resvg), with the hatch unchanged. `usvg.SimplifyPathChecked` is added. Rust gets a no-behaviour-change refactor (`pack`/`pixels`, `sdf_texels` + `half_rows`), a thread-local `BACKDROP_TAP`, and test-only `shader-transpile`, `shader-sdf` and `shader-backdrop` CLI oracles.
+- **Files:**
+  - `core-go/shader/*.go`: the port
+  - `core-go/svg/paint.go` and `svg_test.go`: the painter extension
+  - `core-go/usvg/svgtypes_simple.go`: `SimplifyPathChecked`
+  - `core-go/testdata/shader/`: fixtures
+  - `core/src/{shader,svg}.rs` and `core/src/bin/cli.rs`: refactor, tap and oracles
+- **Review:**
+  - Patches applied: 2 low (the `pointcoord` fixture without mat2, and a new bvec fixture).
+  - Rejected: 1 low (`gl_PointCoord` is left to naga, as in Rust).
+  - Deviations logged by the implementer: `@min`/`@max` don't clamp, as in Rust, and `UsesBackdrop` is weaker until 6b's naga check.
+- **Follow-up review recommended:** false (patched: 0 high, 0 medium, 2 low).
+- **Verification:**
+  - `go vet` and `go test ./...` pass offline, and `GOAMD64=v3` on `./shader/` and `./svg/` passes.
+  - Live parity against the rebuilt CLI passes on every package. `./shader/` and `./svg/` were re-run after the patches.
+  - SDF texels are bit-identical.
+  - `cargo test --release` passes, 292 tests.
+- **Residual risks:**
+  - The backdrop oracle draws through the GPU (WARP).
+  - Linux libm may differ by 1 ulp, which the tolerance covers.
+  - The Rust refactor touches production `shader.rs` (`cargo test` and parity confirm unchanged behaviour).

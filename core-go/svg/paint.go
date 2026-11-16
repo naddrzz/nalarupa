@@ -13,6 +13,10 @@ import (
 
 	"github.com/naddrzz/nalarupa/core-go/jsonv"
 	"github.com/naddrzz/nalarupa/core-go/resolve"
+	"github.com/naddrzz/nalarupa/core-go/resvg"
+	"github.com/naddrzz/nalarupa/core-go/skia"
+	"github.com/naddrzz/nalarupa/core-go/text"
+	"github.com/naddrzz/nalarupa/core-go/usvg"
 )
 
 // paint is one fill or stroke paint: an SVG paint server value with its alpha and blend mode.
@@ -551,10 +555,25 @@ type Outline struct {
 	EvenOdd bool
 }
 
-// ShaderPainter runs a shader fill's GLSL source over a w×h node box and returns the base64 PNG of the
-// result (shader.rs `png`). load returns an image the shader samples, premultiplied, by its url.
+// ShaderPainter runs shader fills (shader.rs `png`, `uses_backdrop`).
 type ShaderPainter interface {
-	PNG(src string, uniforms *jsonv.Object, w, h float64, outline Outline, load func(url string) (*Pixmap, bool)) (string, error)
+	// UsesBackdrop reports whether the shader src reads `@backdrop`, so the emitter has to paint what lies
+	// behind the node.
+	UsesBackdrop(src string) bool
+	// PNG runs src over a w×h node box and returns the base64 PNG of the result. load returns an image the
+	// shader samples, premultiplied, by its url; backdrop is nil unless UsesBackdrop.
+	PNG(src string, uniforms *jsonv.Object, w, h float64, outline Outline, load func(url string) (*Pixmap, bool), backdrop *Backdrop) (string, error)
+}
+
+// Backdrop is what lies behind a shader fill that reads `@backdrop`: what its top-level frame painted so
+// far, over the light canvas colour.
+type Backdrop struct {
+	// Key identifies the pixels (the hash of SVG), for caching.
+	Key uint64
+	// SVG is the backdrop document, the node box as its view.
+	SVG string
+	// Paint renders SVG into a w×h pixmap (premultiplied, top row first).
+	Paint func(w, h int) (*skia.Pixmap, bool)
 }
 
 // shader is a shader fill as an image pattern; when the file is missing, no painter is set or it fails,
@@ -583,7 +602,11 @@ func (s *Svg) shader(o *jsonv.Object, b Rect) string {
 			}
 			return DecodeImage(p)
 		}
-		data, err = s.Shader.PNG(string(src), jsonv.Obj(jsonv.Get(o, "uniforms")), w, h, outline, load)
+		var behind *Backdrop
+		if s.Shader.UsesBackdrop(string(src)) {
+			behind = s.backdrop(b)
+		}
+		data, err = s.Shader.PNG(string(src), jsonv.Obj(jsonv.Get(o, "uniforms")), w, h, outline, load, behind)
 	}
 	s.outline = &outline
 	id := s.id("p")
@@ -596,4 +619,36 @@ func (s *Svg) shader(o *jsonv.Object, b Rect) string {
 			`) rotate(135) scale(5)"><rect x="0.4" width="0.2" height="1" fill="#ff0000"/></pattern>`)
 	}
 	return id
+}
+
+// backdrop is what this top-level frame painted so far over the light canvas colour, cropped to the box b.
+// Other top-level frames beneath are not included (raster.rs's background blur does that).
+func (s *Svg) backdrop(b Rect) *Backdrop {
+	x, y, w, h := f(b.X), f(b.Y), f(b.W), f(b.H)
+	out := s.out.String()
+	open := strings.Count(out, "<g ") + strings.Count(out, "<g>")
+	closing := strings.Repeat("</g>", max(open-strings.Count(out, "</g>"), 0))
+	doc := `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="` + w + `" height="` + h + `" viewBox="` + x + " " + y + " " + w + " " + h +
+		`"><rect x="` + x + `" y="` + y + `" width="` + w + `" height="` + h + `" fill="#f6f6f6"/><defs>` + s.defs.String() + `</defs>` + out + closing + `</svg>`
+	opt := usvg.DefaultOptions()
+	if fonts, ok := s.Fonts.(*text.Fonts); ok {
+		opt.FontDB = fonts.Database()
+		opt.FontResolver = usvg.FontsResolver(fonts)
+	}
+	opt.ResourcesDir = s.Base
+	bw, bh := float32(b.W), float32(b.H)
+	return &Backdrop{Key: FxHash(doc), SVG: doc, Paint: func(pw, ph int) (*skia.Pixmap, bool) {
+		opt := opt
+		opt.ImageHrefResolver = ImageHrefResolver()
+		tree, err := usvg.FromStr(doc, &opt)
+		if err != nil || pw <= 0 || ph <= 0 {
+			return nil, false
+		}
+		pm, ok := skia.NewPixmap(uint32(pw), uint32(ph))
+		if !ok {
+			return nil, false
+		}
+		resvg.Render(tree, skia.TransformFromScale(float32(pw)/bw, float32(ph)/bh), pm.AsMut())
+		return pm, true
+	}}
 }

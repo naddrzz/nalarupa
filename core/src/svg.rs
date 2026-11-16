@@ -1606,6 +1606,9 @@ impl<'a> Svg<'a> {
             let close = "</g>".repeat(open.saturating_sub(self.out.matches("</g>").count()));
             format!(r##"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="{w}" height="{h}" viewBox="{x} {y} {w} {h}"><rect x="{x}" y="{y}" width="{w}" height="{h}" fill="#f6f6f6"/><defs>{}</defs>{}{close}</svg>"##, self.defs, self.out)
         });
+        if let Some(b) = &behind {
+            crate::shader::BACKDROP_TAP.with_borrow_mut(|t| t.as_mut().map(|t| t.push(b.clone())));
+        }
         let opts = resvg::usvg::Options { fontdb: std::sync::Arc::clone(&self.fonts.db), font_resolver: self.fonts.resolver(), resources_dir: base.clone(), image_href_resolver: image_href_resolver(), ..Default::default() };
         let png = src.and_then(|src| {
             let mut load = |u: &str| assets.image(u, base.as_deref()).and_then(|p| decode_image(&p));

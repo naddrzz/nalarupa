@@ -1,0 +1,1 @@
+{"w": 120.75, "h": 33.3, "scale": 2, "uniforms": {"tint": "#ff000080", "edge": "nope", "speed": 99, "filter": -3, "steps": 7.9, "down": -1e12, "offset": [1.5], "grid": [3, "x", 9], "quad": "skip", "cell": [1, 2, 3, 4], "flip": 1, "sample": 0, "on": true, "res": [1, 2], "rot": [1, 2, 3], "a": 0.1, "pair": 2, "photo": ""}}

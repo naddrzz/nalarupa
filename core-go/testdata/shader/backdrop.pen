@@ -1,0 +1,18 @@
+{
+  "version": "2.19",
+  "children": [
+    {"type": "frame", "id": "card", "x": 0, "y": 0, "width": 240, "height": 160, "layout": "none", "fill": "#ffffff", "cornerRadius": 12, "clip": true, "children": [
+      {"type": "rectangle", "id": "red", "x": 10, "y": 10, "width": 80, "height": 60, "fill": "#e33", "cornerRadius": [4, 8, 0, 12]},
+      {"type": "ellipse", "id": "ring", "x": 60, "y": 40, "width": 90, "height": 90, "fill": {"type": "gradient", "gradientType": "linear", "rotation": 30, "colors": [{"color": "#0af", "position": 0}, {"color": "#fa0", "position": 1}]}, "stroke": "#123", "strokeWidth": 3},
+      {"type": "group", "id": "faded", "opacity": 0.5, "children": [
+        {"type": "rectangle", "id": "stripe", "x": 0, "y": 100, "width": 240, "height": 20, "fill": "#2a2", "rotation": 10},
+        {"type": "path", "id": "tri", "x": 150, "y": 20, "width": 60, "height": 50, "geometry": "M30 0L60 50H0Z", "fill": "#90c"}
+      ]},
+      {"type": "frame", "id": "inner", "x": 40, "y": 30, "width": 160, "height": 100, "layout": "none", "opacity": 0.9, "children": [
+        {"type": "rectangle", "id": "glass", "x": 10, "y": 10, "width": 120, "height": 70, "cornerRadius": 16, "fill": [{"type": "shader", "url": "./glass.frag"}, "#ffffff22"]}
+      ]},
+      {"type": "rectangle", "id": "plain", "x": 160, "y": 110, "width": 40, "height": 30, "fill": {"type": "shader", "url": "./plain.frag"}}
+    ]},
+    {"type": "ellipse", "id": "lone", "x": 300, "y": 0, "width": 64, "height": 48, "fill": {"type": "shader", "url": "./glass.frag"}}
+  ]
+}

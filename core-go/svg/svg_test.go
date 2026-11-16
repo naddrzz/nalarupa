@@ -591,14 +591,54 @@ func TestPremultipliedStops(t *testing.T) {
 }
 
 type painter struct {
-	got     string
-	outline Outline
-	err     error
+	got      string
+	outline  Outline
+	err      error
+	backdrop bool
+	behind   *Backdrop
 }
 
-func (p *painter) PNG(src string, _ *jsonv.Object, w, h float64, o Outline, _ func(string) (*Pixmap, bool)) (string, error) {
-	p.got, p.outline = src, o
+func (p *painter) UsesBackdrop(string) bool { return p.backdrop }
+
+func (p *painter) PNG(src string, _ *jsonv.Object, w, h float64, o Outline, _ func(string) (*Pixmap, bool), b *Backdrop) (string, error) {
+	p.got, p.outline, p.behind = src, o, b
 	return "AAAA", p.err
+}
+
+// A shader reading `@backdrop` gets what its frame painted so far, with open groups closed, rendered at the
+// asked size; others get none.
+func TestShaderBackdrop(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "glass.frag"), []byte("void main() {}"), 0o666)
+	frame := jsonv.MustParse(`{"id": "f", "type": "frame", "fill": "#00ff00", "opacity": 0.5}`).(*jsonv.Object)
+	f := &resolve.RNode{ID: "f", Type: "frame", P: frame, X: 0, Y: 0, W: 40, H: 20}
+	f.Kids = []*resolve.RNode{node("rectangle", `{"fill": {"type": "shader", "url": "glass.frag"}}`, Rect{10, 0, 20, 20})}
+	for _, uses := range []bool{false, true} {
+		p := &painter{backdrop: uses}
+		s := New(noFonts{}, offlineAssets(t), dir)
+		s.Shader = p
+		s.Node(f)
+		if (p.behind != nil) != uses {
+			t.Fatalf("uses %v: backdrop %v", uses, p.behind)
+		}
+	}
+	p := &painter{backdrop: true}
+	s := New(noFonts{}, offlineAssets(t), dir)
+	s.Shader = p
+	s.Node(f)
+	b := p.behind
+	if !strings.HasPrefix(b.SVG, `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="20" height="20" viewBox="10 0 20 20"><rect x="10" y="0" width="20" height="20" fill="#f6f6f6"/><defs>`) ||
+		!strings.HasSuffix(b.SVG, `</g></svg>`) || b.Key != FxHash(b.SVG) {
+		t.Fatal(b.SVG)
+	}
+	pm, ok := b.Paint(4, 4)
+	if !ok || pm.Width() != 4 || pm.Height() != 4 {
+		t.Fatal("no backdrop pixels")
+	}
+	// Half-transparent green over #f6f6f6.
+	if c, _ := pm.Pixel(1, 1); c.Red() != 123 || c.Green() != 251 || c.Blue() != 123 || c.Alpha() != 255 {
+		t.Fatal(c)
+	}
 }
 
 // A shader fill without a painter, a missing file or a failing painter draws the red error hatch; a

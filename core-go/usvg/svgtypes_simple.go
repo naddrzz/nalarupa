@@ -10,12 +10,21 @@ type SimpleSegment struct {
 // SimplifyPath is svgtypes' SimplifyingPathParser over d (arcs as cubics, H/V as lines), up to its first
 // error.
 func SimplifyPath(d string) []SimpleSegment {
+	out, _ := SimplifyPathChecked(d)
+	return out
+}
+
+// SimplifyPathChecked is SimplifyPath plus whether d parsed without an error.
+func SimplifyPathChecked(d string) ([]SimpleSegment, bool) {
 	var out []SimpleSegment
 	p := stNewSimplifyingPathParser(d)
 	for {
 		s, ok, err := p.Next()
-		if !ok || err != nil {
-			return out
+		if err != nil {
+			return out, false
+		}
+		if !ok {
+			return out, true
 		}
 		var k byte
 		switch s.Kind {

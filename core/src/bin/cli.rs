@@ -35,6 +35,16 @@
 //!                                                       replays canvas steps on a resvg `Renderer` (offline, pinned
 //!                                                       clock): each render's RGB bytes as <step>.rgb plus log.json
 //!                                                       (the Go port's canvas oracle, see canvas below)
+//!   nalarupa-cli shader-transpile <file.frag> [<uniforms.json> <w> <h> <scale>]
+//!                                                       `transpile` output, the naga block layout and the packed
+//!                                                       uniforms as JSON (the Go port's shader oracle)
+//!   nalarupa-cli shader-sdf <outline.json> <w> <h> <dpi> <out>
+//!                                                       the `@sdf` texels as raw little-endian f32 (<out>.f32, top
+//!                                                       row first) and the f16 texture (<out>.f16, bottom row first);
+//!                                                       prints {"width","height"} (the Go port's SDF oracle)
+//!   nalarupa-cli shader-backdrop <doc.pen> <node-id> [--offline]
+//!                                                       the `@backdrop` SVGs the SVG export of a node builds, as a
+//!                                                       JSON array (the Go port's backdrop oracle)
 
 use nalarupa_core::engine::engine;
 use nalarupa_core::resolve::RNode;
@@ -254,6 +264,53 @@ fn run(args: &[String]) -> Result<(), String> {
             std::fs::write(arg(3)?, bytes).map_err(|e| e.to_string())
         }
         "canvas" => canvas::run(arg(2)?, arg(3)?, arg(4)?),
+        "shader-transpile" => {
+            let src = std::fs::read_to_string(arg(2)?).map_err(|e| e.to_string())?;
+            let uniforms = match args.get(3) {
+                Some(p) => {
+                    let v: Value = serde_json::from_str(&std::fs::read_to_string(p).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+                    Some(v.as_object().cloned().ok_or("uniforms must be a JSON object")?)
+                }
+                None => None,
+            };
+            let num = |i: usize, d: f64| args.get(i).map_or(Ok(d), |s| s.parse::<f64>().map_err(|_| format!("bad number {s}")));
+            let out = nalarupa_core::shader::oracle_transpile(&src, uniforms.as_ref(), num(4, 100.0)?, num(5, 100.0)?, num(6, 2.0)?);
+            println!("{out}");
+            Ok(())
+        }
+        "shader-sdf" => {
+            let v: Value = serde_json::from_str(&std::fs::read_to_string(arg(2)?).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+            let f = |k: &str| v[k].as_f64().unwrap_or(0.0);
+            let outline = match v["kind"].as_str() {
+                Some("rrect") => {
+                    let r: Vec<f64> = v["radii"].as_array().map(|a| a.iter().filter_map(Value::as_f64).collect()).unwrap_or_default();
+                    nalarupa_core::shader::Outline::RRect(r.try_into().map_err(|_| "rrect needs 4 radii")?)
+                }
+                Some("ellipse") => nalarupa_core::shader::Outline::Ellipse,
+                Some("path") => nalarupa_core::shader::Outline::Path { d: v["d"].as_str().unwrap_or("").into(), x: f("x"), y: f("y"), evenodd: v["evenodd"].as_bool().unwrap_or(false) },
+                _ => return Err("outline kind must be rrect, ellipse or path".into()),
+            };
+            let num = |i: usize| arg(i).and_then(|s| s.parse::<f64>().map_err(|_| format!("bad number {s}")));
+            let (sw, sh, px, half) = nalarupa_core::shader::oracle_sdf(&outline, num(3)?, num(4)?, num(5)?);
+            let out = arg(6)?;
+            let texels: Vec<u8> = px.iter().flatten().flat_map(|v| v.to_le_bytes()).collect();
+            std::fs::write(format!("{out}.f32"), texels).map_err(|e| e.to_string())?;
+            std::fs::write(format!("{out}.f16"), half.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>()).map_err(|e| e.to_string())?;
+            println!("{}", json!({"width": sw, "height": sh}));
+            Ok(())
+        }
+        "shader-backdrop" => {
+            let mut e = engine();
+            if args.iter().skip(4).any(|a| a == "--offline") {
+                e.offline();
+            }
+            e.open(Path::new(arg(2)?))?;
+            nalarupa_core::shader::BACKDROP_TAP.set(Some(Vec::new()));
+            e.ctx().export_svg(arg(3)?).ok_or("node not found")?;
+            let svgs = nalarupa_core::shader::BACKDROP_TAP.take().unwrap_or_default();
+            println!("{}", json!(svgs));
+            Ok(())
+        }
         other => Err(format!("unknown command '{other}'")),
     }
 }

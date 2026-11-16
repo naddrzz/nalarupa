@@ -1,0 +1,245 @@
+[
+ {
+  "error": "Unknown annotation directive: @x"
+ },
+ {
+  "error": "@range expects numeric arguments, got '0'"
+ },
+ {
+  "error": "@range expects numeric arguments, got '1, x'"
+ },
+ {
+  "error": "@min expects numeric arguments, got 'a'"
+ },
+ {
+  "error": "@max expects numeric arguments, got '1 2'"
+ },
+ {
+  "error": "Unterminated argument list in annotation: '(x'"
+ },
+ {
+  "error": "@color takes no arguments"
+ },
+ {
+  "error": "@label requires a value"
+ },
+ {
+  "error": "@default requires a value"
+ },
+ {
+  "error": "@default got non-numeric value: 'x'"
+ },
+ {
+  "error": "Uniform 'a': @sdf/@backdrop requires sampler2D"
+ },
+ {
+  "error": "Uniform 'a': @sdf/@backdrop requires sampler2D"
+ },
+ {
+  "error": "Uniform 'a': @color requires vec3 or vec4"
+ },
+ {
+  "error": "Uniform 'a': @range/@min/@max is not valid for 'vec3'"
+ },
+ {
+  "error": "Uniform 'a': @range/@min/@max is not valid for 'vec2'"
+ },
+ {
+  "error": "Uniform 'a': @resolution requires vec2 or ivec2"
+ },
+ {
+  "error": "Uniform 'a': @mouse requires vec2 or ivec2"
+ },
+ {
+  "error": "Uniform 'a': @time requires float"
+ },
+ {
+  "error": "Uniform 'a': this uniform does not support @default"
+ },
+ {
+  "error": "Uniform 'a': @color @default needs one number per component"
+ },
+ {
+  "error": "Uniform 'a': @default invalid hex literal: '#12'"
+ },
+ {
+  "error": "Uniform 'a': @color @default needs one number per component"
+ },
+ {
+  "error": "Uniform 'a': @default must be a single number"
+ },
+ {
+  "error": "Uniform 'a': @default must be a single number"
+ },
+ {
+  "error": "Uniform 'a': @default must be a single number"
+ },
+ {
+  "error": "Uniform 'a': is bool, @default must be true or false"
+ },
+ {
+  "error": "Uniform 'a': @default needs 2 numbers"
+ },
+ {
+  "error": "Uniform 'a': @default needs 2 numbers"
+ },
+ {
+  "error": "Uniform 'a': is sampler2D, @default is not supported"
+ },
+ {
+  "error": "Unsupported uniform type: samplerCube"
+ },
+ {
+  "error": "Unsupported uniform type: mat2x3"
+ },
+ {
+  "error": "Unsupported uniform type: uniform arrays (uniform float a[2])"
+ },
+ {
+  "error": "uniform without a type"
+ },
+ {
+  "error": "main() is missing!"
+ },
+ {
+  "error": "No color output found. Expected `out vec4 \u003cname\u003e` or `gl_FragColor`."
+ },
+ {
+  "error": "No color output found. Expected `out vec4 \u003cname\u003e` or `gl_FragColor`."
+ },
+ {
+  "error": "Must use a single `out vec4` variable!"
+ },
+ {
+  "error": "Must use a single `out vec4` variable!"
+ },
+ {
+  "error": "Must use a single `out vec4` variable!"
+ },
+ {
+  "error": "Must use a single `out vec4` variable!"
+ },
+ {
+  "error": "The shader must not use anything but gl_FragCoord and uniforms!"
+ },
+ {
+  "error": "The shader must not use anything but gl_FragCoord and uniforms!"
+ },
+ {
+  "error": "The shader must not use anything but gl_FragCoord and uniforms!"
+ },
+ {
+  "error": "The shader must not use anything but gl_FragCoord and uniforms!"
+ },
+ {
+  "glsl": "#version 450\nlayout(std140, set = 0, binding = 0) uniform NrUniforms { vec4 nr_unit; }; layout(location = 0) out vec4 nr_FragColor; vec4 nr_FragCoord;\nvoid nr_main() { nr_FragColor = vec4(gl_PointCoord, 0.0, 1.0); }\nvoid main() { nr_FragCoord = vec4(gl_FragCoord.x * nr_unit.x, nr_unit.z - gl_FragCoord.y * nr_unit.y, 0.0, 1.0); nr_FragColor = vec4(0.0); nr_main(); }\n",
+  "layout": {
+   "size": 16,
+   "members": [
+    [
+     "nr_unit",
+     0,
+     false
+    ]
+   ],
+   "uniforms": []
+  },
+  "ubo": "0000003f0000003f0000c84200000000"
+ },
+ {
+  "error": "main() is missing!"
+ },
+ {
+  "glsl": "#version 450\nlayout(std140, set = 0, binding = 0) uniform NrUniforms { vec4 nr_unit; }; layout(location = 0) out vec4 nr_FragColor; vec4 nr_FragCoord;\n                \n            void nr_main() { nr_FragColor = vec4(1.0); }\nvoid main() { nr_FragCoord = vec4(gl_FragCoord.x * nr_unit.x, nr_unit.z - gl_FragCoord.y * nr_unit.y, 0.0, 1.0); nr_FragColor = vec4(0.0); nr_main(); }\n",
+  "layout": {
+   "size": 16,
+   "members": [
+    [
+     "nr_unit",
+     0,
+     false
+    ]
+   ],
+   "uniforms": []
+  },
+  "ubo": "0000003f0000003f0000c84200000000"
+ },
+ {
+  "glsl": "#version 450\nlayout(std140, set = 0, binding = 0) uniform NrUniforms { vec4 nr_unit; }; layout(location = 0) out vec4 nr_FragColor; vec4 nr_FragCoord;\n            \nvoid nr_main() { nr_FragColor = vec4(1.0); }\nvoid main() { nr_FragCoord = vec4(gl_FragCoord.x * nr_unit.x, nr_unit.z - gl_FragCoord.y * nr_unit.y, 0.0, 1.0); nr_FragColor = vec4(0.0); nr_main(); }\n",
+  "layout": {
+   "size": 16,
+   "members": [
+    [
+     "nr_unit",
+     0,
+     false
+    ]
+   ],
+   "uniforms": []
+  },
+  "ubo": "0000003f0000003f0000c84200000000"
+ },
+ {
+  "glsl": "#version 450\nlayout(std140, set = 0, binding = 0) uniform NrUniforms { float a; vec4 nr_unit; }; layout(location = 0) out vec4 nr_FragColor; vec4 nr_FragCoord;\n                                                          void nr_main() { nr_FragColor = vec4(a); }\nvoid main() { nr_FragCoord = vec4(gl_FragCoord.x * nr_unit.x, nr_unit.z - gl_FragCoord.y * nr_unit.y, 0.0, 1.0); nr_FragColor = vec4(0.0); nr_main(); }\n",
+  "layout": {
+   "size": 32,
+   "members": [
+    [
+     "a",
+     0,
+     false
+    ],
+    [
+     "nr_unit",
+     16,
+     false
+    ]
+   ],
+   "uniforms": [
+    {
+     "name": "a",
+     "member": "a",
+     "type": "float",
+     "kind": [
+      "float",
+      1.0
+     ]
+    }
+   ]
+  },
+  "ubo": "0000803f0000000000000000000000000000003f0000003f0000c84200000000"
+ },
+ {
+  "error": "Uniform 'a': @color @default needs one number per component"
+ },
+ {
+  "glsl": "#version 450\nlayout(std140, set = 0, binding = 0) uniform NrUniforms { float shown; vec4 nr_unit; }; layout(location = 0) out vec4 nr_FragColor; vec4 nr_FragCoord;\n#define X 1 \\\n  ; uniform float hidden;\n                    \nvoid nr_main() { nr_FragColor = vec4(shown); }\nvoid main() { nr_FragCoord = vec4(gl_FragCoord.x * nr_unit.x, nr_unit.z - gl_FragCoord.y * nr_unit.y, 0.0, 1.0); nr_FragColor = vec4(0.0); nr_main(); }\n",
+  "layout": {
+   "size": 32,
+   "members": [
+    [
+     "shown",
+     0,
+     false
+    ],
+    [
+     "nr_unit",
+     16,
+     false
+    ]
+   ],
+   "uniforms": [
+    {
+     "name": "shown",
+     "member": "shown",
+     "type": "float",
+     "kind": [
+      "float",
+      0.0
+     ]
+    }
+   ]
+  },
+  "ubo": "000000000000000000000000000000000000003f0000003f0000c84200000000"
+ }
+]
