@@ -106,3 +106,15 @@
 - source_plan: `_bmad-output/initiative-go-rewrite/plan-go-rewrite-7a-html-export.md`
   summary: Phase 7c - export job on export.Ctx (plan_files for png/jpeg/webp/svg/pdf/html formats, ExportJob settle/replan/run with Waiter and PathPolicy hooks, the write mutex, script-file claims and file_stem/file_name), with html.rs's deck/PDF/raster/damaged-image/hidden tests; engine export() and ToolOut wiring stay with phase 8.
   evidence: Export orchestration is engine-adjacent (downloads, script runs, agent path policy) and builds on 7a.
+- source_plan: `_bmad-output/initiative-go-rewrite/plan-go-rewrite-8a-engine-core.md`
+  summary: Phase 8b - editor ops in core-go (all of editor.rs - View, snap_targets, painted/fit bounds, nodes_in_rect, drop_target, reparent, wrap/unwrap, infer_flex, add/set/remove_layout, align, duplicate, copy/paste with the own/pen/Figma/SVG/text decoders and variable/component import, path_edit/path_write - plus lib.rs inline ops layers/reorder/node/move_by and its 11 tests), checked with replay sequences from editor-check and drag-check.
+  evidence: Phase 8 split after investigation; editor ops sit on the 8a engine.
+- source_plan: `_bmad-output/initiative-go-rewrite/plan-go-rewrite-8a-engine-core.md`
+  summary: Phase 8c (with 5c) - Engine as the full script Host: execute transaction (commit/rollback/editId store), ToolOut.Finish (script nodes, icon settle, download waits, shots, export job replan/run via 7c), execute_shared with EXECUTE_GATE and cancel (Locker), Generate download goroutine into resolve_pending, begin/end_execute events; recover() in every goroutine.
+  evidence: Phase 8 split; depends on 8a and 5b.
+- source_plan: `_bmad-output/initiative-go-rewrite/plan-go-rewrite-8a-engine-core.md`
+  summary: Phase 8d (5c streams) - stream.rs partial_string/complete_prefix, stream_update/stream_end/take_stream/rebuild_preview, script stream_step live contexts with seeded resume_ids/ids_drawn, preview doc swapping; port stream.rs tests and script.rs streaming tests 2154-2783 (and the 5b resume-probe Rust comparison).
+  evidence: Phase 8 split; depends on 8c.
+- source_plan: `_bmad-output/initiative-go-rewrite/plan-go-rewrite-8a-engine-core.md`
+  summary: Phase 8e - C ABI and DLL - Go dispatch of every non-agent nr_call command (agent ones return not-available until phase 9), //export nr_call/nr_free/nr_render with C-allocated strings and a reused C render buffer, recover() at every export, a c-shared build (cgo with quickjs-ng and static wgpu-native) and package.ts option, then the non-agent app checks (editor, doc, drag, smoke, component, layout, text, paint, shader, scriptnode, script, issues, viewport, export-lock-worker) run with NALARUPA_CORE pointing at the Go DLL.
+  evidence: Phase 8 split; the swap point for the app.
