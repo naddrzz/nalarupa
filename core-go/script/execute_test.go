@@ -682,3 +682,17 @@ func TestBadArgumentsReadLikeSerde(t *testing.T) {
 		}
 	}
 }
+
+// Call.Ran comes once the JavaScript has run, before the report validates what the call touched.
+func TestRanComesBeforeTheReport(t *testing.T) {
+	h := emptyHost(t)
+	ran, laid, early := false, 0, false
+	h.laid = func() {
+		laid++
+		early = early || !ran
+	}
+	out := script.Execute(h, input(`Insert(document, {type: "frame", width: 10, height: 10})`), script.Call{Ran: func() { ran = true }})
+	if out.Error || !ran || laid == 0 || early {
+		t.Fatal(out.Text, ran, laid, early)
+	}
+}

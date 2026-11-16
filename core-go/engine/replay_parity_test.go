@@ -2,10 +2,12 @@
 // `nalarupa-cli replay <script> --seed 42 --data data --out <dir>` (see replay in core/src/bin/cli.rs), each in a
 // fresh work folder holding a copy of testdata/replay/files. Every response line must be equal as text (the same
 // JSON with the same key order and number formatting), and so must the final document line, every render's RGB
-// bytes and every file the run leaves in the work folder (saved documents, copied images, settings.json).
+// bytes and every file the run leaves in the work folder (saved documents, copied images, settings.json). The
+// screenshots of a `tool` step with `png: true` are compared by their decoded pixels (the PNG encoders differ).
 //
 // Without NALARUPA_CLI the comparison is with the committed goldens (testdata/replay/golden: <name>.json with the
-// lines and files, painted with the band count recorded there, plus gzipped frames); with it, with the CLI's live
+// lines and files, painted with the band count recorded there, plus gzipped frames and the screenshots as
+// <name>.<step>.<k>.png); with it, with the CLI's live
 // output. NALARUPA_UPDATE_GOLDEN=1 (with NALARUPA_CLI) rewrites them. A sequence whose first line is `# live` holds
 // platform- or font-dependent output and is compared live only.
 //
@@ -19,13 +21,19 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/color"
+	"image/jpeg"
+	"image/png"
 	"io"
 	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -45,6 +53,8 @@ type replayRun struct {
 	Lines   []string          `json:"lines"`
 	Files   map[string]string `json:"files"` // base64
 	frames  map[int][]byte
+	// shots are the screenshots of `tool` steps with `png: true`, by `<step>.<k>.png`.
+	shots map[string][]byte
 }
 
 // workDir is a fresh work folder with the replay fixtures and, when the system has one, a font at font.ttf.
@@ -119,9 +129,10 @@ func goReplay(t *testing.T, script string, threads int) replayRun {
 	e.Offline()
 	e.Seed(replaySeed)
 	e.Renderer.Threads = threads
-	run := replayRun{Threads: threads, frames: map[int][]byte{}}
+	run := replayRun{Threads: threads, frames: map[int][]byte{}, shots: map[string][]byte{}}
 	r := engine.NewReplayer(e)
 	r.Frames = func(step int, rgb []byte) { run.frames[step] = rgb }
+	r.Shots = func(step, k int, png []byte) { run.shots[fmt.Sprintf("%d.%d.png", step, k)] = png }
 	sc := bufio.NewScanner(bytes.NewReader(src))
 	sc.Buffer(nil, 1<<24)
 	for sc.Scan() {
@@ -155,7 +166,7 @@ func rustReplay(t *testing.T, cli, script string) replayRun {
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("%s replay: %v\n%s", cli, err, stderr.String())
 	}
-	run := replayRun{Threads: min(max(runtime.NumCPU(), 1), 16), frames: map[int][]byte{}}
+	run := replayRun{Threads: min(max(runtime.NumCPU(), 1), 16), frames: map[int][]byte{}, shots: map[string][]byte{}}
 	for _, l := range strings.Split(strings.TrimRight(stdout.String(), "\r\n"), "\n") {
 		run.Lines = append(run.Lines, strings.TrimRight(l, "\r"))
 	}
@@ -171,6 +182,20 @@ func rustReplay(t *testing.T, cli, script string) replayRun {
 				t.Fatal(err)
 			}
 			run.frames[stepOf(t, v.Data.File)] = b
+		}
+		var shots struct {
+			Data struct {
+				Images []string `json:"images"`
+			} `json:"data"`
+		}
+		if json.Unmarshal([]byte(l), &shots) == nil {
+			for _, f := range shots.Data.Images {
+				b, err := os.ReadFile(filepath.Join(out, f))
+				if err != nil {
+					t.Fatal(err)
+				}
+				run.shots[f] = b
+			}
 		}
 	}
 	run.Files = written(t, dir, before)
@@ -264,6 +289,11 @@ func TestReplayParity(t *testing.T) {
 					for i, f := range want.frames {
 						gzipFile(t, filepath.Join(goldenDir, fmt.Sprintf("%s.%d.rgb.gz", name, i)), f)
 					}
+					for f, b := range want.shots {
+						if err := os.WriteFile(filepath.Join(goldenDir, name+"."+f), b, 0o666); err != nil {
+							t.Fatal(err)
+						}
+					}
 				}
 			} else {
 				b, err := os.ReadFile(filepath.Join(goldenDir, name+".json"))
@@ -277,6 +307,15 @@ func TestReplayParity(t *testing.T) {
 				frames, _ := filepath.Glob(filepath.Join(goldenDir, name+".*.rgb.gz"))
 				for _, f := range frames {
 					want.frames[stepOf(t, strings.TrimPrefix(filepath.Base(f), name+"."))] = gunzipFile(t, f)
+				}
+				want.shots = map[string][]byte{}
+				shots, _ := filepath.Glob(filepath.Join(goldenDir, name+".*.png"))
+				for _, f := range shots {
+					b, err := os.ReadFile(f)
+					if err != nil {
+						t.Fatal(err)
+					}
+					want.shots[strings.TrimPrefix(filepath.Base(f), name+".")] = b
 				}
 			}
 			threads := 0
@@ -309,6 +348,11 @@ func TestReplayParity(t *testing.T) {
 					t.Errorf("frame of step %d: %d bytes, want %d; %d channels differ", i, len(g), len(w), diff)
 				}
 			}
+			for _, f := range sortedKeys(names(want.shots), names(got.shots)) {
+				if msg := comparePNG(got.shots[f], want.shots[f]); msg != "" {
+					t.Errorf("screenshot %s: %s", f, msg)
+				}
+			}
 			for _, rel := range sortedKeys(want.Files, got.Files) {
 				g, w := got.Files[rel], want.Files[rel]
 				switch {
@@ -319,7 +363,9 @@ func TestReplayParity(t *testing.T) {
 				case g != w:
 					gb, _ := base64.StdEncoding.DecodeString(g)
 					wb, _ := base64.StdEncoding.DecodeString(w)
-					t.Errorf("%s differs %s", rel, firstDiff(string(gb), string(wb)))
+					if msg := compareWritten(rel, gb, wb); msg != "" {
+						t.Errorf("%s differs %s", rel, msg)
+					}
 				}
 			}
 		})
@@ -337,6 +383,115 @@ func sortedKeys(maps ...map[string]string) []string {
 	}
 	slices.Sort(keys)
 	return keys
+}
+
+// names is m's keys as a set for sortedKeys.
+func names(m map[string][]byte) map[string]string {
+	out := map[string]string{}
+	for k := range m {
+		out[k] = k
+	}
+	return out
+}
+
+// jpegDelta is the largest channel difference allowed between Go's and Rust's JPEG exports: the encoders differ
+// (DCT and quantisation rounding, chroma subsampling; see the 4d and 7c parity).
+const jpegDelta = 12
+
+var (
+	pdfPage     = regexp.MustCompile(`/Type\s*/Page\b`)
+	pdfMediaBox = regexp.MustCompile(`/MediaBox\s*\[([^\]]*)\]`)
+)
+
+// pdfSummary is a PDF's page count and page sizes: the files are written by different PDF writers (the bytes are
+// compared by the 4f parity).
+func pdfSummary(b []byte) string {
+	if !bytes.HasPrefix(b, []byte("%PDF-")) {
+		return "not a PDF"
+	}
+	var boxes []string
+	for _, m := range pdfMediaBox.FindAllSubmatch(b, -1) {
+		var nums []string
+		for _, f := range strings.Fields(string(m[1])) {
+			v, _ := strconv.ParseFloat(f, 64)
+			nums = append(nums, strconv.FormatFloat(v, 'f', 3, 64))
+		}
+		boxes = append(boxes, strings.Join(nums, " "))
+	}
+	return fmt.Sprintf("%d pages %s", len(pdfPage.FindAll(b, -1)), strings.Join(boxes, ", "))
+}
+
+// compareWritten compares a file the run wrote by its kind: PNG by pixels, JPEG by pixels within jpegDelta, PDF by
+// its pages, anything else byte for byte. "" when they match.
+func compareWritten(name string, got, want []byte) string {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".png":
+		return comparePNG(got, want)
+	case ".jpeg", ".jpg":
+		g, err := jpeg.Decode(bytes.NewReader(got))
+		if err != nil {
+			return "Go: " + err.Error()
+		}
+		w, err := jpeg.Decode(bytes.NewReader(want))
+		if err != nil {
+			return "Rust: " + err.Error()
+		}
+		return comparePixels(g, w, jpegDelta)
+	case ".pdf":
+		if g, w := pdfSummary(got), pdfSummary(want); g != w {
+			return fmt.Sprintf("PDF %s, Rust's %s", g, w)
+		}
+		return ""
+	}
+	return firstDiff(string(got), string(want))
+}
+
+// comparePNG compares two screenshots by their decoded pixels: "" when equal.
+func comparePNG(got, want []byte) string {
+	if got == nil || want == nil {
+		return fmt.Sprintf("made by one side only (Go %d bytes, Rust %d bytes)", len(got), len(want))
+	}
+	g, err := png.Decode(bytes.NewReader(got))
+	if err != nil {
+		return "Go: " + err.Error()
+	}
+	w, err := png.Decode(bytes.NewReader(want))
+	if err != nil {
+		return "Rust: " + err.Error()
+	}
+	return comparePixels(g, w, 0)
+}
+
+// comparePixels compares two images by their non-premultiplied pixels, each channel within delta: "" when they
+// match.
+func comparePixels(g, w image.Image, delta int) string {
+	if g.Bounds() != w.Bounds() {
+		return fmt.Sprintf("size %v, want %v", g.Bounds(), w.Bounds())
+	}
+	diff, most := 0, 0
+	b := w.Bounds()
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			gc := color.NRGBAModel.Convert(g.At(x, y)).(color.NRGBA)
+			wc := color.NRGBAModel.Convert(w.At(x, y)).(color.NRGBA)
+			d := max(absDiff(gc.R, wc.R), absDiff(gc.G, wc.G), absDiff(gc.B, wc.B), absDiff(gc.A, wc.A))
+			if d > delta {
+				diff++
+			}
+			most = max(most, d)
+		}
+	}
+	if diff > 0 {
+		return fmt.Sprintf("%d pixels differ by more than %d (at most %d)", diff, delta, most)
+	}
+	return ""
+}
+
+func absDiff(a, b uint8) int {
+	if a > b {
+		return int(a - b)
+	}
+	return int(b - a)
 }
 
 func jsonIndent(v any) []byte {

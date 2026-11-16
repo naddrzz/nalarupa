@@ -1,8 +1,6 @@
 package engine
 
 import (
-	"fmt"
-
 	"github.com/naddrzz/nalarupa/core-go/doc"
 	"github.com/naddrzz/nalarupa/core-go/render"
 	"github.com/naddrzz/nalarupa/core-go/resolve"
@@ -13,7 +11,7 @@ import (
 
 // host is the engine as the execute sandbox's host (script.rs's natives on `Engine`). Its methods are the
 // engine's under the names script.Host gives them; the engine's own Doc, Fonts and Assets fields would clash
-// with them on Engine itself. The caller holds the engine lock.
+// with them on Engine itself. The caller holds the engine lock (a shared-mode call takes it around each native).
 type host struct{ e *Engine }
 
 var _ script.Host = host{}
@@ -34,10 +32,11 @@ func (h host) FindEmptySpace(w, hh float64, dir string, pad float64, anchor stri
 	return h.e.FindEmptySpace(w, hh, dir, pad, anchor)
 }
 
-// Generate: the background download of a generated image and its ResolvePending come with phase 8c; until then
-// the call fails with Rust's text for a Generate type it does not have, and no pending fill is set.
+// Generate starts the background download of a generated image's placeholder photo (`Generate("ai")` and
+// `Generate("stock")`); ResolvePending swaps it in when it lands.
 func (h host) Generate(kind, target, prompt, pending string) error {
-	return fmt.Errorf("Generate type '%s' is not available in Nalarupa; use fills, icons and paths instead", kind)
+	h.e.generate(prompt, pending)
+	return nil
 }
 
 // FindEmptySpace is a free spot of w×h toward dir on the synced canvas, next to the laid-out node anchor (none

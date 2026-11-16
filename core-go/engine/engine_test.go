@@ -965,19 +965,3 @@ func TestStemAndExtension(t *testing.T) {
 		}
 	}
 }
-
-// Until image downloads come (phase 8c), Generate("ai") fails with the not-available text and sets no pending fill.
-func TestGenerateIsNotAvailableYet(t *testing.T) {
-	e := newEngine(t)
-	e.LoadTemplate("empty")
-	e.Edit(setChildren(`[{"id": "r", "type": "rectangle", "width": 20, "height": 20, "fill": "#f00"}]`))
-	args := jsonv.NewObject()
-	args.Set("input", `Generate("ai", "r", "a cat");`)
-	out := script.Execute(e.Host(), args, script.Call{})
-	if !out.Error || !strings.Contains(out.Text, "Generate type 'ai' is not available in Nalarupa; use fills, icons and paths instead") {
-		t.Fatal(out.Text)
-	}
-	if got := str(at(e.Doc.Root, "children", 0, "fill")); got != "#f00" {
-		t.Fatal("no pending fill:", string(jsonv.Marshal(e.Doc.Root)))
-	}
-}

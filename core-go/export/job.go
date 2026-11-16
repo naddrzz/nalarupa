@@ -189,7 +189,7 @@ func planFiles(c *Ctx, dataDir string, ids []string, format, out string, opts js
 		for _, id := range ids {
 			f := jobFile{path: doc.JoinPath(dir, FileStem(id)+"."+format)}
 			if format == "svg" {
-				markup, embedded, ok := svg.Export(c.Doc, id, c.Fonts, c.Assets, c.expand())
+				markup, embedded, ok := svg.Export(c.Doc, c.Libs, id, c.Fonts, c.Assets, c.expand())
 				if !ok {
 					return nil, errors.New(c.Missing(id))
 				}

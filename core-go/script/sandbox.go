@@ -54,7 +54,9 @@ type Icon struct {
 
 // exec is what one execute call's natives share (script.rs `Exec`).
 type exec struct {
-	host     Host
+	host Host
+	// lock, when set, is taken around each native (shared mode).
+	lock     Locker
 	js       *JS
 	budget   time.Duration
 	deadline time.Time
@@ -155,7 +157,16 @@ func (ex *exec) sandbox(globals *jsonv.Object) error {
 	js.TrackRejections("__track")
 	for _, n := range natives {
 		f := n.fn
-		if err := js.Define(n.name, func(a []string) (string, error) { return f(ex, a) }); err != nil {
+		call := func(a []string) (string, error) { return f(ex, a) }
+		if ex.lock != nil {
+			// script.rs `with` without a bound engine: each native locks it for its own work.
+			call = func(a []string) (string, error) {
+				ex.lock.Lock()
+				defer ex.lock.Unlock()
+				return f(ex, a)
+			}
+		}
+		if err := js.Define(n.name, call); err != nil {
 			return errorString("host functions: " + err.Error())
 		}
 	}

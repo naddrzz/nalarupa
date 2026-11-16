@@ -130,7 +130,7 @@ func (a *Assets) IconWeight(library, name string, weight float64) (string, bool)
 	if !ok && a.Online && name != "" && !a.failed[key] {
 		client := a.Client
 		a.spawn(key, func() bool {
-			t, ok := fetch(client, url)
+			t, ok := Fetch(client, url)
 			return ok && utf8.Valid(t) && bytes.Contains(t, []byte("<svg")) && store(file, t)
 		})
 		a.note(key)
@@ -315,7 +315,7 @@ func (a *Assets) resolveImage(url, base string) (string, bool) {
 				if a.Online {
 					client := a.Client
 					a.spawn(url, func() bool {
-						b, ok := fetch(client, url)
+						b, ok := Fetch(client, url)
 						return ok && store(stem+"."+imageExt(b), b)
 					})
 				}
@@ -397,8 +397,8 @@ func satU16(v float64) uint16 {
 	return uint16(v)
 }
 
-// fetch is net.rs get_bytes: any transport error, non-2xx status or body over 32 MiB is a failure.
-func fetch(client *http.Client, url string) ([]byte, bool) {
+// Fetch is net.rs get_bytes: any transport error, non-2xx status or body over 32 MiB is a failure.
+func Fetch(client *http.Client, url string) ([]byte, bool) {
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, false

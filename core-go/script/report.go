@@ -26,6 +26,12 @@ type Call struct {
 	Preview bool
 	// Stop, when closed, interrupts the script (the agent's Stop button).
 	Stop <-chan struct{}
+	// Locker, when set, is the engine lock the caller holds: it is released while the JavaScript runs and taken
+	// around each native (execute_shared). nil: the caller holds the host for the whole call.
+	Locker Locker
+	// Ran, when set, is called once the JavaScript has run (with the Locker taken again), before the rollback or
+	// the report: the engine stops reporting the call as running there (script.rs `bind`, `execute_shared`).
+	Ran func()
 }
 
 // Outcome is what an execute call did. The engine commits it (history, events, the globals, the stored snippet,
@@ -75,14 +81,24 @@ func Execute(h Host, args jsonv.Value, c Call) *Outcome {
 	if budget <= 0 {
 		budget = ExecuteTimeout
 	}
-	ex := &exec{host: h, budget: budget, deadline: time.Now().Add(budget), preview: c.Preview}
+	ex := &exec{host: h, budget: budget, deadline: time.Now().Add(budget), preview: c.Preview, lock: c.Locker}
+	if c.Locker != nil {
+		c.Locker.Unlock()
+	}
 	globals, err := ex.run(src, c.Globals, c.Stop)
+	if c.Locker != nil {
+		c.Locker.Lock()
+	}
+	if c.Ran != nil {
+		c.Ran()
+	}
 	out := &Outcome{
 		Before: before, Touched: ex.touched, Read: ex.read, Shots: ex.shots, Exports: ex.exports, Pens: ex.pens,
 		Limit: ex.limit,
 	}
 	if err != nil {
-		d.Root = before
+		// Rolled back on the document the host has now (Rust's `e.doc.root = before`).
+		h.Doc().Root = before
 		id := editID
 		if id == "" {
 			id = fmt.Sprintf("e%x", h.IDs().Next()&0xffffff)

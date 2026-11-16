@@ -10,6 +10,7 @@ import (
 	"github.com/naddrzz/nalarupa/core-go/doc"
 	"github.com/naddrzz/nalarupa/core-go/guide"
 	"github.com/naddrzz/nalarupa/core-go/jsonv"
+	"github.com/naddrzz/nalarupa/core-go/script"
 )
 
 // RustF64 is how Rust's `{}` writes an f64: the shortest digits that read back, never an exponent.
@@ -257,10 +258,18 @@ func (e *Engine) EditorState() string {
 	return s.String()
 }
 
-// Tool dispatches one agent tool call that runs under the engine lock (shared by MCP and the built-in agent).
-// `execute` comes with phase 8c.
+// Tool dispatches one agent tool call under the engine lock (shared by MCP and the built-in agent); `execute`
+// holds it across the JavaScript (CallTool does not). Call Finish on the answer once the lock is released.
 func (e *Engine) Tool(name string, args jsonv.Value) ToolOut {
 	switch name {
+	case "execute":
+		if e.Executing {
+			return bad("Another execute call is still running.")
+		}
+		c := e.beginExecute(args)
+		out := e.execute(c.args, script.Call{})
+		e.endExecute(c)
+		return out
 	case "get_editor_state":
 		return ok(e.EditorState())
 	case "read_guide":

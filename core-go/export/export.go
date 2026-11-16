@@ -28,7 +28,9 @@ import (
 // Ctx is what exporting a node needs (render.rs `Ctx`): the opened document, the fonts (text measuring and
 // the font database usvg resolves against) and the image and icon assets.
 type Ctx struct {
-	Doc    *doc.Doc
+	Doc *doc.Doc
+	// Libs are the libraries the document's components may come from.
+	Libs   []resolve.Lib
 	Fonts  *text.Fonts
 	Assets *svg.Assets
 	// Scripts runs the script nodes of the laid-out node, noting the runs in rec instead of waiting for them
@@ -55,7 +57,7 @@ func (c *Ctx) LaidOut(index int) *resolve.RNode {
 	if index < 0 || index >= len(kids) {
 		return nil
 	}
-	r := resolve.New(c.Doc.Root, nil)
+	r := resolve.New(c.Doc.Root, c.Libs)
 	n := r.Resolve(kids[index])
 	if n == nil {
 		return nil
@@ -91,7 +93,7 @@ func (c *Ctx) Missing(id string) string {
 
 // NodeTreeAt is the usvg tree of node id's SVG at scale (see svg.NodeSVGAt).
 func (c *Ctx) NodeTreeAt(id string, scale float64) (*usvg.Tree, error) {
-	markup, _, _, ok := svg.NodeSVGAt(c.Doc, id, scale, false, c.Fonts, c.Assets, c.expand())
+	markup, _, _, ok := svg.NodeSVGAt(c.Doc, c.Libs, id, scale, false, c.Fonts, c.Assets, c.expand())
 	if !ok {
 		return nil, errors.New(c.Missing(id))
 	}

@@ -71,7 +71,7 @@ func TestScriptNodeRendersAndHitsAsOne(t *testing.T) {
 	]}`, map[string]string{"dots.js": "/** @schema 2.19\n * @input color: color = #00ff00 */\nreturn [{type: 'ellipse', name: 'dot', x: nalarupa.width - 20, y: 0, width: 20, height: 20, fill: pencil.input.color}, {type: 'ref', ref: 'comp', x: 0, y: 30}];"})
 	fonts, assets := offline(t)
 	ex := &export.Ctx{Doc: d, Fonts: fonts, Assets: assets}
-	markup, _, _, ok := svg.NodeSVGAt(d, "page", 1, false, fonts, assets, func(n *resolve.RNode, r *resolve.Resolver) {
+	markup, _, _, ok := svg.NodeSVGAt(d, nil, "page", 1, false, fonts, assets, func(n *resolve.RNode, r *resolve.Resolver) {
 		script.ExpandScripts(n, r, fonts, d.Dir(), d.Path, false, nil)
 	})
 	if !ok {

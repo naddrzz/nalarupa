@@ -30,6 +30,8 @@ type docHost struct {
 	slid     []string
 	// generated holds each Generate call's kind, target, prompt and pending url.
 	generated [][4]string
+	// laid, when set, is called on each LaidOut.
+	laid func()
 }
 
 var _ script.Host = (*docHost)(nil)
@@ -45,7 +47,12 @@ func (h *docHost) ctx() *render.Ctx {
 	return &render.Ctx{Doc: h.doc, Fonts: h.fonts, Assets: h.assets}
 }
 
-func (h *docHost) LaidOut(index int) *resolve.RNode { return h.ctx().LaidOut(index) }
+func (h *docHost) LaidOut(index int) *resolve.RNode {
+	if h.laid != nil {
+		h.laid()
+	}
+	return h.ctx().LaidOut(index)
+}
 
 func (h *docHost) FindEmptySpace(w, hh float64, dir string, pad float64, anchor string) (float64, float64) {
 	h.renderer.Sync(h.ctx())

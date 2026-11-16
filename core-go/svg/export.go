@@ -111,20 +111,21 @@ type Expand func(n *resolve.RNode, r *resolve.Resolver)
 
 // Export is the SVG file export of node id (possibly nested): its visual bounds, `ceil`ed, as the view.
 // The markup still holds the image tokens of the returned Embedded; pass both to InlineEmbedded.
-func Export(d *doc.Doc, id string, fonts layout.TextMeasurer, assets *Assets, expand Expand) (string, Embedded, bool) {
-	svg, _, embedded, ok := NodeSVGAt(d, id, 1, true, fonts, assets, expand)
+func Export(d *doc.Doc, libs []resolve.Lib, id string, fonts layout.TextMeasurer, assets *Assets, expand Expand) (string, Embedded, bool) {
+	svg, _, embedded, ok := NodeSVGAt(d, libs, id, 1, true, fonts, assets, expand)
 	return svg, embedded, ok
 }
 
 // NodeSVGAt is render.rs `node_svg_at`: node id (possibly nested) as an SVG whose view is its visual bounds
 // (shadows, blur and outer stroke included) from their unrounded corner, ceil((max - min) * scale) pixels
-// in each axis at scale. With embed, image files are written as tokens of the returned Embedded.
-func NodeSVGAt(d *doc.Doc, id string, scale float64, embed bool, fonts layout.TextMeasurer, assets *Assets, expand Expand) (string, Rect, Embedded, bool) {
+// in each axis at scale. With embed, image files are written as tokens of the returned Embedded. libs are the
+// libraries the document's components may come from.
+func NodeSVGAt(d *doc.Doc, libs []resolve.Lib, id string, scale float64, embed bool, fonts layout.TextMeasurer, assets *Assets, expand Expand) (string, Rect, Embedded, bool) {
 	top := topIndex(d, id)
 	if top < 0 {
 		return "", Rect{}, Embedded{}, false
 	}
-	r := resolve.New(d.Root, nil)
+	r := resolve.New(d.Root, libs)
 	root := r.Resolve(d.Children()[top])
 	if root == nil {
 		return "", Rect{}, Embedded{}, false

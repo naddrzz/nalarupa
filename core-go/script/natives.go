@@ -395,9 +395,6 @@ func (ex *exec) generate(a []string) (string, error) {
 		// replaces it when the download finishes.
 		seed := fmt.Sprintf("%x", svg.FxHash(prompt))
 		pending := fmt.Sprintf("nalarupa:pending-image-%s-%x", seed, ex.host.IDs().Next())
-		if err := ex.host.Generate(ty, target, prompt, pending); err != nil {
-			return "", err
-		}
 		fill := jsonv.NewObject()
 		fill.Set("type", "image")
 		fill.Set("url", pending)
@@ -408,6 +405,10 @@ func (ex *exec) generate(a []string) (string, error) {
 			return "", err
 		}
 		ex.host.Changed()
+		// The download starts only once the fill is set: a bad target starts none.
+		if err := ex.host.Generate(ty, target, prompt, pending); err != nil {
+			return "", err
+		}
 		ex.notes = append(ex.notes, fmt.Sprintf("Generate(\"%s\") on %s: the image is loading in the background and appears when ready (placeholder photo source, no image-generation backend).", ty, target))
 		return "", nil
 	case ty == "svg":

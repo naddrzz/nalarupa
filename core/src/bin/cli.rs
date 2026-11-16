@@ -1720,7 +1720,8 @@ mod canvas {
 /// `slide_in`, `tick {ms}` (the slide clock), `settle` (waits for background script runs), the download callbacks
 /// `font_ready`, `asset_ready`, `inflight`, `resolve_pending` and `apply_generated`, `doc` (the document JSON) and
 /// `copy {from, to}` (a file; `@data/` starts a path in the data folder; `copy` without `from` is the clipboard
-/// command). The last line is the final document.
+/// command) and `tool` with `png: true` (its screenshots are written as `<step>.<k>.png`). The last line is the
+/// final document.
 mod replay {
     use nalarupa_core::engine::{engine, Engine};
     use nalarupa_core::render::{Raster, Renderer};
@@ -1805,6 +1806,18 @@ mod replay {
                 Ok(v)
             }
             "doc" => Ok(engine().doc.root.clone()),
+            // With `png` the screenshots are written too, `<step>.<k>.png` in the out folder.
+            "tool" if req["png"] == true => {
+                let res = nalarupa_core::engine::call_tool(s("name"), &req["args"]).finish();
+                let mut files = Vec::new();
+                for (k, b64) in res.images.iter().enumerate() {
+                    let png = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64).map_err(|e| e.to_string())?;
+                    let file = format!("{i}.{k}.png");
+                    std::fs::write(out.join(&file), png).map_err(|e| e.to_string())?;
+                    files.push(file);
+                }
+                Ok(json!({"text": res.text, "error": res.error, "images": files}))
+            }
             // With `from` it copies a file; without, it is the clipboard command.
             "copy" if req.get("from").is_some() => {
                 let data = engine().data_dir.clone();

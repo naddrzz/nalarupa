@@ -278,7 +278,7 @@ func (e *Engine) png(req jsonv.Value) (jsonv.Value, error) {
 	}
 	b := script.OffLock(func(rec *script.Runs) (out built) {
 		e.Locked(func() {
-			cx := &export.Ctx{Doc: e.Doc, Fonts: e.Fonts, Assets: e.Assets, Runs: rec}
+			cx := &export.Ctx{Doc: e.Doc, Libs: e.Libs, Fonts: e.Fonts, Assets: e.Assets, Runs: rec}
 			out.tree, out.err = cx.NodeTreeAt(id, scale)
 		})
 		return out
@@ -302,6 +302,11 @@ func (e *Engine) dispatch(req jsonv.Value) (jsonv.Value, error) {
 	}
 	if cmd == "png" {
 		return e.png(req)
+	}
+	if cmd == "tool" {
+		// The tool runs and finishes without the lock held (lib.rs: `call_tool`, then `finish`).
+		out := e.CallTool(jsonv.StrOr(jsonv.Get(req, "name")), jsonv.Get(req, "args")).Finish(e)
+		return Object("text", out.Text, "error", out.Error, "images", jsonv.Int(int64(len(out.Images)))), nil
 	}
 	e.Lock()
 	defer e.Unlock()
@@ -491,9 +496,6 @@ func (e *Engine) dispatch(req jsonv.Value) (jsonv.Value, error) {
 	case "redo":
 		e.Redo()
 		return e.State(), nil
-	case "tool":
-		out := e.Tool(jsonv.StrOr(arg("name")), arg("args"))
-		return Object("text", out.Text, "error", out.Error, "images", jsonv.Int(int64(len(out.Images)))), nil
 	case "variables":
 		return e.Doc.Variables(), nil
 	case "set_variable":
@@ -535,13 +537,16 @@ func (e *Engine) dispatch(req jsonv.Value) (jsonv.Value, error) {
 // one `{"cmd", ...}` request per line, answered as `nr_call` answers it, with the slide clock pinned. Besides
 // the engine-core commands of `dispatch`, test-only steps reach what the UI cannot: `render` (the RGB bytes go
 // to Frames), `slide_in`, `tick`, `settle`, `font_ready`, `asset_ready`, `inflight`, `resolve_pending`,
-// `apply_generated`, `doc` and `copy` with `from` (a file; without `from`, `copy` is the clipboard command).
+// `apply_generated`, `doc` and `copy` with `from` (a file; without `from`, `copy` is the clipboard command). A
+// `tool` step with `png: true` answers with the names of its screenshots (`<step>.<k>.png`), which go to Shots.
 type Replayer struct {
 	E *Engine
 	// Frames receives each render step's RGB bytes by step index.
 	Frames func(step int, rgb []byte)
-	now    time.Time
-	step   int
+	// Shots receives the k-th screenshot (PNG) of a `tool` step with `png: true`.
+	Shots func(step, k int, png []byte)
+	now   time.Time
+	step  int
 }
 
 // NewReplayer pins e's slide clock and live-zoom estimate for a replay. Make e offline first, as the CLI is.
@@ -698,6 +703,23 @@ func (r *Replayer) step1(req jsonv.Value) (jsonv.Value, error) {
 		e.Lock()
 		defer e.Unlock()
 		return jsonv.Clone(e.Doc.Root), nil
+	case "tool":
+		if !jsonv.IsTrue(jsonv.Get(req, "png")) {
+			break
+		}
+		out := e.CallTool(s("name"), jsonv.Get(req, "args")).Finish(e)
+		files := []string{}
+		for k, b64 := range out.Images {
+			png, err := base64.StdEncoding.DecodeString(b64)
+			if err != nil {
+				return nil, err
+			}
+			if r.Shots != nil {
+				r.Shots(r.step, k, png)
+			}
+			files = append(files, fmt.Sprintf("%d.%d.png", r.step, k))
+		}
+		return Object("text", out.Text, "error", out.Error, "images", Strings(files)), nil
 	case "copy":
 		// With `from` it copies a file; without, it is the clipboard command.
 		if o := jsonv.Obj(req); o == nil || !o.Has("from") {

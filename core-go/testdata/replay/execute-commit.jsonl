@@ -1,0 +1,36 @@
+# Execute commits: a call with inserts (named, nested ones slide in), updates, copy, replace, move, delete and
+# variables is one undo step; undo and redo walk it back and forth; globals carry over to a second call of the same
+# agent and not to another agent's; the agent_edit and agent_activity events; a call inside a drag (merge3);
+# refused arguments; and an execute through the non-shared path is the same.
+{"cmd":"open","path":"shapes.pen"}
+{"cmd":"poll"}
+{"cmd":"tool","name":"execute","args":{"__seed":7,"input":"page = Insert(document, {type: 'frame', name: 'Page', x: 600, y: 0, width: 200, height: 120, layout: 'vertical', gap: 8, padding: 10, fill: '#ffffff'});\nbox = Insert(page, {type: 'rectangle', name: 'Box', width: 60, height: 30, fill: '#336699'});\nInsert(page, {type: 'ellipse', width: 20, height: 20, fill: '#e11d48'});\nUpdate('r1', {width: 140});\nconst c = Copy('card', document, {name: 'Card 2', x: 340, y: 240});\nReplace('e1', {type: 'rectangle', name: 'Swap', width: 40, height: 40, fill: '#000000'});\nMove('far', 'home', 0);\nDelete('pic');\nSetVariables({accent: {type: 'color', value: '#ff8800'}});\nUpdate(box, {fill: '$accent'});\nPrint(Get(box).fill, GetVariables().variables.accent.value);\nlet local = 1;\nfn = () => 1;"}}
+{"cmd":"state"}
+{"cmd":"poll"}
+{"cmd":"tick","ms":2000}
+{"cmd":"doc"}
+{"cmd":"undo"}
+{"cmd":"doc"}
+{"cmd":"redo"}
+{"cmd":"doc"}
+{"cmd":"tool","name":"execute","args":{"__seed":8,"input":"Print(typeof page, typeof box, typeof fn, typeof local);\nUpdate(page, {width: 260});\nGet(box);"}}
+{"cmd":"tool","name":"execute","args":{"__seed":9,"__agent":"other","input":"Print(typeof page);"}}
+{"cmd":"poll"}
+{"cmd":"drag_begin"}
+{"cmd":"update","ids":["home"],"props":{"x":40}}
+{"cmd":"tool","name":"execute","args":{"__seed":10,"input":"Update('card', {y: 30});"}}
+{"cmd":"drag_end"}
+{"cmd":"doc"}
+{"cmd":"undo"}
+{"cmd":"doc"}
+{"cmd":"undo"}
+{"cmd":"doc"}
+{"cmd":"tool","name":"execute","args":{"input":"  "}}
+{"cmd":"tool","name":"execute","args":{}}
+{"cmd":"tool","name":"execute","args":{"input":"x = 1","edits":[]}}
+{"cmd":"tool","name":"execute","args":{"edits":[{"find":"a","replace":"b"}]}}
+{"cmd":"tool","name":"execute","args":{"editId":"nope","edits":[{"find":"a","replace":"b"}]}}
+{"cmd":"save"}
+{"cmd":"tool","name":"execute","args":{"__seed":11,"input":"Print('read only', Get('r1').width);"}}
+{"cmd":"state"}
+{"cmd":"tool","name":"nope","args":{}}

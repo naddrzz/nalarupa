@@ -17,6 +17,17 @@ import (
 // nil allows every path.
 type PathPolicy func(file, base, docPath string) bool
 
+// WritePolicy is agent.rs `path_allowed` for the "Write" tool with base as the workspace: file is inside base
+// (by components, once both are normalized) and is not the open document.
+func WritePolicy(file, base, docPath string) bool {
+	f := doc.PathComponents(normalize(file))
+	if docPath != "" && slices.Equal(doc.PathComponents(normalize(docPath)), f) {
+		return false
+	}
+	root := doc.PathComponents(normalize(base))
+	return len(f) >= len(root) && slices.Equal(f[:len(root)], root)
+}
+
 // CheckScriptExport is html.rs `check_script_export`. A script (the agent's `execute`) exports without a
 // permission card, so it gets the file tools' rule: inside the document's folder, never the open document
 // itself, and a PDF / HTML file must be named like one so it cannot replace some other file (another
@@ -108,6 +119,9 @@ func resolvePath(p string, depth int) string {
 		return ""
 	}
 	abs := absolute(p)
+	if abs == "" {
+		return ""
+	}
 	for a, ok := abs, true; ok; a, ok = doc.ParentPath(a) {
 		rest := strings.TrimLeft(abs[len(a):], `/`+string(os.PathSeparator))
 		if real, err := filepath.EvalSymlinks(a); err == nil {
@@ -128,10 +142,14 @@ func resolvePath(p string, depth int) string {
 	return filepath.Clean(abs)
 }
 
-// absolute is Rust's `std::path::absolute`: on Windows the OS's full path (`..` resolved lexically); elsewhere
-// the path against the working folder with `.` and repeated separators dropped but `..` kept, since it can
-// only be resolved after the links before it.
+// absolute is Rust's `std::path::absolute` (or the path itself when it fails, as for ""): on Windows the OS's
+// full path (`..` resolved lexically); elsewhere the path against the working folder with `.` and repeated
+// separators dropped but `..` kept, since it can only be resolved after the links before it.
 func absolute(p string) string {
+	if p == "" {
+		// Rust's `absolute` refuses an empty path; `normalize` then keeps it as it is.
+		return ""
+	}
 	if runtime.GOOS == "windows" {
 		if abs, err := filepath.Abs(p); err == nil {
 			return abs

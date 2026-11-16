@@ -49,6 +49,8 @@ type AgentState struct {
 	Running bool
 	// Pens are the frames an AI Pen of this process is still drawing into.
 	Pens []string
+	// Stops counts the user's Stops: a Stop while a call's script runs still reaches the pens it starts.
+	Stops uint64
 }
 
 // ScriptState is what `execute` keeps between calls (script.rs `ScriptState`): each agent's globals and the
@@ -56,13 +58,18 @@ type AgentState struct {
 type ScriptState struct {
 	Globals map[string]*jsonv.Object
 	Failed  map[string]string
+	// edit is the `agent_edit` event the last finished call emitted, for endExecute.
+	edit *jsonv.Object
 }
 
-// ToolOut is a tool call's answer: its text, base64 PNG screenshots and whether it failed.
+// ToolOut is a tool call's answer: its text, base64 PNG screenshots and whether it failed. An `execute` answer
+// also holds the screenshots, icons and exports still to finish: call Finish without holding the engine lock.
 type ToolOut struct {
 	Text   string
 	Images []string
 	Error  bool
+	// pending is what Finish still has to do.
+	pending pendingOut
 }
 
 func ok(text string) ToolOut  { return ToolOut{Text: text} }
@@ -117,6 +124,11 @@ type Engine struct {
 	slid map[string]bool
 	// Inflight holds the pending image urls whose download is still running; opening a file keeps them.
 	Inflight map[string]bool
+	// Hooks are the built-in agent's parts of an `execute` call (phase 9); the zero value is inert.
+	Hooks AgentHooks
+	// ImageBase is where `Generate("ai")` and `Generate("stock")` download their placeholder photos from (tests
+	// point it at a local server); the client is Assets.Client.
+	ImageBase string
 	// ClipSession marks the node clipboard this engine writes (editor.rs `session`, process-wide in Rust): drawn
 	// from the id generator on first use, "" until then.
 	ClipSession string
@@ -201,15 +213,16 @@ func New(dataDir string) *Engine {
 		}
 	}
 	e := &Engine{
-		Fonts:    text.New(doc.JoinPath(dataDir, "fonts")),
-		Assets:   svg.NewAssets(doc.JoinPath(dataDir, "cache")),
-		ids:      doc.NewIDSource(uint64(time.Now().UnixNano())),
-		Version:  1,
-		Saved:    1,
-		DataDir:  dataDir,
-		Settings: settings,
-		slid:     map[string]bool{},
-		Inflight: map[string]bool{},
+		Fonts:     text.New(doc.JoinPath(dataDir, "fonts")),
+		Assets:    svg.NewAssets(doc.JoinPath(dataDir, "cache")),
+		ids:       doc.NewIDSource(uint64(time.Now().UnixNano())),
+		Version:   1,
+		Saved:     1,
+		DataDir:   dataDir,
+		Settings:  settings,
+		slid:      map[string]bool{},
+		Inflight:  map[string]bool{},
+		ImageBase: "https://picsum.photos",
 	}
 	e.Fonts.OnReady = func(family string, weight uint16, italic bool) {
 		e.guard(func() { e.FontReady(family, weight, italic) })
