@@ -3,14 +3,14 @@ title: 'Go rewrite phase 7a: HTML/CSS export'
 type: 'refactor'
 ticket: ''
 created: '2026-11-16'
-status: 'in-progress'
-baseline_revision: 'fb44aa21dd7edecac5036388fa9e0e30704a0831'
+status: 'built'
+baseline_revision: 'fcce4d442744fa6eb932d5792ef26d46cfe942f3'
 route: 'full'
 route_source: 'auto'
 risk: 'medium'
-review: ''
-review_source: ''
-lenses_ran: []
+review: 'quick'
+review_source: 'pinned'
+lenses_ran: ['quick']
 review_loop_iteration: 0
 followup_review_recommended: false
 context:
@@ -72,11 +72,11 @@ Export the few `core-go` helpers it needs. A Rust CLI `html --offline` oracle pr
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `core/src/bin/cli.rs` -- the test-only `html … --offline` flag.
-- [ ] `core-go/svg`, `core-go/resolve` -- export the needed helpers (renames only).
-- [ ] `core-go/html/html.go` (document, walk, options, fonts), `size.go`, `paint.go`, `stroke.go`, `effects.go`, `text.go`, `vector.go` -- the port.
-- [ ] `core-go/html/html_test.go` -- the ported CSS-level Rust tests plus each matrix row.
-- [ ] `core-go/html/parity_test.go`, `core-go/testdata/html/*.pen` -- fixtures per matrix row against `nalarupa-cli html --offline` (goldens for text-free fixtures, live for text).
+- [x] `core/src/bin/cli.rs` -- the test-only `html … --offline` flag.
+- [x] `core-go/svg`, `core-go/resolve` -- export the needed helpers (renames only).
+- [x] `core-go/html/html.go` (document, walk, options, fonts), `size.go`, `paint.go`, `stroke.go`, `effects.go`, `text.go`, `vector.go` -- the port.
+- [x] `core-go/html/html_test.go` -- the ported CSS-level Rust tests plus each matrix row.
+- [x] `core-go/html/parity_test.go`, `core-go/testdata/html/*.pen` -- fixtures per matrix row against `nalarupa-cli html --offline` (goldens for text-free fixtures, live for text).
 
 **Acceptance Criteria:**
 - Given MinGW gcc as `CC` (after `go generate ./shader/gpu`), when `go test ./...` runs (also with `GOAMD64=v3`), then it passes with golden HTML parity.
@@ -85,9 +85,22 @@ Export the few `core-go` helpers it needs. A Rust CLI `html --offline` oracle pr
 
 ## Implementation Notes
 
+- Entry point: `html.Document(ctx *export.Ctx, ids []string, opts jsonv.Value) (string, error)`. `export.Ctx` gains `LaidOut(index)` (render.rs `laid_out`), resolving without libraries as `svg.NodeSVGAt` does. Exported for the port (renames only): `svg.Effects`/`EffectsOf` with `Blur`/`Backdrop`, `svg.MeshGradient`, `svg.Pixmap.EncodePNG`, `resolve.Leaf`.
+- Shader fills go through `svg.DefaultShader` (the 6b GPU painter, linked by a blank import of `core-go/shader`), with no backdrop, as Rust's `shader::png(.., None)`.
+- `Option<&Value>` sizes are a `spec` (value plus presence): `Value::from(f64)` of a non-finite number is null there, as in serde.
+- The CLI's `html` command takes only the default options, so options and several ids are covered by `TestOptions` in `html_test.go`; parity fixtures use the defaults, one top-level node per export.
+- Parity fixtures: `testdata/html/{layout,paint,strokes,vectors}.pen` with goldens (text-free, exported with nil fonts), `testdata/html/live/{text,shader}.pen` live only. Shader PNGs are compared within ±3 per channel (6b), mesh PNGs within ±1 (4a). The polygon in `vectors` needs the 4a 1e-12 number tolerance (trigonometry).
+- Ported Rust tests: the CSS-level ones (23, `html_test.go`); `svg_export_reads_images_after_planning`, `exports_slides_deck_and_rasters`, `pdf_export_skips_damaged_images` and the two hidden-layer tests are export-job tests left to 7c.
+
 ## Plan Change Log
 
 ## Review Triage Log
+
+### 2026-11-16 — Review pass
+- verdicts: 2 findings — high 0, medium 0, low 2, false 0, maybe-false 0
+- findings:
+  - `[low]` `[patch]` The 1e-12 number tolerance applies to all fixtures, though only the `vectors` polygon needs it. — Fix: limit it to `vectors`. Everything else must be byte-equal.
+  - `[low]` `[patch]` The number regex absorbs the `22` of `%22` inside percent-encoded data URIs, loosening the tolerance about 200x. — Fix: keep `%XX` escapes out of numbers, with a comparator test.
 
 ## Verification
 
@@ -95,3 +108,19 @@ Export the few `core-go` helpers it needs. A Rust CLI `html --offline` oracle pr
 - `cd core-go && go generate ./shader/gpu && CGO_ENABLED=1 CC=<MinGW gcc> go vet ./... && CGO_ENABLED=1 CC=<MinGW gcc> go test -count=1 ./...` -- expected: pass
 - `cd core-go && CGO_ENABLED=1 CC=<MinGW gcc> NALARUPA_CLI=<target>/release/nalarupa-cli go test -count=1 ./...` -- expected: pass, live (on an idle machine)
 - `cd core && cargo test --release` -- expected: pass (separate `CARGO_TARGET_DIR`; on this machine cargo is at `~/.rustup/toolchains/stable-x86_64-pc-windows-msvc/bin`)
+
+## Auto Run Result
+
+- **Summary:** `core-go/html` ports `html_document`/`html_in` and every helper from `html.rs`: the inline flexbox CSS walk, fonts, options, sizes, the tilted wrapper, SVG inlining, paint CSS with the SVG gradient fallback, mesh and shader raster layers, overlays, strokes, shadows and filters, and text CSS. It exports `svg.Effects`/`EffectsOf`, `MeshGradient`, `Pixmap.EncodePNG`, `resolve.Leaf` and `export.Ctx.LaidOut`. Rust gains a test-only `html --offline`.
+- **Review:**
+  - Patches applied: 2 low, both in the parity comparator (the ulp tolerance applies to `vectors` only, and `%XX` escapes are tokenized separately).
+  - Rejected: none.
+- **Follow-up review recommended:** false (patched: 0 high, 0 medium, 2 low).
+- **Verification:**
+  - `go vet` and `go test ./...` pass, and `GOAMD64=v3` on `./html/` passes.
+  - Live parity passes on every package. 7 golden exports and 3 live ones (text, shader) match byte for byte, except `vectors` within 1e-12 and PNG URIs by pixels.
+  - `cargo test --release` passes, 292 tests.
+- **Residual risks:**
+  - The options are tested by unit tests only, because the CLI uses the defaults.
+  - Shader parity depends on the GPU adapter.
+  - Five export-job tests are left for 7c.

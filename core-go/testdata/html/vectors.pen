@@ -1,0 +1,17 @@
+{
+  "version": "2.19",
+  "children": [
+    {"type": "frame", "id": "vectors", "x": 0, "y": 0, "width": 400, "height": 200, "layout": "horizontal", "gap": 10, "padding": 10, "fill": "#fff", "children": [
+      {"type": "path", "id": "p1", "width": 40, "height": 40, "geometry": "M0 0 L40 0 L20 40 Z", "fill": "#f00", "stroke": "#000", "strokeWidth": 2, "opacity": 0.5},
+      {"type": "polygon", "id": "pg", "width": 40, "height": 40, "polygonCount": 6, "fill": {"type": "gradient", "colors": [{"color": "#f00", "position": 0}, {"color": "#00f", "position": 1}]}, "rotation": 90},
+      {"type": "line", "id": "ln", "width": 40, "height": 0, "stroke": "#333", "strokeWidth": 3},
+      {"type": "ellipse", "id": "ring", "width": 40, "height": 40, "innerRadius": 0.5, "fill": "#0a0"},
+      {"type": "ellipse", "id": "arc", "width": 40, "height": 40, "sweepAngle": 270, "startAngle": 45, "fill": "#a0a", "effect": {"type": "shadow", "offset": {"x": 2, "y": 2}, "blur": 2}},
+      {"type": "icon", "id": "ic1", "width": 24, "height": 24, "icon": "star", "library": "lucide", "fill": "#f80"},
+      {"type": "icon", "id": "ic2", "width": 24, "height": 24, "icon": "dot", "fill": {"type": "gradient", "colors": [{"color": "#f00", "position": 0}, {"color": "#0f0", "position": 1}]}},
+      {"type": "icon", "id": "ic3", "width": 24, "height": 24, "icon": "star", "fill": [{"type": "gradient", "colors": [{"color": "#00f", "position": 0}, {"color": "#ff0", "position": 1}]}], "effect": {"type": "shadow", "offset": {"x": 1, "y": 1}}},
+      {"type": "icon", "id": "ic4", "width": 24, "height": 24, "icon": "dot", "library": "lucide"}
+    ]},
+    {"type": "path", "id": "lonepath", "x": 500, "y": 0, "width": 60, "height": 30, "geometry": "M0 30 C20 0 40 0 60 30", "stroke": "#06c", "strokeWidth": 4, "flipY": true}
+  ]
+}

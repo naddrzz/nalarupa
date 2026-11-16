@@ -565,14 +565,14 @@ func VisualBounds(n *resolve.RNode) Rect {
 			b = union(b, VisualBounds(k))
 		}
 	}
-	fx := effectsOf(n)
+	fx := EffectsOf(n)
 	base := b
 	for _, s := range fx.shadows {
 		if !s.inner {
 			b = union(b, inflate(Rect{base.X + s.dx, base.Y + s.dy, base.W, base.H}, 3*s.sigma))
 		}
 	}
-	return turn(n, inflate(b, 3*fx.blur))
+	return turn(n, inflate(b, 3*fx.Blur))
 }
 
 func maxStroke(n *resolve.RNode) float64 {

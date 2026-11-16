@@ -106,17 +106,17 @@ func (s *Svg) Node(n *resolve.RNode) {
 		return
 	}
 	tf := transform(n)
-	fx := effectsOf(n)
+	fx := EffectsOf(n)
 	// The backdrop is blurred inside the node's opacity layer, which starts out empty: below full
 	// opacity nothing shows.
-	backdrop := fx.backdrop > 0 && opacity >= 1
+	backdrop := fx.Backdrop > 0 && opacity >= 1
 	// Id of the node's black outline (its mask path): what casts its shadows and shapes its background blur.
 	outline := ""
 	if len(fx.shadows) > 0 || backdrop {
 		outline = s.id("m")
 	}
 	if backdrop {
-		s.backdropBlur(n, tf, fx.backdrop, outline)
+		s.backdropBlur(n, tf, fx.Backdrop, outline)
 	}
 	gid := s.id("n")
 	g := ""
@@ -166,13 +166,13 @@ func (s *Svg) Node(n *resolve.RNode) {
 }
 
 // openBlur opens the group of n's layer blur, if it has one; the caller closes it when this is true.
-func (s *Svg) openBlur(n *resolve.RNode, fx effects) bool {
-	if fx.blur <= 0 {
+func (s *Svg) openBlur(n *resolve.RNode, fx Effects) bool {
+	if fx.Blur <= 0 {
 		return false
 	}
 	id := s.id("f")
-	r := inflate(extent(n), 3*fx.blur+fx.reach()+maxStroke(n)+2)
-	s.defs.WriteString(`<filter id="` + id + `" filterUnits="userSpaceOnUse"` + region(r) + ` color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="` + f(fx.blur) + `"/></filter>`)
+	r := inflate(extent(n), 3*fx.Blur+fx.reach()+maxStroke(n)+2)
+	s.defs.WriteString(`<filter id="` + id + `" filterUnits="userSpaceOnUse"` + region(r) + ` color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="` + f(fx.Blur) + `"/></filter>`)
 	s.out.WriteString(`<g filter="url(#` + id + `)">`)
 	return true
 }
@@ -213,7 +213,7 @@ func (s *Svg) Above(n *resolve.RNode, id string) {
 		g += ` transform="` + tf + `"`
 	}
 	s.out.WriteString("<g" + g + ">")
-	blur := s.openBlur(n, effectsOf(n))
+	blur := s.openBlur(n, EffectsOf(n))
 	if len(s.painted) == 0 {
 		// Siblings with a background blur reference what was painted before them.
 		s.tag = hasBackdropBlur(n)
@@ -238,7 +238,7 @@ func (s *Svg) Above(n *resolve.RNode, id string) {
 	s.out.WriteString("</g>")
 }
 
-func (s *Svg) shape(n *resolve.RNode, fx effects, outline string) {
+func (s *Svg) shape(n *resolve.RNode, fx Effects, outline string) {
 	geo := Geometry(n)
 	b := box(n)
 	sweep, hasSweep := n.F("sweepAngle")
@@ -414,7 +414,7 @@ func (s *Svg) slot(n *resolve.RNode) {
 	s.out.WriteString(`<path d="` + stripes.String() + `" fill="none" stroke="` + color + `" stroke-width="1" clip-path="url(#` + clip + `)"/><path d="` + d + `" fill="none" stroke="` + color + `" stroke-width="1"/>`)
 }
 
-func (s *Svg) group(n *resolve.RNode, fx effects, outline string) {
+func (s *Svg) group(n *resolve.RNode, fx Effects, outline string) {
 	kids := ""
 	if outline != "" {
 		kids = outline + "k"
@@ -440,7 +440,7 @@ func (s *Svg) group(n *resolve.RNode, fx effects, outline string) {
 }
 
 // glyphs paints text and icons: every fill paints the glyphs; shadows use the glyph outline.
-func (s *Svg) glyphs(n *resolve.RNode, fx effects, outline string) {
+func (s *Svg) glyphs(n *resolve.RNode, fx Effects, outline string) {
 	text := n.Type == "text"
 	// Text takes a stroke like any shape; icons draw their own strokes.
 	var st *stroke
@@ -537,7 +537,7 @@ func blendStyle(blend string) string {
 
 // dropShadows emits the drop shadows of the black outline m, knocked out where the outline itself is.
 // With a rounded-rect outline the group is tagged for analytic shadows (raster.rs).
-func (s *Svg) dropShadows(fx effects, m string, b Rect, outline *roundRect) {
+func (s *Svg) dropShadows(fx Effects, m string, b Rect, outline *roundRect) {
 	var drops []shadow
 	for _, sh := range fx.shadows {
 		if !sh.inner {
@@ -578,7 +578,7 @@ func (s *Svg) dropShadows(fx effects, m string, b Rect, outline *roundRect) {
 }
 
 // innerShadows emits the offset, blurred inverse of the outline, kept inside the outline.
-func (s *Svg) innerShadows(fx effects, m string, b Rect, outline *roundRect) {
+func (s *Svg) innerShadows(fx Effects, m string, b Rect, outline *roundRect) {
 	for _, sh := range fx.shadows {
 		if !sh.inner {
 			continue

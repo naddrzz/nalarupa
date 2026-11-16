@@ -680,7 +680,7 @@ func TestShaderFills(t *testing.T) {
 // A mesh gradient rasterises into a PNG pattern; an invalid one paints nothing and takes no id.
 func TestMeshGradient(t *testing.T) {
 	o := jsonv.MustParse(`{"columns": 2, "rows": 2, "points": [[0, 0], [1, 0], [0, 1], [1, 1]], "colors": ["#ff0000", "#ff0000", "#0000ff", "#0000ff"]}`).(*jsonv.Object)
-	pm := meshGradient(o, 8, 8)
+	pm := MeshGradient(o, 8, 8)
 	if pm == nil {
 		t.Fatal("valid mesh")
 	}
@@ -690,7 +690,7 @@ func TestMeshGradient(t *testing.T) {
 		t.Fatal(pm)
 	}
 	for _, bad := range []string{`{"columns": 2, "rows": 2, "points": [[0, 0]], "colors": ["#f00"]}`, `{"columns": 1.5, "rows": 2, "points": [], "colors": []}`, `{"rows": 1}`} {
-		if meshGradient(jsonv.MustParse(bad).(*jsonv.Object), 8, 8) != nil {
+		if MeshGradient(jsonv.MustParse(bad).(*jsonv.Object), 8, 8) != nil {
 			t.Error(bad)
 		}
 	}

@@ -44,12 +44,13 @@ type shadow struct {
 	inner         bool
 }
 
-type effects struct {
+// Effects are a node's shadows, layer blur and background blur (svg.rs `Effects`).
+type Effects struct {
 	shadows []shadow
-	// blur is the layer blur sigma (radius / 2; several blurs compound).
-	blur float64
-	// backdrop is the background blur sigma (the largest of several).
-	backdrop float64
+	// Blur is the layer blur sigma (radius / 2; several blurs compound).
+	Blur float64
+	// Backdrop is the background blur sigma (the largest of several).
+	Backdrop float64
 }
 
 // effectList is the enabled entries of an `effect` value (one object or an array).
@@ -70,8 +71,9 @@ func effectList(v jsonv.Value) []jsonv.Value {
 	return out
 }
 
-func effectsOf(n *resolve.RNode) effects {
-	var fx effects
+// EffectsOf reads the enabled effects of n.
+func EffectsOf(n *resolve.RNode) Effects {
+	var fx Effects
 	v, _ := n.P.Get("effect")
 	for _, e := range effectList(v) {
 		sigma := func(k string) float64 { return fmax(numOr(jsonv.Get(e, k), 0), 0) / 2 }
@@ -95,16 +97,16 @@ func effectsOf(n *resolve.RNode) effects {
 				color: c, alpha: a, blend: BlendMode(mode), inner: jsonv.StrIs(jsonv.Get(e, "shadowType"), "inner"),
 			})
 		case "blur":
-			fx.blur = math.Hypot(fx.blur, sigma("radius"))
+			fx.Blur = math.Hypot(fx.Blur, sigma("radius"))
 		case "background_blur":
-			fx.backdrop = fmax(fx.backdrop, sigma("radius"))
+			fx.Backdrop = fmax(fx.Backdrop, sigma("radius"))
 		}
 	}
 	return fx
 }
 
 // reach is how far drop shadows reach past the source outline.
-func (fx effects) reach() float64 {
+func (fx Effects) reach() float64 {
 	r := 0.0
 	for _, s := range fx.shadows {
 		r = fmax(r, fmax(math.Abs(s.dx), math.Abs(s.dy))+3*s.sigma)
@@ -288,7 +290,7 @@ func Blends(n *resolve.RNode) bool {
 	if paintBlends("fill") || paintBlends("stroke") {
 		return true
 	}
-	for _, s := range effectsOf(n).shadows {
+	for _, s := range EffectsOf(n).shadows {
 		if s.blend != "" {
 			return true
 		}
@@ -451,7 +453,7 @@ func (s *Svg) paints(v jsonv.Value, b Rect) []paint {
 					value, alpha = "url(#"+id+")", 0.1
 				}
 			case "mesh_gradient":
-				id, ok := s.rasterPattern(b, func(w, h int) *Pixmap { return meshGradient(x, w, h) })
+				id, ok := s.rasterPattern(b, func(w, h int) *Pixmap { return MeshGradient(x, w, h) })
 				if !ok {
 					continue
 				}

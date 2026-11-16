@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/naddrzz/nalarupa/core-go/doc"
+	"github.com/naddrzz/nalarupa/core-go/layout"
 	"github.com/naddrzz/nalarupa/core-go/resolve"
 	"github.com/naddrzz/nalarupa/core-go/resvg"
 	"github.com/naddrzz/nalarupa/core-go/script"
@@ -44,6 +45,24 @@ func (c *Ctx) expand() svg.Expand {
 	return func(n *resolve.RNode, r *resolve.Resolver) {
 		script.ExpandScripts(n, r, c.Fonts, c.Doc.Dir(), c.Doc.Path, false, c.Runs)
 	}
+}
+
+// LaidOut resolves and lays out the top-level node at index (render.rs `laid_out`), its script nodes run; nil
+// when there is none or it is hidden.
+func (c *Ctx) LaidOut(index int) *resolve.RNode {
+	kids := c.Doc.Children()
+	if index < 0 || index >= len(kids) {
+		return nil
+	}
+	r := resolve.New(c.Doc.Root, nil)
+	n := r.Resolve(kids[index])
+	if n == nil {
+		return nil
+	}
+	layout.Layout(n, c.Fonts)
+	// Script nodes need their laid-out size before they can run.
+	c.expand()(n, r)
+	return n
 }
 
 // TreeOptions is render.rs `tree_options`: the machine's fonts, the depth-limited image resolver and the

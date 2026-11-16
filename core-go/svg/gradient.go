@@ -42,8 +42,8 @@ func satU8(v float64) uint8 {
 	return uint8(v)
 }
 
-// encodePNG demultiplies as tiny-skia's `encode_png` does and writes a PNG.
-func (p *Pixmap) encodePNG() ([]byte, error) {
+// EncodePNG demultiplies as tiny-skia's `encode_png` does and writes a PNG.
+func (p *Pixmap) EncodePNG() ([]byte, error) {
 	img := image.NewNRGBA(image.Rect(0, 0, p.W, p.H))
 	for i := 0; i < len(p.Pix); i += 4 {
 		px := p.Pix[i : i+4]
@@ -108,7 +108,7 @@ func (s *Svg) rasterPattern(b Rect, draw func(w, h int) *Pixmap) (string, bool) 
 	if pm == nil {
 		return "", false
 	}
-	data, err := pm.encodePNG()
+	data, err := pm.EncodePNG()
 	if err != nil {
 		return "", false
 	}
@@ -123,11 +123,11 @@ type meshVertex struct {
 	c [4]float64
 }
 
-// meshGradient is a mesh gradient fill over a w×h pixmap of the node box, or nil when the fill is invalid.
+// MeshGradient is a mesh gradient fill over a w×h pixmap of the node box, or nil when the fill is invalid.
 // `columns`×`rows` points (row-major, one color each) are `[x, y]` or `{position, leftHandle, rightHandle,
 // topHandle, bottomHandle}` in 0..1 of the box. Each cell is a bicubic patch tessellated 32×32 with
 // smoothstep vertex colors (truncated), drawn as Gouraud triangles without antialiasing, src-over.
-func meshGradient(o *jsonv.Object, w, h int) *Pixmap {
+func MeshGradient(o *jsonv.Object, w, h int) *Pixmap {
 	const T = 32
 	points, ok1 := jsonv.Get(o, "points").(*jsonv.Array)
 	colorsV, ok2 := jsonv.Get(o, "colors").(*jsonv.Array)

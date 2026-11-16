@@ -87,7 +87,8 @@ func (n *RNode) Find(id string) *RNode {
 	return nil
 }
 
-func leaf(id, ty string, p *jsonv.Object, problem string) *RNode {
+// Leaf is a render node without children or a layout yet.
+func Leaf(id, ty string, p *jsonv.Object, problem string) *RNode {
 	return &RNode{ID: id, Type: ty, P: p, Problem: problem}
 }
 
@@ -283,7 +284,7 @@ func (r *Resolver) resolveIn(node jsonv.Value, prefix string, parentTheme []them
 		if !ok {
 			p := jsonv.Obj(jsonv.Clone(obj))
 			p.Set("fill", "#FF3B3022")
-			return leaf(path, "frame", p, "missing component")
+			return Leaf(path, "frame", p, "missing component")
 		}
 		if mergedScope != scope {
 			// Entering a library: its theme axes default to its own first values.
@@ -312,7 +313,7 @@ func (r *Resolver) resolveIn(node jsonv.Value, prefix string, parentTheme []them
 			ty = s
 		}
 	}
-	out := leaf(path, ty, p, "")
+	out := Leaf(path, ty, p, "")
 	for _, k := range jsonv.Items(jsonv.Get(node, "children")) {
 		if kid := r.resolveIn(k, childPrefix, theme, scope, depth+1); kid != nil {
 			out.Kids = append(out.Kids, kid)

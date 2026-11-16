@@ -1,7 +1,7 @@
 //! Headless Nalarupa: render/export documents, run execute scripts, serve MCP.
 //!   nalarupa-cli render <doc.pen> <out-dir> [scale] [--offline]   one PNG per top-level node
 //!   nalarupa-cli svg <doc.pen> <node-id> <out.svg> [--offline]
-//!   nalarupa-cli html <doc.pen> <node-id> <out.html>
+//!   nalarupa-cli html <doc.pen> <node-id> <out.html> [--offline]
 //!   nalarupa-cli exec <doc.pen> <script.js> [--save] [--seed <n>] [--globals <json>] [--preview] [--offline]
 //!   nalarupa-cli mcp                                    serve MCP until Ctrl+C
 //!   nalarupa-cli layout <doc.pen> [<saved.pen>] [--scripts]
@@ -99,6 +99,10 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         "html" => {
             let mut e = engine();
+            // `--offline`: no font or asset downloads (the Go port's html parity oracle).
+            if args.iter().skip(5).any(|a| a == "--offline") {
+                e.offline();
+            }
             e.open(Path::new(arg(2)?))?;
             let html = nalarupa_core::html::html_document(&mut e, &[arg(3)?.to_string()], &json!({}))?;
             std::fs::write(arg(4)?, html).map_err(|e| e.to_string())
