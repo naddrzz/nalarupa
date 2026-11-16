@@ -192,7 +192,7 @@ func (e *Engine) Open(path string) error {
 	dropPending(d.Root, e.Inflight)
 	var pens []string
 	if e.Doc.Path != "" && doc.SamePath(e.Doc.Path, path) {
-		pens = slices.Clone(e.Agent.Pens)
+		pens = e.Agent.PenFrames()
 	}
 	dropPlaceholder(d.Root, pens)
 	e.setDoc(d)

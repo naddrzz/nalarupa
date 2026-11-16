@@ -143,7 +143,7 @@ func (e *Engine) settleGenerating(unflagged map[string]bool) {
 	var back []string
 	doc.Walk(e.Doc.Children(), func(n jsonv.Value) {
 		if id, ok := jsonv.Str(jsonv.Get(n, "id")); ok && jsonv.IsTrue(jsonv.Get(n, "placeholder")) {
-			if unflagged[id] && !slices.Contains(e.Agent.Pens, id) {
+			if unflagged[id] && !slices.Contains(e.Agent.PenFrames(), id) {
 				back = append(back, id)
 			}
 		}

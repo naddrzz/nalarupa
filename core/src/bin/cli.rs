@@ -65,6 +65,8 @@
 //!                                                       offline engine (resvg, pinned slide clock) and prints each
 //!                                                       `nr_call` response, then the document (the Go port's engine
 //!                                                       oracle, see replay below)
+//!   nalarupa-cli agent-instructions <backend>           the system instructions of a main agent on `api` or
+//!                                                       `claude-code`, printed as is (the Go port's agent oracle)
 
 use nalarupa_core::engine::engine;
 use nalarupa_core::resolve::RNode;
@@ -323,6 +325,10 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         "canvas" => canvas::run(arg(2)?, arg(3)?, arg(4)?),
         "replay" => replay::run(arg(2)?, &args[3..]),
+        "agent-instructions" => {
+            print!("{}", nalarupa_core::agent::instructions(arg(2)?));
+            Ok(())
+        }
         "stream-prefix" => {
             // Each case is {"src"} (answered {"prefix": complete_prefix}) or {"json", "key"} (answered
             // {"partial": partial_string or null}).

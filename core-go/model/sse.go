@@ -173,7 +173,7 @@ func read(ctx context.Context, req *http.Request, apiError func(int, string) str
 		case err != nil && err != io.EOF:
 			l = line{err: fmt.Errorf("stream interrupted: %v", err)}
 		default:
-			l = line{text: strings.TrimRight(lossy(buf), "\r\n")}
+			l = line{text: strings.TrimRight(Lossy(buf), "\r\n")}
 		}
 		if !send(l) || l.err != nil {
 			return
@@ -207,8 +207,8 @@ func errorBody(r io.Reader) string {
 	return string(b)
 }
 
-// lossy is Rust's String::from_utf8_lossy: each maximal invalid subpart becomes one U+FFFD.
-func lossy(s []byte) string {
+// Lossy is Rust's String::from_utf8_lossy: each maximal invalid subpart becomes one U+FFFD.
+func Lossy(s []byte) string {
 	if utf8.Valid(s) {
 		return string(s)
 	}

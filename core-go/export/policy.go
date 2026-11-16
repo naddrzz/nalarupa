@@ -18,14 +18,33 @@ import (
 type PathPolicy func(file, base, docPath string) bool
 
 // WritePolicy is agent.rs `path_allowed` for the "Write" tool with base as the workspace: file is inside base
-// (by components, once both are normalized) and is not the open document.
+// (by components, once both are normalized) and is not the open document. Rust always passes a base here, so an
+// empty one is the empty path, which every path is inside.
 func WritePolicy(file, base, docPath string) bool {
-	f := doc.PathComponents(normalize(file))
-	if docPath != "" && slices.Equal(doc.PathComponents(normalize(docPath)), f) {
+	f := doc.PathComponents(Normalize(file))
+	return !isDocument(f, docPath) && inside(f, base)
+}
+
+// PathAllowed is agent.rs `path_allowed`: a file tool may touch file inside the workspace (the document's folder),
+// and Read also inside the skills folder. The open document itself is never written behind the app's back. An
+// empty workspace, document or skills folder is none.
+func PathAllowed(file, tool, workspace, document, skills string) bool {
+	f := doc.PathComponents(Normalize(file))
+	if tool != "Read" && isDocument(f, document) {
 		return false
 	}
-	root := doc.PathComponents(normalize(base))
-	return len(f) >= len(root) && slices.Equal(f[:len(root)], root)
+	return (workspace != "" && inside(f, workspace)) || (tool == "Read" && skills != "" && inside(f, skills))
+}
+
+// isDocument: the components f are the open document's ("" when unsaved).
+func isDocument(f []string, document string) bool {
+	return document != "" && slices.Equal(doc.PathComponents(Normalize(document)), f)
+}
+
+// inside: the components f start with root's, once normalized (Rust's `Path::starts_with`).
+func inside(f []string, root string) bool {
+	r := doc.PathComponents(Normalize(root))
+	return len(f) >= len(r) && slices.Equal(f[:len(r)], r)
 }
 
 // CheckScriptExport is html.rs `check_script_export`. A script (the agent's `execute`) exports without a
@@ -78,14 +97,14 @@ var scriptWritten struct {
 }
 
 func scriptWrote(file string) bool {
-	n := normalize(file)
+	n := Normalize(file)
 	scriptWritten.Lock()
 	defer scriptWritten.Unlock()
 	return slices.Contains(scriptWritten.files, n)
 }
 
 func noteScriptWrote(file string) {
-	n := normalize(file)
+	n := Normalize(file)
 	scriptWritten.Lock()
 	defer scriptWritten.Unlock()
 	scriptWritten.files = append(scriptWritten.files, n)
@@ -109,10 +128,10 @@ func ClaimScriptFiles(j *Job) error {
 	return nil
 }
 
-// normalize is agent.rs `normalize`: the absolute path with `.` and `..` resolved and symlinks followed. The
+// Normalize is agent.rs `normalize`: the absolute path with `.` and `..` resolved and symlinks followed. The
 // deepest existing ancestor is resolved by the OS (which follows links before `..`), the not-yet-existing rest
 // is appended lexically; a dangling link is followed by hand, and a link loop resolves to "".
-func normalize(p string) string { return resolvePath(p, 0) }
+func Normalize(p string) string { return resolvePath(p, 0) }
 
 func resolvePath(p string, depth int) string {
 	if depth > 40 {
@@ -124,7 +143,7 @@ func resolvePath(p string, depth int) string {
 	}
 	for a, ok := abs, true; ok; a, ok = doc.ParentPath(a) {
 		rest := strings.TrimLeft(abs[len(a):], `/`+string(os.PathSeparator))
-		if real, err := filepath.EvalSymlinks(a); err == nil {
+		if real, err := canonical(a); err == nil {
 			return filepath.Clean(doc.JoinPath(real, rest))
 		}
 		if target, err := os.Readlink(a); err == nil {

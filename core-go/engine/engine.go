@@ -43,17 +43,6 @@ const SwitchBusy = "Stop the agent or the AI Pen before opening another document
 // SwitchDirty: an external agent has no Save / Don't save prompt, so it must not replace unsaved work.
 const SwitchDirty = "The open document has unsaved changes; ask the user to save it first."
 
-// AgentState is what the engine reads of the built-in agent (agent.rs `AgentState`); the agent itself comes
-// with phase 9.
-type AgentState struct {
-	// Running: an agent run is in progress.
-	Running bool
-	// Pens are the frames an AI Pen of this process is still drawing into.
-	Pens []string
-	// Stops counts the user's Stops: a Stop while a call's script runs still reaches the pens it starts.
-	Stops uint64
-}
-
 // ScriptState is what `execute` keeps between calls (script.rs `ScriptState`): each agent's globals and the
 // snippets of failed calls by editId. Opening or creating a document forgets it.
 type ScriptState struct {
@@ -229,6 +218,7 @@ func New(dataDir string) *Engine {
 		slid:      map[string]bool{},
 		Inflight:  map[string]bool{},
 		ImageBase: "https://picsum.photos",
+		Agent:     AgentState{Cancel: NewFlag()},
 	}
 	e.Fonts.OnReady = func(family string, weight uint16, italic bool) {
 		e.guard(func() { e.FontReady(family, weight, italic) })
@@ -278,7 +268,12 @@ func (e *Engine) SwitchBusyNow() bool {
 
 // Emit queues an event for the UI's next poll; past eventLimit the oldest are dropped.
 func (e *Engine) Emit(ev jsonv.Value) {
-	// Agent events also build the saved chat (phase 9).
+	// Agent events also build the saved chat; it is written when a message or turn ends.
+	if jsonv.StrIs(jsonv.Get(ev, "type"), "agent") && e.Agent.Record(ev) && e.Hooks.SaveChat != nil {
+		if err := e.Hooks.SaveChat(); err != nil {
+			e.Events = append(e.Events, Object("type", "toast", "text", "Could not save the chat: "+err.Error()))
+		}
+	}
 	e.Events = append(e.Events, ev)
 	if len(e.Events) > eventLimit {
 		e.Events = append([]jsonv.Value(nil), e.Events[eventDrop:]...)

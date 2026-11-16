@@ -11,8 +11,8 @@ import (
 	"github.com/naddrzz/nalarupa/core-go/script"
 )
 
-// AgentHooks are the built-in agent's parts of an `execute` call (agent.rs); phase 9 fills them. A nil hook is
-// inert. Each is called under the engine lock.
+// AgentHooks are the built-in agent's parts of the engine (agent.rs), filled by package agent's Attach. A nil
+// hook is inert. Each is called under the engine lock.
 type AgentHooks struct {
 	// Stop is the Stop signal of a call by agent (closed when the user stops it), or nil when Stop does not reach
 	// it: Rust raises it only for a running built-in agent's call.
@@ -23,6 +23,9 @@ type AgentHooks struct {
 	// StartPen starts the AI Pen drawing prompt into frame (w×h) once agent's call committed (agent.rs
 	// `stopped_since` with stops, the agent's Stop count when the call began, and pen.rs `start`).
 	StartPen func(agent string, stops uint64, frame, prompt string, w, h float64)
+	// SaveChat saves the current chat in the background (agent.rs `save_chat`): Emit calls it when an agent event
+	// ends a message or a turn.
+	SaveChat func() error
 	// ExportAllowed is the path rule of a script's Export (agent.rs `path_allowed` for "Write" inside the export
 	// folder); nil is export.WritePolicy.
 	ExportAllowed export.PathPolicy

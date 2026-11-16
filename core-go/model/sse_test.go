@@ -88,7 +88,7 @@ func TestAnErrorStatusReadsTheMessageWhenThereIsOne(t *testing.T) {
 }
 
 func TestLossyReplacesEachInvalidSequenceOnce(t *testing.T) {
-	if got := lossy([]byte("a\xf0\x9f\x98b\xffc")); got != "a�b�c" {
+	if got := Lossy([]byte("a\xf0\x9f\x98b\xffc")); got != "a�b�c" {
 		t.Fatalf("%q", got)
 	}
 }

@@ -306,7 +306,7 @@ func TestAFileSavedMidRunReopensWithoutGeneratingFrames(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "lib.nala"), []byte(`{"version":"2.19","children":[{"id":"L","type":"frame","reusable":true,"placeholder":true}]}`), 0o666)
 	e.Doc.Root.Set("imports", jsonv.MustParse(`{"lib": "lib.nala"}`))
 	e.Save("")
-	e.Agent.Pens = append(e.Agent.Pens, "f")
+	e.Agent.Pens = append(e.Agent.Pens, Pen{Frame: "f", Cancel: NewFlag()})
 	e.Open(path)
 	if !jsonv.IsTrue(jsonv.Get(e.Doc.Find("f"), "placeholder")) {
 		t.Error("the pen's frame keeps its flag")
