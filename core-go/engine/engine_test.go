@@ -20,13 +20,15 @@ import (
 	"github.com/naddrzz/nalarupa/core-go/script"
 )
 
-// The ports of engine.rs's tests come first (save_as_moves_the_live_preview waits for the streams of phase 8d),
+// The ports of engine.rs's tests come first (save_as_moves_the_live_preview is in streams_test.go),
 // then the engine's own.
 
 func newEngine(t *testing.T) *Engine {
 	t.Helper()
 	e := New(t.TempDir())
 	e.Offline()
+	// Streams a test leaves running free their JS contexts with it.
+	t.Cleanup(func() { e.Locked(e.closeLive) })
 	return e
 }
 

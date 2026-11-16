@@ -221,7 +221,24 @@ type job struct {
 	src, file, input, schema string
 }
 
+// runHook, set by tests (SetRunHook), is called with a script's source on the goroutine about to run it.
+var runHook atomic.Pointer[func(src string)]
+
+// SetRunHook makes every script node run call f with its source first, on the goroutine about to run it; nil
+// removes it. Tests use it to hold a run until they release it, which shows what waits for the run and what does
+// not without timing it.
+func SetRunHook(f func(src string)) {
+	if f == nil {
+		runHook.Store(nil)
+		return
+	}
+	runHook.Store(&f)
+}
+
 func runJob(j *job) Result {
+	if h := runHook.Load(); h != nil {
+		(*h)(j.src)
+	}
 	out, st := runScript(j.src, j.file, j.input)
 	if st != nil {
 		return Result{Status: st}

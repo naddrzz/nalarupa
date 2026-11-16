@@ -77,7 +77,10 @@ func (e *Engine) Touch() {
 	e.Selection = slices.DeleteFunc(e.Selection, func(id string) bool {
 		return !strings.Contains(id, "/") && e.Doc.Find(id) == nil
 	})
-	// Phase 8d: in-flight agent previews are layered on the latest document here.
+	// Keep in-flight agent previews layered on top of the latest document.
+	if len(e.Streams) > 0 && !e.Executing {
+		e.rebuildPreview()
+	}
 }
 
 // Undo steps back. It is ignored during a drag: DragEnd would otherwise push the pre-drag snapshot as a new
@@ -249,6 +252,7 @@ func (e *Engine) resetHistory() {
 	e.Selection = nil
 	e.Renderer.Slides = nil
 	e.slid = map[string]bool{}
+	e.closeLive()
 	e.Script = ScriptState{}
 	e.Touch()
 	e.markSaved()

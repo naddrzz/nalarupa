@@ -23,6 +23,7 @@ import (
 	"github.com/naddrzz/nalarupa/core-go/jsonv"
 	"github.com/naddrzz/nalarupa/core-go/render"
 	"github.com/naddrzz/nalarupa/core-go/resolve"
+	"github.com/naddrzz/nalarupa/core-go/script"
 	"github.com/naddrzz/nalarupa/core-go/svg"
 	"github.com/naddrzz/nalarupa/core-go/text"
 )
@@ -60,6 +61,8 @@ type ScriptState struct {
 	Failed  map[string]string
 	// edit is the `agent_edit` event the last finished call emitted, for endExecute.
 	edit *jsonv.Object
+	// live holds the JS state of the `execute` calls still streaming, by stream key.
+	live map[string]*script.Live
 }
 
 // ToolOut is a tool call's answer: its text, base64 PNG screenshots and whether it failed. An `execute` answer
@@ -108,7 +111,10 @@ type Engine struct {
 	// step on release. DragClean is whether the document was clean then.
 	DragBefore *jsonv.Object
 	DragClean  bool
-	// Preview is the document as displayed while streams are active (phase 8d); nil shows Doc.
+	// Streams are the `execute` calls the model is still writing.
+	Streams []*Stream
+	// Preview is the document as displayed while streams are active: the document plus every stream's complete
+	// statements; nil shows Doc.
 	Preview *doc.Doc
 	// Executing is true while JavaScript runs; layout queries then read the document being edited.
 	Executing bool

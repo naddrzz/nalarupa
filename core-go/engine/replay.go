@@ -537,7 +537,8 @@ func (e *Engine) dispatch(req jsonv.Value) (jsonv.Value, error) {
 // one `{"cmd", ...}` request per line, answered as `nr_call` answers it, with the slide clock pinned. Besides
 // the engine-core commands of `dispatch`, test-only steps reach what the UI cannot: `render` (the RGB bytes go
 // to Frames), `slide_in`, `tick`, `settle`, `font_ready`, `asset_ready`, `inflight`, `resolve_pending`,
-// `apply_generated`, `doc` and `copy` with `from` (a file; without `from`, `copy` is the clipboard command). A
+// `apply_generated`, `doc`, `stream_update` and `stream_end` (the engine side of a streamed `execute` call, answered
+// with the streams and the preview) and `copy` with `from` (a file; without `from`, `copy` is the clipboard command). A
 // `tool` step with `png: true` answers with the names of its screenshots (`<step>.<k>.png`), which go to Shots.
 type Replayer struct {
 	E *Engine
@@ -596,6 +597,21 @@ func (r *Replayer) slides() *jsonv.Array {
 
 func (r *Replayer) version() *jsonv.Object {
 	return Object("version", u64(r.E.Version), "dirty", r.E.Dirty())
+}
+
+// streams is the answer to `stream_update` and `stream_end`: the streams and the preview.
+func (r *Replayer) streams() *jsonv.Object {
+	e := r.E
+	list := jsonv.NewArray()
+	list.Items = []jsonv.Value{}
+	for _, s := range e.Streams {
+		list.Items = append(list.Items, Object("key", s.Key, "agent", s.Agent, "source", s.Source, "seed", u64(s.Seed), "touched", jsonv.Int(int64(s.Touched))))
+	}
+	var preview jsonv.Value
+	if e.Preview != nil {
+		preview = jsonv.Clone(e.Preview.Root)
+	}
+	return Object("version", u64(e.Version), "dirty", e.Dirty(), "executing", e.Executing, "streams", list, "preview", preview)
 }
 
 func (r *Replayer) step1(req jsonv.Value) (jsonv.Value, error) {
@@ -703,6 +719,20 @@ func (r *Replayer) step1(req jsonv.Value) (jsonv.Value, error) {
 		e.Lock()
 		defer e.Unlock()
 		return jsonv.Clone(e.Doc.Root), nil
+	case "stream_update":
+		e.Lock()
+		defer e.Unlock()
+		agent, ok := jsonv.Str(jsonv.Get(req, "agent"))
+		if !ok {
+			agent = "agent"
+		}
+		e.StreamUpdate(s("key"), agent, s("source"))
+		return r.streams(), nil
+	case "stream_end":
+		e.Lock()
+		defer e.Unlock()
+		e.StreamEnd(s("key"))
+		return r.streams(), nil
 	case "tool":
 		if !jsonv.IsTrue(jsonv.Get(req, "png")) {
 			break

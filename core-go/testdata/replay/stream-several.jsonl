@@ -1,0 +1,24 @@
+# Several streams at once: two agents, a user edit while they stream (the preview layered on the new document),
+# final calls taken by prefix among the caller's own streams, by key, and by prefix without an agent.
+{"cmd":"open","path":"shapes.pen"}
+{"cmd":"stream_update","key":"t1","source":"pos = {x: 0, y: 0}\nInsert(document, {type: 'frame', name: 'One', x: 0, y: 0, width: 60, height: 60, fill: '#336699'})\nq(","agent":"agA"}
+{"cmd":"stream_update","key":"t2","source":"pos = {x: 0, y: 0}\nInsert(document, {type: 'frame', name: 'Two', x: 80, y: 0, width: 60, height: 60, fill: '#e11d48'})\nq(","agent":"agB"}
+{"cmd":"stream_update","key":"t3","source":"Insert(document, {type: 'ellipse', name: 'Three', x: 0, y: 80, width: 40, height: 40, fill: '#22c55e'})\nq(","agent":"agA"}
+{"cmd":"render","w":260,"h":200,"cam":[-20,-20],"zoom":0.5,"bg":[30,30,30]}
+{"cmd":"poll"}
+{"cmd":"update","ids":["r1"],"props":{"width":150}}
+{"cmd":"doc"}
+{"cmd":"stream_update","key":"t2","source":"pos = {x: 0, y: 0}\nInsert(document, {type: 'frame', name: 'Two', x: 80, y: 0, width: 60, height: 60, fill: '#e11d48'})\nUpdate(pos, {})\n","agent":"agB"}
+{"cmd":"render","w":260,"h":200,"cam":[-20,-20],"zoom":0.5,"bg":[30,30,30]}
+{"cmd":"tool","name":"execute","args":{"input":"pos = {x: 0, y: 0}\nInsert(document, {type: 'frame', name: 'One', x: 0, y: 0, width: 60, height: 60, fill: '#336699'})\nPrint('done')","__agent":"agA"}}
+{"cmd":"poll"}
+{"cmd":"tool","name":"execute","args":{"input":"Insert(document, {type: 'ellipse', name: 'Three', x: 0, y: 80, width: 40, height: 40, fill: '#22c55e'})\n","__stream":"t3","__agent":"agA"}}
+{"cmd":"poll"}
+{"cmd":"tool","name":"execute","args":{"input":"pos = {x: 0, y: 0}\nInsert(document, {type: 'frame', name: 'Two', x: 80, y: 0, width: 60, height: 60, fill: '#e11d48'})\nInsert(document, {type: 'rectangle', name: 'Extra', width: 5, height: 5})"}}
+{"cmd":"poll"}
+{"cmd":"state"}
+{"cmd":"render","w":260,"h":200,"cam":[-20,-20],"zoom":0.5,"bg":[30,30,30]}
+{"cmd":"undo"}
+{"cmd":"undo"}
+{"cmd":"undo"}
+{"cmd":"doc"}

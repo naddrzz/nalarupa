@@ -21,6 +21,7 @@ import (
 
 	"github.com/naddrzz/nalarupa/core-go/jsonv"
 	"github.com/naddrzz/nalarupa/core-go/script"
+	"github.com/naddrzz/nalarupa/core-go/script/scripttest"
 	"github.com/naddrzz/nalarupa/core-go/svg"
 )
 
@@ -292,17 +293,15 @@ func TestARunningScriptLeavesTheEngineFreeAndStopsWithTheAgent(t *testing.T) {
 		if running {
 			break
 		}
-		if time.Since(started) > 5*time.Second {
+		if time.Since(started) > time.Minute {
 			t.Fatal("the script never started")
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	time.Sleep(200 * time.Millisecond)
-	at := time.Now()
-	e.Locked(func() {})
-	if time.Since(at) > time.Second {
-		t.Fatal("the engine stayed locked while the script ran")
-	}
+	// The script loops until Stop, so a lock held across it would never be free here.
+	free := make(chan bool, 1)
+	go func() { e.Locked(func() { free <- true }) }()
+	scripttest.Within(t, free, "the engine stayed locked while the script ran")
 	var blocked, direct ToolOut
 	e.Locked(func() {
 		blocked = e.Tool("open_document", Object("path", filepath.Join(t.TempDir(), "never-opened.pen")))
@@ -567,7 +566,7 @@ func TestScriptExportNeverReplacesAFileItDidNotWrite(t *testing.T) {
 	}
 }
 
-// openSlowScript opens a document whose page holds a script node that takes a second to run.
+// openSlowScript opens a document whose page holds a script node running src.
 func openSlowScript(t *testing.T, e *Engine, src string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -583,17 +582,28 @@ func openSlowScript(t *testing.T, e *Engine, src string) string {
 	return dir
 }
 
-// The agent's screenshots and exports of a script node run it after the tool call, off the engine lock.
+// The agent's screenshots and exports of a script node run it after the tool call, off the engine lock: the call
+// answers while the run is held, and the engine lock is free while Finish waits for it.
 func TestAgentShotsAndExportsRunScriptNodesOffTheLock(t *testing.T) {
 	e := newEngine(t)
-	dir := openSlowScript(t, e, fmt.Sprintf("/** @schema 2.19 */\n// %d\nconst s = Date.now(); while (Date.now() - s < 1000) {}\nreturn [{type: 'rectangle', width: nalarupa.width, height: nalarupa.height, fill: '#ff0101'}];", time.Now().UnixNano()))
-	started := time.Now()
-	out := e.testExecute(t, fmt.Sprintf("TakeScreenshot(\"page\")\nExport(\"page\", \"png\", %q, {scale: 1})", filepath.Join(dir, "agent")))
+	marker := fmt.Sprintf("held-%d", time.Now().UnixNano())
+	started, release := scripttest.HoldRuns(t, script.SetRunHook, marker)
+	dir := openSlowScript(t, e, fmt.Sprintf("/** @schema 2.19 */\n// %s\nreturn [{type: 'rectangle', width: nalarupa.width, height: nalarupa.height, fill: '#ff0101'}];", marker))
+	called := make(chan ToolOut, 1)
+	go func() {
+		called <- e.testExecute(t, fmt.Sprintf("TakeScreenshot(\"page\")\nExport(\"page\", \"png\", %q, {scale: 1})", filepath.Join(dir, "agent")))
+	}()
+	out := scripttest.Within(t, called, "the tool call waited for the script")
 	mustOK(t, out)
-	if time.Since(started) > 500*time.Millisecond {
-		t.Fatal("the tool call waited for the script under the lock:", time.Since(started))
-	}
-	out = out.Finish(e)
+	finished := make(chan ToolOut, 1)
+	go func() { finished <- out.Finish(e) }()
+	scripttest.Within(t, started, "Finish runs the script")
+	// The run is held inside Finish: the engine answers meanwhile.
+	locked := make(chan bool, 1)
+	go func() { e.Locked(func() { locked <- true }) }()
+	scripttest.Within(t, locked, "the engine lock is held while the script runs")
+	release()
+	out = scripttest.Within(t, finished, "Finish ends once the run is released")
 	if !strings.Contains(out.Text, "Exported:") || !redMiddle(t, decodeShot(t, out.Images[0])) || !redMiddle(t, firstFile(t, filepath.Join(dir, "agent"))) {
 		t.Fatal("the script's output is in the screenshot and the export:", out.Text)
 	}

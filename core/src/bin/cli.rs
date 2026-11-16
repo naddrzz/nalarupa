@@ -58,6 +58,8 @@
 //!   nalarupa-cli figma <clipboard.html>                 `figma::decode` of a Figma clipboard as JSON: [[node, [x, y, w, h]], ...],
 //!                                                       null when it is not Figma data, or {"error"} (the Go port's
 //!                                                       Figma import oracle)
+//!   nalarupa-cli stream-prefix <cases.json>             `complete_prefix` of each {src} and `partial_string` of each
+//!                                                       {json, key} as a JSON array (the Go port's stream oracle)
 //!   nalarupa-cli replay <script.jsonl> [--seed <n>] [--data <dir>] [--out <dir>]
 //!                                                       runs one `{"cmd", ...}` per line through `dispatch` on the
 //!                                                       offline engine (resvg, pinned slide clock) and prints each
@@ -321,6 +323,20 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         "canvas" => canvas::run(arg(2)?, arg(3)?, arg(4)?),
         "replay" => replay::run(arg(2)?, &args[3..]),
+        "stream-prefix" => {
+            // Each case is {"src"} (answered {"prefix": complete_prefix}) or {"json", "key"} (answered
+            // {"partial": partial_string or null}).
+            let cases: Vec<Value> = serde_json::from_str(&std::fs::read_to_string(arg(2)?).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+            let out: Vec<Value> = cases
+                .iter()
+                .map(|c| match c["src"].as_str() {
+                    Some(src) => json!({"prefix": nalarupa_core::stream::complete_prefix(src)}),
+                    None => json!({"partial": nalarupa_core::stream::partial_string(c["json"].as_str().unwrap_or_default(), c["key"].as_str().unwrap_or_default())}),
+                })
+                .collect();
+            println!("{}", Value::Array(out));
+            Ok(())
+        }
         "shader-transpile" => {
             let src = std::fs::read_to_string(arg(2)?).map_err(|e| e.to_string())?;
             let uniforms = match args.get(3) {
@@ -1738,6 +1754,11 @@ mod replay {
         json!({"version": e.version, "dirty": e.dirty()})
     }
 
+    fn streams(e: &Engine) -> Value {
+        let streams: Vec<Value> = e.streams.iter().map(|s| json!({"key": s.key, "agent": s.agent, "source": s.source, "seed": s.seed, "touched": s.touched})).collect();
+        json!({"version": e.version, "dirty": e.dirty(), "executing": e.executing, "streams": streams, "preview": e.preview.as_ref().map(|p| &p.root)})
+    }
+
     fn step(i: usize, req: &Value, out: &Path) -> Result<Value, String> {
         let num = |k: &str, d: f64| req[k].as_f64().unwrap_or(d);
         let s = |k: &str| req[k].as_str().unwrap_or_default();
@@ -1806,6 +1827,17 @@ mod replay {
                 Ok(v)
             }
             "doc" => Ok(engine().doc.root.clone()),
+            // The engine side of a streamed `execute` call (the built-in agent calls these), answered with the preview.
+            "stream_update" => {
+                let mut e = engine();
+                e.stream_update(s("key"), req["agent"].as_str().unwrap_or("agent"), s("source"));
+                Ok(streams(&e))
+            }
+            "stream_end" => {
+                let mut e = engine();
+                e.stream_end(s("key"));
+                Ok(streams(&e))
+            }
             // With `png` the screenshots are written too, `<step>.<k>.png` in the out folder.
             "tool" if req["png"] == true => {
                 let res = nalarupa_core::engine::call_tool(s("name"), &req["args"]).finish();

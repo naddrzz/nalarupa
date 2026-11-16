@@ -4,6 +4,7 @@ package script_test
 
 import (
 	"bytes"
+	"fmt"
 	"image/png"
 	"os"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 	"github.com/naddrzz/nalarupa/core-go/render"
 	"github.com/naddrzz/nalarupa/core-go/resolve"
 	"github.com/naddrzz/nalarupa/core-go/script"
+	"github.com/naddrzz/nalarupa/core-go/script/scripttest"
 	"github.com/naddrzz/nalarupa/core-go/svg"
 	"github.com/naddrzz/nalarupa/core-go/text"
 )
@@ -107,37 +109,38 @@ func TestScriptNodeRendersAndHitsAsOne(t *testing.T) {
 
 func TestLiveScriptRunsOffTheLock(t *testing.T) {
 	waitIdle(t)
+	marker := fmt.Sprintf("held-%d", time.Now().UnixNano())
+	started, release := scripttest.HoldRuns(t, script.SetRunHook, marker)
 	d := open(t, `{"version": "2.19", "children": [
 		{"type": "frame", "id": "page", "x": 0, "y": 0, "width": 300, "height": 200, "layout": "none", "children": [
 			{"type": "script", "id": "s", "x": 0, "y": 0, "width": 100, "height": 100, "scriptUri": "./slow.js"}]}
-	]}`, map[string]string{"slow.js": "/** @schema 2.19 */\nconst s = Date.now(); while (Date.now() - s < 1000) {}\nreturn [{type: 'rectangle', width: nalarupa.width, height: 10}];"})
+	]}`, map[string]string{"slow.js": "/** @schema 2.19 */\n// " + marker + "\nreturn [{type: 'rectangle', width: nalarupa.width, height: 10}];"})
 	fonts, assets := offline(t)
 	cx := &render.Ctx{Doc: d, Fonts: fonts, Assets: assets}
 	r := &render.Renderer{}
-	// A run takes 1 s, so the bounds below catch any wait for one while leaving a slow runner room.
-	started := time.Now()
-	r.Sync(cx)
-	if el := time.Since(started); el > 700*time.Millisecond {
-		t.Fatalf("sync does not wait for the script: %v", el)
-	}
+	// The run is held: a sync that waited for it would never return.
+	scripttest.Returns(t, "sync", func() { r.Sync(cx) })
+	scripttest.Started(t, started, "the run is in the background")
 	if r.Find("s/0") != nil {
 		t.Fatal("no output yet")
 	}
 	if !script.Busy() {
 		t.Fatal("the run is in the background")
 	}
-	// A resize meanwhile only queues the newest size and is as quick.
-	started = time.Now()
-	for w := 101; w < 106; w++ {
-		if err := d.Update("s", jsonv.MustParse(`{"width": `+string(jsonv.Int(int64(w)))+`}`)); err != nil {
-			t.Fatal(err)
+	// A resize meanwhile only queues the newest size and does not wait either.
+	scripttest.Returns(t, "resizing", func() {
+		for w := 101; w < 106; w++ {
+			if err := d.Update("s", jsonv.MustParse(`{"width": `+string(jsonv.Int(int64(w)))+`}`)); err != nil {
+				panic(err)
+			}
+			r.Sync(cx)
 		}
-		r.Sync(cx)
+	})
+	if r.Find("s/0") != nil {
+		t.Fatal("still no output while the run is held")
 	}
-	if el := time.Since(started); el > 700*time.Millisecond {
-		t.Fatalf("resizing does not wait either: %v", el)
-	}
-	limit := time.Now().Add(10 * time.Second)
+	release()
+	limit := time.Now().Add(time.Minute)
 	for f := r.Find("s/0"); f == nil || f.W != 105; f = r.Find("s/0") {
 		if time.Now().After(limit) {
 			t.Fatal("the runs finish and the layer is rebuilt")
@@ -145,32 +148,46 @@ func TestLiveScriptRunsOffTheLock(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 		r.Sync(cx)
 	}
-	if script.Busy() {
-		t.Fatal("no run left")
-	}
+	waitIdle(t)
 }
 
 // Exporting a script node in record mode never waits for its JavaScript, and OffLock still gets its output
 // into the file (ui_exports_run_script_nodes_off_the_lock).
 func TestExportsRunScriptNodesOffTheLock(t *testing.T) {
+	marker := fmt.Sprintf("held-%d", time.Now().UnixNano())
+	started, release := scripttest.HoldRuns(t, script.SetRunHook, marker)
 	d := open(t, `{"version": "2.19", "children": [
 		{"type": "frame", "id": "page", "x": 0, "y": 0, "width": 100, "height": 100, "layout": "none", "fill": "#ffffff", "children": [
 			{"type": "script", "id": "s", "x": 0, "y": 0, "width": 100, "height": 100, "scriptUri": "./slow.js"}]}
-	]}`, map[string]string{"slow.js": "/** @schema 2.19 */\nconst s = Date.now(); while (Date.now() - s < 1000) {}\nreturn [{type: 'rectangle', width: nalarupa.width, height: nalarupa.height, fill: '#ff0000'}];"})
+	]}`, map[string]string{"slow.js": "/** @schema 2.19 */\n// " + marker + "\nreturn [{type: 'rectangle', width: nalarupa.width, height: nalarupa.height, fill: '#ff0000'}];"})
 	fonts, assets := offline(t)
-	var planned []time.Duration
-	file := script.OffLock(func(rec *script.Runs) []byte {
-		started := time.Now()
-		ex := &export.Ctx{Doc: d, Fonts: fonts, Assets: assets, Runs: rec}
-		b, err := ex.NodePNG("page", 1)
-		if err != nil {
-			t.Fatal(err)
-		}
-		planned = append(planned, time.Since(started))
-		return b
-	})
-	if len(planned) != 2 || planned[0] > 500*time.Millisecond {
-		t.Fatalf("planning in record mode waited for the script: %v", planned)
+	draws := 0
+	exported := make(chan []byte, 1)
+	go func() {
+		exported <- script.OffLock(func(rec *script.Runs) []byte {
+			draws++
+			ex := &export.Ctx{Doc: d, Fonts: fonts, Assets: assets, Runs: rec}
+			b, err := ex.NodePNG("page", 1)
+			if err != nil {
+				panic(err)
+			}
+			return b
+		})
+	}()
+	// The held run starts only after the first draw planned it in record mode: planning did not wait for it.
+	scripttest.Started(t, started, "OffLock runs the noted script")
+	if draws != 1 {
+		t.Fatalf("planning in record mode waited for the script: %d draws", draws)
+	}
+	release()
+	var file []byte
+	select {
+	case file = <-exported:
+	case <-time.After(time.Minute):
+		t.Fatal("OffLock ends once the run is released")
+	}
+	if draws != 2 {
+		t.Fatalf("drawn again with the output: %d draws", draws)
 	}
 	img, err := png.Decode(bytes.NewReader(file))
 	if err != nil {

@@ -41,6 +41,20 @@ func (s *IDSource) Next() uint64 {
 	return x
 }
 
+// State is where the sequence stands, for SetState.
+func (s *IDSource) State() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.seed
+}
+
+// SetState puts the sequence back where State found it.
+func (s *IDSource) SetState(state uint64) {
+	s.mu.Lock()
+	s.seed = state
+	s.mu.Unlock()
+}
+
 // Resume restores the sequence of seed after draws values (script.rs `resume_ids`).
 func (s *IDSource) Resume(seed, draws uint64) {
 	s.Reseed(seed)

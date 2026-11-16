@@ -35,14 +35,29 @@ type executeCall struct {
 	agent string
 }
 
-// beginExecute starts an `execute` call: it runs with its id seed (a streamed call's, phase 8d).
+// beginExecute starts an `execute` call: it retires the stream the call belongs to, and then runs with that
+// stream's id seed, so the previewed nodes keep their ids.
 func (e *Engine) beginExecute(args jsonv.Value) executeCall {
-	agent, ok := jsonv.Str(jsonv.Get(args, "__agent"))
-	if !ok {
-		agent = "agent"
+	key, hasKey := jsonv.Str(jsonv.Get(args, "__stream"))
+	agent, hasAgent := jsonv.Str(jsonv.Get(args, "__agent"))
+	input, _ := jsonv.Str(jsonv.Get(args, "input"))
+	c := executeCall{args: args, agent: agent}
+	if !hasAgent {
+		c.agent = "agent"
+	}
+	if s := e.takeStream(key, hasKey, agent, hasAgent, input); s != nil {
+		if o := jsonv.Obj(args); o != nil {
+			o = jsonv.Obj(jsonv.Clone(o))
+			o.Set("__seed", u64(s.Seed))
+			c.args = o
+		}
+		c.seen = s.Touched
+		if !hasAgent {
+			c.agent = s.Agent
+		}
 	}
 	e.Script.edit = nil
-	return executeCall{args: args, agent: agent}
+	return c
 }
 
 // endExecute reports what a finished `execute` call wrote and read. The ids come from the call's `agent_edit`

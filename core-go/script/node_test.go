@@ -13,6 +13,7 @@ import (
 	"github.com/naddrzz/nalarupa/core-go/jsonv"
 	"github.com/naddrzz/nalarupa/core-go/layout"
 	"github.com/naddrzz/nalarupa/core-go/resolve"
+	"github.com/naddrzz/nalarupa/core-go/script/scripttest"
 )
 
 // noText measures nothing: these documents hold no text.
@@ -378,13 +379,18 @@ func TestSlots(t *testing.T) {
 	scripts.cache = nil
 	delete(scripts.slots, "back-slot")
 	scripts.Unlock()
+	marker := fmt.Sprintf("held-%d", time.Now().UnixNano())
+	started, release := scripttest.HoldRuns(t, SetRunHook, marker)
 	dir := scriptDir(t, map[string]string{
-		"slow.js": "/** @schema 2.19 */\nconst s = Date.now(); while (Date.now() - s < 300) {}\nreturn [{type: 'rectangle', width: nalarupa.width, height: 10}];",
+		"slow.js": "/** @schema 2.19 */\n// " + marker + "\nreturn [{type: 'rectangle', width: nalarupa.width, height: 10}];",
 	})
-	call := func(w float64) Result { return scriptNode("./slow.js", dir, nil, w, 10, "back-slot", nil) }
+	call := func(w float64) (r Result) {
+		scripttest.Returns(t, "a live call", func() { r = scriptNode("./slow.js", dir, nil, w, 10, "back-slot", nil) })
+		return r
+	}
 	wait := func(until func() bool) {
 		t.Helper()
-		limit := time.Now().Add(10 * time.Second)
+		limit := time.Now().Add(time.Minute)
 		for !until() {
 			if time.Now().After(limit) {
 				t.Fatal("timed out")
@@ -398,19 +404,21 @@ func TestSlots(t *testing.T) {
 		return scripts.slots["back-slot"].next == nil
 	}
 	before := Finished()
-	started := time.Now()
-	if s := errOf(t, call(201)); s.Kind != "running" || s.Title != "Running script" || time.Since(started) > 100*time.Millisecond {
+	// The run is held: a call that waited for it would never return.
+	if s := errOf(t, call(201)); s.Kind != "running" || s.Title != "Running script" {
 		t.Fatalf("a live miss returns at once as running: %+v", s)
 	}
 	if !Busy() {
 		t.Fatal("the run is in the background")
 	}
-	wait(nextEmpty) // the worker has taken it
+	scripttest.Started(t, started, "the worker has taken it")
+	wait(nextEmpty)
 	call(202)
 	call(201)
 	if !nextEmpty() {
 		t.Fatal("back to the size that is running drops the stale one waiting behind it")
 	}
+	release()
 	wait(func() bool { return !Busy() })
 	r := call(201)
 	if r.Status != nil || num(t, r.Nodes[0], "width") != 201 || Finished() != before+1 {
@@ -427,12 +435,18 @@ func TestSlots(t *testing.T) {
 }
 
 func TestWorkersAndEviction(t *testing.T) {
-	// Twelve slots with eight workers: the rest wait and are picked up as workers free.
+	// Twelve slots with eight workers: the rest wait and are picked up as workers free. The runs are held, so all
+	// eight are still busy when counted.
+	marker := fmt.Sprintf("held-%d", time.Now().UnixNano())
+	started, release := scripttest.HoldRuns(t, SetRunHook, marker)
 	dir := scriptDir(t, map[string]string{
-		"slow.js": "/** @schema 2.19 */\nconst s = Date.now(); while (Date.now() - s < 100) {}\nreturn [{type: 'rectangle', width: nalarupa.width, height: 1}];",
+		"slow.js": "/** @schema 2.19 */\n// " + marker + "\nreturn [{type: 'rectangle', width: nalarupa.width, height: 1}];",
 	})
 	for i := range 12 {
-		scriptNode("./slow.js", dir, nil, 300+float64(i), 1, fmt.Sprint("w", i), nil)
+		scripttest.Returns(t, "a live call", func() { scriptNode("./slow.js", dir, nil, 300+float64(i), 1, fmt.Sprint("w", i), nil) })
+	}
+	for range workers {
+		scripttest.Started(t, started, "a worker runs")
 	}
 	scripts.Lock()
 	active := scripts.active
@@ -440,7 +454,8 @@ func TestWorkersAndEviction(t *testing.T) {
 	if active != workers {
 		t.Fatalf("%d workers", active)
 	}
-	limit := time.Now().Add(10 * time.Second)
+	release()
+	limit := time.Now().Add(time.Minute)
 	for Busy() {
 		if time.Now().After(limit) {
 			t.Fatal("the waiting slots never ran")
@@ -478,20 +493,25 @@ func TestWorkersAndEviction(t *testing.T) {
 }
 
 func TestRecordMode(t *testing.T) {
+	marker := fmt.Sprintf("held-%d", time.Now().UnixNano())
+	_, release := scripttest.HoldRuns(t, SetRunHook, marker)
 	dir := scriptDir(t, map[string]string{
-		"slow.js": "/** @schema 2.19 */\nconst s = Date.now(); while (Date.now() - s < 300) {}\nreturn [{type: 'rectangle', width: nalarupa.width, height: nalarupa.height}];",
+		"slow.js": "/** @schema 2.19 */\n// " + marker + "\nreturn [{type: 'rectangle', width: nalarupa.width, height: nalarupa.height}];",
 	})
 	draws := 0
 	draw := func(rec *Runs) Result {
 		draws++
 		return scriptNode("./slow.js", dir, nil, 77, 7, "", rec)
 	}
-	started := time.Now()
+	// The run is held: a draw that ran it would never return.
 	rec := &Runs{}
-	if s := errOf(t, draw(rec)); s.Kind != "running" || time.Since(started) > 100*time.Millisecond {
+	var r Result
+	scripttest.Returns(t, "a recorded draw", func() { r = draw(rec) })
+	if s := errOf(t, r); s.Kind != "running" {
 		t.Fatalf("a recorded miss draws as running at once: %+v", s)
 	}
-	draw(rec)
+	scripttest.Returns(t, "a recorded draw", func() { draw(rec) })
+	release()
 	if rec.IsEmpty() || len(rec.jobs) != 1 {
 		t.Fatalf("one run noted: %d", len(rec.jobs))
 	}
@@ -502,7 +522,7 @@ func TestRecordMode(t *testing.T) {
 		t.Fatal("Extend skips runs already noted")
 	}
 	draws = 0
-	r := OffLock(draw)
+	r = OffLock(draw)
 	if r.Status != nil || num(t, r.Nodes[0], "width") != 77 || draws != 2 {
 		t.Fatalf("OffLock runs the noted run and draws again: %+v draws %d", r, draws)
 	}

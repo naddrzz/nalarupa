@@ -299,7 +299,9 @@ func (e *Engine) Save(path string) (string, error) {
 	}
 	e.Doc.Path = target
 	e.markSaved()
-	// Phase 8d: a live preview is rebuilt here from the new folder.
+	if moved && len(e.Streams) > 0 && !e.Executing {
+		e.rebuildPreview() // the live preview is a copy of the old document: redo it from the new folder
+	}
 	e.rememberRecent(target)
 	return target, nil
 }
