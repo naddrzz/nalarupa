@@ -85,3 +85,6 @@
 - source_plan: `_bmad-output/initiative-go-rewrite/plan-go-rewrite-5a-script-nodes.md`
   summary: Phase 5c (with the engine phase) - execute transaction (rollback, history commit, editId store), execute_shared with EXECUTE_GATE and cancel, live streaming contexts and seeding (stream.rs complete_prefix), Generate downloads and pens, screenshots/exports through ToolOut::finish, and the app script-check/scriptnode-check.
   evidence: These parts mutate engine state and run under the engine lock, so they belong with phase 8.
+- source_plan: `_bmad-output/initiative-go-rewrite/plan-go-rewrite-6a-shader-transpile.md`
+  summary: Phase 6b - GPU half of shader fills via wgpu-native through cgo (device with WARP/lavapipe fallback, GLSL module through wgpu-native's GLSL extension or SPIR-V, 256-row tiled draw, readback with rgb<=a clamp, image/SDF/backdrop textures and samplers, PNG and program caches with their limits, the GPU mutex and error/reset semantics, naga-style `line N: kind` errors), wired as the svg ShaderPainter and into export/html, with pixel parity against `nalarupa-cli svg/image` within +-2-3 on WARP and lavapipe; decide NoContraction (Rust's strict_spirv on Vulkan) handling.
+  evidence: shader.rs split after investigation; the CPU half (6a) is pure Go, the GPU half needs cgo, a prebuilt wgpu-native and software-adapter CI checks.
