@@ -60,8 +60,8 @@ func overlaps(a, b Rect) bool {
 	return a.X < b.X+b.W && b.X < a.X+a.W && a.Y < b.Y+b.H && b.Y < a.Y+a.H
 }
 
-// compose is `p ∘ m` (m applies first); a nil p is the identity.
-func compose(p *[6]float64, m [6]float64) [6]float64 {
+// Compose is `p ∘ m` (m applies first); a nil p is the identity.
+func Compose(p *[6]float64, m [6]float64) [6]float64 {
 	if p == nil {
 		return m
 	}

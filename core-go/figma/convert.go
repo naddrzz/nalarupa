@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/naddrzz/nalarupa/core-go/jsonv"
-	"github.com/naddrzz/nalarupa/core-go/usvg"
+	"github.com/naddrzz/nalarupa/core-go/libm"
 )
 
 // deg is Rust's to_degrees factor.
@@ -130,11 +130,11 @@ func (d *doc) convert(e *node, up []jsonv.Value, parentFlow bool, depth int) *js
 		// Rotation from the first column, flips where the matrix disagrees.
 		mirrored := float64(m00*m11)-float64(m10*m01) < 0
 		sx, sy := math.Sqrt(float64(m00*m00)+float64(m10*m10)), math.Sqrt(float64(m01*m01)+float64(m11*m11))
-		rot := usvg.Atan2(m10, m00)
+		rot := libm.Atan2(m10, m00)
 		if mirrored {
-			rot = usvg.Atan2(-m10, -m00)
+			rot = libm.Atan2(-m10, -m00)
 		}
-		c, s := usvg.Cos(rot), usvg.Sin(rot)
+		c, s := libm.Cos(rot), libm.Sin(rot)
 		if !flow {
 			o.Set("x", jsonv.Float(m02))
 			o.Set("y", jsonv.Float(m12))

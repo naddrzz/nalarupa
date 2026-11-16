@@ -115,7 +115,7 @@ func scriptError(err error, src string) (string, *string) {
 		if !ok {
 			continue
 		}
-		ls := lines(src)
+		ls := Lines(src)
 		var out []string
 		for d := max(a-3, 0); d < min(a+2, len(ls)); d++ {
 			mark := " "

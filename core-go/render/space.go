@@ -6,6 +6,12 @@ import "math"
 // whole document), searched in steps of 40 toward dir ("left", "top", "bottom", else right), keeping pad
 // clear of every top-level box. It returns the spot rounded, or (0, 0) on an empty canvas.
 func FindEmptySpace(r *Renderer, w, h float64, dir string, pad float64, anchor *Flat) (x, y float64) {
+	x, y, _ = FindEmptySpaceOK(r, w, h, dir, pad, anchor)
+	return x, y
+}
+
+// FindEmptySpaceOK is FindEmptySpace, ok false on an empty canvas (where Rust answers integer zeros).
+func FindEmptySpaceOK(r *Renderer, w, h float64, dir string, pad float64, anchor *Flat) (x, y float64, ok bool) {
 	var boxes []Rect
 	for _, id := range r.Order {
 		if l, ok := r.Layers[id]; ok && len(l.Flat) > 0 {
@@ -41,7 +47,7 @@ func FindEmptySpace(r *Renderer, w, h float64, dir string, pad float64, anchor *
 		x, y = a.X+a.W+pad, a.Y
 	}
 	if len(boxes) == 0 {
-		return 0, 0
+		return 0, 0, false
 	}
 	for range 500 {
 		if !busy(x, y) {
@@ -58,5 +64,5 @@ func FindEmptySpace(r *Renderer, w, h float64, dir string, pad float64, anchor *
 			x += 40
 		}
 	}
-	return math.Round(x), math.Round(y)
+	return math.Round(x), math.Round(y), true
 }

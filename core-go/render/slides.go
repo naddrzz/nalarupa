@@ -412,7 +412,7 @@ func (r *Renderer) RefreshSlides(cx *Ctx, rebuilt []string, roots map[int]*resol
 		alpha := 1.0
 		for _, n := range chain {
 			if svg.IsTurned(n) {
-				c := compose(m, svg.OwnMatrix(n))
+				c := Compose(m, svg.OwnMatrix(n))
 				m = &c
 			}
 			op, ok := n.F("opacity")
@@ -431,7 +431,7 @@ func (r *Renderer) RefreshSlides(cx *Ctx, rebuilt []string, roots map[int]*resol
 		var turned *[6]float64
 		for i, a := range chain {
 			if svg.IsTurned(a) {
-				c := compose(turned, svg.OwnMatrix(a))
+				c := Compose(turned, svg.OwnMatrix(a))
 				turned = &c
 			}
 			if markup, ok := svg.ClipSVG(a, turned); ok {

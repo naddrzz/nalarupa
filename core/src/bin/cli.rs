@@ -1719,7 +1719,8 @@ mod canvas {
 /// reach what the UI cannot: `render` (what `nr_render` does, the RGB bytes written to `<out>/<step>.rgb`),
 /// `slide_in`, `tick {ms}` (the slide clock), `settle` (waits for background script runs), the download callbacks
 /// `font_ready`, `asset_ready`, `inflight`, `resolve_pending` and `apply_generated`, `doc` (the document JSON) and
-/// `copy {from, to}` (a file; `@data/` starts a path in the data folder). The last line is the final document.
+/// `copy {from, to}` (a file; `@data/` starts a path in the data folder; `copy` without `from` is the clipboard
+/// command). The last line is the final document.
 mod replay {
     use nalarupa_core::engine::{engine, Engine};
     use nalarupa_core::render::{Raster, Renderer};
@@ -1804,7 +1805,8 @@ mod replay {
                 Ok(v)
             }
             "doc" => Ok(engine().doc.root.clone()),
-            "copy" => {
+            // With `from` it copies a file; without, it is the clipboard command.
+            "copy" if req.get("from").is_some() => {
                 let data = engine().data_dir.clone();
                 let path = |p: &str| match p.strip_prefix("@data/") {
                     Some(rest) => data.join(rest),

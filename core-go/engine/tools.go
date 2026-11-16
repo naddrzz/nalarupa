@@ -12,8 +12,8 @@ import (
 	"github.com/naddrzz/nalarupa/core-go/jsonv"
 )
 
-// rustF64 is how Rust's `{}` writes an f64: the shortest digits that read back, never an exponent.
-func rustF64(f float64) string {
+// RustF64 is how Rust's `{}` writes an f64: the shortest digits that read back, never an exponent.
+func RustF64(f float64) string {
 	switch {
 	case math.IsNaN(f):
 		return "NaN"
@@ -68,7 +68,7 @@ func (e *Engine) EditorState() string {
 	var sel []string
 	for _, id := range e.Selection[:min(len(e.Selection), 40)] {
 		if f := e.Renderer.Find(id); f != nil {
-			sel = append(sel, fmt.Sprintf("`%s` \"%s\" %s %sx%s", id, f.Name, f.Type, rustF64(math.Round(f.W)), rustF64(math.Round(f.H))))
+			sel = append(sel, fmt.Sprintf("`%s` \"%s\" %s %sx%s", id, f.Name, f.Type, RustF64(math.Round(f.W)), RustF64(math.Round(f.H))))
 		} else {
 			sel = append(sel, "`"+id+"`")
 		}
@@ -107,7 +107,7 @@ func (e *Engine) EditorState() string {
 				where = " [user visible]"
 			}
 		}
-		r := func(v float64) string { return rustF64(math.Round(v)) }
+		r := func(v float64) string { return RustF64(math.Round(v)) }
 		tops = append(tops, top{visible, fmt.Sprintf("  - `%s` \"%s\" %s at (%s, %s) size %sx%s%s%s", id, f.Name, f.Type, r(f.X), r(f.Y), r(f.W), r(f.H), comp, where)})
 	}
 	slices.SortStableFunc(tops, func(a, b top) int {
@@ -250,7 +250,7 @@ func (e *Engine) EditorState() string {
 		fmt.Fprintf(&s, "- Fonts in use: %s\n", strings.Join(list, "; "))
 	}
 	if b, ok := e.Renderer.Bounds(); ok {
-		r := func(v float64) string { return rustF64(math.Round(v)) }
+		r := func(v float64) string { return RustF64(math.Round(v)) }
 		fmt.Fprintf(&s, "- Canvas content bounds: x %s y %s w %s h %s\n", r(b.X), r(b.Y), r(b.W), r(b.H))
 	}
 	s.WriteString("\nCall `read_guide` (no arguments) before your first `execute`; it explains the .pen schema and the execute API.\n")

@@ -117,6 +117,9 @@ type Engine struct {
 	slid map[string]bool
 	// Inflight holds the pending image urls whose download is still running; opening a file keeps them.
 	Inflight map[string]bool
+	// ClipSession marks the node clipboard this engine writes (editor.rs `session`, process-wide in Rust): drawn
+	// from the id generator on first use, "" until then.
+	ClipSession string
 }
 
 // Lock takes the engine lock.
@@ -224,6 +227,9 @@ func (e *Engine) Offline() {
 	e.Fonts.Online = false
 	e.Assets.Online = false
 }
+
+// IDs is the generator the open document's new ids are drawn from (Rust's thread-local `random_u64`).
+func (e *Engine) IDs() *doc.IDSource { return e.ids }
 
 // Seed pins the ids new nodes take from now on (the same seed gives the same ids as Rust's `doc::reseed`).
 func (e *Engine) Seed(seed uint64) { e.ids.Reseed(seed) }

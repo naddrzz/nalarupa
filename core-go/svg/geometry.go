@@ -9,6 +9,7 @@ import (
 
 	"github.com/naddrzz/nalarupa/core-go/jsonv"
 	"github.com/naddrzz/nalarupa/core-go/layout"
+	"github.com/naddrzz/nalarupa/core-go/libm"
 	"github.com/naddrzz/nalarupa/core-go/resolve"
 )
 
@@ -143,7 +144,7 @@ func ellipseD(n *resolve.RNode) string {
 	sweep := clamp(fOr(n, "sweepAngle", 360), -360, 360)
 	pt := func(a, k float64) (float64, float64) {
 		r := toRad(a)
-		return cx + rx*k*math.Cos(r), cy - ry*k*math.Sin(r)
+		return cx + float64(rx*k*libm.Cos(r)), cy - float64(ry*k*libm.Sin(r))
 	}
 	full := func(k float64) string {
 		return "M" + f(cx+rx*k) + " " + f(cy) + "A" + f(rx*k) + " " + f(ry*k) + " 0 1 0 " + f(cx-rx*k) + " " + f(cy) +
@@ -190,7 +191,7 @@ func polygonD(n *resolve.RNode) string {
 	pts := make([][2]float64, count)
 	for i := range pts {
 		a := toRad(-90 + 360*float64(i)/float64(count))
-		pts[i] = [2]float64{cx + rx*math.Cos(a), cy + ry*math.Sin(a)}
+		pts[i] = [2]float64{cx + float64(rx*libm.Cos(a)), cy + float64(ry*libm.Sin(a))}
 	}
 	r := 0.0
 	cr, _ := n.P.Get("cornerRadius")
@@ -289,13 +290,13 @@ func PathBBox(d string) (Rect, bool) {
 	add := func(x, y float64) { b = [4]float64{fmin(b[0], x), fmin(b[1], y), fmax(b[2], x), fmax(b[3], y)} }
 	var cur, start [2]float64
 	cubicT := func(p0, p1, p2, p3 float64) []float64 {
-		a, bb, c := -p0+3*p1-3*p2+p3, 2*(p0-2*p1+p2), p1-p0
+		a, bb, c := -p0+float64(3*p1)-float64(3*p2)+p3, 2*(p0-float64(2*p1)+p2), p1-p0
 		var roots []float64
 		if math.Abs(a) < 1e-12 {
 			if math.Abs(bb) >= 1e-12 {
 				roots = []float64{-c / bb}
 			}
-		} else if disc := bb*bb - 4*a*c; disc >= 0 {
+		} else if disc := float64(bb*bb) - float64(4*a*c); disc >= 0 {
 			roots = []float64{(-bb + math.Sqrt(disc)) / (2 * a), (-bb - math.Sqrt(disc)) / (2 * a)}
 		}
 		out := roots[:0]
@@ -321,7 +322,7 @@ func PathBBox(d string) (Rect, bool) {
 		case segCurve:
 			at := func(t, p0, p1, p2, p3 float64) float64 {
 				u := 1 - t
-				return u*u*u*p0 + 3*u*u*t*p1 + 3*u*t*t*p2 + t*t*t*p3
+				return float64(u*u*u*p0) + float64(3*u*u*t*p1) + float64(3*u*t*t*p2) + float64(t*t*t*p3)
 			}
 			ts := append(cubicT(cur[0], s.x1, s.x2, s.x), cubicT(cur[1], s.y1, s.y2, s.y)...)
 			for _, t := range ts {
@@ -330,9 +331,11 @@ func PathBBox(d string) (Rect, bool) {
 			add(s.x, s.y)
 			cur = [2]float64{s.x, s.y}
 		case segQuad:
-			at := func(t, p0, p1, p2 float64) float64 { return (1-t)*(1-t)*p0 + 2*(1-t)*t*p1 + t*t*p2 }
+			at := func(t, p0, p1, p2 float64) float64 {
+				return float64((1-t)*(1-t)*p0) + float64(2*(1-t)*t*p1) + float64(t*t*p2)
+			}
 			for _, q := range [][3]float64{{cur[0], s.x1, s.x}, {cur[1], s.y1, s.y}} {
-				den := q[0] - 2*q[1] + q[2]
+				den := q[0] - float64(2*q[1]) + q[2]
 				t := -1.0
 				if math.Abs(den) > 1e-12 {
 					t = (q[0] - q[1]) / den
@@ -461,9 +464,9 @@ func flips(n *resolve.RNode) (float64, float64) {
 func OwnMatrix(n *resolve.RNode) [6]float64 {
 	t := -toRad(fOr(n, "rotation", 0))
 	sx, sy := flips(n)
-	a, b, c, d := math.Cos(t)*sx, math.Sin(t)*sx, -math.Sin(t)*sy, math.Cos(t)*sy
+	a, b, c, d := libm.Cos(t)*sx, libm.Sin(t)*sx, -libm.Sin(t)*sy, libm.Cos(t)*sy
 	px, py := n.X-n.BX, n.Y-n.BY
-	return [6]float64{a, b, c, d, px - a*px - c*py, py - b*px - d*py}
+	return [6]float64{a, b, c, d, px - float64(a*px) - float64(c*py), py - float64(b*px) - float64(d*py)}
 }
 
 // transform is the rotation (CCW) and flips about the node's origin as an SVG transform list.

@@ -1,0 +1,52 @@
+# Align each edge and centre for one layer (to its parent, or a top-level frame's children inside it) and for
+# several (to their union, rotated and flipped ones by their painted bounds, children of turned frames stepped in
+# their parent's space, layout children skipped); duplicate in place, beside a top-level frame, several at once,
+# instances and components, with the seed's ids.
+{"cmd":"open","path":"editor.pen"}
+{"cmd":"align","ids":["A","B","E"],"dir":"left"}
+{"cmd":"bounds","ids":["A"]}
+{"cmd":"bounds","ids":["E"]}
+{"cmd":"align","ids":["A","B","E"],"dir":"hcenter"}
+{"cmd":"align","ids":["A","B","E"],"dir":"right"}
+{"cmd":"align","ids":["A","B","E"],"dir":"top"}
+{"cmd":"align","ids":["A","B","E"],"dir":"vcenter"}
+{"cmd":"align","ids":["A","B","E"],"dir":"bottom"}
+{"cmd":"doc"}
+{"cmd":"align","ids":["E"],"dir":"left"}
+{"cmd":"align","ids":["E"],"dir":"vcenter"}
+{"cmd":"align","ids":["E"],"dir":"diagonal"}
+{"cmd":"node","id":"E"}
+{"cmd":"align","ids":["T1","T2","G"],"dir":"left"}
+{"cmd":"align","ids":["T1","T2","G"],"dir":"bottom"}
+{"cmd":"align","ids":["T2"],"dir":"right"}
+{"cmd":"align","ids":["G2"],"dir":"hcenter"}
+{"cmd":"align","ids":["M1"],"dir":"top"}
+{"cmd":"doc"}
+{"cmd":"align","ids":["T"],"dir":"left"}
+{"cmd":"align","ids":["S"],"dir":"vcenter"}
+{"cmd":"align","ids":["Free"],"dir":"right"}
+{"cmd":"align","ids":["Free","Grp","M"],"dir":"top"}
+{"cmd":"align","ids":["R1","R2"],"dir":"left"}
+{"cmd":"align","ids":["Rabs"],"dir":"right"}
+{"cmd":"align","ids":["Inst/CompR"],"dir":"left"}
+{"cmd":"align","ids":[],"dir":"left"}
+{"cmd":"doc"}
+{"cmd":"undo"}
+{"cmd":"undo"}
+{"cmd":"undo"}
+{"cmd":"duplicate","ids":["A"]}
+{"cmd":"children_boxes","id":"F"}
+{"cmd":"duplicate","ids":["F"]}
+{"cmd":"frames"}
+{"cmd":"duplicate","ids":["F"],"inPlace":true}
+{"cmd":"duplicate","ids":["B","A","T1"]}
+{"cmd":"duplicate","ids":["Comp"]}
+{"cmd":"duplicate","ids":["Inst","R2"]}
+{"cmd":"duplicate","ids":["Grp","Gr1"]}
+{"cmd":"duplicate","ids":["nope"]}
+{"cmd":"duplicate","ids":["Inst/CompR"]}
+{"cmd":"duplicate","ids":[]}
+{"cmd":"doc"}
+{"cmd":"undo"}
+{"cmd":"undo"}
+{"cmd":"doc"}

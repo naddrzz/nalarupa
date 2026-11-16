@@ -1,0 +1,49 @@
+{"version": "2.19",
+ "variables": {"brand": {"type": "color", "value": [{"value": "#ff0000"}, {"value": "#00ff00", "theme": {"mode": "dark"}}]}, "alias": {"type": "color", "value": "$brand"}, "sp": {"type": "number", "value": 24}},
+ "themes": {"mode": ["light", "dark"]},
+ "children": [
+  {"type": "frame", "id": "F", "name": "F", "x": 0, "y": 0, "width": 400, "height": 300, "layout": "none", "fill": "#ffffff", "children": [
+    {"type": "rectangle", "id": "A", "name": "A", "x": 10, "y": 10, "width": 50, "height": 50, "fill": "#e11d48"},
+    {"type": "rectangle", "id": "B", "name": "B", "x": 100, "y": 20, "width": 50, "height": 30, "fill": "#0ea5e9"},
+    {"type": "ellipse", "id": "E", "x": 200, "y": 150, "width": 40, "height": 60, "rotation": 30, "flipY": true, "fill": "#22c55e"}
+  ]},
+  {"type": "frame", "id": "T", "name": "Turned", "x": 600, "y": 0, "width": 400, "height": 400, "layout": "none", "rotation": 30, "children": [
+    {"type": "rectangle", "id": "T1", "x": 40, "y": 30, "width": 60, "height": 20, "fill": "#111111"},
+    {"type": "rectangle", "id": "T2", "x": 200, "y": 150, "width": 30, "height": 50, "rotation": 17, "fill": "#222222"},
+    {"type": "group", "id": "G", "x": 100, "y": 250, "children": [
+      {"type": "rectangle", "id": "G1", "x": 0, "y": 0, "width": 40, "height": 20, "fill": "#333333"},
+      {"type": "rectangle", "id": "G2", "x": 80, "y": 40, "width": 40, "height": 20, "rotation": 180, "fill": "#444444"}
+    ]}
+  ]},
+  {"type": "frame", "id": "M", "name": "Mirror", "x": 1200, "y": 0, "width": 300, "height": 200, "layout": "none", "flipX": true, "children": [
+    {"type": "rectangle", "id": "M1", "x": 20, "y": 20, "width": 60, "height": 40, "flipY": true, "fill": "#555555"}
+  ]},
+  {"type": "frame", "id": "R", "name": "Row", "x": 0, "y": 500, "width": 400, "height": 100, "layout": "horizontal", "gap": 10, "padding": 10, "fill": "#eeeeee", "children": [
+    {"type": "rectangle", "id": "R1", "width": 50, "height": 50, "fill": "#666666"},
+    {"type": "rectangle", "id": "R2", "width": "fill_container", "height": 50, "fill": "#777777"},
+    {"type": "rectangle", "id": "R3", "width": 50, "height": "fill_container", "fill": "#888888"},
+    {"type": "rectangle", "id": "Rabs", "x": 300, "y": 5, "width": 20, "height": 20, "layoutPosition": "absolute", "fill": "#999999"}
+  ]},
+  {"type": "frame", "id": "C", "name": "Col", "x": 500, "y": 500, "width": 200, "height": 300, "layout": "vertical", "gap": 8, "padding": [12, 16], "rotation": 90, "children": [
+    {"type": "rectangle", "id": "C1", "width": "fill_container", "height": 40, "fill": "#aaaaaa"},
+    {"type": "rectangle", "id": "C2", "width": 80, "height": 20, "fill": "#bbbbbb"}
+  ]},
+  {"type": "frame", "id": "S", "name": "Scatter", "x": 0, "y": 900, "width": 500, "height": 200, "layout": "none", "children": [
+    {"type": "rectangle", "id": "S1", "x": 40, "y": 30, "width": 50, "height": 20},
+    {"type": "rectangle", "id": "S2", "x": 110, "y": 10, "width": 50, "height": 40},
+    {"type": "rectangle", "id": "S3", "x": 180, "y": 20, "width": 50, "height": 30}
+  ]},
+  {"type": "frame", "id": "Comp", "name": "Comp", "reusable": true, "x": 1600, "y": 0, "width": 100, "height": 50, "layout": "none", "fill": "$alias", "children": [
+    {"type": "rectangle", "id": "CompR", "x": 10, "y": 10, "width": 30, "height": 30, "fill": "#ffffff"}
+  ]},
+  {"type": "frame", "id": "P", "name": "P", "x": 1600, "y": 300, "width": 200, "height": 120, "layout": "none", "children": [
+    {"type": "ref", "id": "Inst", "ref": "Comp", "x": 20, "y": 20},
+    {"type": "path", "id": "Pa", "x": 20, "y": 80, "width": 60, "height": 30, "geometry": "M0 0 L10 0 C15 0 20 5 20 10 Q20 20 10 20 L0 0 Z", "stroke": "#000000", "strokeWidth": 1},
+    {"type": "path", "id": "Pv", "x": 100, "y": 70, "width": 80, "height": 40, "viewBox": [0, 0, 40, 20], "geometry": "M0 0 L40 20", "rotation": 60, "stroke": "#000000", "strokeWidth": 2}
+  ]},
+  {"type": "group", "id": "Grp", "x": 1200, "y": 400, "rotation": 25, "children": [
+    {"type": "rectangle", "id": "Gr1", "x": 0, "y": 0, "width": 30, "height": 30, "fill": "#123456"},
+    {"type": "rectangle", "id": "Gr2", "x": 50, "y": 10, "width": 30, "height": 30, "flipX": true, "fill": "#654321"}
+  ]},
+  {"type": "rectangle", "id": "Free", "name": "Free", "x": 1300, "y": 700, "width": 80, "height": 60, "rotation": 10, "fill": "#abcdef"}
+ ]}

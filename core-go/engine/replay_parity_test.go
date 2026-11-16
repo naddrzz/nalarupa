@@ -8,7 +8,9 @@
 // lines and files, painted with the band count recorded there, plus gzipped frames); with it, with the CLI's live
 // output. NALARUPA_UPDATE_GOLDEN=1 (with NALARUPA_CLI) rewrites them. A sequence whose first line is `# live` holds
 // platform- or font-dependent output and is compared live only.
-package engine
+//
+// The editor package's commands join the dispatcher here, so the editor sequences (editor-*.jsonl) replay too.
+package engine_test
 
 import (
 	"bufio"
@@ -27,6 +29,8 @@ import (
 	"strings"
 	"testing"
 
+	_ "github.com/naddrzz/nalarupa/core-go/editor"
+	"github.com/naddrzz/nalarupa/core-go/engine"
 	"github.com/naddrzz/nalarupa/core-go/jsonv"
 )
 
@@ -111,12 +115,12 @@ func goReplay(t *testing.T, script string, threads int) replayRun {
 	dir := workDir(t)
 	before := fixtures(t, dir)
 	t.Chdir(dir)
-	e := New("data")
+	e := engine.New("data")
 	e.Offline()
 	e.Seed(replaySeed)
 	e.Renderer.Threads = threads
 	run := replayRun{Threads: threads, frames: map[int][]byte{}}
-	r := NewReplayer(e)
+	r := engine.NewReplayer(e)
 	r.Frames = func(step int, rgb []byte) { run.frames[step] = rgb }
 	sc := bufio.NewScanner(bytes.NewReader(src))
 	sc.Buffer(nil, 1<<24)

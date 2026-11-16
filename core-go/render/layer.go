@@ -44,7 +44,7 @@ func prepareLayer(cx *Ctx, resolver *resolve.Resolver, index int, hash, finished
 			parentM = mats[len(mats)-1]
 		}
 		if rotated {
-			m := compose(parentM, svg.OwnMatrix(n))
+			m := Compose(parentM, svg.OwnMatrix(n))
 			mats = append(mats, &m)
 		} else {
 			mats = append(mats, parentM)

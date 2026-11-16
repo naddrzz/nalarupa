@@ -6,7 +6,7 @@ import (
 	"strconv"
 
 	"github.com/naddrzz/nalarupa/core-go/jsonv"
-	"github.com/naddrzz/nalarupa/core-go/usvg"
+	"github.com/naddrzz/nalarupa/core-go/libm"
 )
 
 // hex is "#rrggbbaa" from Figma's 0..1 floats, alpha times opacity.
@@ -102,22 +102,6 @@ type stop struct {
 	color string
 }
 
-// totalCmp is Rust's f64::total_cmp.
-func totalCmp(a, b float64) int {
-	key := func(f float64) int64 {
-		x := int64(math.Float64bits(f))
-		return x ^ int64(uint64(x>>63)>>1)
-	}
-	ka, kb := key(a), key(b)
-	switch {
-	case ka < kb:
-		return -1
-	case ka > kb:
-		return 1
-	}
-	return 0
-}
-
 // gradient derives the .pen center, rotation and size from the handles: Figma's gradient transform maps
 // the node's unit box to gradient space, and its inverse gives them. nil when the paint has none.
 func gradient(kind string, r jsonv.Value) *jsonv.Object {
@@ -167,7 +151,7 @@ func gradient(kind string, r jsonv.Value) *jsonv.Object {
 		}
 		px, py := -ny, nx
 		ln := float64(px*(fp[0]-h[0])) + float64(py*(fp[1]-h[1]))
-		ang := usvg.Atan2(py, px) + math.Pi/2
+		ang := libm.Atan2(py, px) + math.Pi/2
 		if ln < 0 {
 			ln = -ln
 			ang += math.Pi
@@ -184,11 +168,11 @@ func gradient(kind string, r jsonv.Value) *jsonv.Object {
 		}
 		disc = math.Sqrt(disc)
 		big, small := (sum+disc)/2, (sum-disc)/2
-		ty, center, rot = "radial", h, usvg.Atan2(big-y, x)+math.Pi/2
+		ty, center, rot = "radial", h, libm.Atan2(big-y, x)+math.Pi/2
 		width, hasW, height = math.Sqrt(small)*2, true, math.Sqrt(big)*2
 	default:
 		h, fp, gp := inv(0.5, 0.5), inv(1, 0.5), inv(0.5, 1)
-		ang := usvg.Atan2(fp[1]-h[1], fp[0]-h[0]) + math.Pi/2
+		ang := libm.Atan2(fp[1]-h[1], fp[0]-h[0]) + math.Pi/2
 		cross := float64((gp[0]-h[0])*(fp[1]-h[1])) - float64((gp[1]-h[1])*(fp[0]-h[0]))
 		sign := 1.0
 		if cross > 0 {
@@ -196,7 +180,7 @@ func gradient(kind string, r jsonv.Value) *jsonv.Object {
 		}
 		// A conic gradient needs stops at 0 and 1: both get the color where the seam is crossed.
 		if len(stops) >= 2 {
-			slices.SortStableFunc(stops, func(a, b stop) int { return totalCmp(a.pos, b.pos) })
+			slices.SortStableFunc(stops, func(a, b stop) int { return libm.TotalCmp(a.pos, b.pos) })
 			first, last := stops[0], stops[len(stops)-1]
 			if first.pos != 0 || last.pos != 1 {
 				span := first.pos + (1 - last.pos)

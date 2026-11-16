@@ -133,7 +133,7 @@ func TestLines(t *testing.T) {
 		{"a\r\nb\r", []string{"a", "b\r"}},
 		{"a\r\r\n", []string{"a\r"}},
 	} {
-		got := lines(c.in)
+		got := Lines(c.in)
 		if len(got) != len(c.want) || strings.Join(got, "|") != strings.Join(c.want, "|") {
 			t.Errorf("%q: got %q, want %q", c.in, got, c.want)
 		}

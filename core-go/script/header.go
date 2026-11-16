@@ -350,9 +350,9 @@ func parseInput(src string) (input, error) {
 	return in, nil
 }
 
-// lines is Rust's `str::lines`: split after each `\n`, the `\n` or `\r\n` that ends a line stripped (a lone
+// Lines is Rust's `str::lines`: split after each `\n`, the `\n` or `\r\n` that ends a line stripped (a lone
 // `\r` at the very end stays), no empty last line.
-func lines(s string) []string {
+func Lines(s string) []string {
 	out := strings.SplitAfter(s, "\n")
 	if out[len(out)-1] == "" {
 		out = out[:len(out)-1]
@@ -383,7 +383,7 @@ func scriptHeader(src string) (schema string, hasSchema bool, inputs []input, er
 		if end < 0 {
 			break
 		}
-		for _, line := range lines(body[:end]) {
+		for _, line := range Lines(body[:end]) {
 			l := strings.TrimLeftFunc(line, unicode.IsSpace)
 			if r, ok := strings.CutPrefix(l, "*"); ok {
 				l = strings.TrimPrefix(r, " ")

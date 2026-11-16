@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/naddrzz/nalarupa/core-go/jsonv"
+	"github.com/naddrzz/nalarupa/core-go/libm"
 	"github.com/naddrzz/nalarupa/core-go/resolve"
 )
 
@@ -171,10 +172,10 @@ func LocalAABB(n *resolve.RNode) [4]float64 {
 	if n.B("flipY") {
 		sy = -1
 	}
-	a, b, c, d := math.Cos(r)*sx, math.Sin(r)*sx, -math.Sin(r)*sy, math.Cos(r)*sy
+	a, b, c, d := libm.Cos(r)*sx, libm.Sin(r)*sx, -libm.Sin(r)*sy, libm.Cos(r)*sy
 	o := [4]float64{math.MaxFloat64, math.MaxFloat64, -math.MaxFloat64, -math.MaxFloat64}
 	for _, p := range [][2]float64{{n.BX, n.BY}, {n.BX + n.W, n.BY}, {n.BX, n.BY + n.H}, {n.BX + n.W, n.BY + n.H}} {
-		x, y := a*p[0]+c*p[1], b*p[0]+d*p[1]
+		x, y := float64(a*p[0])+float64(c*p[1]), float64(b*p[0])+float64(d*p[1])
 		o = [4]float64{fmin(o[0], x), fmin(o[1], y), fmax(o[2], x), fmax(o[3], y)}
 	}
 	return o
