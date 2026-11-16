@@ -43,23 +43,6 @@ func lexical(p string) string {
 	return filepath.Clean(p)
 }
 
-// components splits a cleaned path into its volume, root and names.
-func components(p string) []string {
-	vol := filepath.VolumeName(p)
-	rest := p[len(vol):]
-	var out []string
-	if vol != "" {
-		out = append(out, vol)
-	}
-	if rest != "" && (rest[0] == '/' || rest[0] == filepath.Separator) {
-		out = append(out, string(filepath.Separator))
-	}
-	for _, name := range strings.FieldsFunc(rest, func(r rune) bool { return r == '/' || r == filepath.Separator }) {
-		out = append(out, name)
-	}
-	return out
-}
-
 // relocated is the relative reference url (resolved against from) as written for a document in to;
 // false when it is not a relative path (empty, absolute, a `scheme:` url or a `pencil:` id). Another
 // drive gets an absolute path.
@@ -78,7 +61,7 @@ func relocated(url, from, to string) (string, bool) {
 		return "", false
 	}
 	full := lexical(filepath.Join(from, url))
-	target, base := components(full), components(to)
+	target, base := PathComponents(full), PathComponents(to)
 	common := 0
 	for common < len(target) && common < len(base) && target[common] == base[common] {
 		common++

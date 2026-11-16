@@ -1,0 +1,36 @@
+# live: output that depends on the platform and the installed fonts (the guide's line endings, system error text,
+# text layout), compared live only. The harness puts a system font at font.ttf.
+{"cmd":"tool","name":"read_guide"}
+{"cmd":"tool","name":"read_guide","args":{"topic":" Schema.md "}}
+{"cmd":"tool","name":"read_guide","args":{"topic":"nope"}}
+{"cmd":"tool","name":"get_style"}
+{"cmd":"tool","name":"get_style","args":{"name":"pit wall"}}
+{"cmd":"tool","name":"get_style","args":{"name":"x"}}
+{"cmd":"open","path":"missing.pen"}
+{"cmd":"open","path":"no/such/dir.pen"}
+{"cmd":"open","path":"broken.pen"}
+{"cmd":"tool","name":"open_document","args":{"path":"broken.pen"}}
+{"cmd":"new","template":"slides"}
+{"cmd":"tool","name":"get_editor_state"}
+{"cmd":"render","w":240,"h":160,"cam":[-20,-20],"zoom":0.2}
+{"cmd":"new","template":"mobile"}
+{"cmd":"render","w":120,"h":200,"cam":[-10,-10],"zoom":0.3}
+{"cmd":"open","path":"shapes.pen"}
+{"cmd":"insert","node":{"type":"text","x":0,"y":300,"content":"Hello there","fontFamily":"Fake Face","fontSize":24}}
+{"cmd":"save","path":"text.pen"}
+{"cmd":"render","w":240,"h":200,"cam":[-10,-10],"zoom":0.5}
+{"cmd":"copy","from":"font.ttf","to":"@data/fonts/Fake_Face-400.ttf"}
+{"cmd":"font_ready","family":"Fake Face","weight":400}
+{"cmd":"font_ready","family":"Fake Face","weight":400}
+{"cmd":"render","w":240,"h":200,"cam":[-10,-10],"zoom":0.5}
+{"cmd":"tool","name":"get_editor_state"}
+{"cmd":"copy","from":"gen.png","to":"@data/settings.json.tmp/blocker"}
+{"cmd":"settings_set","key":"theme","value":"light"}
+{"cmd":"settings_set","key":"theme","value":null}
+{"cmd":"settings_get"}
+{"cmd":"save","path":"text2.pen"}
+{"cmd":"copy","from":"gen.png","to":"blocked/doc.pen/x"}
+{"cmd":"copy","from":"gen.png","to":"@data/images/gen.png"}
+{"cmd":"insert","node":{"type":"rectangle","width":4,"height":4,"fill":{"type":"image","url":"data/images/gen.png"}}}
+{"cmd":"save","path":"blocked/doc.pen"}
+{"cmd":"doc"}

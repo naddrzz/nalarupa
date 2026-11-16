@@ -13,10 +13,15 @@ import (
 // maxDepth matches serde_json's recursion limit: it refuses the 128th nested array or object.
 const maxDepth = 127
 
-// Parse decodes one JSON value. Errors carry the line and column where parsing stopped.
+// Parse decodes one JSON value as serde_json does: what it refuses is refused with its message, line and column.
 func Parse(data []byte) (Value, error) {
 	if !utf8.Valid(data) {
 		return nil, errors.New("invalid UTF-8")
+	}
+	// serde_json's own message and position for anything it refuses (encoding/json accepts some of it, such
+	// as numbers out of range, and words the rest differently).
+	if err := serdeCheck(data); err != nil {
+		return nil, err
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()

@@ -174,7 +174,11 @@ func (f *Fonts) fetch(family string, weight uint16, italic bool) bool {
 	// The goroutine gets copies: it never touches Fonts.
 	dl, cache, ready := f.dl, f.cache, f.OnReady
 	go func() {
-		dl.download(cache, family, weight, italic)
+		// A download that panics only fails, as a Rust download thread that dies does.
+		func() {
+			defer func() { recover() }()
+			dl.download(cache, family, weight, italic)
+		}()
 		if ready != nil {
 			ready(family, weight, italic)
 		}

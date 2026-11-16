@@ -1,0 +1,5 @@
+{"version": "2.19", "children": [
+  {"type": "frame", "id": "board", "x": 0, "y": 0, "width": 260, "height": 220, "layout": "none", "fill": "#f8fafc", "children": [
+    {"type": "script", "id": "grid", "x": 10, "y": 10, "width": 200, "height": 160, "scriptUri": "./grid.js"}
+  ]}
+]}

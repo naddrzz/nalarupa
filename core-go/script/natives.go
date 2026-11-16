@@ -42,29 +42,9 @@ func jsonArg(a []string, i int) (jsonv.Value, error) {
 	}
 	v, err := jsonv.Parse([]byte(t))
 	if err != nil {
-		return nil, fmt.Errorf("invalid argument: %s", serdeError(t, err))
+		return nil, fmt.Errorf("invalid argument: %v", err)
 	}
 	return serdeNumbers(v), nil
-}
-
-// serdeError is serde_json's message for the usual bad arguments: a character no JSON value starts with
-// (`undefined`, from a value JSON cannot hold) or nothing but whitespace. Other errors keep jsonv's text.
-func serdeError(t string, err error) string {
-	line, col := 1, 0
-	for _, c := range t {
-		switch c {
-		case ' ', '\t', '\r':
-			col++
-		case '\n':
-			line, col = line+1, 0
-		default:
-			if strings.ContainsRune(`{["-0123456789tfn"`, c) {
-				return err.Error()
-			}
-			return fmt.Sprintf("expected value at line %d column %d", line, col+1)
-		}
-	}
-	return fmt.Sprintf("EOF while parsing a value at line %d column %d", line, col)
 }
 
 // serdeNumbers rewrites v's numbers as serde_json holds them once it has parsed JSON that JavaScript wrote: an
@@ -415,6 +395,9 @@ func (ex *exec) generate(a []string) (string, error) {
 		// replaces it when the download finishes.
 		seed := fmt.Sprintf("%x", svg.FxHash(prompt))
 		pending := fmt.Sprintf("nalarupa:pending-image-%s-%x", seed, ex.host.IDs().Next())
+		if err := ex.host.Generate(ty, target, prompt, pending); err != nil {
+			return "", err
+		}
 		fill := jsonv.NewObject()
 		fill.Set("type", "image")
 		fill.Set("url", pending)
@@ -425,7 +408,6 @@ func (ex *exec) generate(a []string) (string, error) {
 			return "", err
 		}
 		ex.host.Changed()
-		ex.host.Generate(ty, target, prompt, pending)
 		ex.notes = append(ex.notes, fmt.Sprintf("Generate(\"%s\") on %s: the image is loading in the background and appears when ready (placeholder photo source, no image-generation backend).", ty, target))
 		return "", nil
 	case ty == "svg":

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/naddrzz/nalarupa/core-go/jsonv"
 )
@@ -64,7 +65,10 @@ func FromJSON(text []byte) (*Doc, error) {
 func Load(path string) (*Doc, error) {
 	text, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("cannot read %s: %v", path, err)
+		return nil, fmt.Errorf("cannot read %s: %s", path, IOError(err))
+	}
+	if !utf8.Valid(text) {
+		return nil, fmt.Errorf("cannot read %s: stream did not contain valid UTF-8", path) // read_to_string's error
 	}
 	d, err := FromJSON(text)
 	if err != nil {
@@ -79,26 +83,26 @@ func Load(path string) (*Doc, error) {
 // leaves no temp file.
 func (d *Doc) Save(path string) error {
 	text := jsonv.MarshalPretty(d.Root)
-	if dir := filepath.Dir(path); dir != "" {
-		if err := os.MkdirAll(dir, 0o777); err != nil {
-			return err
+	if dir, ok := ParentPath(path); ok {
+		if err := CreateDirAll(dir); err != nil {
+			return errors.New(IOError(err))
 		}
 	}
 	target, err := filepath.EvalSymlinks(path)
 	if err != nil {
 		if _, lerr := os.Lstat(path); !errors.Is(err, os.ErrNotExist) || lerr == nil {
-			return fmt.Errorf("cannot resolve %s: %v", path, err)
+			return fmt.Errorf("cannot resolve %s: %s", path, IOError(err))
 		}
 		target = path
 	}
 	tmp := target + ".tmp-nalarupa"
 	if err := os.WriteFile(tmp, text, 0o666); err != nil {
-		os.Remove(tmp)
-		return fmt.Errorf("cannot write %s: %v", tmp, err)
+		RemoveFile(tmp)
+		return fmt.Errorf("cannot write %s: %s", tmp, IOError(err))
 	}
 	if err := os.Rename(tmp, target); err != nil {
-		os.Remove(tmp)
-		return fmt.Errorf("cannot save %s: %v", path, err)
+		RemoveFile(tmp)
+		return fmt.Errorf("cannot save %s: %s", path, IOError(err))
 	}
 	return nil
 }

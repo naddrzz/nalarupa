@@ -1,0 +1,15 @@
+{"version": "2.19",
+ "variables": {"ink": {"type": "color", "value": "#1F2A1C"}, "paper": {"type": "color", "value": [{"value": "#111111", "theme": {"mode": "dark"}}, {"value": "#F4EFE6"}]}, "space": {"type": "number", "value": 24}, "half": {"type": "number", "value": 0.5}, "dense": {"type": "boolean", "value": true}},
+ "themes": {"mode": ["light", "dark"]},
+ "children": [
+  {"type": "frame", "id": "home", "name": "Home", "x": 0, "y": 0, "width": 300, "height": 200, "layout": "vertical", "gap": 10, "padding": 12, "fill": "$paper", "children": [
+    {"type": "rectangle", "id": "r1", "name": "Bar", "width": 120, "height": 30, "fill": "$ink", "cornerRadius": 6},
+    {"type": "ellipse", "id": "e1", "width": 40, "height": 40, "fill": "#e11d48"},
+    {"type": "rectangle", "id": "pic", "width": 60, "height": 40, "fill": {"type": "image", "url": "./a/img.png", "mode": "fill"}}
+  ]},
+  {"type": "frame", "id": "card", "name": "Card", "reusable": true, "x": 340, "y": 0, "width": 120, "height": 80, "layout": "none", "fill": "#0ea5e9", "children": [
+    {"type": "rectangle", "id": "cb", "x": 10, "y": 10, "width": 50, "height": 20, "fill": "#ffffff"}
+  ]},
+  {"type": "ref", "id": "inst", "ref": "card", "x": 340, "y": 120},
+  {"type": "rectangle", "id": "far", "name": "Far", "x": 2000, "y": 1500, "width": 50, "height": 50, "fill": "#22c55e"}
+ ]}

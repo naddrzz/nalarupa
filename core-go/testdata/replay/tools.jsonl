@@ -1,0 +1,22 @@
+# Tools: get_editor_state (selection, viewport, components, variables), open_document (refused while dirty, a missing
+# path, a new file created, an existing one opened) and unknown tools.
+{"cmd":"tool","name":"nope"}
+{"cmd":"tool","name":"execute_later"}
+{"cmd":"open","path":"shapes.pen"}
+{"cmd":"tool","name":"get_editor_state"}
+{"cmd":"select","ids":["r1","inst","nope","inst/cb"]}
+{"cmd":"viewport","x":0,"y":0,"w":500,"h":400}
+{"cmd":"tool","name":"get_editor_state"}
+{"cmd":"update","ids":["far"],"props":{"x":10}}
+{"cmd":"tool","name":"open_document","args":{"path":"new/doc.pen"}}
+{"cmd":"undo"}
+{"cmd":"tool","name":"open_document"}
+{"cmd":"tool","name":"open_document","args":{"path":"new/doc.pen"}}
+{"cmd":"poll"}
+{"cmd":"state"}
+{"cmd":"tool","name":"get_editor_state"}
+{"cmd":"tool","name":"open_document","args":{"path":"old.pen"}}
+{"cmd":"tool","name":"get_editor_state"}
+{"cmd":"variables"}
+{"cmd":"new","template":"empty"}
+{"cmd":"tool","name":"get_editor_state","args":{}}

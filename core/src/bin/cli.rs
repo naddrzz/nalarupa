@@ -58,6 +58,11 @@
 //!   nalarupa-cli figma <clipboard.html>                 `figma::decode` of a Figma clipboard as JSON: [[node, [x, y, w, h]], ...],
 //!                                                       null when it is not Figma data, or {"error"} (the Go port's
 //!                                                       Figma import oracle)
+//!   nalarupa-cli replay <script.jsonl> [--seed <n>] [--data <dir>] [--out <dir>]
+//!                                                       runs one `{"cmd", ...}` per line through `dispatch` on the
+//!                                                       offline engine (resvg, pinned slide clock) and prints each
+//!                                                       `nr_call` response, then the document (the Go port's engine
+//!                                                       oracle, see replay below)
 
 use nalarupa_core::engine::engine;
 use nalarupa_core::resolve::RNode;
@@ -315,6 +320,7 @@ fn run(args: &[String]) -> Result<(), String> {
             std::fs::write(arg(3)?, bytes).map_err(|e| e.to_string())
         }
         "canvas" => canvas::run(arg(2)?, arg(3)?, arg(4)?),
+        "replay" => replay::run(arg(2)?, &args[3..]),
         "shader-transpile" => {
             let src = std::fs::read_to_string(arg(2)?).map_err(|e| e.to_string())?;
             let uniforms = match args.get(3) {
@@ -1703,5 +1709,149 @@ mod canvas {
             log.push(entry);
         }
         std::fs::write(out.join("log.json"), serde_json::to_string_pretty(&log).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+    }
+}
+
+/// The Go port's engine oracle: each line of the script is one `{"cmd", ...}` request, answered as `nr_call`
+/// answers it (`{"ok", "data"}` or `{"ok", "error"}`), one JSON line each. Lines that are blank or start with `#`
+/// are skipped. The engine is offline, paints with resvg and runs its slides on a pinned clock; `--seed` pins the
+/// ids inserts draw and `--data` is the data folder (`NALARUPA_DATA`). Besides `dispatch`'s commands, a few steps
+/// reach what the UI cannot: `render` (what `nr_render` does, the RGB bytes written to `<out>/<step>.rgb`),
+/// `slide_in`, `tick {ms}` (the slide clock), `settle` (waits for background script runs), the download callbacks
+/// `font_ready`, `asset_ready`, `inflight`, `resolve_pending` and `apply_generated`, `doc` (the document JSON) and
+/// `copy {from, to}` (a file; `@data/` starts a path in the data folder). The last line is the final document.
+mod replay {
+    use nalarupa_core::engine::{engine, Engine};
+    use nalarupa_core::render::{Raster, Renderer};
+    use serde_json::{json, Value};
+    use std::path::Path;
+    use std::time::{Duration, Instant};
+
+    fn slides(r: &Renderer) -> Value {
+        let now = r.now();
+        r.slides.iter().map(|s| json!({"id": s.id, "state": s.state(now)})).collect()
+    }
+
+    fn version(e: &Engine) -> Value {
+        json!({"version": e.version, "dirty": e.dirty()})
+    }
+
+    fn step(i: usize, req: &Value, out: &Path) -> Result<Value, String> {
+        let num = |k: &str, d: f64| req[k].as_f64().unwrap_or(d);
+        let s = |k: &str| req[k].as_str().unwrap_or_default();
+        match req["cmd"].as_str().unwrap_or_default() {
+            "render" => {
+                let mut e = engine();
+                e.expire_slides();
+                e.sync();
+                let (w, h) = (num("w", 800.0) as u32, num("h", 600.0) as u32);
+                let bg = req["bg"].as_array().map_or([255, 255, 255], |c| [0, 1, 2].map(|k| c.get(k).and_then(Value::as_u64).unwrap_or(0) as u8));
+                e.renderer.ms_per_mp = if req["slow"] == true { 1e9 } else { 0.0 };
+                let cam = |k: usize| req["cam"][k].as_f64().unwrap_or(0.0);
+                let solo = req["solo"].as_str();
+                let px = e.renderer.render(w, h, cam(0), cam(1), num("zoom", 1.0), bg, solo, req["sharp"] != false);
+                let rgb: Vec<u8> = px.chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect();
+                let file = format!("{i}.rgb");
+                std::fs::write(out.join(&file), rgb).map_err(|e| e.to_string())?;
+                Ok(json!({"width": w.clamp(1, 8192), "height": h.clamp(1, 8192), "file": file, "slides": slides(&e.renderer)}))
+            }
+            "slide_in" => {
+                let mut e = engine();
+                e.slide_in(s("id"));
+                Ok(slides(&e.renderer))
+            }
+            "tick" => {
+                let mut e = engine();
+                e.renderer.clock = Some(e.renderer.now() + Duration::from_millis(req["ms"].as_u64().unwrap_or(0)));
+                e.expire_slides();
+                Ok(slides(&e.renderer))
+            }
+            "settle" => {
+                let until = Instant::now() + Duration::from_secs(30);
+                while nalarupa_core::script::busy() {
+                    if Instant::now() > until {
+                        return Err("script nodes still running".into());
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Ok(json!(true))
+            }
+            "font_ready" => {
+                let mut e = engine();
+                e.font_ready(s("family"), num("weight", 400.0) as u16, req["italic"] == true);
+                Ok(version(&e))
+            }
+            "asset_ready" => {
+                let mut e = engine();
+                e.asset_ready(s("key"), req["ok"] != false);
+                Ok(version(&e))
+            }
+            "inflight" => {
+                engine().inflight.insert(s("url").to_string());
+                Ok(json!(true))
+            }
+            "resolve_pending" => {
+                let mut e = engine();
+                e.resolve_pending(s("pending"), s("url"));
+                Ok(version(&e))
+            }
+            "apply_generated" => {
+                let mut e = engine();
+                let props = req["props"].as_object().cloned().unwrap_or_default();
+                let hit = e.apply_generated(s("id"), &props, req["done"] == true);
+                let mut v = version(&e);
+                v["hit"] = json!(hit);
+                Ok(v)
+            }
+            "doc" => Ok(engine().doc.root.clone()),
+            "copy" => {
+                let data = engine().data_dir.clone();
+                let path = |p: &str| match p.strip_prefix("@data/") {
+                    Some(rest) => data.join(rest),
+                    None => Path::new(p).to_path_buf(),
+                };
+                let to = path(s("to"));
+                if let Some(dir) = to.parent() {
+                    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+                }
+                std::fs::copy(path(s("from")), &to).map_err(|e| e.to_string())?;
+                Ok(json!(true))
+            }
+            _ => nalarupa_core::dispatch(req),
+        }
+    }
+
+    pub(super) fn run(script: &str, rest: &[String]) -> Result<(), String> {
+        let flag = |name: &str| rest.iter().position(|a| a == name).and_then(|i| rest.get(i + 1)).map(String::as_str);
+        if let Some(dir) = flag("--data") {
+            std::env::set_var("NALARUPA_DATA", dir); // before the engine starts: it reads its settings from there
+        }
+        let out = Path::new(flag("--out").unwrap_or("."));
+        std::fs::create_dir_all(out).map_err(|e| e.to_string())?;
+        {
+            let mut e = engine();
+            e.offline();
+            e.renderer.raster = Raster::Resvg;
+            e.renderer.clock = Some(Instant::now());
+        }
+        if let Some(seed) = flag("--seed") {
+            nalarupa_core::doc::reseed(seed.parse::<u64>().map_err(|e| format!("--seed: {e}"))?);
+        }
+        let src = std::fs::read_to_string(script).map_err(|e| e.to_string())?;
+        let mut i = 0;
+        for line in src.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
+            let req: Value = serde_json::from_str(line).map_err(|e| format!("step {i}: {e}"))?;
+            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| step(i, &req, out)));
+            let v = match res {
+                Ok(Ok(v)) => json!({"ok": true, "data": v}),
+                Ok(Err(e)) => json!({"ok": false, "error": e}),
+                Err(_) => json!({"ok": false, "error": "internal error (panic)"}),
+            };
+            println!("{v}");
+            i += 1;
+        }
+        let e = engine();
+        println!("{}", json!({"doc": e.doc.root, "path": e.doc.path, "version": e.version, "dirty": e.dirty(), "selection": e.selection}));
+        Ok(())
     }
 }

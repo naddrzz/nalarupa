@@ -1,0 +1,30 @@
+{
+ "threads": 12,
+ "lines": [
+  "{\"ok\":true,\"data\":{\"text\":\"unknown tool: nope\",\"error\":true,\"images\":0}}",
+  "{\"ok\":true,\"data\":{\"text\":\"unknown tool: execute_later\",\"error\":true,\"images\":0}}",
+  "{\"ok\":true,\"data\":{\"version\":3,\"title\":\"shapes\",\"path\":\"shapes.pen\",\"dirty\":false,\"selection\":[],\"agentRunning\":false,\"executing\":false,\"penDrawing\":false,\"mcpPort\":0,\"animating\":false}}",
+  "{\"ok\":true,\"data\":{\"text\":\"# Nalarupa editor state\\n\\n- Document: shapes.pen\\n- Selection: nothing\\n- Top-level nodes (4):\\n  - `home` \\\"Home\\\" frame at (0, 0) size 300x200\\n  - `card` \\\"Card\\\" frame at (340, 0) size 120x80 [component]\\n  - `inst` \\\"Card\\\" frame at (340, 120) size 120x80\\n  - `far` \\\"Far\\\" rectangle at (2000, 1500) size 50x50\\n- Components: `card` \\\"Card\\\"\\n- Variables: 5 (theme axes: mode): ink #1F2A1C, paper #F4EFE6, space 24, half 0.5, dense true\\n- Canvas content bounds: x -64 y -64 w 2178 h 1678\\n\\nCall `read_guide` (no arguments) before your first `execute`; it explains the .pen schema and the execute API.\\n\",\"error\":false,\"images\":0}}",
+  "{\"ok\":true,\"data\":{\"version\":3,\"title\":\"shapes\",\"path\":\"shapes.pen\",\"dirty\":false,\"selection\":[\"r1\",\"inst\",\"nope\",\"inst/cb\"],\"agentRunning\":false,\"executing\":false,\"penDrawing\":false,\"mcpPort\":0,\"animating\":false}}",
+  "{\"ok\":true,\"data\":true}",
+  "{\"ok\":true,\"data\":{\"text\":\"# Nalarupa editor state\\n\\n- Document: shapes.pen\\n- Selection: `r1` \\\"Bar\\\" rectangle 120x30, `inst` \\\"Card\\\" frame 120x80, `nope`, `inst/cb` \\\"rectangle\\\" rectangle 50x20\\n- Top-level nodes (4):\\n  - `home` \\\"Home\\\" frame at (0, 0) size 300x200 [user visible]\\n  - `card` \\\"Card\\\" frame at (340, 0) size 120x80 [component] [user visible]\\n  - `inst` \\\"Card\\\" frame at (340, 120) size 120x80 [user visible]\\n  - `far` \\\"Far\\\" rectangle at (2000, 1500) size 50x50 [outside viewport]\\n- Components: `card` \\\"Card\\\"\\n- Variables: 5 (theme axes: mode): ink #1F2A1C, paper #F4EFE6, space 24, half 0.5, dense true\\n- Canvas content bounds: x -64 y -64 w 2178 h 1678\\n\\nCall `read_guide` (no arguments) before your first `execute`; it explains the .pen schema and the execute API.\\n\",\"error\":false,\"images\":0}}",
+  "{\"ok\":true,\"data\":{\"version\":4,\"title\":\"shapes\",\"path\":\"shapes.pen\",\"dirty\":true,\"selection\":[\"r1\",\"inst\",\"inst/cb\"],\"agentRunning\":false,\"executing\":false,\"penDrawing\":false,\"mcpPort\":0,\"animating\":false}}",
+  "{\"ok\":true,\"data\":{\"text\":\"The open document has unsaved changes; ask the user to save it first.\",\"error\":true,\"images\":0}}",
+  "{\"ok\":true,\"data\":{\"version\":5,\"title\":\"shapes\",\"path\":\"shapes.pen\",\"dirty\":false,\"selection\":[\"r1\",\"inst\",\"inst/cb\"],\"agentRunning\":false,\"executing\":false,\"penDrawing\":false,\"mcpPort\":0,\"animating\":false}}",
+  "{\"ok\":true,\"data\":{\"text\":\"path is required\",\"error\":true,\"images\":0}}",
+  "{\"ok\":true,\"data\":{\"text\":\"Opened new/doc.pen\",\"error\":false,\"images\":0}}",
+  "{\"ok\":true,\"data\":{\"state\":{\"version\":6,\"title\":\"doc\",\"path\":\"new/doc.pen\",\"dirty\":false,\"selection\":[],\"agentRunning\":false,\"executing\":false,\"penDrawing\":false,\"mcpPort\":0,\"animating\":false},\"events\":[{\"type\":\"document_opened\"}]}}",
+  "{\"ok\":true,\"data\":{\"version\":6,\"title\":\"doc\",\"path\":\"new/doc.pen\",\"dirty\":false,\"selection\":[],\"agentRunning\":false,\"executing\":false,\"penDrawing\":false,\"mcpPort\":0,\"animating\":false}}",
+  "{\"ok\":true,\"data\":{\"text\":\"# Nalarupa editor state\\n\\n- Document: new/doc.pen\\n- Selection: nothing\\n- Top-level nodes (0):\\n\\n- Variables: 0\\n\\nCall `read_guide` (no arguments) before your first `execute`; it explains the .pen schema and the execute API.\\n\",\"error\":false,\"images\":0}}",
+  "{\"ok\":true,\"data\":{\"text\":\"Opened old.pen\",\"error\":false,\"images\":0}}",
+  "{\"ok\":true,\"data\":{\"text\":\"# Nalarupa editor state\\n\\n- Document: old.pen\\n- Selection: nothing\\n- Top-level nodes (5):\\n  - `gen` \\\"Generating\\\" frame at (0, 0) size 200x120 [user visible]\\n  - `CBdXk` \\\"rectangle\\\" rectangle at (0, 140) size 30x30 [user visible]\\n  - `dup` \\\"rectangle\\\" rectangle at (40, 140) size 30x30 [user visible]\\n  - `CERmv` \\\"rectangle\\\" rectangle at (80, 140) size 30x30 [user visible]\\n  - `li` \\\"frame\\\" frame at (0, 200) size 100x60 [user visible]\\n- Variables: 0\\n- Canvas content bounds: x -64 y -64 w 328 h 388\\n\\nCall `read_guide` (no arguments) before your first `execute`; it explains the .pen schema and the execute API.\\n\",\"error\":false,\"images\":0}}",
+  "{\"ok\":true,\"data\":{\"variables\":{},\"themes\":{}}}",
+  "{\"ok\":true,\"data\":{\"version\":8,\"title\":\"Untitled\",\"path\":null,\"dirty\":false,\"selection\":[],\"agentRunning\":false,\"executing\":false,\"penDrawing\":false,\"mcpPort\":0,\"animating\":false}}",
+  "{\"ok\":true,\"data\":{\"text\":\"# Nalarupa editor state\\n\\n- Document: Untitled (not saved yet)\\n- Selection: nothing\\n- Top-level nodes (0):\\n\\n- Variables: 0\\n\\nCall `read_guide` (no arguments) before your first `execute`; it explains the .pen schema and the execute API.\\n\",\"error\":false,\"images\":0}}",
+  "{\"doc\":{\"version\":\"2.19\",\"children\":[]},\"path\":null,\"version\":8,\"dirty\":false,\"selection\":[]}"
+ ],
+ "files": {
+  "data/settings.json": "ewogICJyZWNlbnQiOiBbCiAgICAib2xkLnBlbiIsCiAgICAibmV3L2RvYy5wZW4iLAogICAgInNoYXBlcy5wZW4iCiAgXQp9",
+  "new/doc.pen": "ewogICJ2ZXJzaW9uIjogIjIuMTkiLAogICJjaGlsZHJlbiI6IFtdCn0="
+ }
+}

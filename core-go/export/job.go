@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/naddrzz/nalarupa/core-go/doc"
 	"github.com/naddrzz/nalarupa/core-go/jsonv"
 	"github.com/naddrzz/nalarupa/core-go/script"
 	"github.com/naddrzz/nalarupa/core-go/svg"
@@ -99,7 +100,7 @@ func (j *Job) Run() ([]string, error) {
 	defer writing.Unlock()
 	var written []string
 	for _, f := range j.files {
-		if dir, _ := parent(f.path); dir != "" {
+		if dir, _ := doc.ParentPath(f.path); dir != "" {
 			if err := os.MkdirAll(dir, 0o777); err != nil {
 				return written, err
 			}
@@ -186,7 +187,7 @@ func planFiles(c *Ctx, dataDir string, ids []string, format, out string, opts js
 		}
 		q := uint8(min(max(quality, 1), 100))
 		for _, id := range ids {
-			f := jobFile{path: join(dir, FileStem(id)+"."+format)}
+			f := jobFile{path: doc.JoinPath(dir, FileStem(id)+"."+format)}
 			if format == "svg" {
 				markup, embedded, ok := svg.Export(c.Doc, id, c.Fonts, c.Assets, c.expand())
 				if !ok {

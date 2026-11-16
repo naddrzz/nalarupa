@@ -191,7 +191,15 @@ func (a *Assets) startQueued() {
 		a.running++
 		ready := a.OnReady
 		go func() {
-			ok := q.job()
+			// A download that panics is a failed one, as a Rust download thread that dies is.
+			ok := func() (ok bool) {
+				defer func() {
+					if recover() != nil {
+						ok = false
+					}
+				}()
+				return q.job()
+			}()
 			if ready != nil {
 				ready(q.key, ok)
 			}

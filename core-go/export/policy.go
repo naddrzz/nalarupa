@@ -108,19 +108,19 @@ func resolvePath(p string, depth int) string {
 		return ""
 	}
 	abs := absolute(p)
-	for a, ok := abs, true; ok; a, ok = parent(a) {
+	for a, ok := abs, true; ok; a, ok = doc.ParentPath(a) {
 		rest := strings.TrimLeft(abs[len(a):], `/`+string(os.PathSeparator))
 		if real, err := filepath.EvalSymlinks(a); err == nil {
-			return filepath.Clean(join(real, rest))
+			return filepath.Clean(doc.JoinPath(real, rest))
 		}
 		if target, err := os.Readlink(a); err == nil {
-			up, ok := parent(a)
+			up, ok := doc.ParentPath(a)
 			if !ok {
 				up = a
 			}
-			next := join(up, target)
+			next := doc.JoinPath(up, target)
 			if rest != "" {
-				next = join(next, rest)
+				next = doc.JoinPath(next, rest)
 			}
 			return resolvePath(next, depth+1)
 		}

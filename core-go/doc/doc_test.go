@@ -3,6 +3,7 @@ package doc
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -416,5 +417,41 @@ func TestZeroIDSourceIsSeedOne(t *testing.T) {
 	d.IDs = &IDSource{}
 	if a, b := d.GenID(), d.GenID(); a == "" || a == b {
 		t.Fatal(a, b)
+	}
+}
+
+// Folders are created as Rust's create_dir_all creates them: a file in the way reports what creating that
+// folder reports, and a save under it fails with Rust's text.
+func TestCreateDirAllAsRust(t *testing.T) {
+	dir := t.TempDir()
+	deep := filepath.Join(dir, "a", "b", "c")
+	if err := CreateDirAll(deep); err != nil {
+		t.Fatal(err)
+	}
+	if err := CreateDirAll(deep); err != nil {
+		t.Fatal("an existing folder is fine:", err)
+	}
+	if st, err := os.Stat(deep); err != nil || !st.IsDir() {
+		t.Fatal("created")
+	}
+	file := filepath.Join(dir, "file")
+	os.WriteFile(file, nil, 0o666)
+	err := CreateDirAll(filepath.Join(file, "sub", "x"))
+	if err == nil {
+		t.Fatal("a file in the way fails")
+	}
+	want := "Not a directory (os error 20)" // mkdir of x below the file
+	if runtime.GOOS == "windows" {
+		want = "Cannot create a file when that file already exists. (os error 183)"
+	}
+	if IOError(err) != want {
+		t.Fatalf("%q, want %q", IOError(err), want)
+	}
+	d := New()
+	if err := d.Save(filepath.Join(file, "sub", "doc.pen")); err == nil || err.Error() != want {
+		t.Fatalf("save under a file: %v", err)
+	}
+	if err := CreateDirAll(""); err != nil {
+		t.Fatal(err)
 	}
 }

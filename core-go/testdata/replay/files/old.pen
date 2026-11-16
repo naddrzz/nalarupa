@@ -1,0 +1,13 @@
+{"version": "2.6",
+ "imports": {"lib": "lib.pen"},
+ "children": [
+  {"type": "frame", "id": "gen", "name": "Generating", "x": 0, "y": 0, "width": 200, "height": 120, "layout": "none", "placeholder": true, "children": [
+    {"type": "frame", "id": "inner", "x": 10, "y": 10, "width": 50, "height": 50, "placeholder": true},
+    {"type": "rectangle", "id": "img1", "x": 70, "y": 10, "width": 50, "height": 50, "fill": {"type": "image", "url": "nalarupa:pending-image-1-a", "mode": "fill"}},
+    {"type": "rectangle", "id": "img2", "x": 130, "y": 10, "width": 50, "height": 50, "fill": {"type": "image", "url": "nalarupa:pending-image-2-b", "mode": "fill"}}
+  ]},
+  {"type": "rectangle", "x": 0, "y": 140, "width": 30, "height": 30, "fill": "#000000", "metadata": {"placeholder": true}},
+  {"type": "rectangle", "id": "dup", "x": 40, "y": 140, "width": 30, "height": 30, "fill": "#ff0000"},
+  {"type": "rectangle", "id": "dup", "x": 80, "y": 140, "width": 30, "height": 30, "fill": "#00ff00", "stroke": {"fill": "#00FF00", "thickness": 2}},
+  {"type": "ref", "id": "li", "ref": "lib:C", "x": 0, "y": 200}
+ ]}

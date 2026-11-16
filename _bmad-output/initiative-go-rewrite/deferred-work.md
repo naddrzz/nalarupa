@@ -118,3 +118,9 @@
 - source_plan: `_bmad-output/initiative-go-rewrite/plan-go-rewrite-8a-engine-core.md`
   summary: Phase 8e - C ABI and DLL - Go dispatch of every non-agent nr_call command (agent ones return not-available until phase 9), //export nr_call/nr_free/nr_render with C-allocated strings and a reused C render buffer, recover() at every export, a c-shared build (cgo with quickjs-ng and static wgpu-native) and package.ts option, then the non-agent app checks (editor, doc, drag, smoke, component, layout, text, paint, shader, scriptnode, script, issues, viewport, export-lock-worker) run with NALARUPA_CORE pointing at the Go DLL.
   evidence: Phase 8 split; the swap point for the app.
+- source_plan: `_bmad-output/initiative-go-rewrite/plan-go-rewrite-8a-engine-core.md`
+  summary: Read document numbers as serde_json does when a document is loaded (doc.FromJSON): jsonv keeps each number's source text, while Rust parses it to u64/i64/f64 (without `float_roundtrip`) and writes it back canonically, so a file holding `1.50`, `1e2` or a 20-digit float saves differently. script's `serdeNumbers`/`serdeNumber` already do this for script arguments; move them into jsonv and apply them on load.
+  evidence: The replay fixtures use canonical numbers; jsonv.Parse now refuses what serde refuses (serdeCheck) but does not rewrite what it accepts.
+- source_plan: `_bmad-output/initiative-go-rewrite/plan-go-rewrite-8a-engine-core.md`
+  summary: Phase 8c makes the engine's `execute` real: Engine.Tool answers "unknown tool: execute" and the script host's Generate does nothing until then (no download, the fill keeps its pending url).
+  evidence: 8a ports the engine core only; the replay sequences do not call execute.

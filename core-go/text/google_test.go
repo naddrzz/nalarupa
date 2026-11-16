@@ -422,3 +422,20 @@ func TestDownloadMetadataCached(t *testing.T) {
 	sameRequests(t, g.requests(), "/gh/ofl/famname/FamName%5Bopsz,wght%5D.ttf")
 	fileIs(t, filepath.Join(cache, "var", "FamName.ttf"), []byte("var font"))
 }
+
+type panicTransport struct{}
+
+func (panicTransport) RoundTrip(*http.Request) (*http.Response, error) { panic("broken download") }
+
+// A download that panics does not take the process down: it is reported as a failed one.
+func TestPanickingDownloadIsReportedFailed(t *testing.T) {
+	dl := newDownloader()
+	dl.metadataURL, dl.githubURL, dl.cssURL = "http://fonts.test/metadata", "http://fonts.test/github", "http://fonts.test/css2"
+	dl.client = &http.Client{Transport: panicTransport{}}
+	f, ready := onlineFonts(t, dl)
+	f.Ensure(layout.TextStyle{Family: "Boom Sans", Weight: 400})
+	k := next(t, ready)
+	if f.Downloaded(k.family, k.weight, k.italic) || f.HasFamily("Boom Sans") {
+		t.Fatal("nothing was downloaded")
+	}
+}

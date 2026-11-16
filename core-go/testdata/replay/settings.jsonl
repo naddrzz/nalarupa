@@ -1,0 +1,22 @@
+# Settings: set, overwrite, remove, read back with the API key and provider keys masked and the backend derived, and
+# the recents of open and save.
+{"cmd":"settings_get"}
+{"cmd":"settings_set","key":"theme","value":"dark"}
+{"cmd":"settings_set","key":"zoom","value":1.5}
+{"cmd":"settings_set","key":"anthropic_api_key","value":"  "}
+{"cmd":"settings_get"}
+{"cmd":"settings_set","key":"anthropic_api_key","value":" sk-ant-test\n"}
+{"cmd":"settings_set","key":"providers","value":[{"id":"p1","api_key":"k1"},{"id":"p2","api_key":""},{"id":"p3"},"odd"]}
+{"cmd":"settings_get"}
+{"cmd":"settings_set","key":"agent_backend","value":"claude-code"}
+{"cmd":"settings_get"}
+{"cmd":"settings_set","key":"theme","value":null}
+{"cmd":"settings_set","key":"theme","value":"light"}
+{"cmd":"settings_set","value":1}
+{"cmd":"settings_set","key":"agent_backend","value":""}
+{"cmd":"settings_get"}
+{"cmd":"open","path":"shapes.pen"}
+{"cmd":"save","path":"x/one.pen"}
+{"cmd":"open","path":"old.pen"}
+{"cmd":"open","path":"shapes.pen"}
+{"cmd":"settings_get"}

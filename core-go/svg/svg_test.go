@@ -740,3 +740,19 @@ func TestEsc(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+// A download that panics does not take the process down: it is reported as a failed one.
+func TestPanickingDownloadIsReportedFailed(t *testing.T) {
+	a := NewAssets(t.TempDir())
+	ready := make(chan bool, 1)
+	a.OnReady = func(key string, ok bool) { ready <- ok }
+	a.spawn("boom", func() bool { panic("broken download") })
+	select {
+	case ok := <-ready:
+		if ok {
+			t.Fatal("a panicking download failed")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("OnReady never fired")
+	}
+}

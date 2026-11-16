@@ -23,9 +23,10 @@ type Host interface {
 	// FindEmptySpace is render.rs `find_empty_space` on the synced renderer: a free spot of w×h toward dir,
 	// next to the laid-out node anchor (none when "" or not found) or the whole document.
 	FindEmptySpace(w, h float64, dir string, pad float64, anchor string) (x, y float64)
-	// Generate starts the background download of an image fill the script pointed at pending (`Generate("ai")`
-	// and `Generate("stock")`), replacing it with the image once it lands. The sandbox has already set the fill.
-	Generate(kind, target, prompt, pending string)
+	// Generate starts the background download of an image fill the script points at pending (`Generate("ai")`
+	// and `Generate("stock")`), replacing it with the image once it lands; the sandbox sets the fill after it. An
+	// error (a host without downloads) fails the call with its text and sets no fill.
+	Generate(kind, target, prompt, pending string) error
 	// IDs is the generator the call's ids come from: Execute makes it the document's (doc.Doc.IDs) for the call.
 	IDs() *doc.IDSource
 	// Fonts and Assets answer the validation's font and icon checks.

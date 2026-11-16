@@ -517,7 +517,8 @@ impl Engine {
         }
         let room = self.doc.parent_of(id).is_some_and(|(p, _)| self.renderer.can_slide_into(&self.doc, &p));
         if self.slid.insert(id.to_string()) && room {
-            self.renderer.slides.push(crate::render::Slide::new(id));
+            // The renderer's clock is the wall clock unless a replay pinned it.
+            self.renderer.slides.push(crate::render::Slide::new_at(id, self.renderer.now()));
         }
     }
 

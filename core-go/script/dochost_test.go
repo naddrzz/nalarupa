@@ -52,8 +52,9 @@ func (h *docHost) FindEmptySpace(w, hh float64, dir string, pad float64, anchor 
 	return render.FindEmptySpace(&h.renderer, w, hh, dir, pad, h.renderer.Find(anchor))
 }
 
-func (h *docHost) Generate(kind, target, prompt, pending string) {
+func (h *docHost) Generate(kind, target, prompt, pending string) error {
 	h.generated = append(h.generated, [4]string{kind, target, prompt, pending})
+	return nil
 }
 
 // execOffline is the fonts (system fonts and an empty cache) and assets of every docHost, as `nalarupa-cli exec
