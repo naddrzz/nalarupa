@@ -2,7 +2,7 @@
 //!   nalarupa-cli render <doc.pen> <out-dir> [scale] [--offline]   one PNG per top-level node
 //!   nalarupa-cli svg <doc.pen> <node-id> <out.svg> [--offline]
 //!   nalarupa-cli html <doc.pen> <node-id> <out.html>
-//!   nalarupa-cli exec <doc.pen> <script.js> [--save]
+//!   nalarupa-cli exec <doc.pen> <script.js> [--save] [--seed <n>] [--globals <json>] [--preview] [--offline]
 //!   nalarupa-cli mcp                                    serve MCP until Ctrl+C
 //!   nalarupa-cli layout <doc.pen> [<saved.pen>] [--scripts]
 //!                                                       laid-out tree of every top-level node as JSON
@@ -89,7 +89,14 @@ fn run(args: &[String]) -> Result<(), String> {
             std::fs::write(arg(4)?, html).map_err(|e| e.to_string())
         }
         "exec" => {
+            // Test-only flags (the Go port's execute oracle): `--seed <n>` sets `__seed`, `--globals <json>` the
+            // globals earlier calls kept, `--preview` the 2 s budget of a streaming step, `--offline` no font or
+            // asset downloads. The globals after the call are printed on a line starting `=== globals: `.
+            let flag = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).map(String::as_str);
             let mut e = engine();
+            if args.iter().any(|a| a == "--offline") {
+                e.offline();
+            }
             let doc = Path::new(arg(2)?);
             if doc.exists() {
                 e.open(doc)?;
@@ -97,11 +104,25 @@ fn run(args: &[String]) -> Result<(), String> {
                 e.load_template("empty");
             }
             let src = std::fs::read_to_string(arg(3)?).map_err(|e| e.to_string())?;
-            let out = e.tool("execute", &json!({"input": src}));
+            let mut call = json!({"input": src});
+            if let Some(seed) = flag("--seed") {
+                call["__seed"] = json!(seed.parse::<u64>().map_err(|e| format!("--seed: {e}"))?);
+            }
+            if let Some(globals) = flag("--globals") {
+                let map = serde_json::from_str::<Value>(globals).ok().and_then(|v| v.as_object().cloned()).ok_or("--globals takes a JSON object")?;
+                e.script.globals.insert("agent".into(), map);
+            }
+            let out = if args.iter().any(|a| a == "--preview") {
+                nalarupa_core::script::execute_within(&mut e, &call, nalarupa_core::script::PREVIEW_TIMEOUT)
+            } else {
+                e.tool("execute", &call)
+            };
+            let globals = Value::Object(e.script.globals.get("agent").cloned().unwrap_or_default());
             drop(e);
             let out = out.finish();
             let mut e = engine();
             println!("{}", out.text);
+            println!("=== globals: {globals}");
             for (i, img) in out.images.iter().enumerate() {
                 let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, img).map_err(|e| e.to_string())?;
                 let p = format!("shot-{i}.png");

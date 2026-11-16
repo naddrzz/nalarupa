@@ -122,7 +122,7 @@ func (r *Renderer) ShiftSiblings(cx *Ctx) map[int]*resolve.RNode {
 	// Each move is old layout to new, once: several inserts in one sync share siblings.
 	moved := map[string]bool{}
 	for _, id := range fresh {
-		top := TopIndex(cx.Doc, id)
+		top := cx.Doc.TopIndex(id)
 		if top < 0 {
 			continue
 		}
@@ -378,7 +378,7 @@ func (r *Renderer) RefreshSlides(cx *Ctx, rebuilt []string, roots map[int]*resol
 		return m
 	}
 	for _, s := range r.Slides {
-		top := TopIndex(cx.Doc, s.ID)
+		top := cx.Doc.TopIndex(s.ID)
 		if top < 0 {
 			s.tree = nil
 			continue
@@ -394,7 +394,7 @@ func (r *Renderer) RefreshSlides(cx *Ctx, rebuilt []string, roots map[int]*resol
 		}
 		var node *resolve.RNode
 		if root != nil {
-			node = FindRNode(root, s.ID)
+			node = root.Find(s.ID)
 		}
 		if node == nil {
 			s.tree = nil
@@ -472,7 +472,7 @@ func (r *Renderer) RefreshSlides(cx *Ctx, rebuilt []string, roots map[int]*resol
 			if a == s.ID {
 				continue
 			}
-			if an := FindRNode(root, a); an != nil && FindRNode(an, s.ID) != nil {
+			if an := root.Find(a); an != nil && an.Find(s.ID) != nil {
 				s.ancestors = append(s.ancestors, a)
 			}
 		}

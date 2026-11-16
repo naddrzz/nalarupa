@@ -208,7 +208,8 @@ func rgba(s string) ([4]float64, bool) {
 	return [4]float64{float64(c[0]) / 255, float64(c[1]) / 255, float64(c[2]) / 255, float64(c[3]) / 255}, true
 }
 
-func hex(c [4]float64) string {
+// Hex is a colour as #rrggbb (its alpha dropped).
+func Hex(c [4]float64) string {
 	b := func(v float64) uint8 { return uint8(math.Round(clamp(v, 0, 1) * 255)) }
 	return fmt.Sprintf("#%02x%02x%02x", b(c[0]), b(c[1]), b(c[2]))
 }
@@ -329,7 +330,7 @@ type stop struct {
 func stopTags(stops []stop) string {
 	var out strings.Builder
 	push := func(p float64, c [4]float64) {
-		out.WriteString(`<stop offset="` + f(p) + `" stop-color="` + hex(c) + `" stop-opacity="` + f(c[3]) + `"/>`)
+		out.WriteString(`<stop offset="` + f(p) + `" stop-color="` + Hex(c) + `" stop-opacity="` + f(c[3]) + `"/>`)
 	}
 	for i, s := range stops {
 		if i > 0 {

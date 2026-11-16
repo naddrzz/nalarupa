@@ -402,3 +402,19 @@ func TestSaveIsAtomicAndSerdeFormatted(t *testing.T) {
 		t.Fatal("temp file left behind")
 	}
 }
+
+// The zero IDSource draws as seed 0 made odd, so it never sticks at 0 (and GenID never loops).
+func TestZeroIDSourceIsSeedOne(t *testing.T) {
+	var zero IDSource
+	one := NewIDSource(0)
+	for range 3 {
+		if a, b := zero.Next(), one.Next(); a != b || a == 0 {
+			t.Fatal(a, b)
+		}
+	}
+	d := New()
+	d.IDs = &IDSource{}
+	if a, b := d.GenID(), d.GenID(); a == "" || a == b {
+		t.Fatal(a, b)
+	}
+}

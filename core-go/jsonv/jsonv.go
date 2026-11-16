@@ -279,8 +279,8 @@ func Float(f float64) Value {
 	return Number(FormatFloat(f))
 }
 
-// FormatFloat writes a finite f64 as serde_json does (ryu): the shortest round-trip digits, with
-// ".0" on whole numbers and an exponent outside 1e-5 ≤ |f| < 1e16.
+// FormatFloat writes a finite f64 as serde_json 1.0.154 does (zmij): the shortest round-trip digits,
+// with ".0" on whole numbers and a signed exponent outside 1e-5 ≤ |f| < 1e16 (`1e+16`, `1e-6`).
 func FormatFloat(f float64) string {
 	if f == 0 {
 		if math.Signbit(f) {
@@ -308,11 +308,19 @@ func FormatFloat(f float64) string {
 	case kk > -5 && kk <= 0:
 		out = "0." + strings.Repeat("0", -kk) + digits
 	case n == 1:
-		out = digits + "e" + strconv.Itoa(kk-1)
+		out = digits + exponent(kk-1)
 	default:
-		out = digits[:1] + "." + digits[1:] + "e" + strconv.Itoa(kk-1)
+		out = digits[:1] + "." + digits[1:] + exponent(kk-1)
 	}
 	return sign + out
+}
+
+// exponent is how serde_json's float writer (zmij) writes a decimal exponent: `e+21`, `e-7`.
+func exponent(e int) string {
+	if e >= 0 {
+		return "e+" + strconv.Itoa(e)
+	}
+	return "e" + strconv.Itoa(e)
 }
 
 // Equal is serde_json's `==`: objects compare without regard to key order, and numbers by kind

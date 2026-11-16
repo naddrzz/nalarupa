@@ -1,0 +1,21 @@
+// Get by path, with options, on instance descendants, and with visitors.
+const show = (v) => Print(JSON.stringify(v));
+show(Get("hero"));
+show(Get("board", {depth: 1}));
+show(Get("board", {depth: 0, includePathGeometry: true}));
+show([Get("wave"), Get("wave", {includePathGeometry: true})]);
+show(Get("hero", {resolveVariables: true}));
+show(Get("dark", {resolveVariables: true}));
+show(Get("ok"));
+show(Get("ok", {resolveInstances: true}));
+show(Get("ok", {resolveInstances: true, depth: 0}));
+show(Get("ok/btnbg"));
+show(Get(n => n.type === "ref" ? n.id : undefined));
+show(Get("board", (n, c) => ({id: n.id, depth: c.depth, index: c.index, parent: c.parentCtx && c.parentCtx.node.id, bounds: c.bounds, problems: c.problems})));
+show(Get((n, c) => { if (n.id === "stack") c.skipChildren(); return n.id }));
+show(Get("ok", (n, c) => [n.id, c.depth], {resolveInstances: true}));
+show(Get("ok", (n, c) => [n.id, c.depth]));
+show(Get("stack", {resolveVariables: true}, (n, c) => [n.id, n.gap, c.bounds]));
+show(Get((n) => n.name, {resolveVariables: true}));
+const c = Copy("ok/btnbg", "board", {x: 1, y: 1});
+show(Get(c));

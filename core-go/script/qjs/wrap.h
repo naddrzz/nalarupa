@@ -30,4 +30,12 @@ int qjs_track_rejections(JSContext *ctx, qjs_guard *g, const char *name);
 int qjs_tag(JSValue v);
 JSValue qjs_undefined(void);
 
+void qjs_set_go(qjs_guard *g, uintptr_t h);
+int qjs_define_native(JSContext *ctx, const char *name, int index);
+JSValue qjs_throw_message(JSContext *ctx, const char *msg, size_t len);
+JSValue qjs_throw_panic(JSContext *ctx);
+JSValue qjs_new_string(JSContext *ctx, const char *s, size_t len);
+JSValue qjs_global(JSContext *ctx, const char *name);
+JSValue qjs_exception(void);
+
 #endif

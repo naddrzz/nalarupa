@@ -1,0 +1,97 @@
+{
+  "steps": [
+    {
+      "text": "OK\n\n## Created nodes by name\n\"Page\": \"3xFPL\" (= page)\n\nGlobal variables carry over to later calls: declared, page, count, label, nested, when, big, weird\n",
+      "error": false,
+      "globals": {
+        "declared": "var",
+        "page": "3xFPL",
+        "count": 3,
+        "label": "three",
+        "nested": {
+          "list": [
+            1,
+            2.5,
+            {
+              "deep": true
+            }
+          ],
+          "none": null
+        },
+        "when": "1970-01-01T00:00:00.000Z",
+        "big": 1.1805916207174112e+21,
+        "weird": null
+      }
+    },
+    {
+      "text": "OK\n\n## Created nodes by name\n\"From globals\": \"pZRth\"\n\nGlobal variables carry over to later calls: declared, page, count, label, nested, when, big, weird\n\n## Print output\nundefined undefined var undefined 1970-01-01T00:00:00.000Z 1.1805916207174112e+21 null object undefined three\n",
+      "error": false,
+      "globals": {
+        "declared": "var",
+        "page": "3xFPL",
+        "count": 4,
+        "label": "three",
+        "nested": {
+          "list": [
+            1,
+            2.5,
+            {
+              "deep": true
+            }
+          ],
+          "none": null
+        },
+        "when": "1970-01-01T00:00:00.000Z",
+        "big": 1.1805916207174112e+21,
+        "weird": null
+      }
+    },
+    {
+      "text": "Error: Error: not kept (line 2)\nAll operations in this call have been rolled back.\nIMPORTANT: fix this by calling execute again with `editId: \"e8660c3\"` and an `edits` list of {find, replace} patches — do not resend the whole snippet.",
+      "error": true,
+      "globals": {
+        "declared": "var",
+        "page": "3xFPL",
+        "count": 4,
+        "label": "three",
+        "nested": {
+          "list": [
+            1,
+            2.5,
+            {
+              "deep": true
+            }
+          ],
+          "none": null
+        },
+        "when": "1970-01-01T00:00:00.000Z",
+        "big": 1.1805916207174112e+21,
+        "weird": null
+      }
+    },
+    {
+      "text": "OK\n\nGlobal variables carry over to later calls: declared, page, count, label, nested, when, big, weird\n\n## Print output\n4 [\"list\",\"none\"]\n",
+      "error": false,
+      "globals": {
+        "declared": "var",
+        "page": "3xFPL",
+        "count": 4,
+        "label": "three",
+        "nested": {
+          "list": [
+            1,
+            2.5,
+            {
+              "deep": true
+            }
+          ],
+          "none": null
+        },
+        "when": "1970-01-01T00:00:00.000Z",
+        "big": 1.1805916207174112e+21,
+        "weird": null
+      }
+    }
+  ],
+  "saved": "{\n  \"version\": \"2.19\",\n  \"themes\": {\n    \"mode\": [\n      \"light\",\n      \"dark\"\n    ]\n  },\n  \"variables\": {\n    \"brand\": {\n      \"type\": \"color\",\n      \"value\": [\n        {\n          \"value\": \"#3366FF\"\n        },\n        {\n          \"value\": \"#99BBFF\",\n          \"theme\": {\n            \"mode\": \"dark\"\n          }\n        }\n      ]\n    },\n    \"gap\": {\n      \"type\": \"number\",\n      \"value\": 12\n    }\n  },\n  \"children\": [\n    {\n      \"type\": \"frame\",\n      \"id\": \"board\",\n      \"name\": \"Board\",\n      \"x\": 0,\n      \"y\": 0,\n      \"width\": 600,\n      \"height\": 400,\n      \"layout\": \"none\",\n      \"fill\": \"#FFFFFF\",\n      \"children\": [\n        {\n          \"type\": \"rectangle\",\n          \"id\": \"hero\",\n          \"name\": \"Hero\",\n          \"x\": 20,\n          \"y\": 20,\n          \"width\": 200,\n          \"height\": 120,\n          \"fill\": \"$brand\",\n          \"cornerRadius\": 8\n        },\n        {\n          \"type\": \"ellipse\",\n          \"id\": \"dot\",\n          \"name\": \"Dot\",\n          \"x\": 260,\n          \"y\": 40,\n          \"width\": 40,\n          \"height\": 40,\n          \"fill\": \"#FF8800\"\n        },\n        {\n          \"type\": \"path\",\n          \"id\": \"wave\",\n          \"name\": \"Wave\",\n          \"x\": 20,\n          \"y\": 200,\n          \"width\": 120,\n          \"height\": 40,\n          \"geometry\": \"M0 20 C30 0 90 40 120 20\",\n          \"stroke\": \"#333333\",\n          \"strokeWidth\": 2,\n          \"strokeLinejoin\": \"miter\",\n          \"strokeLinecap\": \"butt\",\n          \"strokeAlignment\": \"inner\"\n        },\n        {\n          \"type\": \"frame\",\n          \"id\": \"stack\",\n          \"name\": \"Stack\",\n          \"x\": 320,\n          \"y\": 20,\n          \"layout\": \"vertical\",\n          \"gap\": \"$gap\",\n          \"padding\": 10,\n          \"fill\": \"#F2F2F2\",\n          \"children\": [\n            {\n              \"type\": \"rectangle\",\n              \"id\": \"s1\",\n              \"name\": \"S1\",\n              \"width\": 80,\n              \"height\": 20,\n              \"fill\": \"#CCCCCC\"\n            },\n            {\n              \"type\": \"rectangle\",\n              \"id\": \"s2\",\n              \"name\": \"S2\",\n              \"width\": 80,\n              \"height\": 20,\n              \"fill\": \"#BBBBBB\"\n            }\n          ]\n        }\n      ]\n    },\n    {\n      \"type\": \"frame\",\n      \"id\": \"button\",\n      \"name\": \"Button\",\n      \"reusable\": true,\n      \"x\": 700,\n      \"y\": 0,\n      \"width\": 120,\n      \"height\": 40,\n      \"layout\": \"none\",\n      \"fill\": \"#222222\",\n      \"children\": [\n        {\n          \"type\": \"rectangle\",\n          \"id\": \"btnbg\",\n          \"name\": \"Bg\",\n          \"x\": 4,\n          \"y\": 4,\n          \"width\": 112,\n          \"height\": 32,\n          \"fill\": \"$brand\"\n        },\n        {\n          \"type\": \"ellipse\",\n          \"id\": \"btnicon\",\n          \"name\": \"Icon\",\n          \"x\": 10,\n          \"y\": 12,\n          \"width\": 16,\n          \"height\": 16,\n          \"fill\": \"#FFFFFF\"\n        }\n      ]\n    },\n    {\n      \"type\": \"ref\",\n      \"id\": \"ok\",\n      \"name\": \"OK button\",\n      \"ref\": \"button\",\n      \"x\": 700,\n      \"y\": 100,\n      \"descendants\": {\n        \"btnbg\": {\n          \"fill\": \"#00AA55\"\n        }\n      }\n    },\n    {\n      \"type\": \"frame\",\n      \"id\": \"dark\",\n      \"name\": \"Dark\",\n      \"x\": 700,\n      \"y\": 200,\n      \"width\": 200,\n      \"height\": 100,\n      \"layout\": \"none\",\n      \"theme\": {\n        \"mode\": \"dark\"\n      },\n      \"fill\": \"$brand\",\n      \"children\": [\n        {\n          \"type\": \"rectangle\",\n          \"id\": \"inDark\",\n          \"name\": \"In dark\",\n          \"x\": 10,\n          \"y\": 10,\n          \"width\": \"$gap\",\n          \"height\": 10,\n          \"fill\": \"$brand\"\n        }\n      ]\n    },\n    {\n      \"type\": \"frame\",\n      \"name\": \"Page\",\n      \"x\": 0,\n      \"y\": 600,\n      \"width\": 300,\n      \"height\": 200,\n      \"layout\": \"none\",\n      \"id\": \"3xFPL\",\n      \"children\": [\n        {\n          \"type\": \"rectangle\",\n          \"name\": \"From globals\",\n          \"x\": 30,\n          \"y\": 2.5,\n          \"width\": 50,\n          \"height\": 50,\n          \"id\": \"pZRth\"\n        }\n      ]\n    }\n  ]\n}"
+}

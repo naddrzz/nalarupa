@@ -74,6 +74,19 @@ func (n *RNode) Visit(f func(*RNode, int), depth int) {
 	}
 }
 
+// Find is the node id in n's subtree, or nil.
+func (n *RNode) Find(id string) *RNode {
+	if n.ID == id {
+		return n
+	}
+	for _, k := range n.Kids {
+		if f := k.Find(id); f != nil {
+			return f
+		}
+	}
+	return nil
+}
+
 func leaf(id, ty string, p *jsonv.Object, problem string) *RNode {
 	return &RNode{ID: id, Type: ty, P: p, Problem: problem}
 }

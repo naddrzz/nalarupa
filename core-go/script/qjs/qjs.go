@@ -32,6 +32,7 @@ import "C"
 import (
 	"errors"
 	"runtime"
+	"runtime/cgo"
 	"unsafe"
 )
 
@@ -64,6 +65,12 @@ func Undefined() Value { return Value{C.qjs_undefined()} }
 type Runtime struct {
 	ctx   *C.JSContext
 	guard *C.qjs_guard
+	// handle is what natives find this Runtime by; natives are the functions Define registered.
+	handle  cgo.Handle
+	natives []Native
+	// panicked is the panic a native raised (when hasPanic), raised again once control is back in Go.
+	panicked any
+	hasPanic bool
 }
 
 // New is a runtime capped at memory bytes of heap and stack bytes of C stack, with the interrupt handler armed by
@@ -80,7 +87,10 @@ func New(memory, stack int) (*Runtime, error) {
 		C.qjs_guard_free(g)
 		return nil, errors.New("cannot create a JavaScript runtime")
 	}
-	return &Runtime{ctx: ctx, guard: g}, nil
+	r := &Runtime{ctx: ctx, guard: g}
+	r.handle = cgo.NewHandle(r)
+	C.qjs_set_go(g, C.uintptr_t(r.handle))
+	return r, nil
 }
 
 // Close frees the runtime; every Value taken from it must be freed first. Call it on the goroutine that called New.
@@ -89,6 +99,7 @@ func (r *Runtime) Close() {
 		return
 	}
 	C.qjs_free(r.ctx)
+	r.handle.Delete()
 	C.qjs_guard_free(r.guard)
 	*r = Runtime{}
 	runtime.UnlockOSThread()
@@ -119,7 +130,17 @@ func (r *Runtime) Eval(src, file string, strict bool) Value {
 	if strict {
 		flags |= C.JS_EVAL_FLAG_STRICT
 	}
-	return Value{C.qjs_eval(r.ctx, code, C.size_t(len(src)), name, flags)}
+	v := Value{C.qjs_eval(r.ctx, code, C.size_t(len(src)), name, flags)}
+	r.afterJS(v)
+	return v
+}
+
+// afterJS raises again a panic a native raised while JavaScript ran, freeing v (the call's result) first.
+func (r *Runtime) afterJS(v Value) {
+	if r.hasPanic {
+		r.Free(v)
+		r.repanic()
+	}
 }
 
 // Call calls f with this and args (which stay owned by the caller).
@@ -132,11 +153,17 @@ func (r *Runtime) Call(f, this Value, args ...Value) Value {
 	if len(argv) > 0 {
 		p = &argv[0]
 	}
-	return Value{C.qjs_call(r.ctx, f.v, this.v, C.int(len(argv)), p)}
+	v := Value{C.qjs_call(r.ctx, f.v, this.v, C.int(len(argv)), p)}
+	r.afterJS(v)
+	return v
 }
 
 // RunJob runs one pending job: 0 when there was none, 1 when one ran, -1 when it threw (see Exception).
-func (r *Runtime) RunJob() int { return int(C.qjs_run_job(r.ctx)) }
+func (r *Runtime) RunJob() int {
+	n := int(C.qjs_run_job(r.ctx))
+	r.afterJS(Undefined())
+	return n
+}
 
 // Heap is the bytes the runtime has allocated (JS_ComputeMemoryUsage's malloc_size).
 func (r *Runtime) Heap() int64 { return int64(C.qjs_heap(r.ctx)) }

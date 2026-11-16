@@ -794,7 +794,7 @@ fn prepare(e: &mut Engine, args: &Value) -> Result<Prepared, ToolOut> {
     Ok(Prepared { source, edit_id, before, agent, globals, was_clean, stops: e.agent.stops })
 }
 
-fn execute_within(e: &mut Engine, args: &Value, budget: Duration) -> ToolOut {
+pub fn execute_within(e: &mut Engine, args: &Value, budget: Duration) -> ToolOut {
     let prep = match prepare(e, args) {
         Ok(p) => p,
         Err(out) => return out,

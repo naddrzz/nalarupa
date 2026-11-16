@@ -6,6 +6,7 @@
 #include <string.h>
 #include "cutils.h"
 #include "wrap.h"
+#include "_cgo_export.h"
 
 struct qjs_guard {
     _Atomic int cancel;
@@ -13,7 +14,12 @@ struct qjs_guard {
     _Atomic int64_t deadline;
     // tracker is the global the rejection tracker calls, or NULL.
     char *tracker;
+    // go is the cgo.Handle of the Go Runtime natives call back into; fn_class is the class of native functions.
+    uintptr_t go;
+    JSClassID fn_class;
 };
+
+void qjs_set_go(qjs_guard *g, uintptr_t h) { g->go = h; }
 
 qjs_guard *qjs_guard_new(void) { return calloc(1, sizeof(qjs_guard)); }
 
@@ -43,9 +49,18 @@ static int interrupt(JSRuntime *rt, void *opaque) {
     return qjs_canceled(g) || qjs_expired(g);
 }
 
-// qjs_new is rquickjs's `Runtime::new` (which registers three classes of its own) followed by what script.rs sets
-// on it: the memory and stack limits, the interrupt handler, then `Context::full` (JS_NewContext). The guard is the
-// runtime's opaque.
+// native_call is the call hook of the native function class, as rquickjs's `RustFunction` class has one: a call
+// pushes no stack frame of its own (so stacks match rquickjs's) and goes to the Go native at the object's index.
+static JSValue native_call(JSContext *ctx, JSValueConst func, JSValueConst this_val, int argc, JSValueConst *argv,
+                           int flags) {
+    qjs_guard *g = JS_GetRuntimeOpaque(JS_GetRuntime(ctx));
+    int index = (int)(uintptr_t)JS_GetOpaque(func, g->fn_class) - 1;
+    return qjsGoNative(ctx, g->go, index, argc, (JSValue *)argv);
+}
+
+// qjs_new is rquickjs's `Runtime::new` (which registers three classes of its own; natives are instances of the
+// second, `RustFunction`) followed by what script.rs sets on it: the memory and stack limits, the interrupt handler,
+// then `Context::full` (JS_NewContext). The guard is the runtime's opaque.
 JSContext *qjs_new(size_t memory, size_t stack, qjs_guard *g) {
     JSRuntime *rt = JS_NewRuntime();
     if (!rt)
@@ -57,12 +72,13 @@ JSContext *qjs_new(size_t memory, size_t stack, qjs_guard *g) {
         JS_NewClassID(rt, &ids[i]);
     }
     for (int i = 0; i < 3; i++) {
-        JSClassDef def = {.class_name = classes[i]};
+        JSClassDef def = {.class_name = classes[i], .call = i == 1 ? native_call : NULL};
         if (JS_NewClass(rt, ids[i], &def)) {
             JS_FreeRuntime(rt);
             return NULL;
         }
     }
+    g->fn_class = ids[1];
     JS_SetRuntimeOpaque(rt, g);
     JS_SetMemoryLimit(rt, memory);
     JS_SetMaxStackSize(rt, stack);
@@ -136,3 +152,55 @@ int qjs_track_rejections(JSContext *ctx, qjs_guard *g, const char *name) {
 int qjs_tag(JSValue v) { return JS_VALUE_GET_TAG(v); }
 
 JSValue qjs_undefined(void) { return JS_UNDEFINED; }
+
+// qjs_define_native makes the global name a native function that calls the Go native at index, as rquickjs's
+// `Function::new` does: an instance of the native class with Function.prototype and a configurable length of 0.
+int qjs_define_native(JSContext *ctx, const char *name, int index) {
+    qjs_guard *g = JS_GetRuntimeOpaque(JS_GetRuntime(ctx));
+    JSValue proto = JS_GetFunctionProto(ctx);
+    JSValue f = JS_NewObjectProtoClass(ctx, proto, g->fn_class);
+    JS_FreeValue(ctx, proto);
+    if (JS_IsException(f))
+        return -1;
+    JS_SetOpaque(f, (void *)(uintptr_t)(index + 1));
+    if (JS_DefinePropertyValueStr(ctx, f, "length", JS_NewInt32(ctx, 0), JS_PROP_CONFIGURABLE | JS_PROP_THROW) < 0) {
+        JS_FreeValue(ctx, f);
+        return -1;
+    }
+    JSValue global = JS_GetGlobalObject(ctx);
+    int r = JS_SetPropertyStr(ctx, global, name, f);
+    JS_FreeValue(ctx, global);
+    return r < 0 ? -1 : 0;
+}
+
+// qjs_throw_message throws a new Error with an own `message` property, as rquickjs's `Exception::throw_message`.
+JSValue qjs_throw_message(JSContext *ctx, const char *msg, size_t len) {
+    JSValue e = JS_NewError(ctx);
+    if (JS_IsException(e))
+        return e;
+    if (JS_SetPropertyStr(ctx, e, "message", JS_NewStringLen(ctx, msg, len)) < 0) {
+        JS_FreeValue(ctx, e);
+        return JS_EXCEPTION;
+    }
+    return JS_Throw(ctx, e);
+}
+
+// qjs_throw_panic throws an uncatchable error: a Go native panicked, and no JavaScript may run on past it.
+JSValue qjs_throw_panic(JSContext *ctx) {
+    JSValue e = JS_NewError(ctx);
+    if (JS_IsException(e))
+        return e;
+    JS_SetUncatchableError(ctx, e);
+    return JS_Throw(ctx, e);
+}
+
+JSValue qjs_new_string(JSContext *ctx, const char *s, size_t len) { return JS_NewStringLen(ctx, len ? s : "", len); }
+
+JSValue qjs_global(JSContext *ctx, const char *name) {
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue v = JS_GetPropertyStr(ctx, global, name);
+    JS_FreeValue(ctx, global);
+    return v;
+}
+
+JSValue qjs_exception(void) { return JS_EXCEPTION; }

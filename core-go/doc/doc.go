@@ -29,6 +29,8 @@ var nodeTypes = []string{
 type Doc struct {
 	Root *jsonv.Object
 	Path string
+	// IDs is the generator new ids are drawn from; nil is the process-wide one. An execute run sets its own.
+	IDs *IDSource
 }
 
 // New returns an empty document.
@@ -141,6 +143,17 @@ func (d *Doc) Children() []jsonv.Value {
 // Find returns the first node with id, or nil.
 func (d *Doc) Find(id string) jsonv.Value {
 	return FindIn(d.Children(), id)
+}
+
+// TopIndex is the index of the top-level node that holds id (an instance path by its head), or -1.
+func (d *Doc) TopIndex(id string) int {
+	head, _, _ := strings.Cut(id, "/")
+	for i, n := range d.Children() {
+		if jsonv.StrIs(jsonv.Get(n, "id"), head) || FindIn([]jsonv.Value{n}, head) != nil {
+			return i
+		}
+	}
+	return -1
 }
 
 func (d *Doc) indexPath(id string) []int {
@@ -270,7 +283,7 @@ func (d *Doc) AllIDs() []string {
 // GenID returns a fresh id no node has.
 func (d *Doc) GenID() string {
 	for {
-		if id := randomID(); d.Find(id) == nil {
+		if id := d.randomID(); d.Find(id) == nil {
 			return id
 		}
 	}
@@ -789,7 +802,7 @@ type remapEntry struct{ old, new string }
 func (d *Doc) assignIDs(node jsonv.Value, remap *[]remapEntry) {
 	var fresh string
 	for {
-		fresh = randomID()
+		fresh = d.randomID()
 		if d.Find(fresh) == nil && !slices.ContainsFunc(*remap, func(e remapEntry) bool { return e.new == fresh }) {
 			break
 		}

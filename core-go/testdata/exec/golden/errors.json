@@ -1,0 +1,60 @@
+{
+  "steps": [
+    {
+      "text": "Error: Error: check failed: 0 (line 4)\nAll operations in this call have been rolled back.\nIMPORTANT: fix this by calling execute again with `editId: \"e11441\"` and an `edits` list of {find, replace} patches — do not resend the whole snippet.",
+      "error": true,
+      "globals": {}
+    },
+    {
+      "text": "Error: Uncaught code 7\nAll operations in this call have been rolled back.\nIMPORTANT: fix this by calling execute again with `editId: \"e13cc2\"` and an `edits` list of {find, replace} patches — do not resend the whole snippet.",
+      "error": true,
+      "globals": {}
+    },
+    {
+      "text": "Error: SyntaxError: invalid property name (line 2)\nAll operations in this call have been rolled back.\nIMPORTANT: fix this by calling execute again with `editId: \"e8660c3\"` and an `edits` list of {find, replace} patches — do not resend the whole snippet.",
+      "error": true,
+      "globals": {}
+    },
+    {
+      "text": "Error: RangeError: late (line 4)\nAll operations in this call have been rolled back.\nIMPORTANT: fix this by calling execute again with `editId: \"e14547\"` and an `edits` list of {find, replace} patches — do not resend the whole snippet.",
+      "error": true,
+      "globals": {}
+    },
+    {
+      "text": "Error: Uncaught undefined\nAll operations in this call have been rolled back.\nIMPORTANT: fix this by calling execute again with `editId: \"e14547\"` and an `edits` list of {find, replace} patches — do not resend the whole snippet.",
+      "error": true,
+      "globals": {}
+    },
+    {
+      "text": "Error: Error: children[0] of 'frame': children[0] of 'frame': unknown node type 'star' (valid: frame, group, rectangle, ellipse, polygon, line, path, text, note, prompt, context, icon, script, browser, ref) (line 2)\nAll operations in this call have been rolled back.\nIMPORTANT: fix this by calling execute again with `editId: \"e16dc4\"` and an `edits` list of {find, replace} patches — do not resend the whole snippet.",
+      "error": true,
+      "globals": {}
+    },
+    {
+      "text": "Error: Error: node not found: nope (line 1)\nAll operations in this call have been rolled back.\nIMPORTANT: fix this by calling execute again with `editId: \"e8ee1c7\"` and an `edits` list of {find, replace} patches — do not resend the whole snippet.",
+      "error": true,
+      "globals": {}
+    },
+    {
+      "text": "Error: Error: node not found: nope (line 2)\nAll operations in this call have been rolled back.\nIMPORTANT: fix this by calling execute again with `editId: \"ebf8661\"` and an `edits` list of {find, replace} patches — do not resend the whole snippet.",
+      "error": true,
+      "globals": {}
+    },
+    {
+      "text": "Error: Error: invalid argument: expected value at line 1 column 1 (line 1)\nAll operations in this call have been rolled back.\nIMPORTANT: fix this by calling execute again with `editId: \"e932249\"` and an `edits` list of {find, replace} patches — do not resend the whole snippet.",
+      "error": true,
+      "globals": {}
+    },
+    {
+      "text": "OK\n\n## Print output\nnode not found: nope     at Update (eval_script:6:53)\n    at \u003ceval\u003e (input:2:7)\n [\"message\"] 0  function\n    at Get (eval_script:26:37)\n    at deep (input:3:26)\n    at \u003ceval\u003e (input:4:7)\n\nTypeError BigInt are forbidden in JSON.stringify     at stringify (native)\n    at __j (eval_script:3:60)\n    at Insert (eval_script:4:64)\n    at \u003ceval\u003e (input:5:7)\n\n",
+      "error": false,
+      "globals": {}
+    },
+    {
+      "text": "Error: String contained internal null bytes: nul byte found in provided data at position: 5\nAll operations in this call have been rolled back.\nIMPORTANT: fix this by calling execute again with `editId: \"e9762cb\"` and an `edits` list of {find, replace} patches — do not resend the whole snippet.",
+      "error": true,
+      "globals": {}
+    }
+  ],
+  "saved": "{\n  \"version\": \"2.19\",\n  \"themes\": {\n    \"mode\": [\n      \"light\",\n      \"dark\"\n    ]\n  },\n  \"variables\": {\n    \"brand\": {\n      \"type\": \"color\",\n      \"value\": [\n        {\n          \"value\": \"#3366FF\"\n        },\n        {\n          \"value\": \"#99BBFF\",\n          \"theme\": {\n            \"mode\": \"dark\"\n          }\n        }\n      ]\n    },\n    \"gap\": {\n      \"type\": \"number\",\n      \"value\": 12\n    }\n  },\n  \"children\": [\n    {\n      \"type\": \"frame\",\n      \"id\": \"board\",\n      \"name\": \"Board\",\n      \"x\": 0,\n      \"y\": 0,\n      \"width\": 600,\n      \"height\": 400,\n      \"layout\": \"none\",\n      \"fill\": \"#FFFFFF\",\n      \"children\": [\n        {\n          \"type\": \"rectangle\",\n          \"id\": \"hero\",\n          \"name\": \"Hero\",\n          \"x\": 20,\n          \"y\": 20,\n          \"width\": 200,\n          \"height\": 120,\n          \"fill\": \"$brand\",\n          \"cornerRadius\": 8\n        },\n        {\n          \"type\": \"ellipse\",\n          \"id\": \"dot\",\n          \"name\": \"Dot\",\n          \"x\": 260,\n          \"y\": 40,\n          \"width\": 40,\n          \"height\": 40,\n          \"fill\": \"#FF8800\"\n        },\n        {\n          \"type\": \"path\",\n          \"id\": \"wave\",\n          \"name\": \"Wave\",\n          \"x\": 20,\n          \"y\": 200,\n          \"width\": 120,\n          \"height\": 40,\n          \"geometry\": \"M0 20 C30 0 90 40 120 20\",\n          \"stroke\": \"#333333\",\n          \"strokeWidth\": 2,\n          \"strokeLinejoin\": \"miter\",\n          \"strokeLinecap\": \"butt\",\n          \"strokeAlignment\": \"inner\"\n        },\n        {\n          \"type\": \"frame\",\n          \"id\": \"stack\",\n          \"name\": \"Stack\",\n          \"x\": 320,\n          \"y\": 20,\n          \"layout\": \"vertical\",\n          \"gap\": \"$gap\",\n          \"padding\": 10,\n          \"fill\": \"#F2F2F2\",\n          \"children\": [\n            {\n              \"type\": \"rectangle\",\n              \"id\": \"s1\",\n              \"name\": \"S1\",\n              \"width\": 80,\n              \"height\": 20,\n              \"fill\": \"#CCCCCC\"\n            },\n            {\n              \"type\": \"rectangle\",\n              \"id\": \"s2\",\n              \"name\": \"S2\",\n              \"width\": 80,\n              \"height\": 20,\n              \"fill\": \"#BBBBBB\"\n            }\n          ]\n        },\n        {\n          \"type\": \"rectangle\",\n          \"id\": \"v0Bq9\"\n        }\n      ]\n    },\n    {\n      \"type\": \"frame\",\n      \"id\": \"button\",\n      \"name\": \"Button\",\n      \"reusable\": true,\n      \"x\": 700,\n      \"y\": 0,\n      \"width\": 120,\n      \"height\": 40,\n      \"layout\": \"none\",\n      \"fill\": \"#222222\",\n      \"children\": [\n        {\n          \"type\": \"rectangle\",\n          \"id\": \"btnbg\",\n          \"name\": \"Bg\",\n          \"x\": 4,\n          \"y\": 4,\n          \"width\": 112,\n          \"height\": 32,\n          \"fill\": \"$brand\"\n        },\n        {\n          \"type\": \"ellipse\",\n          \"id\": \"btnicon\",\n          \"name\": \"Icon\",\n          \"x\": 10,\n          \"y\": 12,\n          \"width\": 16,\n          \"height\": 16,\n          \"fill\": \"#FFFFFF\"\n        }\n      ]\n    },\n    {\n      \"type\": \"ref\",\n      \"id\": \"ok\",\n      \"name\": \"OK button\",\n      \"ref\": \"button\",\n      \"x\": 700,\n      \"y\": 100,\n      \"descendants\": {\n        \"btnbg\": {\n          \"fill\": \"#00AA55\"\n        }\n      }\n    },\n    {\n      \"type\": \"frame\",\n      \"id\": \"dark\",\n      \"name\": \"Dark\",\n      \"x\": 700,\n      \"y\": 200,\n      \"width\": 200,\n      \"height\": 100,\n      \"layout\": \"none\",\n      \"theme\": {\n        \"mode\": \"dark\"\n      },\n      \"fill\": \"$brand\",\n      \"children\": [\n        {\n          \"type\": \"rectangle\",\n          \"id\": \"inDark\",\n          \"name\": \"In dark\",\n          \"x\": 10,\n          \"y\": 10,\n          \"width\": \"$gap\",\n          \"height\": 10,\n          \"fill\": \"$brand\"\n        }\n      ]\n    }\n  ]\n}"
+}

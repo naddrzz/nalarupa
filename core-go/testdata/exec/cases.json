@@ -1,0 +1,40 @@
+[
+  {"name": "edits", "doc": "shapes.pen", "steps": [{"script": "edits.js", "seed": 1}, {"script": "replace-vars.js", "seed": 5}]},
+  {"name": "get", "doc": "shapes.pen", "steps": [{"script": "get.js", "seed": 1}]},
+  {"name": "errors", "doc": "shapes.pen", "steps": [
+    {"script": "e-throw.js", "seed": 1},
+    {"script": "e-value.js", "seed": 2},
+    {"script": "e-syntax.js", "seed": 3},
+    {"script": "e-reject.js", "seed": 4},
+    {"script": "e-reject-undefined.js", "seed": 5},
+    {"script": "e-badnode.js", "seed": 6},
+    {"script": "e-native.js", "seed": 7},
+    {"script": "e-generate.js", "seed": 8},
+    {"script": "e-args.js", "seed": 9},
+    {"script": "e-caught.js", "seed": 10},
+    {"script": "e-nul.js", "seed": 11}
+  ]},
+  {"name": "limits", "doc": "shapes.pen", "steps": [
+    {"script": "l-loop.js", "seed": 1, "preview": true},
+    {"script": "l-oom.js", "seed": 2},
+    {"script": "l-stack.js", "seed": 3},
+    {"script": "l-jobs-oom.js", "seed": 4},
+    {"script": "l-jobs-spin.js", "seed": 5, "preview": true}
+  ]},
+  {"name": "limits-30s", "doc": "shapes.pen", "slow": true, "steps": [{"script": "l-loop.js", "seed": 1}]},
+  {"name": "globals", "doc": "shapes.pen", "steps": [
+    {"script": "globals-1.js", "seed": 1},
+    {"script": "globals-2.js", "seed": 2},
+    {"script": "globals-3.js", "seed": 3},
+    {"script": "globals-4.js", "seed": 4}
+  ]},
+  {"name": "validate-shapes", "doc": "shapes.pen", "steps": [{"script": "validate-shapes.js", "seed": 1}]},
+  {"name": "validate-text", "doc": "shapes.pen", "live": true, "steps": [{"script": "validate-text.js", "seed": 1}]},
+  {"name": "numbers", "doc": "shapes.pen", "steps": [{"script": "numbers-1.js", "seed": 1}, {"script": "numbers-2.js", "seed": 2}]},
+  {"name": "empty-template", "doc": "", "steps": [{"script": "empty-0.js", "seed": 1}, {"script": "empty-1.js", "seed": 2}, {"script": "empty-2.js", "seed": 3}]},
+  {"name": "mobile-template", "doc": "mobile.pen", "steps": [{"script": "mobile.js", "seed": 1}]},
+  {"name": "slides-template", "doc": "slides.pen", "live": true, "steps": [{"script": "slides.js", "seed": 1}]},
+  {"name": "seed-1", "doc": "shapes.pen", "steps": [{"script": "seeds.js", "seed": 1}]},
+  {"name": "seed-2", "doc": "shapes.pen", "steps": [{"script": "seeds.js", "seed": 2}]},
+  {"name": "seed-1-preview", "doc": "shapes.pen", "steps": [{"script": "seeds.js", "seed": 1, "preview": true}]}
+]

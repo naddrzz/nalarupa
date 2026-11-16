@@ -232,17 +232,6 @@ func (r *Renderer) threads() int {
 // Dirty is the doc-space areas changed since the cached view was painted (merged at the next Render).
 func (r *Renderer) Dirty() []Rect { return r.dirty }
 
-// TopIndex is the index of the top-level node that holds id (an instance path by its head), or -1.
-func TopIndex(d *doc.Doc, id string) int {
-	head, _, _ := strings.Cut(id, "/")
-	for i, n := range d.Children() {
-		if jsonv.StrIs(jsonv.Get(n, "id"), head) || doc.FindIn([]jsonv.Value{n}, head) != nil {
-			return i
-		}
-	}
-	return -1
-}
-
 // ancestorsOf appends n and the descendants of n on the way to node id (not id itself); false if absent.
 func ancestorsOf(n *resolve.RNode, id string, chain *[]*resolve.RNode) bool {
 	*chain = append(*chain, n)
@@ -280,19 +269,6 @@ func dimmed(d *doc.Doc, id string) bool {
 		}
 	}
 	return false
-}
-
-// FindRNode is the node id in n's subtree, or nil.
-func FindRNode(n *resolve.RNode, id string) *resolve.RNode {
-	if n.ID == id {
-		return n
-	}
-	for _, k := range n.Kids {
-		if f := FindRNode(k, id); f != nil {
-			return f
-		}
-	}
-	return nil
 }
 
 func valueString(v jsonv.Value, present bool) string {

@@ -110,11 +110,13 @@ func (js *JS) Call(f Value, args ...string) (Value, error) {
 	for i, a := range args {
 		vals[i] = js.rt.NewString(a)
 	}
-	r := js.rt.Call(f.v, qjs.Undefined(), vals...)
-	for _, v := range vals {
-		js.rt.Free(v)
-	}
-	return js.result(r)
+	// Freed even when a native's panic comes back through Call: a leaked value fails the runtime's free.
+	defer func() {
+		for _, v := range vals {
+			js.rt.Free(v)
+		}
+	}()
+	return js.result(js.rt.Call(f.v, qjs.Undefined(), vals...))
 }
 
 // String is v as a Go string when v is a JS string, otherwise a *ConvError (rquickjs's `FromJs<String>`).
@@ -253,6 +255,11 @@ func (e *Exception) Error() string {
 func (js *JS) exception() *Exception {
 	v := js.rt.Exception()
 	defer js.rt.Free(v)
+	return js.read(v)
+}
+
+// read is a thrown value as rquickjs reads it: an Error's name, message and stack, or another value's text.
+func (js *JS) read(v qjs.Value) *Exception {
 	if !qjs.IsError(v) {
 		s, _ := js.toString(v)
 		return &Exception{Text: s}
@@ -286,3 +293,30 @@ func parseUsize(s string) (int, bool) {
 	n, err := strconv.ParseUint(s, 10, 63)
 	return int(n), err == nil
 }
+
+// Native is a Go function JavaScript calls by a global name: its arguments as JS ToString makes them (rquickjs's
+// `Rest<Coerced<String>>`), its result a string. An error is thrown as a new Error with its text as the message.
+type Native = qjs.Native
+
+// Define makes the global name call f, as rquickjs's `Function::new` set on the globals.
+func (js *JS) Define(name string, f Native) error { return js.rt.Define(name, f) }
+
+// Global is the global property name.
+func (js *JS) Global(name string) (Value, error) { return js.result(js.rt.Global(name)) }
+
+// Nullish reports whether v is undefined or null.
+func (js *JS) Nullish(v Value) bool {
+	t := v.v.Tag()
+	return t == qjs.TagUndefined || t == qjs.TagNull
+}
+
+// Index is v[i]; a throwing getter returns its exception.
+func (js *JS) Index(v Value, i int) (Value, error) {
+	return js.result(js.rt.Get(v.v, strconv.Itoa(i)))
+}
+
+// IsArray reports whether v is an Array.
+func (js *JS) IsArray(v Value) bool { return qjs.IsArray(v.v) }
+
+// Thrown is v read as a thrown value, as rquickjs reads the exception after `ctx.throw(v)`.
+func (js *JS) Thrown(v Value) *Exception { return js.read(v.v) }
