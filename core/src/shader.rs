@@ -604,6 +604,28 @@ pub fn oracle_sdf(outline: &Outline, w: f64, h: f64, dpi: f64) -> (usize, usize,
     (sw, sh, px, half)
 }
 
+/// Test-only, the Go port's oracle (`nalarupa-cli shader-render`): `render` with sampler images loaded from
+/// `dir` and, when `backdrop`, `oracle_backdrop` behind the node, plus the adapter it ran on.
+#[doc(hidden)]
+#[allow(clippy::too_many_arguments)]
+pub fn oracle_render(src: &str, uniforms: Option<&Map<String, Value>>, w: f64, h: f64, scale: f64, outline: &Outline, dir: &std::path::Path, backdrop: bool) -> Result<(tiny_skia::Pixmap, String), String> {
+    let mut image = |u: &str| crate::svg::decode_image(dir.join(u).to_str()?);
+    let mut behind = |bw: u32, bh: u32| oracle_backdrop(bw, bh);
+    let pm = render(src, uniforms, w, h, scale, outline, &mut image, if backdrop { Some(&mut behind as &mut Backdrop<'_>) } else { None })?;
+    Ok((pm, adapter()?))
+}
+
+/// Test-only: the oracle's backdrop, opaque with red = column and green = row, each 0 to 255 across the pixmap.
+#[doc(hidden)]
+pub fn oracle_backdrop(w: u32, h: u32) -> Option<tiny_skia::Pixmap> {
+    let mut p = tiny_skia::Pixmap::new(w, h)?;
+    for (i, px) in p.data_mut().chunks_exact_mut(4).enumerate() {
+        let (x, y) = (i as u32 % w, i as u32 / w);
+        px.copy_from_slice(&[(x * 255 / (w - 1).max(1)) as u8, (y * 255 / (h - 1).max(1)) as u8, 64, 255]);
+    }
+    Some(p)
+}
+
 thread_local! {
     /// Test-only: when set, the `@backdrop` SVGs built by svg.rs on this thread, in order.
     #[doc(hidden)]

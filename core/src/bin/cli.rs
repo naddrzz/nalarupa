@@ -42,6 +42,11 @@
 //!                                                       the `@sdf` texels as raw little-endian f32 (<out>.f32, top
 //!                                                       row first) and the f16 texture (<out>.f16, bottom row first);
 //!                                                       prints {"width","height"} (the Go port's SDF oracle)
+//!   nalarupa-cli shader-render <file.frag> <uniforms.json|-> <w> <h> <scale> <outline.json> <out.rgba> [--backdrop]
+//!                                                       `render` of the shader (sampler images relative to the
+//!                                                       shader's folder, `--backdrop`: the oracle gradient behind
+//!                                                       it) as premultiplied RGBA bytes; prints {"width","height",
+//!                                                       "adapter"} or {"error"} (the Go port's GPU oracle)
 //!   nalarupa-cli shader-backdrop <doc.pen> <node-id> [--offline]
 //!                                                       the `@backdrop` SVGs the SVG export of a node builds, as a
 //!                                                       JSON array (the Go port's backdrop oracle)
@@ -279,17 +284,7 @@ fn run(args: &[String]) -> Result<(), String> {
             Ok(())
         }
         "shader-sdf" => {
-            let v: Value = serde_json::from_str(&std::fs::read_to_string(arg(2)?).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
-            let f = |k: &str| v[k].as_f64().unwrap_or(0.0);
-            let outline = match v["kind"].as_str() {
-                Some("rrect") => {
-                    let r: Vec<f64> = v["radii"].as_array().map(|a| a.iter().filter_map(Value::as_f64).collect()).unwrap_or_default();
-                    nalarupa_core::shader::Outline::RRect(r.try_into().map_err(|_| "rrect needs 4 radii")?)
-                }
-                Some("ellipse") => nalarupa_core::shader::Outline::Ellipse,
-                Some("path") => nalarupa_core::shader::Outline::Path { d: v["d"].as_str().unwrap_or("").into(), x: f("x"), y: f("y"), evenodd: v["evenodd"].as_bool().unwrap_or(false) },
-                _ => return Err("outline kind must be rrect, ellipse or path".into()),
-            };
+            let outline = outline_json(arg(2)?)?;
             let num = |i: usize| arg(i).and_then(|s| s.parse::<f64>().map_err(|_| format!("bad number {s}")));
             let (sw, sh, px, half) = nalarupa_core::shader::oracle_sdf(&outline, num(3)?, num(4)?, num(5)?);
             let out = arg(6)?;
@@ -297,6 +292,28 @@ fn run(args: &[String]) -> Result<(), String> {
             std::fs::write(format!("{out}.f32"), texels).map_err(|e| e.to_string())?;
             std::fs::write(format!("{out}.f16"), half.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>()).map_err(|e| e.to_string())?;
             println!("{}", json!({"width": sw, "height": sh}));
+            Ok(())
+        }
+        "shader-render" => {
+            let src = std::fs::read_to_string(arg(2)?).map_err(|e| e.to_string())?;
+            let uniforms = match arg(3)? {
+                "-" => None,
+                p => {
+                    let v: Value = serde_json::from_str(&std::fs::read_to_string(p).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+                    Some(v.as_object().cloned().ok_or("uniforms must be a JSON object")?)
+                }
+            };
+            let num = |i: usize| arg(i).and_then(|s| s.parse::<f64>().map_err(|_| format!("bad number {s}")));
+            let outline = outline_json(arg(7)?)?;
+            let dir = Path::new(arg(2)?).parent().unwrap_or(Path::new("."));
+            let backdrop = args.iter().skip(9).any(|a| a == "--backdrop");
+            match nalarupa_core::shader::oracle_render(&src, uniforms.as_ref(), num(4)?, num(5)?, num(6)?, &outline, dir, backdrop) {
+                Ok((pm, adapter)) => {
+                    std::fs::write(arg(8)?, pm.data()).map_err(|e| e.to_string())?;
+                    println!("{}", json!({"width": pm.width(), "height": pm.height(), "adapter": adapter}));
+                }
+                Err(e) => println!("{}", json!({"error": e})),
+            }
             Ok(())
         }
         "shader-backdrop" => {
@@ -313,6 +330,22 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         other => Err(format!("unknown command '{other}'")),
     }
+}
+
+/// A shader outline from a JSON file: `{"kind": "rrect", "radii": [...]}`, `{"kind": "ellipse"}` or
+/// `{"kind": "path", "d", "x", "y", "evenodd"}`.
+fn outline_json(path: &str) -> Result<nalarupa_core::shader::Outline, String> {
+    let v: Value = serde_json::from_str(&std::fs::read_to_string(path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    let f = |k: &str| v[k].as_f64().unwrap_or(0.0);
+    Ok(match v["kind"].as_str() {
+        Some("rrect") => {
+            let r: Vec<f64> = v["radii"].as_array().map(|a| a.iter().filter_map(Value::as_f64).collect()).unwrap_or_default();
+            nalarupa_core::shader::Outline::RRect(r.try_into().map_err(|_| "rrect needs 4 radii")?)
+        }
+        Some("ellipse") => nalarupa_core::shader::Outline::Ellipse,
+        Some("path") => nalarupa_core::shader::Outline::Path { d: v["d"].as_str().unwrap_or("").into(), x: f("x"), y: f("y"), evenodd: v["evenodd"].as_bool().unwrap_or(false) },
+        _ => return Err("outline kind must be rrect, ellipse or path".into()),
+    })
 }
 
 fn dump(n: &RNode) -> Value {

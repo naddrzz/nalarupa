@@ -47,9 +47,13 @@ type Svg struct {
 	pad float64
 }
 
+// DefaultShader is the shader painter New gives emitters: package shader sets it to the GPU painter when it
+// is linked in (svg cannot import it), else shader fills draw the error hatch.
+var DefaultShader ShaderPainter
+
 // New returns an emitter; base is the document's folder ("" when unsaved).
 func New(fonts layout.TextMeasurer, assets *Assets, base string) *Svg {
-	return &Svg{Fonts: fonts, Assets: assets, Base: base, Skip: map[string]bool{}}
+	return &Svg{Fonts: fonts, Assets: assets, Base: base, Skip: map[string]bool{}, Shader: DefaultShader}
 }
 
 // StartIDs numbers ids from uid on, so several inline SVGs in one page do not share ids; read back with UID.

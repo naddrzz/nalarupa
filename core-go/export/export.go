@@ -16,6 +16,8 @@ import (
 	"github.com/naddrzz/nalarupa/core-go/resolve"
 	"github.com/naddrzz/nalarupa/core-go/resvg"
 	"github.com/naddrzz/nalarupa/core-go/script"
+	// Shader fills run on the GPU (it sets svg.DefaultShader).
+	_ "github.com/naddrzz/nalarupa/core-go/shader"
 	"github.com/naddrzz/nalarupa/core-go/skia"
 	"github.com/naddrzz/nalarupa/core-go/svg"
 	"github.com/naddrzz/nalarupa/core-go/text"
