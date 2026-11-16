@@ -5,8 +5,8 @@
 // Without NALARUPA_CLI the comparison is with the committed Rust files (testdata/script/golden); with it, with
 // the CLI's live output. NALARUPA_UPDATE_GOLDEN=1 (with NALARUPA_CLI) rewrites them.
 //
-// Error texts differ where the engines do (see statusText): stack positions keep their line but not their
-// column, and an interrupted run's position is not compared.
+// Statuses are compared exactly, stack columns and an interrupted run's position included, except where the C
+// compiler shows (see differs).
 package script_test
 
 import (
@@ -105,23 +105,25 @@ func laidOut(t *testing.T, path string, fonts *text.Fonts) []box {
 	return trees
 }
 
-var column = regexp.MustCompile(`(?m)^(    at .*):(\d+):\d+(\)?)$`)
+// differs masks what depends on the C compiler rather than the engine: quickjs-ng's C stack frames are smaller
+// built by gcc (cgo) than by MSVC (Rust's Windows build), so the same 512 KB stack holds more JS frames (325
+// against 146 for the depth probe's one-line recursion, measured on Windows). Only that count is masked.
+var differs = map[string]*regexp.Regexp{"probes/depths/depth": regexp.MustCompile(`^Error: \d+ `)}
 
-// statusText is the part of a status both engines produce alike: quickjs-ng (rquickjs) and QuickJS place
-// columns differently, and stop an interrupted loop at different lines.
-func statusText(s *status) string {
+// statusText is the status of the node at path at, as compared.
+func statusText(at string, s *status) string {
 	if s == nil {
 		return "-"
 	}
 	desc, code := "<nil>", "<nil>"
 	if s.Description != nil {
-		desc = column.ReplaceAllString(*s.Description, "$1:$2$3")
+		desc = *s.Description
+		if re := differs[at]; re != nil {
+			desc = re.ReplaceAllLiteralString(desc, "Error: (frames) ")
+		}
 	}
 	if s.Code != nil {
 		code = *s.Code
-	}
-	if strings.HasPrefix(desc, "InternalError: interrupted\n") {
-		desc, code = "InternalError: interrupted", "(position not compared)"
 	}
 	return s.Kind + " | " + s.Title + " | " + desc + " | " + code
 }
@@ -143,7 +145,7 @@ func sameBoxes(t *testing.T, got, want []box, at string) {
 		if !near(g.X, w.X) || !near(g.Y, w.Y) || !near(g.W, w.W) || !near(g.H, w.H) {
 			t.Errorf("%s: got (%v, %v, %v, %v), want (%v, %v, %v, %v)", id, g.X, g.Y, g.W, g.H, w.X, w.Y, w.W, w.H)
 		}
-		if gs, ws := statusText(g.Status), statusText(w.Status); gs != ws {
+		if gs, ws := statusText(id, g.Status), statusText(id, w.Status); gs != ws {
 			t.Errorf("%s status:\n got %q\nwant %q", id, gs, ws)
 		}
 		sameBoxes(t, g.Children, w.Children, id)

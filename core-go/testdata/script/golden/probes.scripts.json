@@ -1,0 +1,993 @@
+[
+  {
+    "id": "errors",
+    "type": "frame",
+    "x": 0.0,
+    "y": 0.0,
+    "w": 1200.0,
+    "h": 120.0,
+    "problem": null,
+    "children": [
+      {
+        "id": "construct",
+        "type": "script",
+        "x": 0.0,
+        "y": 0.0,
+        "w": 160.0,
+        "h": 100.0,
+        "problem": null,
+        "children": [],
+        "status": {
+          "kind": "error",
+          "title": "Script runtime error",
+          "description": "TypeError: not a constructor\n    at <anonymous> (p-construct.js:2:5)\n    at <anonymous> (p-construct.js:4:11)",
+          "code": "  1: /** @schema 2.19 */\n> 2: new (() => 1)();"
+        }
+      },
+      {
+        "id": "parse",
+        "type": "script",
+        "x": 170.0,
+        "y": 0.0,
+        "w": 160.0,
+        "h": 100.0,
+        "problem": null,
+        "children": [],
+        "status": {
+          "kind": "error",
+          "title": "Script runtime error",
+          "description": "SyntaxError: Expected property name or '}' in JSON at position 1 (line 1 column 2)\n    at <input>:1:2\n    at parse (native)\n    at <anonymous> (p-parse.js:2:6)\n    at <anonymous> (p-parse.js:4:11)",
+          "code": "> 1: /** @schema 2.19 */\n  2: JSON.parse(\"{bad\");"
+        }
+      },
+      {
+        "id": "bigint",
+        "type": "script",
+        "x": 340.0,
+        "y": 0.0,
+        "w": 160.0,
+        "h": 100.0,
+        "problem": null,
+        "children": [],
+        "status": {
+          "kind": "error",
+          "title": "Script runtime error",
+          "description": "TypeError: cannot convert BigInt to number\n    at <anonymous> (p-bigint.js:2:41)\n    at <anonymous> (p-bigint.js:4:11)",
+          "code": "  1: /** @schema 2.19 */\n> 2: return [{type: \"rectangle\", width: 1n + 1}];"
+        }
+      },
+      {
+        "id": "message",
+        "type": "script",
+        "x": 510.0,
+        "y": 0.0,
+        "w": 160.0,
+        "h": 100.0,
+        "problem": null,
+        "children": [],
+        "status": {
+          "kind": "error",
+          "title": "Script runtime error",
+          "description": "Error: 42\n    at <anonymous> (p-message.js:2:15)\n    at <anonymous> (p-message.js:6:11)",
+          "code": "  1: /** @schema 2.19 */\n> 2: const e = new Error(\"m\");\n  3: e.message = 42;\n  4: throw e;"
+        }
+      },
+      {
+        "id": "caught",
+        "type": "script",
+        "x": 680.0,
+        "y": 0.0,
+        "w": 160.0,
+        "h": 100.0,
+        "problem": null,
+        "children": [],
+        "status": {
+          "kind": "error",
+          "title": "Script runtime error",
+          "description": "Error: ReferenceError: undefinedName is not defined | RangeError: Maximum call stack size exceeded\n    at <anonymous> (p-caught.js:6:22)\n    at <anonymous> (p-caught.js:8:11)",
+          "code": "  4: function f() { return f() + 1; }\n  5: try { f(); } catch (e) { seen.push(String(e)); }\n> 6: throw new Error(seen.join(\" | \"));"
+        }
+      },
+      {
+        "id": "limit",
+        "type": "script",
+        "x": 850.0,
+        "y": 0.0,
+        "w": 160.0,
+        "h": 100.0,
+        "problem": null,
+        "children": [],
+        "status": {
+          "kind": "error",
+          "title": "Script runtime error",
+          "description": "TypeError: deep\n    at c (p-limit.js:5:26)\n    at b (p-limit.js:4:16)",
+          "code": "  3: function a() { b(); }\n  4: function b() { c(); }\n> 5: function c() { throw new TypeError(\"deep\"); }\n  6: a();"
+        }
+      }
+    ]
+  },
+  {
+    "id": "depths",
+    "type": "frame",
+    "x": 0.0,
+    "y": 200.0,
+    "w": 1200.0,
+    "h": 120.0,
+    "problem": null,
+    "children": [
+      {
+        "id": "stringify80",
+        "type": "script",
+        "x": 0.0,
+        "y": 200.0,
+        "w": 160.0,
+        "h": 100.0,
+        "problem": null,
+        "children": [
+          {
+            "id": "stringify80/0",
+            "type": "rectangle",
+            "x": 0.0,
+            "y": 200.0,
+            "w": 482.0,
+            "h": 1.0,
+            "problem": "partially clipped",
+            "children": []
+          }
+        ]
+      },
+      {
+        "id": "stringify400",
+        "type": "script",
+        "x": 170.0,
+        "y": 200.0,
+        "w": 160.0,
+        "h": 100.0,
+        "problem": null,
+        "children": [
+          {
+            "id": "stringify400/0",
+            "type": "rectangle",
+            "x": 170.0,
+            "y": 200.0,
+            "w": 2402.0,
+            "h": 1.0,
+            "problem": "partially clipped",
+            "children": []
+          }
+        ]
+      },
+      {
+        "id": "nest63",
+        "type": "script",
+        "x": 340.0,
+        "y": 200.0,
+        "w": 160.0,
+        "h": 100.0,
+        "problem": null,
+        "children": [
+          {
+            "id": "nest63/0",
+            "type": "frame",
+            "x": 340.0,
+            "y": 200.0,
+            "w": 0.0,
+            "h": 0.0,
+            "problem": null,
+            "children": [
+              {
+                "id": "nest63/1",
+                "type": "frame",
+                "x": 340.0,
+                "y": 200.0,
+                "w": 0.0,
+                "h": 0.0,
+                "problem": null,
+                "children": [
+                  {
+                    "id": "nest63/2",
+                    "type": "frame",
+                    "x": 340.0,
+                    "y": 200.0,
+                    "w": 0.0,
+                    "h": 0.0,
+                    "problem": null,
+                    "children": [
+                      {
+                        "id": "nest63/3",
+                        "type": "frame",
+                        "x": 340.0,
+                        "y": 200.0,
+                        "w": 0.0,
+                        "h": 0.0,
+                        "problem": null,
+                        "children": [
+                          {
+                            "id": "nest63/4",
+                            "type": "frame",
+                            "x": 340.0,
+                            "y": 200.0,
+                            "w": 0.0,
+                            "h": 0.0,
+                            "problem": null,
+                            "children": [
+                              {
+                                "id": "nest63/5",
+                                "type": "frame",
+                                "x": 340.0,
+                                "y": 200.0,
+                                "w": 0.0,
+                                "h": 0.0,
+                                "problem": null,
+                                "children": [
+                                  {
+                                    "id": "nest63/6",
+                                    "type": "frame",
+                                    "x": 340.0,
+                                    "y": 200.0,
+                                    "w": 0.0,
+                                    "h": 0.0,
+                                    "problem": null,
+                                    "children": [
+                                      {
+                                        "id": "nest63/7",
+                                        "type": "frame",
+                                        "x": 340.0,
+                                        "y": 200.0,
+                                        "w": 0.0,
+                                        "h": 0.0,
+                                        "problem": null,
+                                        "children": [
+                                          {
+                                            "id": "nest63/8",
+                                            "type": "frame",
+                                            "x": 340.0,
+                                            "y": 200.0,
+                                            "w": 0.0,
+                                            "h": 0.0,
+                                            "problem": null,
+                                            "children": [
+                                              {
+                                                "id": "nest63/9",
+                                                "type": "frame",
+                                                "x": 340.0,
+                                                "y": 200.0,
+                                                "w": 0.0,
+                                                "h": 0.0,
+                                                "problem": null,
+                                                "children": [
+                                                  {
+                                                    "id": "nest63/10",
+                                                    "type": "frame",
+                                                    "x": 340.0,
+                                                    "y": 200.0,
+                                                    "w": 0.0,
+                                                    "h": 0.0,
+                                                    "problem": null,
+                                                    "children": [
+                                                      {
+                                                        "id": "nest63/11",
+                                                        "type": "frame",
+                                                        "x": 340.0,
+                                                        "y": 200.0,
+                                                        "w": 0.0,
+                                                        "h": 0.0,
+                                                        "problem": null,
+                                                        "children": [
+                                                          {
+                                                            "id": "nest63/12",
+                                                            "type": "frame",
+                                                            "x": 340.0,
+                                                            "y": 200.0,
+                                                            "w": 0.0,
+                                                            "h": 0.0,
+                                                            "problem": null,
+                                                            "children": [
+                                                              {
+                                                                "id": "nest63/13",
+                                                                "type": "frame",
+                                                                "x": 340.0,
+                                                                "y": 200.0,
+                                                                "w": 0.0,
+                                                                "h": 0.0,
+                                                                "problem": null,
+                                                                "children": [
+                                                                  {
+                                                                    "id": "nest63/14",
+                                                                    "type": "frame",
+                                                                    "x": 340.0,
+                                                                    "y": 200.0,
+                                                                    "w": 0.0,
+                                                                    "h": 0.0,
+                                                                    "problem": null,
+                                                                    "children": [
+                                                                      {
+                                                                        "id": "nest63/15",
+                                                                        "type": "frame",
+                                                                        "x": 340.0,
+                                                                        "y": 200.0,
+                                                                        "w": 0.0,
+                                                                        "h": 0.0,
+                                                                        "problem": null,
+                                                                        "children": [
+                                                                          {
+                                                                            "id": "nest63/16",
+                                                                            "type": "frame",
+                                                                            "x": 340.0,
+                                                                            "y": 200.0,
+                                                                            "w": 0.0,
+                                                                            "h": 0.0,
+                                                                            "problem": null,
+                                                                            "children": [
+                                                                              {
+                                                                                "id": "nest63/17",
+                                                                                "type": "frame",
+                                                                                "x": 340.0,
+                                                                                "y": 200.0,
+                                                                                "w": 0.0,
+                                                                                "h": 0.0,
+                                                                                "problem": null,
+                                                                                "children": [
+                                                                                  {
+                                                                                    "id": "nest63/18",
+                                                                                    "type": "frame",
+                                                                                    "x": 340.0,
+                                                                                    "y": 200.0,
+                                                                                    "w": 0.0,
+                                                                                    "h": 0.0,
+                                                                                    "problem": null,
+                                                                                    "children": [
+                                                                                      {
+                                                                                        "id": "nest63/19",
+                                                                                        "type": "frame",
+                                                                                        "x": 340.0,
+                                                                                        "y": 200.0,
+                                                                                        "w": 0.0,
+                                                                                        "h": 0.0,
+                                                                                        "problem": null,
+                                                                                        "children": [
+                                                                                          {
+                                                                                            "id": "nest63/20",
+                                                                                            "type": "frame",
+                                                                                            "x": 340.0,
+                                                                                            "y": 200.0,
+                                                                                            "w": 0.0,
+                                                                                            "h": 0.0,
+                                                                                            "problem": null,
+                                                                                            "children": [
+                                                                                              {
+                                                                                                "id": "nest63/21",
+                                                                                                "type": "frame",
+                                                                                                "x": 340.0,
+                                                                                                "y": 200.0,
+                                                                                                "w": 0.0,
+                                                                                                "h": 0.0,
+                                                                                                "problem": null,
+                                                                                                "children": [
+                                                                                                  {
+                                                                                                    "id": "nest63/22",
+                                                                                                    "type": "frame",
+                                                                                                    "x": 340.0,
+                                                                                                    "y": 200.0,
+                                                                                                    "w": 0.0,
+                                                                                                    "h": 0.0,
+                                                                                                    "problem": null,
+                                                                                                    "children": [
+                                                                                                      {
+                                                                                                        "id": "nest63/23",
+                                                                                                        "type": "frame",
+                                                                                                        "x": 340.0,
+                                                                                                        "y": 200.0,
+                                                                                                        "w": 0.0,
+                                                                                                        "h": 0.0,
+                                                                                                        "problem": null,
+                                                                                                        "children": [
+                                                                                                          {
+                                                                                                            "id": "nest63/24",
+                                                                                                            "type": "frame",
+                                                                                                            "x": 340.0,
+                                                                                                            "y": 200.0,
+                                                                                                            "w": 0.0,
+                                                                                                            "h": 0.0,
+                                                                                                            "problem": null,
+                                                                                                            "children": [
+                                                                                                              {
+                                                                                                                "id": "nest63/25",
+                                                                                                                "type": "frame",
+                                                                                                                "x": 340.0,
+                                                                                                                "y": 200.0,
+                                                                                                                "w": 0.0,
+                                                                                                                "h": 0.0,
+                                                                                                                "problem": null,
+                                                                                                                "children": [
+                                                                                                                  {
+                                                                                                                    "id": "nest63/26",
+                                                                                                                    "type": "frame",
+                                                                                                                    "x": 340.0,
+                                                                                                                    "y": 200.0,
+                                                                                                                    "w": 0.0,
+                                                                                                                    "h": 0.0,
+                                                                                                                    "problem": null,
+                                                                                                                    "children": [
+                                                                                                                      {
+                                                                                                                        "id": "nest63/27",
+                                                                                                                        "type": "frame",
+                                                                                                                        "x": 340.0,
+                                                                                                                        "y": 200.0,
+                                                                                                                        "w": 0.0,
+                                                                                                                        "h": 0.0,
+                                                                                                                        "problem": null,
+                                                                                                                        "children": [
+                                                                                                                          {
+                                                                                                                            "id": "nest63/28",
+                                                                                                                            "type": "frame",
+                                                                                                                            "x": 340.0,
+                                                                                                                            "y": 200.0,
+                                                                                                                            "w": 0.0,
+                                                                                                                            "h": 0.0,
+                                                                                                                            "problem": null,
+                                                                                                                            "children": [
+                                                                                                                              {
+                                                                                                                                "id": "nest63/29",
+                                                                                                                                "type": "frame",
+                                                                                                                                "x": 340.0,
+                                                                                                                                "y": 200.0,
+                                                                                                                                "w": 0.0,
+                                                                                                                                "h": 0.0,
+                                                                                                                                "problem": null,
+                                                                                                                                "children": [
+                                                                                                                                  {
+                                                                                                                                    "id": "nest63/30",
+                                                                                                                                    "type": "frame",
+                                                                                                                                    "x": 340.0,
+                                                                                                                                    "y": 200.0,
+                                                                                                                                    "w": 0.0,
+                                                                                                                                    "h": 0.0,
+                                                                                                                                    "problem": null,
+                                                                                                                                    "children": [
+                                                                                                                                      {
+                                                                                                                                        "id": "nest63/31",
+                                                                                                                                        "type": "frame",
+                                                                                                                                        "x": 340.0,
+                                                                                                                                        "y": 200.0,
+                                                                                                                                        "w": 0.0,
+                                                                                                                                        "h": 0.0,
+                                                                                                                                        "problem": null,
+                                                                                                                                        "children": [
+                                                                                                                                          {
+                                                                                                                                            "id": "nest63/32",
+                                                                                                                                            "type": "frame",
+                                                                                                                                            "x": 340.0,
+                                                                                                                                            "y": 200.0,
+                                                                                                                                            "w": 0.0,
+                                                                                                                                            "h": 0.0,
+                                                                                                                                            "problem": null,
+                                                                                                                                            "children": [
+                                                                                                                                              {
+                                                                                                                                                "id": "nest63/33",
+                                                                                                                                                "type": "frame",
+                                                                                                                                                "x": 340.0,
+                                                                                                                                                "y": 200.0,
+                                                                                                                                                "w": 0.0,
+                                                                                                                                                "h": 0.0,
+                                                                                                                                                "problem": null,
+                                                                                                                                                "children": [
+                                                                                                                                                  {
+                                                                                                                                                    "id": "nest63/34",
+                                                                                                                                                    "type": "frame",
+                                                                                                                                                    "x": 340.0,
+                                                                                                                                                    "y": 200.0,
+                                                                                                                                                    "w": 0.0,
+                                                                                                                                                    "h": 0.0,
+                                                                                                                                                    "problem": null,
+                                                                                                                                                    "children": [
+                                                                                                                                                      {
+                                                                                                                                                        "id": "nest63/35",
+                                                                                                                                                        "type": "frame",
+                                                                                                                                                        "x": 340.0,
+                                                                                                                                                        "y": 200.0,
+                                                                                                                                                        "w": 0.0,
+                                                                                                                                                        "h": 0.0,
+                                                                                                                                                        "problem": null,
+                                                                                                                                                        "children": [
+                                                                                                                                                          {
+                                                                                                                                                            "id": "nest63/36",
+                                                                                                                                                            "type": "frame",
+                                                                                                                                                            "x": 340.0,
+                                                                                                                                                            "y": 200.0,
+                                                                                                                                                            "w": 0.0,
+                                                                                                                                                            "h": 0.0,
+                                                                                                                                                            "problem": null,
+                                                                                                                                                            "children": [
+                                                                                                                                                              {
+                                                                                                                                                                "id": "nest63/37",
+                                                                                                                                                                "type": "frame",
+                                                                                                                                                                "x": 340.0,
+                                                                                                                                                                "y": 200.0,
+                                                                                                                                                                "w": 0.0,
+                                                                                                                                                                "h": 0.0,
+                                                                                                                                                                "problem": null,
+                                                                                                                                                                "children": [
+                                                                                                                                                                  {
+                                                                                                                                                                    "id": "nest63/38",
+                                                                                                                                                                    "type": "frame",
+                                                                                                                                                                    "x": 340.0,
+                                                                                                                                                                    "y": 200.0,
+                                                                                                                                                                    "w": 0.0,
+                                                                                                                                                                    "h": 0.0,
+                                                                                                                                                                    "problem": null,
+                                                                                                                                                                    "children": [
+                                                                                                                                                                      {
+                                                                                                                                                                        "id": "nest63/39",
+                                                                                                                                                                        "type": "frame",
+                                                                                                                                                                        "x": 340.0,
+                                                                                                                                                                        "y": 200.0,
+                                                                                                                                                                        "w": 0.0,
+                                                                                                                                                                        "h": 0.0,
+                                                                                                                                                                        "problem": null,
+                                                                                                                                                                        "children": [
+                                                                                                                                                                          {
+                                                                                                                                                                            "id": "nest63/40",
+                                                                                                                                                                            "type": "frame",
+                                                                                                                                                                            "x": 340.0,
+                                                                                                                                                                            "y": 200.0,
+                                                                                                                                                                            "w": 0.0,
+                                                                                                                                                                            "h": 0.0,
+                                                                                                                                                                            "problem": null,
+                                                                                                                                                                            "children": [
+                                                                                                                                                                              {
+                                                                                                                                                                                "id": "nest63/41",
+                                                                                                                                                                                "type": "frame",
+                                                                                                                                                                                "x": 340.0,
+                                                                                                                                                                                "y": 200.0,
+                                                                                                                                                                                "w": 0.0,
+                                                                                                                                                                                "h": 0.0,
+                                                                                                                                                                                "problem": null,
+                                                                                                                                                                                "children": [
+                                                                                                                                                                                  {
+                                                                                                                                                                                    "id": "nest63/42",
+                                                                                                                                                                                    "type": "frame",
+                                                                                                                                                                                    "x": 340.0,
+                                                                                                                                                                                    "y": 200.0,
+                                                                                                                                                                                    "w": 0.0,
+                                                                                                                                                                                    "h": 0.0,
+                                                                                                                                                                                    "problem": null,
+                                                                                                                                                                                    "children": [
+                                                                                                                                                                                      {
+                                                                                                                                                                                        "id": "nest63/43",
+                                                                                                                                                                                        "type": "frame",
+                                                                                                                                                                                        "x": 340.0,
+                                                                                                                                                                                        "y": 200.0,
+                                                                                                                                                                                        "w": 0.0,
+                                                                                                                                                                                        "h": 0.0,
+                                                                                                                                                                                        "problem": null,
+                                                                                                                                                                                        "children": [
+                                                                                                                                                                                          {
+                                                                                                                                                                                            "id": "nest63/44",
+                                                                                                                                                                                            "type": "frame",
+                                                                                                                                                                                            "x": 340.0,
+                                                                                                                                                                                            "y": 200.0,
+                                                                                                                                                                                            "w": 0.0,
+                                                                                                                                                                                            "h": 0.0,
+                                                                                                                                                                                            "problem": null,
+                                                                                                                                                                                            "children": [
+                                                                                                                                                                                              {
+                                                                                                                                                                                                "id": "nest63/45",
+                                                                                                                                                                                                "type": "frame",
+                                                                                                                                                                                                "x": 340.0,
+                                                                                                                                                                                                "y": 200.0,
+                                                                                                                                                                                                "w": 0.0,
+                                                                                                                                                                                                "h": 0.0,
+                                                                                                                                                                                                "problem": null,
+                                                                                                                                                                                                "children": [
+                                                                                                                                                                                                  {
+                                                                                                                                                                                                    "id": "nest63/46",
+                                                                                                                                                                                                    "type": "frame",
+                                                                                                                                                                                                    "x": 340.0,
+                                                                                                                                                                                                    "y": 200.0,
+                                                                                                                                                                                                    "w": 0.0,
+                                                                                                                                                                                                    "h": 0.0,
+                                                                                                                                                                                                    "problem": null,
+                                                                                                                                                                                                    "children": [
+                                                                                                                                                                                                      {
+                                                                                                                                                                                                        "id": "nest63/47",
+                                                                                                                                                                                                        "type": "frame",
+                                                                                                                                                                                                        "x": 340.0,
+                                                                                                                                                                                                        "y": 200.0,
+                                                                                                                                                                                                        "w": 0.0,
+                                                                                                                                                                                                        "h": 0.0,
+                                                                                                                                                                                                        "problem": null,
+                                                                                                                                                                                                        "children": [
+                                                                                                                                                                                                          {
+                                                                                                                                                                                                            "id": "nest63/48",
+                                                                                                                                                                                                            "type": "frame",
+                                                                                                                                                                                                            "x": 340.0,
+                                                                                                                                                                                                            "y": 200.0,
+                                                                                                                                                                                                            "w": 0.0,
+                                                                                                                                                                                                            "h": 0.0,
+                                                                                                                                                                                                            "problem": null,
+                                                                                                                                                                                                            "children": [
+                                                                                                                                                                                                              {
+                                                                                                                                                                                                                "id": "nest63/49",
+                                                                                                                                                                                                                "type": "frame",
+                                                                                                                                                                                                                "x": 340.0,
+                                                                                                                                                                                                                "y": 200.0,
+                                                                                                                                                                                                                "w": 0.0,
+                                                                                                                                                                                                                "h": 0.0,
+                                                                                                                                                                                                                "problem": null,
+                                                                                                                                                                                                                "children": [
+                                                                                                                                                                                                                  {
+                                                                                                                                                                                                                    "id": "nest63/50",
+                                                                                                                                                                                                                    "type": "frame",
+                                                                                                                                                                                                                    "x": 340.0,
+                                                                                                                                                                                                                    "y": 200.0,
+                                                                                                                                                                                                                    "w": 0.0,
+                                                                                                                                                                                                                    "h": 0.0,
+                                                                                                                                                                                                                    "problem": null,
+                                                                                                                                                                                                                    "children": [
+                                                                                                                                                                                                                      {
+                                                                                                                                                                                                                        "id": "nest63/51",
+                                                                                                                                                                                                                        "type": "frame",
+                                                                                                                                                                                                                        "x": 340.0,
+                                                                                                                                                                                                                        "y": 200.0,
+                                                                                                                                                                                                                        "w": 0.0,
+                                                                                                                                                                                                                        "h": 0.0,
+                                                                                                                                                                                                                        "problem": null,
+                                                                                                                                                                                                                        "children": [
+                                                                                                                                                                                                                          {
+                                                                                                                                                                                                                            "id": "nest63/52",
+                                                                                                                                                                                                                            "type": "frame",
+                                                                                                                                                                                                                            "x": 340.0,
+                                                                                                                                                                                                                            "y": 200.0,
+                                                                                                                                                                                                                            "w": 0.0,
+                                                                                                                                                                                                                            "h": 0.0,
+                                                                                                                                                                                                                            "problem": null,
+                                                                                                                                                                                                                            "children": [
+                                                                                                                                                                                                                              {
+                                                                                                                                                                                                                                "id": "nest63/53",
+                                                                                                                                                                                                                                "type": "frame",
+                                                                                                                                                                                                                                "x": 340.0,
+                                                                                                                                                                                                                                "y": 200.0,
+                                                                                                                                                                                                                                "w": 0.0,
+                                                                                                                                                                                                                                "h": 0.0,
+                                                                                                                                                                                                                                "problem": null,
+                                                                                                                                                                                                                                "children": [
+                                                                                                                                                                                                                                  {
+                                                                                                                                                                                                                                    "id": "nest63/54",
+                                                                                                                                                                                                                                    "type": "frame",
+                                                                                                                                                                                                                                    "x": 340.0,
+                                                                                                                                                                                                                                    "y": 200.0,
+                                                                                                                                                                                                                                    "w": 0.0,
+                                                                                                                                                                                                                                    "h": 0.0,
+                                                                                                                                                                                                                                    "problem": null,
+                                                                                                                                                                                                                                    "children": [
+                                                                                                                                                                                                                                      {
+                                                                                                                                                                                                                                        "id": "nest63/55",
+                                                                                                                                                                                                                                        "type": "frame",
+                                                                                                                                                                                                                                        "x": 340.0,
+                                                                                                                                                                                                                                        "y": 200.0,
+                                                                                                                                                                                                                                        "w": 0.0,
+                                                                                                                                                                                                                                        "h": 0.0,
+                                                                                                                                                                                                                                        "problem": null,
+                                                                                                                                                                                                                                        "children": [
+                                                                                                                                                                                                                                          {
+                                                                                                                                                                                                                                            "id": "nest63/56",
+                                                                                                                                                                                                                                            "type": "frame",
+                                                                                                                                                                                                                                            "x": 340.0,
+                                                                                                                                                                                                                                            "y": 200.0,
+                                                                                                                                                                                                                                            "w": 0.0,
+                                                                                                                                                                                                                                            "h": 0.0,
+                                                                                                                                                                                                                                            "problem": null,
+                                                                                                                                                                                                                                            "children": [
+                                                                                                                                                                                                                                              {
+                                                                                                                                                                                                                                                "id": "nest63/57",
+                                                                                                                                                                                                                                                "type": "frame",
+                                                                                                                                                                                                                                                "x": 340.0,
+                                                                                                                                                                                                                                                "y": 200.0,
+                                                                                                                                                                                                                                                "w": 0.0,
+                                                                                                                                                                                                                                                "h": 0.0,
+                                                                                                                                                                                                                                                "problem": null,
+                                                                                                                                                                                                                                                "children": [
+                                                                                                                                                                                                                                                  {
+                                                                                                                                                                                                                                                    "id": "nest63/58",
+                                                                                                                                                                                                                                                    "type": "frame",
+                                                                                                                                                                                                                                                    "x": 340.0,
+                                                                                                                                                                                                                                                    "y": 200.0,
+                                                                                                                                                                                                                                                    "w": 0.0,
+                                                                                                                                                                                                                                                    "h": 0.0,
+                                                                                                                                                                                                                                                    "problem": null,
+                                                                                                                                                                                                                                                    "children": [
+                                                                                                                                                                                                                                                      {
+                                                                                                                                                                                                                                                        "id": "nest63/59",
+                                                                                                                                                                                                                                                        "type": "frame",
+                                                                                                                                                                                                                                                        "x": 340.0,
+                                                                                                                                                                                                                                                        "y": 200.0,
+                                                                                                                                                                                                                                                        "w": 0.0,
+                                                                                                                                                                                                                                                        "h": 0.0,
+                                                                                                                                                                                                                                                        "problem": null,
+                                                                                                                                                                                                                                                        "children": [
+                                                                                                                                                                                                                                                          {
+                                                                                                                                                                                                                                                            "id": "nest63/60",
+                                                                                                                                                                                                                                                            "type": "frame",
+                                                                                                                                                                                                                                                            "x": 340.0,
+                                                                                                                                                                                                                                                            "y": 200.0,
+                                                                                                                                                                                                                                                            "w": 0.0,
+                                                                                                                                                                                                                                                            "h": 0.0,
+                                                                                                                                                                                                                                                            "problem": null,
+                                                                                                                                                                                                                                                            "children": [
+                                                                                                                                                                                                                                                              {
+                                                                                                                                                                                                                                                                "id": "nest63/61",
+                                                                                                                                                                                                                                                                "type": "frame",
+                                                                                                                                                                                                                                                                "x": 340.0,
+                                                                                                                                                                                                                                                                "y": 200.0,
+                                                                                                                                                                                                                                                                "w": 0.0,
+                                                                                                                                                                                                                                                                "h": 0.0,
+                                                                                                                                                                                                                                                                "problem": null,
+                                                                                                                                                                                                                                                                "children": [
+                                                                                                                                                                                                                                                                  {
+                                                                                                                                                                                                                                                                    "id": "nest63/62",
+                                                                                                                                                                                                                                                                    "type": "rectangle",
+                                                                                                                                                                                                                                                                    "x": 340.0,
+                                                                                                                                                                                                                                                                    "y": 200.0,
+                                                                                                                                                                                                                                                                    "w": 1.0,
+                                                                                                                                                                                                                                                                    "h": 1.0,
+                                                                                                                                                                                                                                                                    "problem": "fully clipped",
+                                                                                                                                                                                                                                                                    "children": []
+                                                                                                                                                                                                                                                                  }
+                                                                                                                                                                                                                                                                ]
+                                                                                                                                                                                                                                                              }
+                                                                                                                                                                                                                                                            ]
+                                                                                                                                                                                                                                                          }
+                                                                                                                                                                                                                                                        ]
+                                                                                                                                                                                                                                                      }
+                                                                                                                                                                                                                                                    ]
+                                                                                                                                                                                                                                                  }
+                                                                                                                                                                                                                                                ]
+                                                                                                                                                                                                                                              }
+                                                                                                                                                                                                                                            ]
+                                                                                                                                                                                                                                          }
+                                                                                                                                                                                                                                        ]
+                                                                                                                                                                                                                                      }
+                                                                                                                                                                                                                                    ]
+                                                                                                                                                                                                                                  }
+                                                                                                                                                                                                                                ]
+                                                                                                                                                                                                                              }
+                                                                                                                                                                                                                            ]
+                                                                                                                                                                                                                          }
+                                                                                                                                                                                                                        ]
+                                                                                                                                                                                                                      }
+                                                                                                                                                                                                                    ]
+                                                                                                                                                                                                                  }
+                                                                                                                                                                                                                ]
+                                                                                                                                                                                                              }
+                                                                                                                                                                                                            ]
+                                                                                                                                                                                                          }
+                                                                                                                                                                                                        ]
+                                                                                                                                                                                                      }
+                                                                                                                                                                                                    ]
+                                                                                                                                                                                                  }
+                                                                                                                                                                                                ]
+                                                                                                                                                                                              }
+                                                                                                                                                                                            ]
+                                                                                                                                                                                          }
+                                                                                                                                                                                        ]
+                                                                                                                                                                                      }
+                                                                                                                                                                                    ]
+                                                                                                                                                                                  }
+                                                                                                                                                                                ]
+                                                                                                                                                                              }
+                                                                                                                                                                            ]
+                                                                                                                                                                          }
+                                                                                                                                                                        ]
+                                                                                                                                                                      }
+                                                                                                                                                                    ]
+                                                                                                                                                                  }
+                                                                                                                                                                ]
+                                                                                                                                                              }
+                                                                                                                                                            ]
+                                                                                                                                                          }
+                                                                                                                                                        ]
+                                                                                                                                                      }
+                                                                                                                                                    ]
+                                                                                                                                                  }
+                                                                                                                                                ]
+                                                                                                                                              }
+                                                                                                                                            ]
+                                                                                                                                          }
+                                                                                                                                        ]
+                                                                                                                                      }
+                                                                                                                                    ]
+                                                                                                                                  }
+                                                                                                                                ]
+                                                                                                                              }
+                                                                                                                            ]
+                                                                                                                          }
+                                                                                                                        ]
+                                                                                                                      }
+                                                                                                                    ]
+                                                                                                                  }
+                                                                                                                ]
+                                                                                                              }
+                                                                                                            ]
+                                                                                                          }
+                                                                                                        ]
+                                                                                                      }
+                                                                                                    ]
+                                                                                                  }
+                                                                                                ]
+                                                                                              }
+                                                                                            ]
+                                                                                          }
+                                                                                        ]
+                                                                                      }
+                                                                                    ]
+                                                                                  }
+                                                                                ]
+                                                                              }
+                                                                            ]
+                                                                          }
+                                                                        ]
+                                                                      }
+                                                                    ]
+                                                                  }
+                                                                ]
+                                                              }
+                                                            ]
+                                                          }
+                                                        ]
+                                                      }
+                                                    ]
+                                                  }
+                                                ]
+                                              }
+                                            ]
+                                          }
+                                        ]
+                                      }
+                                    ]
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "nest64",
+        "type": "script",
+        "x": 510.0,
+        "y": 200.0,
+        "w": 160.0,
+        "h": 100.0,
+        "problem": null,
+        "children": [],
+        "status": {
+          "kind": "error",
+          "title": "Invalid script output",
+          "description": "Script must return an array of nodes.",
+          "code": null
+        }
+      },
+      {
+        "id": "nest74",
+        "type": "script",
+        "x": 680.0,
+        "y": 200.0,
+        "w": 160.0,
+        "h": 100.0,
+        "problem": null,
+        "children": [],
+        "status": {
+          "kind": "error",
+          "title": "Invalid script output",
+          "description": "Script must return an array of nodes.",
+          "code": null
+        }
+      },
+      {
+        "id": "depth",
+        "type": "script",
+        "x": 850.0,
+        "y": 200.0,
+        "w": 160.0,
+        "h": 100.0,
+        "problem": null,
+        "children": [],
+        "status": {
+          "kind": "error",
+          "title": "Script runtime error",
+          "description": "Error: 146 RangeError: Maximum call stack size exceeded\n    at <anonymous> (p-depth.js:4:53)\n    at <anonymous> (p-depth.js:6:11)",
+          "code": "  2: let d = 0;\n  3: function f(n) { d = n; return f(n + 1) + 1; }\n> 4: try { f(0); } catch (e) { throw new Error(d + \" \" + e); }"
+        }
+      }
+    ]
+  },
+  {
+    "id": "heap",
+    "type": "frame",
+    "x": 0.0,
+    "y": 400.0,
+    "w": 1200.0,
+    "h": 120.0,
+    "problem": null,
+    "children": [
+      {
+        "id": "fill699913",
+        "type": "script",
+        "x": 0.0,
+        "y": 400.0,
+        "w": 160.0,
+        "h": 100.0,
+        "problem": null,
+        "children": [
+          {
+            "id": "fill699913/0",
+            "type": "rectangle",
+            "x": 0.0,
+            "y": 400.0,
+            "w": 699.913,
+            "h": 1.0,
+            "problem": "partially clipped",
+            "children": []
+          }
+        ]
+      },
+      {
+        "id": "fill700",
+        "type": "script",
+        "x": 170.0,
+        "y": 400.0,
+        "w": 160.0,
+        "h": 100.0,
+        "problem": null,
+        "children": [],
+        "status": {
+          "kind": "error",
+          "title": "Script runtime error",
+          "description": "InternalError: out of memory\n    at <anonymous> (p-fill700.js:2:29)\n    at <anonymous> (p-fill700.js:5:11)",
+          "code": "  1: /** @schema 2.19 */\n> 2: const a = new Array(700000).fill(1.5);\n  3: return [{type: \"rectangle\", width: a.length / 1000, height: 1}];"
+        }
+      },
+      {
+        "id": "fill900",
+        "type": "script",
+        "x": 340.0,
+        "y": 400.0,
+        "w": 160.0,
+        "h": 100.0,
+        "problem": null,
+        "children": [],
+        "status": {
+          "kind": "error",
+          "title": "Script runtime error",
+          "description": "InternalError: out of memory\n    at <anonymous> (p-fill900.js:2:29)\n    at <anonymous> (p-fill900.js:5:11)",
+          "code": "  1: /** @schema 2.19 */\n> 2: const a = new Array(900000).fill(1.5);\n  3: return [{type: \"rectangle\", width: a.length / 1000, height: 1}];"
+        }
+      },
+      {
+        "id": "globals",
+        "type": "script",
+        "x": 510.0,
+        "y": 400.0,
+        "w": 160.0,
+        "h": 100.0,
+        "problem": null,
+        "children": [],
+        "status": {
+          "kind": "error",
+          "title": "Script runtime error",
+          "description": "Error: object,function,number,function,function,function,10,symbol,symbol,function,function,undefined,performance+__seed,undefined,undefined\n    at <anonymous> (p-globals.js:5:68)\n    at <anonymous> (p-globals.js:7:11)",
+          "code": "  3:   typeof Array.fromAsync, typeof Error.captureStackTrace, Error.stackTraceLimit, typeof Symbol.dispose,\n  4:   typeof Symbol.asyncDispose, typeof DisposableStack, typeof AsyncDisposableStack, typeof navigator,\n> 5:   Object.keys(globalThis).join(\"+\"), typeof console, typeof print].join(\",\"));"
+        }
+      }
+    ]
+  }
+]

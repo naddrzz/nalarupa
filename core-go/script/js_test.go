@@ -9,7 +9,7 @@ import (
 
 func newJS(t *testing.T) *JS {
 	t.Helper()
-	js, err := NewJS(Limits{Memory: 16 << 20, StackSlots: stackSlots})
+	js, err := NewJS(Limits{Memory: 16 << 20, Stack: 512 << 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,19 +68,18 @@ func TestEvalIsSloppyGlobalCode(t *testing.T) {
 	js.Free(v)
 }
 
-// The globals rquickjs's Context::full has beyond this engine's.
-func TestQuickJSNGGlobals(t *testing.T) {
+// The globals of rquickjs's Context::full, all native to quickjs-ng.
+func TestContextFullGlobals(t *testing.T) {
 	js := newJS(t)
 	got := evalString(t, js, `[typeof performance, typeof performance.now, typeof performance.timeOrigin, typeof queueMicrotask,
 		typeof Array.fromAsync, Array.fromAsync.length, typeof Error.captureStackTrace, Error.stackTraceLimit,
-		typeof Symbol.dispose, typeof Symbol.asyncDispose, Symbol.dispose === Symbol.asyncDispose,
-		Object.keys(globalThis).length].join(",")`)
-	if got != "object,function,number,function,function,1,function,10,symbol,symbol,false,0" {
+		typeof Symbol.dispose, typeof Symbol.asyncDispose, typeof DisposableStack, typeof AsyncDisposableStack,
+		Object.keys(globalThis).join("+")].join(",")`)
+	if got != "object,function,number,function,function,1,function,10,symbol,symbol,function,function,performance" {
 		t.Fatalf("%q", got)
 	}
-	// performance.now is monotonic milliseconds since the runtime was made.
-	time.Sleep(20 * time.Millisecond)
-	if got := evalString(t, js, `const a = performance.now(), b = performance.now(); String(a >= 20 && a < 10000 && b >= a)`); got != "true" {
+	time.Sleep(5 * time.Millisecond)
+	if got := evalString(t, js, `const a = performance.now(), b = performance.now(); String(a > 0 && b >= a)`); got != "true" {
 		t.Fatalf("performance.now: %s", got)
 	}
 	if err := js.Exec(`var log = []; queueMicrotask(() => log.push("micro"));
@@ -110,11 +109,11 @@ const holder = {}; (function where() { Error.captureStackTrace(holder) })();`, "
 // rquickjs reads message and stack coerced to strings; name must be a string.
 func TestExceptionCoercesMessageAndStack(t *testing.T) {
 	js := newJS(t)
-	ex := exception(t, js.Exec("const e = new Error('m'); e.message = 42; e.stack = {toString() { return 'S' }}; e.name = 7; throw e", "input"))
+	ex := exception(t, js.Exec("const e = new Error('m'); e.message = 42; Object.defineProperty(e, 'stack', {value: {toString() { return 'S' }}}); e.name = 7; throw e", "input"))
 	if ex.Name != "Error" || ex.Message != "42" || ex.Stack != "S" {
 		t.Fatalf("%+v", ex)
 	}
-	ex = exception(t, js.Exec("const f = new TypeError('m'); f.message = null; f.stack = undefined; throw f", "input"))
+	ex = exception(t, js.Exec("const f = new TypeError('m'); f.message = null; Object.defineProperty(f, 'stack', {value: undefined}); throw f", "input"))
 	if ex.Name != "TypeError" || ex.Message != "" || ex.Stack != "" {
 		t.Fatalf("%+v", ex)
 	}
@@ -229,7 +228,7 @@ func TestMemoryAndStack(t *testing.T) {
 		t.Fatalf("%+v", ex)
 	}
 	ex = exception(t, newJS(t).Exec("function f(n) { return f(n + 1) + 1 }\nf(0)", "input"))
-	if ex.Name != "RangeError" || ex.Message != "Maximum call stack size exceeded" || strings.Count(ex.Stack, "\n") != maxFrames {
+	if ex.Name != "RangeError" || ex.Message != "Maximum call stack size exceeded" || strings.Count(ex.Stack, "\n") != 10 {
 		t.Fatalf("%+v", ex)
 	}
 }

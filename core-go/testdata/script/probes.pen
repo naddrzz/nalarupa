@@ -1,0 +1,24 @@
+{"version": "2.19", "children": [
+  {"type": "frame", "id": "errors", "x": 0, "y": 0, "width": 1200, "height": 120, "layout": "horizontal", "gap": 10, "children": [
+    {"type": "script", "id": "construct", "width": 160, "height": 100, "scriptUri": "./p-construct.js"},
+    {"type": "script", "id": "parse", "width": 160, "height": 100, "scriptUri": "./p-parse.js"},
+    {"type": "script", "id": "bigint", "width": 160, "height": 100, "scriptUri": "./p-bigint.js"},
+    {"type": "script", "id": "message", "width": 160, "height": 100, "scriptUri": "./p-message.js"},
+    {"type": "script", "id": "caught", "width": 160, "height": 100, "scriptUri": "./p-caught.js"},
+    {"type": "script", "id": "limit", "width": 160, "height": 100, "scriptUri": "./p-limit.js"}
+  ]},
+  {"type": "frame", "id": "depths", "x": 0, "y": 200, "width": 1200, "height": 120, "layout": "horizontal", "gap": 10, "children": [
+    {"type": "script", "id": "stringify80", "width": 160, "height": 100, "scriptUri": "./p-stringify80.js"},
+    {"type": "script", "id": "stringify400", "width": 160, "height": 100, "scriptUri": "./p-stringify400.js"},
+    {"type": "script", "id": "nest63", "width": 160, "height": 100, "scriptUri": "./p-nest63.js"},
+    {"type": "script", "id": "nest64", "width": 160, "height": 100, "scriptUri": "./p-nest64.js"},
+    {"type": "script", "id": "nest74", "width": 160, "height": 100, "scriptUri": "./p-nest74.js"},
+    {"type": "script", "id": "depth", "width": 160, "height": 100, "scriptUri": "./p-depth.js"}
+  ]},
+  {"type": "frame", "id": "heap", "x": 0, "y": 400, "width": 1200, "height": 120, "layout": "horizontal", "gap": 10, "children": [
+    {"type": "script", "id": "fill699913", "width": 160, "height": 100, "scriptUri": "./p-fill699913.js"},
+    {"type": "script", "id": "fill700", "width": 160, "height": 100, "scriptUri": "./p-fill700.js"},
+    {"type": "script", "id": "fill900", "width": 160, "height": 100, "scriptUri": "./p-fill900.js"},
+    {"type": "script", "id": "globals", "width": 160, "height": 100, "scriptUri": "./p-globals.js"}
+  ]}
+]}

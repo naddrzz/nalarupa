@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -122,7 +123,9 @@ func TestScriptNodeRuns(t *testing.T) {
 	if s := run("./loop.js"); s.Title != "Script runtime error" || !strings.HasPrefix(desc(s), "InternalError: interrupted") {
 		t.Fatalf("%+v", s)
 	}
-	if el := time.Since(started); el < scriptTimeout || el > 4*time.Second {
+	// The budget runs on the engine's clock (QueryPerformanceCounter on Windows, as Rust's Instant); Go's clock there
+	// advances by timer ticks, so it may read up to one tick (at most 15.6 ms) short.
+	if el := time.Since(started); el < scriptTimeout-16*time.Millisecond || el > 4*time.Second {
 		t.Fatalf("2 s budget: %v", el)
 	}
 	if s := run("./many.js"); s.Title != "Too many nodes" || desc(s) != "Script output cannot exceed 1000 nodes." {
@@ -230,12 +233,13 @@ func TestScriptLimits(t *testing.T) {
 		}
 	}
 	s := errOf(t, run("./deep.js"))
-	if !strings.HasPrefix(desc(s), "RangeError: Maximum call stack size exceeded\n") || strings.Count(desc(s), "\n    at ") != maxFrames || !strings.Contains(code(s), "> 2: function f") {
+	if !strings.HasPrefix(desc(s), "RangeError: Maximum call stack size exceeded\n") || strings.Count(desc(s), "\n    at ") != 10 || !strings.Contains(code(s), "> 2: function f") {
 		t.Fatalf("%+v %q", s, desc(s))
 	}
-	// Caught, the overflow leaves the script running; the depth is the one rquickjs reaches in 512 KB.
+	// Caught, the overflow leaves the script running. A 512 KB stack holds at least the 146 frames Rust's MSVC
+	// build reaches (gcc's smaller frames hold more: see differs in parity_test.go).
 	r := run("./depth.js")
-	if r.Status != nil || num(t, r.Nodes[0], "width") != 146 {
+	if r.Status != nil || num(t, r.Nodes[0], "width") < 146 {
 		t.Fatalf("%+v", r)
 	}
 	// The budget holds plain work comfortably (rquickjs runs this in well under a second).
@@ -499,5 +503,45 @@ func TestRecordMode(t *testing.T) {
 	draws = 0
 	if r := OffLock(draw); r.Status != nil || draws != 1 {
 		t.Fatalf("a cached output draws once: %d", draws)
+	}
+}
+
+// Runs on many goroutines at once each get their own runtime and give what they give one at a time.
+func TestParallelRunsMatchSerial(t *testing.T) {
+	srcs := []string{
+		"return Array.from({length: 20}, (_, i) => ({type: 'rectangle', width: Math.random() * 100, height: i}));",
+		"function f(n) { return f(n + 1) + 1 }\nreturn f(0);",
+		"const a = [];\nfor (;;) a.push(new Array(100000).fill(1.5));",
+		"null.boom;",
+		"let o = {}; for (let i = 0; i < 400; i++) o = {a: o};\nreturn [{type: 'rectangle', width: JSON.stringify(o).length, height: 1}];",
+	}
+	jobs := make([]job, 4*len(srcs))
+	for i := range jobs {
+		jobs[i] = job{src: "/** @schema 2.19 */\n" + srcs[i%len(srcs)], file: fmt.Sprintf("p%d.js", i%len(srcs)), input: `{"width":10,"height":10,"input":{}}`, schema: "2.19"}
+	}
+	text := func(r Result) string {
+		if r.Status != nil {
+			return r.Status.Title + "|" + desc(r.Status) + "|" + code(r.Status)
+		}
+		return string(jsonv.Marshal(jsonv.NewArray(r.Nodes...)))
+	}
+	want := make([]string, len(jobs))
+	for i := range jobs {
+		want[i] = text(runJob(&jobs[i]))
+	}
+	got := make([]string, len(jobs))
+	var wg sync.WaitGroup
+	for i := range jobs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			got[i] = text(runJob(&jobs[i]))
+		}()
+	}
+	wg.Wait()
+	for i := range jobs {
+		if got[i] != want[i] {
+			t.Errorf("job %d:\n got %q\nwant %q", i, got[i], want[i])
+		}
 	}
 }

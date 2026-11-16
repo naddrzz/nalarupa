@@ -2,7 +2,7 @@
 //
 // A script node (`type: "script"`) names a `.js` file (`scriptUri`, relative to the document) whose body
 // returns an array of nodes; they become the node's children, placed in its local space (no layout) and
-// never saved. Each run gets a fresh 16 MB QuickJS runtime with the call depth rquickjs reaches in 512 KB,
+// never saved. Each run gets a fresh quickjs-ng runtime with a 16 MB heap and a 512 KB stack,
 // 2 s (compiling is not timed), `Math.random` = mulberry32 seeded 0, and at most 1000 output nodes. Runs are
 // cached by (source, inputs, size), so a script re-runs exactly when its file, its inputs or its size
 // changed. Laid out live (under the engine lock) a run that is not cached goes to a worker goroutine and
@@ -33,6 +33,7 @@ import (
 // Script node limits.
 const (
 	scriptMemory  = 16 << 20
+	scriptStack   = 512 << 10
 	scriptTimeout = 2 * time.Second
 	scriptNodes   = 1000
 	// workers is the most runs going at once: a document with many script nodes queues the rest.
@@ -131,12 +132,12 @@ func scriptError(err error, src string) (string, *string) {
 
 // runScript compiles and calls the script once; it returns its JSON result.
 func runScript(src, file, input string) (string, *Status) {
-	js, err := NewJS(Limits{Memory: scriptMemory, StackSlots: stackSlots})
+	js, err := NewJS(Limits{Memory: scriptMemory, Stack: scriptStack})
 	if err != nil {
 		return "", errStatus("An internal error occurred", err.Error())
 	}
 	defer js.Close()
-	if err := js.Exec(scriptPrelude, "<eval>"); err != nil {
+	if err := js.ExecStrict(scriptPrelude); err != nil {
 		return "", errStatus("An internal error occurred", err.Error())
 	}
 	// The wrapper keeps the script on line 1 onwards, so error lines are the file's lines.
