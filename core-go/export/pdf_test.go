@@ -51,7 +51,7 @@ func TestPDFTreesErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("no pages: %v", err)
 	}
-	if !bytes.Contains(b, []byte("/MediaBox [0 0 595 842]")) || !bytes.Contains(b, []byte("/Count 1>>")) {
+	if !bytes.Contains(b, []byte("/MediaBox[0 0 595 842]")) || !bytes.Contains(b, []byte("/Count 1>>")) {
 		t.Errorf("no trees: want one 595x842 page, got\n%s", b)
 	}
 }

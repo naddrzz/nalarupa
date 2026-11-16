@@ -10,3 +10,6 @@ core-go/**/.parity-live
 
 # The pinned wgpu-native release, fetched by `go generate ./shader/gpu`.
 core-go/shader/gpu/wgpu-native/
+
+# The Go core library, built by core-go/build.ps1 or build.sh.
+core-go/out/

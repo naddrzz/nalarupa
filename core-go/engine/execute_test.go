@@ -19,6 +19,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/naddrzz/nalarupa/core-go/doc"
+	"github.com/naddrzz/nalarupa/core-go/export"
 	"github.com/naddrzz/nalarupa/core-go/jsonv"
 	"github.com/naddrzz/nalarupa/core-go/script"
 	"github.com/naddrzz/nalarupa/core-go/script/scripttest"
@@ -313,13 +315,13 @@ func TestARunningScriptLeavesTheEngineFreeAndStopsWithTheAgent(t *testing.T) {
 	if !direct.Error || direct.Text != "Another execute call is still running." {
 		t.Fatal(direct.Text)
 	}
-	if st, _ := e.dispatch(Object("cmd", "state")); !jsonv.IsTrue(jsonv.Get(st, "executing")) {
+	if st, _ := e.Dispatch(Object("cmd", "state")); !jsonv.IsTrue(jsonv.Get(st, "executing")) {
 		t.Fatal("the UI state reports the running script")
 	}
 	// A gated edit waits at the edit gate until the call has rolled back.
 	edited := make(chan error)
 	go func() {
-		_, err := e.dispatch(Object("cmd", "insert", "node", jsonv.MustParse(`{"type": "rectangle", "name": "User", "width": 5, "height": 5}`)))
+		_, err := e.Dispatch(Object("cmd", "insert", "node", jsonv.MustParse(`{"type": "rectangle", "name": "User", "width": 5, "height": 5}`)))
 		edited <- err
 	}()
 	select {
@@ -606,6 +608,92 @@ func TestAgentShotsAndExportsRunScriptNodesOffTheLock(t *testing.T) {
 	out = scripttest.Within(t, finished, "Finish ends once the run is released")
 	if !strings.Contains(out.Text, "Exported:") || !redMiddle(t, decodeShot(t, out.Images[0])) || !redMiddle(t, firstFile(t, filepath.Join(dir, "agent"))) {
 		t.Fatal("the script's output is in the screenshot and the export:", out.Text)
+	}
+}
+
+// The UI's export of an image still downloading waits for it (without the engine lock) and includes it; switching
+// documents while it waits does not change what it exports.
+func TestUIExportsWaitForImagesStillDownloading(t *testing.T) {
+	e := emptyEngine(t)
+	url := slowRedPNG(t, "ui-export")
+	dir := filepath.Join(e.DataDir, "exports", "ui-export-waits")
+	mustOK(t, e.testExecute(t, fmt.Sprintf("c = Insert(document, {type:\"frame\", width:100, height:100, layout:\"none\", fill:{type:\"image\", url:%q, mode:\"fill\"}})", url)))
+	var id string
+	e.Locked(func() {
+		kids := e.Doc.Children()
+		id = jsonv.StrOr(jsonv.Get(kids[len(kids)-1], "id"))
+		e.Assets.Online = true
+	})
+	type result struct {
+		files []string
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		files, err := e.Export([]string{id}, "png", dir, Object("scale", jsonv.Int(1)))
+		done <- result{files, err}
+	}()
+	until := time.Now().Add(5 * time.Second)
+	waiting := func() (b bool) {
+		e.Locked(func() { b = e.Assets.Loading(url) })
+		return b
+	}
+	for !waiting() && len(done) == 0 && time.Now().Before(until) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	var before *doc.Doc
+	e.Locked(func() { before, e.Doc = e.Doc, doc.New() })
+	res := scripttest.Within(t, done, "the export ends once the image is in")
+	e.Locked(func() { e.Doc = before })
+	if res.err != nil || len(res.files) != 1 {
+		t.Fatal(res.files, res.err)
+	}
+	b, err := os.ReadFile(res.files[0])
+	if err != nil || !redMiddle(t, b) {
+		t.Fatal("the image is in the export", err)
+	}
+}
+
+// Exporting a script node never runs its JavaScript under the engine lock, and the file still shows its output:
+// planning answers while the run is held, and the lock is free while the export waits for it.
+func TestUIExportsRunScriptNodesOffTheLock(t *testing.T) {
+	e := newEngine(t)
+	marker := fmt.Sprintf("held-%d", time.Now().UnixNano())
+	started, release := scripttest.HoldRuns(t, script.SetRunHook, marker)
+	dir := openSlowScript(t, e, fmt.Sprintf("/** @schema 2.19 */\n// %s\nreturn [{type: 'rectangle', width: nalarupa.width, height: nalarupa.height, fill: '#ff0000'}];", marker))
+	ids, opts := []string{"page"}, Object("scale", jsonv.Int(1))
+	planned := make(chan error, 1)
+	go func() {
+		var err error
+		e.Locked(func() {
+			_, err = export.Plan(e.exportCtx(e.Doc, e.Libs, nil), e.DataDir, ids, "png", filepath.Join(dir, "planned"), opts)
+		})
+		planned <- err
+	}()
+	if err := scripttest.Within(t, planned, "planning under the lock waited for the script"); err != nil {
+		t.Fatal(err)
+	}
+	type result struct {
+		files []string
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		files, err := e.Export(ids, "png", filepath.Join(dir, "ui"), opts)
+		done <- result{files, err}
+	}()
+	scripttest.Within(t, started, "the export runs the script")
+	locked := make(chan bool, 1)
+	go func() { e.Locked(func() { locked <- true }) }()
+	scripttest.Within(t, locked, "the engine lock is held while the script runs")
+	release()
+	res := scripttest.Within(t, done, "the export ends once the run is released")
+	if res.err != nil || len(res.files) != 1 {
+		t.Fatal(res.files, res.err)
+	}
+	b, err := os.ReadFile(res.files[0])
+	if err != nil || !redMiddle(t, b) {
+		t.Fatal("the script's output is in the export", err)
 	}
 }
 

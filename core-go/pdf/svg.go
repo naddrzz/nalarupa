@@ -54,14 +54,14 @@ func Encode(trees []*usvg.Tree) ([]byte, error) {
 		content := d.w.alloc()
 		d.w.stream(content, "", st.content, true)
 		page := d.w.alloc()
-		d.w.obj(page, "<</Type /Page /Parent "+d.pagesRef.String()+" /MediaBox [0 0 "+nums(w, h)+"] /Resources "+st.res.dict()+" /Contents "+content.String()+">>")
+		d.w.obj(page, "<</Type /Page /Parent "+d.pagesRef.String()+" /MediaBox[0 0 "+nums(w, h)+"] /Resources "+st.res.dict()+" /Contents "+content.String()+">>")
 		d.pages = append(d.pages, page)
 	}
 	if len(trees) == 0 {
 		// krilla's Document::finish writes one empty A4 page when none was started.
 		content, page := d.w.alloc(), d.w.alloc()
 		d.w.stream(content, "", nil, true)
-		d.w.obj(page, "<</Type /Page /Parent "+d.pagesRef.String()+" /MediaBox [0 0 595 842] /Resources "+(&resources{}).dict()+" /Contents "+content.String()+">>")
+		d.w.obj(page, "<</Type /Page /Parent "+d.pagesRef.String()+" /MediaBox[0 0 595 842] /Resources "+(&resources{}).dict()+" /Contents "+content.String()+">>")
 		d.pages = append(d.pages, page)
 	}
 	for _, f := range d.fontOrder {

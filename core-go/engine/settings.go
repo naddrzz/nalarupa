@@ -1,8 +1,10 @@
 package engine
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/naddrzz/nalarupa/core-go/doc"
@@ -104,4 +106,71 @@ func (e *Engine) SettingsView() *jsonv.Object {
 	}
 	s.Set("backend", e.Backend())
 	return s
+}
+
+// providerFormats are the API formats a provider can speak (provider.rs `FORMATS`).
+var providerFormats = []string{"anthropic", "chat", "responses"}
+
+// SaveProvider adds or replaces provider p in the `providers` setting and saves it (lib.rs `provider_save`,
+// provider.rs `save`): it returns the provider's id, new ones drawn as `p` and 8 hex digits. A blank, masked or
+// absent key keeps the saved one, so the UI can save back what it read.
+func (e *Engine) SaveProvider(p jsonv.Value) (string, error) {
+	list := jsonv.Arr(jsonv.Clone(jsonv.Get(e.Settings, "providers")))
+	if list == nil {
+		list = jsonv.NewArray()
+	}
+	base, _ := jsonv.Str(jsonv.Get(p, "base_url"))
+	base = strings.TrimSpace(base)
+	if base == "" {
+		return "", errors.New("A provider needs a base URL (its API root, e.g. https://openrouter.ai/api/v1).")
+	}
+	format, _ := jsonv.Str(jsonv.Get(p, "format"))
+	if !slices.Contains(providerFormats, format) {
+		return "", fmt.Errorf("Unknown format \"%s\": choose anthropic, chat or responses.", format)
+	}
+	id, ok := jsonv.Str(jsonv.Get(p, "id"))
+	if !ok || id == "" {
+		id = fmt.Sprintf("p%08x", doc.RandomU64()&0xffff_ffff)
+	}
+	old := slices.IndexFunc(list.Items, func(q jsonv.Value) bool { return jsonv.StrIs(jsonv.Get(q, "id"), id) })
+	var key jsonv.Value
+	if k, ok := jsonv.Str(jsonv.Get(p, "api_key")); ok && strings.TrimSpace(k) != "" && strings.TrimSpace(k) != Mask {
+		key = strings.TrimSpace(k)
+	} else if old >= 0 {
+		// Blank, masked or absent: keep what was saved (a local server can have no key at all).
+		key = jsonv.Clone(jsonv.Get(list.Items[old], "api_key"))
+	}
+	models := []string{}
+	for _, m := range jsonv.Items(jsonv.Get(p, "models")) {
+		if s, ok := jsonv.Str(m); ok && strings.TrimSpace(s) != "" {
+			models = append(models, strings.TrimSpace(s))
+		}
+	}
+	name, _ := jsonv.Str(jsonv.Get(p, "name"))
+	if name = strings.TrimSpace(name); name == "" {
+		name = base
+	}
+	saved := Object("id", id, "name", name, "format", format, "base_url", base, "api_key", key, "models", Strings(models),
+		"vision", !jsonv.IsFalse(jsonv.Get(p, "vision")))
+	if old >= 0 {
+		list.Items[old] = saved
+	} else {
+		list.Items = append(list.Items, saved)
+	}
+	return id, e.SetSetting("providers", list)
+}
+
+// RemoveProvider drops the provider with this id from the `providers` setting and saves it.
+func (e *Engine) RemoveProvider(id string) error {
+	// A missing list is an empty one; anything else saved (null included) goes back as it was, and a null is
+	// removed by SetSetting, as Rust's `set_setting` does.
+	list, had := e.Settings.Get("providers")
+	if !had {
+		list = jsonv.NewArray()
+	}
+	list = jsonv.Clone(list)
+	if a := jsonv.Arr(list); a != nil {
+		a.Items = slices.DeleteFunc(a.Items, func(q jsonv.Value) bool { return jsonv.StrIs(jsonv.Get(q, "id"), id) })
+	}
+	return e.SetSetting("providers", list)
 }

@@ -34,7 +34,7 @@ var (
 	objHead    = regexp.MustCompile(`^(\d+) 0 obj\n`)
 	lengthRe   = regexp.MustCompile(`/Length (\d+)`)
 	refRe      = regexp.MustCompile(`(\d+) 0 R`)
-	mediaBoxRe = regexp.MustCompile(`/MediaBox \[([-0-9. ]+)\]`)
+	mediaBoxRe = regexp.MustCompile(`/MediaBox\[([-0-9. ]+)\]`)
 )
 
 // ParseStructure checks a file's structure: the header, startxref, an xref entry for every object whose

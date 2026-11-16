@@ -127,13 +127,53 @@ func (e *Engine) planOutputs(out *script.Outcome) ToolOut {
 	}
 	redraw := len(p.shots) > 0 && (len(p.icons) > 0 || len(p.downloads) > 0 || !p.runs.IsEmpty())
 	if redraw || stale {
-		p.callDoc = &doc.Doc{Root: cloneRoot(e.Doc.Root), Path: e.Doc.Path}
-		p.callLibs = make([]resolve.Lib, len(e.Libs))
-		for i, l := range e.Libs {
-			p.callLibs[i] = resolve.Lib{Alias: l.Alias, Root: jsonv.Clone(l.Root)}
-		}
+		p.callDoc, p.callLibs = e.snapshot()
 	}
 	return ToolOut{Text: text, pending: p}
+}
+
+// snapshot is a copy of the open document and its libraries, to draw or plan again from once the lock was
+// released (the live ones may change or be switched meanwhile).
+func (e *Engine) snapshot() (*doc.Doc, []resolve.Lib) {
+	libs := make([]resolve.Lib, len(e.Libs))
+	for i, l := range e.Libs {
+		libs[i] = resolve.Lib{Alias: l.Alias, Root: jsonv.Clone(l.Root)}
+	}
+	return &doc.Doc{Root: cloneRoot(e.Doc.Root), Path: e.Doc.Path}, libs
+}
+
+// Export is lib.rs's `export` command (html.rs `export`): it plans under the engine lock; when the targets draw
+// icons or images still downloading or script nodes not run yet, it runs those and waits for the downloads
+// without the lock (at most settleWait, as screenshots do) and plans again from the same document; then it writes
+// the files without the lock and returns their paths. Call it without holding the lock.
+func (e *Engine) Export(ids []string, format, out string, opts jsonv.Value) ([]string, error) {
+	var (
+		job      *export.Job
+		err      error
+		callDoc  *doc.Doc
+		callLibs []resolve.Lib
+	)
+	e.Locked(func() {
+		job, err = export.Plan(e.exportCtx(e.Doc, e.Libs, nil), e.DataDir, ids, format, out, opts)
+		if err == nil && job.Stale() {
+			callDoc, callLibs = e.snapshot()
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	if callDoc != nil {
+		job.Settle(e.WaitDownloads, time.Now().Add(settleWait))
+		e.Locked(func() { job, err = job.Replan(e.exportCtx(callDoc, callLibs, nil), e.DataDir) })
+		if err != nil {
+			return nil, err
+		}
+	}
+	files, err := job.Run()
+	if err != nil {
+		return nil, err
+	}
+	return files, nil
 }
 
 // Finish settles pending icons, rasterizes pending screenshots and writes pending exports once the icons and
