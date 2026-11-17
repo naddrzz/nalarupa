@@ -354,11 +354,17 @@ func TestTextRenderParity(t *testing.T) {
 	cache := t.TempDir()
 	fonts := text.New(cache)
 	fonts.Online = false
+	emoji := fonts.HasFamily("Noto Emoji")
 	for _, doc := range docs {
 		stem := strings.TrimSuffix(filepath.Base(doc), ".svg")
 		for _, scale := range c.Scales {
 			key := stem + "@" + scaleName(scale)
 			t.Run(key, func(t *testing.T) {
+				if strings.HasPrefix(stem, "emoji") && !emoji {
+					// As in usvg's TestTextParity: without monochrome Noto Emoji, emoji may fall back to a color
+					// font (Segoe UI Emoji's COLR glyphs on a stock Windows), which the port does not draw.
+					t.Skip("Noto Emoji is not installed")
+				}
 				want := rustRender(t, cli, doc, scale, cache)
 				got := goRender(t, doc, scale, fonts)
 				checkRendered(t, got, want, fx.tolerance("text/"+key))

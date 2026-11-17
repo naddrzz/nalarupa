@@ -47,8 +47,14 @@ type scenario struct {
 	Doc  string `json:"doc"` // under testdata
 	Live bool   `json:"live"`
 	// Tolerance applies to the frames served from a cached view that edits have repainted; others are exact.
-	Tolerance *tolerance       `json:"tolerance"`
-	Steps     []map[string]any `json:"steps"`
+	Tolerance *tolerance `json:"tolerance"`
+	// CRT applies, live on Windows only, to every frame: Rust takes f64 cos and acos from the platform libm,
+	// and the Windows CRT rounds some off by over half an ulp where Go's are correctly rounded
+	// (skia/path64.go). A cubic the clipper chops near a tangent at a band's edge then lands a supersampled
+	// row apart (a quarter of a pixel's coverage, at most 64 levels). Band edges follow the core count, so
+	// which frames it hits depends on the machine.
+	CRT   *tolerance       `json:"crt"`
+	Steps []map[string]any `json:"steps"`
 }
 
 type tolerance struct {
@@ -570,7 +576,11 @@ func TestCanvasParity(t *testing.T) {
 				if wf, ok := wantFrames[i]; ok {
 					w := int(want.Log[i].(map[string]any)["width"].(float64))
 					if msg := compareRGB(frames[i], wf, w, tolFor(sc, repainted[i])); msg != "" {
-						t.Errorf("step %d render: %s", i, msg)
+						if sc.CRT != nil && cli != "" && runtime.GOOS == "windows" && compareRGB(frames[i], wf, w, sc.CRT) == "" {
+							t.Logf("step %d render: %s (within the Windows CRT allowance)", i, msg)
+						} else {
+							t.Errorf("step %d render: %s", i, msg)
+						}
 					}
 				}
 			}

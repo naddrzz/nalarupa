@@ -402,10 +402,18 @@ func TestPDFParity(t *testing.T) {
 		}
 		write(dc.Name, trees)
 	}
+	emoji := svgFonts.HasFamily("Noto Emoji")
 	for _, corpus := range fx.Corpora {
 		files, _ := filepath.Glob(filepath.Join(testdata, filepath.FromSlash(corpus), "*.svg"))
 		for _, file := range files {
-			name := strings.ReplaceAll(corpus, "/", "-") + "-" + strings.TrimSuffix(filepath.Base(file), ".svg")
+			stem := strings.TrimSuffix(filepath.Base(file), ".svg")
+			name := strings.ReplaceAll(corpus, "/", "-") + "-" + stem
+			if corpus == "usvg/text" && strings.HasPrefix(stem, "emoji") && !emoji {
+				// As in usvg's TestTextParity: without monochrome Noto Emoji, emoji may fall back to a color font
+				// (Segoe UI Emoji's COLR glyphs on a stock Windows), which the port does not draw.
+				t.Logf("%s: skipped, Noto Emoji is not installed", name)
+				continue
+			}
 			b, err := os.ReadFile(file)
 			if err != nil {
 				t.Fatal(err)

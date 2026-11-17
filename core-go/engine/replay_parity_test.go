@@ -10,7 +10,8 @@
 // <name>.<step>.<k>.png); with it, with the CLI's live
 // output. NALARUPA_UPDATE_GOLDEN=1 (with NALARUPA_CLI) rewrites them. A sequence whose first line is `# live` holds
 // platform- or font-dependent output and is compared live only. A `# frames within <n>: <why>` line lets its frames
-// differ by n (at most 2) per channel.
+// differ by n (at most 2) per channel, and a `# repaint pixels <n>: <why>` line, live only, lets n pixels of a frame
+// differ by up to repaintDelta (see there).
 //
 // The editor package's commands join the dispatcher here, so the editor sequences (editor-*.jsonl) replay too.
 package engine_test
@@ -344,19 +345,43 @@ func TestReplayParity(t *testing.T) {
 					t.Fatalf("# frames within %d: at most %d is allowed", within, maxFramesWithin)
 				}
 			}
+			// Live only: the goldens are painted with their recorded band count, which Go replays.
+			repaintPixels := 0
+			if m := framesRepaint.FindSubmatch(src); m != nil && cli != "" {
+				repaintPixels, _ = strconv.Atoi(string(m[1]))
+				if repaintPixels > maxRepaintPixels {
+					t.Fatalf("# repaint pixels %d: at most %d is allowed", repaintPixels, maxRepaintPixels)
+				}
+			}
 			for _, i := range steps {
 				g, w := got.frames[i], want.frames[i]
 				if !bytes.Equal(g, w) {
-					diff := 0
-					for k := range min(len(g), len(w)) {
-						if d := int(g[k]) - int(w[k]); d > within || -d > within {
-							diff++
+					diff, maxDelta, pixels := 0, 0, 0
+					for p := 0; p+3 <= min(len(g), len(w)); p += 3 {
+						off := false
+						for k := p; k < p+3; k++ {
+							d := int(g[k]) - int(w[k])
+							d = max(d, -d)
+							maxDelta = max(maxDelta, d)
+							if d > within {
+								diff++
+								off = true
+							}
+						}
+						if off {
+							pixels++
 						}
 					}
 					if diff == 0 && len(g) == len(w) {
 						continue
 					}
-					t.Errorf("frame of step %d: %d bytes, want %d; %d channels differ", i, len(g), len(w), diff)
+					msg := fmt.Sprintf("frame of step %d: %d bytes, want %d; %d channels of %d pixels differ by over %d, max delta %d",
+						i, len(g), len(w), diff, pixels, within, maxDelta)
+					if len(g) == len(w) && maxDelta <= repaintDelta && pixels <= repaintPixels {
+						t.Logf("%s (within the repaint allowance)", msg)
+						continue
+					}
+					t.Error(msg)
 				}
 			}
 			for _, f := range sortedKeys(names(want.shots), names(got.shots)) {
@@ -412,12 +437,24 @@ const jpegDelta = 12
 // maxFramesWithin caps a `# frames within` allowance: more would hide real rendering differences.
 const maxFramesWithin = 2
 
+// repaintDelta and maxRepaintPixels bound a `# repaint pixels <n>: <why>` allowance, live only. Go repaints an
+// edit in the bands the full paint of the view used, so it equals a full paint; Rust's resvg path repaints the
+// dirty rectangle alone (phase 10a). Where a band edge of the full paint cuts a curve, the two differ by a cut
+// curve's antialiasing shift, and band edges follow the core count (render.rs `Painter::paint`), so which frames
+// and pixels it hits depends on the machine. A frame may then have n pixels off by up to repaintDelta.
+const (
+	repaintDelta     = 64
+	maxRepaintPixels = 32
+)
+
 var (
 	// framesWithin is a sequence's `# frames within <n>: <why>` line: its frames may differ by n per channel.
 	// n is at most maxFramesWithin.
 	framesWithin = regexp.MustCompile(`(?m)^# frames within (\d+):`)
-	pdfPage      = regexp.MustCompile(`/Type\s*/Page\b`)
-	pdfMediaBox  = regexp.MustCompile(`/MediaBox\s*\[([^\]]*)\]`)
+	// framesRepaint is a sequence's `# repaint pixels <n>: <why>` line (see repaintDelta).
+	framesRepaint = regexp.MustCompile(`(?m)^# repaint pixels (\d+):`)
+	pdfPage       = regexp.MustCompile(`/Type\s*/Page\b`)
+	pdfMediaBox   = regexp.MustCompile(`/MediaBox\s*\[([^\]]*)\]`)
 )
 
 // pdfSummary is a PDF's page count and page sizes: the files are written by different PDF writers (the bytes are

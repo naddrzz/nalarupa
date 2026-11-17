@@ -3,6 +3,8 @@
 # a script node's finished background run redraws its layer.
 # frames within 1: Go repaints an edit in the bands the full paint of the view used, so it equals a full paint; Rust's
 # resvg path repaints the dirty rectangle alone, where cut curves shift their antialiased edges (phase 10a).
+# repaint pixels 4: with 4 cores (the hosted Windows runner) a band edge of the full paint cuts a curve, whose shifted
+# antialiasing Go's banded repaints keep and Rust's dirty-rectangle repaints do not (1 pixel, 14 levels).
 {"cmd":"open","path":"slides.pen"}
 {"cmd":"render","w":220,"h":160,"cam":[-10,-10],"zoom":0.25,"bg":[30,30,30]}
 {"cmd":"update","ids":["n1"],"props":{"enabled":true}}
