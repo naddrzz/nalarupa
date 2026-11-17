@@ -95,6 +95,14 @@ func (f *Fonts) clusters(text string, st layout.TextStyle) []cluster {
 
 // shape shapes text in one face at a weight (only `wght` is set on variable fonts), with no language,
 // as rustybuzz does. Nil when the face cannot be shaped.
+// newBuffer is a HarfBuzz buffer with room for n runes (AddRunes appends them one by one).
+func newBuffer(n int) *harfbuzz.Buffer {
+	buf := harfbuzz.NewBuffer()
+	buf.Info = make([]harfbuzz.GlyphInfo, 0, n)
+	buf.Pos = make([]harfbuzz.GlyphPosition, 0, n)
+	return buf
+}
+
 func (f *Fonts) shape(id faceID, text string, weight uint16) []glyph {
 	hb := f.shaper(id, weight)
 	if hb == nil {
@@ -106,7 +114,7 @@ func (f *Fonts) shape(id faceID, text string, weight uint16) []glyph {
 		runes = append(runes, r)
 		offsets = append(offsets, i)
 	}
-	buf := harfbuzz.NewBuffer()
+	buf := newBuffer(len(runes))
 	buf.AddRunes(runes, 0, -1)
 	buf.GuessSegmentProperties()
 	buf.Props.Language = ""

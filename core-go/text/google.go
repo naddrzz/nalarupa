@@ -66,8 +66,30 @@ func (d *downloader) prepare(files ...string) {
 	}
 }
 
+// drop forgets the preparations of files (a Fonts without a downloader has none).
+func (d *downloader) drop(files ...string) {
+	if d == nil {
+		return
+	}
+	d.preparedMu.Lock()
+	defer d.preparedMu.Unlock()
+	for _, file := range files {
+		delete(d.prepared, file)
+	}
+}
+
+// pending is how many preparations are waiting to be taken.
+func (d *downloader) pending() int {
+	d.preparedMu.Lock()
+	defer d.preparedMu.Unlock()
+	return len(d.prepared)
+}
+
 // take returns, once, the faces prepared from file when it still holds data; nil otherwise.
 func (d *downloader) take(file string, data []byte) []*faceInfo {
+	if d == nil {
+		return nil
+	}
 	d.preparedMu.Lock()
 	defer d.preparedMu.Unlock()
 	p, ok := d.prepared[file]

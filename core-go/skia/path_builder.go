@@ -20,6 +20,11 @@ type PathBuilder struct {
 // NewPathBuilder creates a builder.
 func NewPathBuilder() *PathBuilder { return &PathBuilder{moveToRequired: true} }
 
+// NewPathBuilderWithCapacity is NewPathBuilder with room for verbs and points.
+func NewPathBuilderWithCapacity(verbs, points int) *PathBuilder {
+	return &PathBuilder{moveToRequired: true, verbs: make([]PathVerb, 0, verbs), points: make([]Point, 0, points)}
+}
+
 // PathFromRect creates a closed clockwise contour: top left, top right, bottom right, bottom left.
 func PathFromRect(r Rect) *Path {
 	return &Path{
@@ -204,6 +209,25 @@ func (b *PathBuilder) PushPath(other *Path) {
 	b.lastMoveToIndex = len(b.points)
 	b.verbs = append(b.verbs, other.verbs...)
 	b.points = append(b.points, other.points...)
+}
+
+// PushPathTransformed is PushPath(other.Transform(ts)) without the intermediate path: false (and nothing
+// pushed) where Transform gives nil, a point that is not finite.
+func (b *PathBuilder) PushPathTransformed(other *Path, ts Transform) bool {
+	if ts.IsIdentity() {
+		b.PushPath(other)
+		return true
+	}
+	start := len(b.points)
+	b.points = append(b.points, other.points...)
+	ts.MapPoints(b.points[start:])
+	if _, ok := RectFromPoints(b.points[start:]); !ok {
+		b.points = b.points[:start]
+		return false
+	}
+	b.lastMoveToIndex = start
+	b.verbs = append(b.verbs, other.verbs...)
+	return true
 }
 
 func (b *PathBuilder) pushPathBuilder(other *PathBuilder) {

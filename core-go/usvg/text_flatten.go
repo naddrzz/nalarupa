@@ -48,18 +48,15 @@ func flattenText(t *Text, cache *converterCache) (*Group, skia.NonZeroRect, bool
 			children = append(children, withRenderingMode(span.underline, mode))
 		}
 
-		// Consecutive outline glyphs go into one path; anything else ends it.
-		b := skia.NewPathBuilder()
+		// Consecutive outline glyphs go into one path; anything else ends it. The outlines are looked up
+		// first, so the path is sized once (a long line otherwise regrows it many times).
 		hasExplicitVariations := len(span.variations) != 0
+		outlines := make([]*skia.Path, len(span.positionedGlyphs))
+		verbs, points := 0, 0
 		for gi := range span.positionedGlyphs {
 			g := &span.positionedGlyphs[gi]
-			colr, image := cache.glyphImage(g.Font, g.ID)
-			if colr {
-				continue // a COLR glyph is a group of its own in usvg; not ported
-			}
-			if image {
-				children = pushOutlinePaths(span, &b, children, mode)
-				continue // an SVG or bitmap glyph; not ported
+			if colr, image := cache.glyphImage(g.Font, g.ID); colr || image {
+				continue
 			}
 			// Variations bypass the outline cache: with explicit ones, or an automatic opsz.
 			needsVariations := hasExplicitVariations ||
@@ -71,9 +68,24 @@ func flattenText(t *Text, cache *converterCache) (*Group, skia.NonZeroRect, bool
 				outline = cache.fontdbOutline(g.Font, g.ID)
 			}
 			if outline != nil {
-				if p := outline.Transform(g.OutlineTransform()); p != nil {
-					b.PushPath(p)
-				}
+				outlines[gi] = outline
+				verbs += outline.Len()
+				points += outline.PointsLen()
+			}
+		}
+		b := skia.NewPathBuilderWithCapacity(verbs, points)
+		for gi := range span.positionedGlyphs {
+			g := &span.positionedGlyphs[gi]
+			colr, image := cache.glyphImage(g.Font, g.ID)
+			if colr {
+				continue // a COLR glyph is a group of its own in usvg; not ported
+			}
+			if image {
+				children = pushOutlinePaths(span, &b, children, mode)
+				continue // an SVG or bitmap glyph; not ported
+			}
+			if outline := outlines[gi]; outline != nil {
+				b.PushPathTransformed(outline, g.OutlineTransform())
 			}
 		}
 		children = pushOutlinePaths(span, &b, children, mode)
@@ -106,11 +118,16 @@ func outlineWithVariations(db *text.Database, id text.FaceID, gid uint16, variat
 	if opsz == FontOpticalSizingAuto && !explicitOpsz && db.HasAxis(id, tagOpsz) {
 		vars = append(vars, text.Variation{Tag: tagOpsz, Value: fontSize})
 	}
-	b := skia.NewPathBuilder()
-	if !db.OutlineVaried(id, gid, vars, b) {
-		return nil
-	}
-	return b.Finish()
+	// Memoised per face, glyph and coordinates (text is converted again on every rebuild); callers only read
+	// the path.
+	p, _ := db.OutlineMemo(id, gid, vars, func() any {
+		b := skia.NewPathBuilder()
+		if !db.OutlineVaried(id, gid, vars, b) {
+			return (*skia.Path)(nil)
+		}
+		return b.Finish()
+	}).(*skia.Path)
+	return p
 }
 
 type glyphKey struct {
@@ -124,11 +141,14 @@ func (c *converterCache) fontdbOutline(font text.FaceID, id uint16) *skia.Path {
 	if p, ok := c.outlines[k]; ok {
 		return p
 	}
-	var p *skia.Path
-	b := skia.NewPathBuilder()
-	if c.fontdb.Outline(font, id, b) {
-		p = b.Finish()
-	}
+	// Also memoised across parses, per face (text is converted again on every rebuild); callers only read it.
+	p, _ := c.fontdb.OutlineDefaultMemo(font, id, func() any {
+		b := skia.NewPathBuilder()
+		if !c.fontdb.Outline(font, id, b) {
+			return (*skia.Path)(nil)
+		}
+		return b.Finish()
+	}).(*skia.Path)
 	c.outlines[k] = p
 	return p
 }

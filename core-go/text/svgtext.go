@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/go-text/typesetting/font"
 	ot "github.com/go-text/typesetting/font/opentype"
@@ -57,7 +58,26 @@ type Variation struct {
 type Database struct {
 	db      *fontDB
 	shapers map[string]*harfbuzz.Font
+
+	// shapes memoises Shape: text is converted again on every rebuild (a sliding node's snapshot, a landed
+	// font), and shaping is deterministic in its inputs. Keyed by the shaper, which stands for the face and
+	// its variations.
+	shapesMu sync.Mutex
+	shapes   map[shapeMemoKey][]ShapedGlyph
 }
+
+type shapeMemoKey struct {
+	hb                      *harfbuzz.Font
+	text                    string
+	rtl, smallCaps, kerning bool
+}
+
+// maxShapeMemo bounds the shaping memo; past it the memo starts over. A run longer than maxShapeMemoText is
+// not kept (a pasted line of minified JSON would hold megabytes for nothing).
+const (
+	maxShapeMemo     = 1 << 13
+	maxShapeMemoText = 1 << 12
+)
 
 // NewDatabase is an empty database (fontdb::Database::new()).
 func NewDatabase() *Database { return &Database{db: newDB()} }
@@ -249,13 +269,34 @@ func (d *Database) Shape(id FaceID, text string, rtl, smallCaps, kerning bool, v
 	if hb == nil {
 		return nil, false
 	}
+	if len(text) > maxShapeMemoText {
+		return shapeRun(hb, text, rtl, smallCaps, kerning), true
+	}
+	k := shapeMemoKey{hb, text, rtl, smallCaps, kerning}
+	d.shapesMu.Lock()
+	out, ok := d.shapes[k]
+	d.shapesMu.Unlock()
+	if ok {
+		return out, true // callers only read it
+	}
+	out = shapeRun(hb, text, rtl, smallCaps, kerning)
+	d.shapesMu.Lock()
+	if d.shapes == nil || len(d.shapes) >= maxShapeMemo {
+		d.shapes = map[shapeMemoKey][]ShapedGlyph{}
+	}
+	d.shapes[k] = out
+	d.shapesMu.Unlock()
+	return out, true
+}
+
+func shapeRun(hb *harfbuzz.Font, text string, rtl, smallCaps, kerning bool) []ShapedGlyph {
 	runes := make([]rune, 0, len(text))
 	offsets := make([]int, 0, len(text))
 	for i, r := range text {
 		runes = append(runes, r)
 		offsets = append(offsets, i)
 	}
-	buf := harfbuzz.NewBuffer()
+	buf := newBuffer(len(runes))
 	buf.AddRunes(runes, 0, -1)
 	buf.Props.Direction = harfbuzz.LeftToRight
 	if rtl {
@@ -276,7 +317,7 @@ func (d *Database) Shape(id FaceID, text string, rtl, smallCaps, kerning bool, v
 		p := buf.Pos[i]
 		out[i] = ShapedGlyph{Cluster: offsets[g.Cluster], ID: uint32(g.Glyph), XOffset: int32(p.XOffset), YOffset: int32(p.YOffset), XAdvance: int32(p.XAdvance)}
 	}
-	return out, true
+	return out
 }
 
 // shaper is the HarfBuzz font of a face with the variations set, as rustybuzz's set_variations computes
@@ -321,6 +362,11 @@ func (d *Database) Outline(id FaceID, gid uint16, b OutlineBuilder) bool {
 	if o == nil {
 		return false
 	}
+	return o.outlineGlyph(gid, o.coords(o.defaultVariations()), b)
+}
+
+// defaultVariations sets every axis to its default.
+func (o *outlineFace) defaultVariations() []Variation {
 	var vars []Variation
 	fixed := func(b []byte) float32 { return float32(int32(binary.BigEndian.Uint32(b))) / 65536 }
 	for i := 0; i+20 <= len(o.fvar) && i/20 < o.axes; i += 20 {
@@ -329,7 +375,44 @@ func (d *Database) Outline(id FaceID, gid uint16, b OutlineBuilder) bool {
 		v.Value = fixed(o.fvar[i+8:])
 		vars = append(vars, v)
 	}
-	return o.outlineGlyph(gid, o.coords(vars), b)
+	return vars
+}
+
+// OutlineMemo returns what build made of the glyph's outline with the variations set in turn, built once per
+// face, glyph and resulting coordinates: the value must not change afterwards (usvg keeps its finished paths
+// here, read only). build gets OutlineVaried's arguments to call it with.
+func (d *Database) OutlineMemo(id FaceID, gid uint16, vars []Variation, build func() any) any {
+	o := d.outlineFace(id)
+	if o == nil {
+		return build()
+	}
+	return o.memoBuilt(memoKey(gid, o.coords(vars)), build)
+}
+
+// OutlineDefaultMemo is OutlineMemo for the outline Outline gives (every axis at its default).
+func (d *Database) OutlineDefaultMemo(id FaceID, gid uint16, build func() any) any {
+	o := d.outlineFace(id)
+	if o == nil {
+		return build()
+	}
+	return o.memoBuilt(memoKey(gid, o.coords(o.defaultVariations())), build)
+}
+
+func (o *outlineFace) memoBuilt(k outlineKey, build func() any) any {
+	o.memoMu.Lock()
+	v, ok := o.built[k]
+	o.memoMu.Unlock()
+	if ok {
+		return v
+	}
+	v = build()
+	o.memoMu.Lock()
+	if o.built == nil || len(o.built) >= maxOutlineMemo {
+		o.built = map[outlineKey]any{}
+	}
+	o.built[k] = v
+	o.memoMu.Unlock()
+	return v
 }
 
 // OutlineVaried outlines a glyph with the variations set in turn (usvg's outline_with_variations).
@@ -356,6 +439,22 @@ func (d *Database) GlyphImage(id FaceID, gid uint16) (colr, image bool) {
 	if f == nil {
 		return false, false
 	}
+	f.imagesMu.Lock()
+	v, ok := f.glyphImages[gid]
+	f.imagesMu.Unlock()
+	if !ok {
+		v[0], v[1] = glyphImage(f, gid)
+		f.imagesMu.Lock()
+		if f.glyphImages == nil {
+			f.glyphImages = map[uint16][2]bool{}
+		}
+		f.glyphImages[gid] = v
+		f.imagesMu.Unlock()
+	}
+	return v[0], v[1]
+}
+
+func glyphImage(f *faceInfo, gid uint16) (colr, image bool) {
 	ft := f.font()
 	if ft == nil {
 		return false, false

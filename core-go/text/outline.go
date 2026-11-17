@@ -10,6 +10,7 @@ package text
 
 import (
 	"encoding/binary"
+	"sync"
 
 	"github.com/go-text/typesetting/font"
 	ot "github.com/go-text/typesetting/font/opentype"
@@ -1422,7 +1423,65 @@ type outlineFace struct {
 	axes    int // coordinates kept (at most 64)
 	cff1    *cffTable
 	cff     *font.Face // CFF2, through go-text
+
+	// memo holds each outline drawn so far, by glyph and coordinates, as the builder calls it made: text is
+	// converted again on every rebuild (a sliding node's snapshot, a landed font), and a variable font's
+	// glyph costs its gvar deltas each time. memoMu also serialises the outlining (cff's coordinates are state).
+	memoMu sync.Mutex
+	memo   map[outlineKey]*outlineRecord
+	// built holds what callers made of an outline (usvg's finished path), by the same key (OutlineMemo).
+	built map[outlineKey]any
 }
+
+type outlineKey struct {
+	gid    uint16
+	coords string // the normalised coordinates, two bytes each
+	varied bool   // coords is not nil
+}
+
+// outlineRecord is one outline: the builder calls in order, and what outlineGlyph returned.
+type outlineRecord struct {
+	ops []outlineOp
+	ok  bool
+}
+
+type outlineOp struct {
+	kind uint8 // 'M', 'L', 'Q', 'C', 'Z'
+	p    [6]float32
+}
+
+func (r *outlineRecord) MoveTo(x, y float32) { r.ops = append(r.ops, outlineOp{'M', [6]float32{x, y}}) }
+func (r *outlineRecord) LineTo(x, y float32) { r.ops = append(r.ops, outlineOp{'L', [6]float32{x, y}}) }
+func (r *outlineRecord) QuadTo(x1, y1, x, y float32) {
+	r.ops = append(r.ops, outlineOp{'Q', [6]float32{x1, y1, x, y}})
+}
+func (r *outlineRecord) CubicTo(x1, y1, x2, y2, x, y float32) {
+	r.ops = append(r.ops, outlineOp{'C', [6]float32{x1, y1, x2, y2, x, y}})
+}
+func (r *outlineRecord) Close() { r.ops = append(r.ops, outlineOp{kind: 'Z'}) }
+
+// replay makes the recorded calls on b.
+func (r *outlineRecord) replay(b OutlineBuilder) bool {
+	for _, op := range r.ops {
+		p := &op.p
+		switch op.kind {
+		case 'M':
+			b.MoveTo(p[0], p[1])
+		case 'L':
+			b.LineTo(p[0], p[1])
+		case 'Q':
+			b.QuadTo(p[0], p[1], p[2], p[3])
+		case 'C':
+			b.CubicTo(p[0], p[1], p[2], p[3], p[4], p[5])
+		case 'Z':
+			b.Close()
+		}
+	}
+	return r.ok
+}
+
+// maxOutlineMemo bounds a face's memo; past it the memo starts over.
+const maxOutlineMemo = 1 << 15
 
 func (fi *faceInfo) outlineFace() *outlineFace {
 	if fi.outl != nil || fi.noOutl {
@@ -1562,7 +1621,36 @@ func setVariation(fvar, avar []byte, hasAvar bool, coords []int16, t uint32, val
 }
 
 // outlineGlyph is ttf_parser::Face::outline_glyph at coords.
+func memoKey(gid uint16, coords []int16) outlineKey {
+	k := outlineKey{gid: gid, varied: coords != nil}
+	if len(coords) > 0 {
+		c := make([]byte, 2*len(coords))
+		for i, v := range coords {
+			binary.BigEndian.PutUint16(c[2*i:], uint16(v))
+		}
+		k.coords = string(c)
+	}
+	return k
+}
+
 func (o *outlineFace) outlineGlyph(gid uint16, coords []int16, b OutlineBuilder) bool {
+	k := memoKey(gid, coords)
+	o.memoMu.Lock()
+	r, ok := o.memo[k]
+	if !ok {
+		r = &outlineRecord{}
+		r.ok = o.drawGlyph(gid, coords, r)
+		if o.memo == nil || len(o.memo) >= maxOutlineMemo {
+			o.memo = map[outlineKey]*outlineRecord{}
+		}
+		o.memo[k] = r
+	}
+	o.memoMu.Unlock()
+	return r.replay(b)
+}
+
+// drawGlyph outlines a glyph at coords (ttf_parser::Face::outline_glyph).
+func (o *outlineFace) drawGlyph(gid uint16, coords []int16, b OutlineBuilder) bool {
 	if o.gvar != nil {
 		if !o.hasGlyf {
 			return false

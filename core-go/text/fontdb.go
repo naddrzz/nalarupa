@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 
 	"github.com/go-text/typesetting/font"
 )
@@ -78,6 +79,9 @@ type faceInfo struct {
 	noShaper bool
 	outl     *outlineFace // glyph outline tables, parsed on first use
 	noOutl   bool
+	// glyphImages memoises GlyphImage per glyph (text conversion asks per glyph, on every rebuild).
+	imagesMu    sync.Mutex
+	glyphImages map[uint16][2]bool
 }
 
 func (f *faceInfo) hasName(name string) bool {
@@ -161,6 +165,7 @@ type fontDB struct {
 	slots     []*faceInfo // nil = free
 	free      []int       // freed slots, reused last-freed first (slotmap's free list)
 	next      faceID
+	byID      map[faceID]*faceInfo // the faces in slots, for face (text conversion asks per glyph)
 	serif     string
 	sansSerif string
 }
@@ -179,18 +184,15 @@ func (db *fontDB) faces() []*faceInfo {
 
 func (db *fontDB) len() int { return len(db.slots) - len(db.free) }
 
-func (db *fontDB) face(id faceID) *faceInfo {
-	for _, f := range db.slots {
-		if f != nil && f.id == id {
-			return f
-		}
-	}
-	return nil
-}
+func (db *fontDB) face(id faceID) *faceInfo { return db.byID[id] }
 
 func (db *fontDB) push(f *faceInfo) {
 	db.next++
 	f.id = db.next
+	if db.byID == nil {
+		db.byID = map[faceID]*faceInfo{}
+	}
+	db.byID[f.id] = f
 	if n := len(db.free); n > 0 {
 		db.slots[db.free[n-1]] = f
 		db.free = db.free[:n-1]
@@ -202,6 +204,7 @@ func (db *fontDB) push(f *faceInfo) {
 func (db *fontDB) remove(id faceID) {
 	for i, f := range db.slots {
 		if f != nil && f.id == id {
+			delete(db.byID, id)
 			db.slots[i] = nil
 			db.free = append(db.free, i)
 			return

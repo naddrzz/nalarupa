@@ -215,7 +215,8 @@ func TestDownloadVariable(t *testing.T) {
 
 // A downloaded font is parsed for shaping on the download's goroutine: Downloaded, which the engine calls under
 // its lock, only adds the faces (a CJK font's glyph table took a second to parse on a slow machine, and every
-// call waited for it).
+// call waited for it). Two weights of a variable family share its file: the second request's preparation is
+// dropped, not kept, once the first one loaded the face.
 func TestDownloadParsesOffTheOwner(t *testing.T) {
 	family, _, data := systemFace(t, fonts(t))
 	compact := compactFamily(family)
@@ -225,8 +226,16 @@ func TestDownloadParsesOffTheOwner(t *testing.T) {
 	})
 	f, ready := onlineFonts(t, g.downloader())
 	f.Ensure(layout.TextStyle{Family: family, Size: 16, Weight: 400})
-	next(t, ready)
-	if !f.Downloaded(family, 400, false) {
+	f.Ensure(layout.TextStyle{Family: family, Size: 16, Weight: 700})
+	first := next(t, ready)
+	// Before Downloaded: the download's goroutine has already parsed the file.
+	f.dl.preparedMu.Lock()
+	p, ok := f.dl.prepared[varFile(f.cache, family, false)]
+	f.dl.preparedMu.Unlock()
+	if !ok || len(p.faces) == 0 || p.faces[0].shaper == nil {
+		t.Fatal("the font was not parsed on the download's goroutine")
+	}
+	if !f.Downloaded(first.family, first.weight, first.italic) {
 		t.Fatal("the download adds a face")
 	}
 	n := 0
@@ -234,12 +243,60 @@ func TestDownloadParsesOffTheOwner(t *testing.T) {
 		if x.hasName(family) {
 			n++
 			if x.shaper == nil {
-				t.Fatal("the face was not parsed before Downloaded")
+				t.Fatal("the face is not the prepared one")
 			}
 		}
 	}
 	if n == 0 {
 		t.Fatal("no face of the family")
+	}
+	second := next(t, ready)
+	f.Downloaded(second.family, second.weight, second.italic)
+	if n := f.dl.pending(); n != 0 {
+		t.Fatalf("the downloader still holds %d preparations", n)
+	}
+	noMore(t, ready)
+}
+
+// A preparation that lands after its variable family was loaded (by the request for another weight, which shares
+// the file) is dropped by its Downloaded, which finds the face already there.
+func TestLatePreparationIsDropped(t *testing.T) {
+	var family, path string
+	if path = os.Getenv("NALARUPA_VARIABLE_FONT"); path != "" {
+		db := newDB()
+		db.loadFile(path)
+		if fs := db.faces(); len(fs) > 0 && fs[0].isVariable() {
+			family = fs[0].families[0].name
+		}
+	} else {
+		for _, x := range fonts(t).db.faces() {
+			if x.src.path != "" && x.index == 0 && x.isVariable() {
+				family, path = x.families[0].name, x.src.path
+				break
+			}
+		}
+	}
+	if family == "" {
+		t.Skip("no variable font: set NALARUPA_VARIABLE_FONT to one")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := newFonts(newDB(), t.TempDir())
+	f.dl = newDownloader()
+	file := varFile(f.cache, family, false)
+	if err := os.MkdirAll(filepath.Dir(file), 0o777); err != nil || os.WriteFile(file, data, 0o666) != nil {
+		t.Fatal("cannot write the cache")
+	}
+	f.dl.prepare(file)
+	if !f.Downloaded(family, 400, false) || f.dl.pending() != 0 {
+		t.Fatalf("the first weight takes the preparation (%d left)", f.dl.pending())
+	}
+	f.dl.prepare(file)
+	f.Downloaded(family, 700, false)
+	if n := f.dl.pending(); n != 0 {
+		t.Fatalf("a late preparation is kept: %d", n)
 	}
 }
 

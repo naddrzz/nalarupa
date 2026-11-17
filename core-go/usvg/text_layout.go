@@ -6,6 +6,7 @@ package usvg
 
 import (
 	"math"
+	"slices"
 	"sort"
 	"unicode/utf8"
 
@@ -387,7 +388,11 @@ func layoutText(t *Text, resolver *FontResolver, db *text.Database) ([]Span, ski
 				continue
 			}
 			bb = bb.expand(bboxFromNonZeroRect(spanBBox))
-			var glyphs []PositionedGlyph
+			n := 0
+			for _, gc := range fragments {
+				n += len(gc.glyphs)
+			}
+			glyphs := make([]PositionedGlyph, 0, n)
 			for _, gc := range fragments {
 				clusterTS := gc.fullTransform()
 				for _, g := range gc.glyphs {
@@ -426,7 +431,7 @@ func layoutText(t *Text, resolver *FontResolver, db *text.Database) ([]Span, ski
 // convertSpan is convert_span: the span's visible clusters and the bounding box of every visible
 // cluster of the chunk from font metrics (not glyph outlines).
 func convertSpan(span *TextSpan, clusters []glyphCluster, textTS skia.Transform) ([]glyphCluster, skia.NonZeroRect, bool) {
-	var spanClusters []glyphCluster
+	spanClusters := make([]glyphCluster, 0, len(clusters))
 	b := skia.NewPathBuilder()
 	for i := range clusters {
 		c := &clusters[i]
@@ -831,7 +836,7 @@ func processChunk(chunk *TextChunk, fonts fontsCache, resolver *FontResolver, db
 		}
 	}
 
-	var clusters []glyphCluster
+	clusters := make([]glyphCluster, 0, len(glyphs))
 	for start := 0; start < len(glyphs); {
 		end := start
 		for end < len(glyphs) && glyphs[end].byteIdx == glyphs[start].byteIdx {
@@ -1122,6 +1127,7 @@ func shapeTextWithFont(s string, font *resolvedFont, smallCaps, kerning bool, va
 		if !ok {
 			return nil
 		}
+		glyphs = slices.Grow(glyphs, len(out))
 		for i, g := range out {
 			start := g.Cluster
 			end := len(sub)

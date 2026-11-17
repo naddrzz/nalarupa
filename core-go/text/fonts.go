@@ -179,8 +179,10 @@ func (f *Fonts) fetch(family string, weight uint16, italic bool) bool {
 			defer func() { recover() }()
 			dl.download(cache, family, weight, italic)
 			// Parsed here, not in Downloaded: a large font (a CJK one) takes long to parse, and the owner calls
-			// Downloaded under its lock.
-			dl.prepare(varFile(cache, family, italic), staticFile(cache, family, weight, italic))
+			// Downloaded under its lock. Without OnReady nothing would take the result.
+			if ready != nil {
+				dl.prepare(varFile(cache, family, italic), staticFile(cache, family, weight, italic))
+			}
 		}()
 		if ready != nil {
 			ready(family, weight, italic)
@@ -191,6 +193,9 @@ func (f *Fonts) fetch(family string, weight uint16, italic bool) bool {
 
 // loadCached makes the face available from what is on disk; true when it is.
 func (f *Fonts) loadCached(family string, weight uint16, italic bool) bool {
+	// A preparation for this style is taken below or dropped on return: when the face is already loaded (another
+	// weight's request loaded the shared variable file), nothing else would free it.
+	defer f.dl.drop(varFile(f.cache, family, italic), staticFile(f.cache, family, weight, italic))
 	if anyFace(f.db, func(x *faceInfo) bool {
 		return x.hasNameFold(family) && (x.style != styleNormal) == italic && x.isVariable()
 	}) {

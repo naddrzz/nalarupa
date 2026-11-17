@@ -23,6 +23,9 @@ type Path struct {
 // Len is the number of segments.
 func (p *Path) Len() int { return len(p.verbs) }
 
+// PointsLen is the number of points.
+func (p *Path) PointsLen() int { return len(p.points) }
+
 // IsEmpty reports whether the path has no segments.
 func (p *Path) IsEmpty() bool { return len(p.verbs) == 0 }
 
@@ -40,24 +43,35 @@ func (p *Path) ComputeTightBounds() (Rect, bool) {
 	// Big enough for the worst case (cubic) extremas + 1.
 	var extremas [5]Point
 	mn, mx := p.points[0], p.points[0]
-	iter := p.Segments()
-	var lastPoint Point
-	for {
-		seg, ok := iter.Next()
-		if !ok {
-			break
-		}
+	// The segments as Segments gives them (no auto-close), walked inline: text conversion bounds every path.
+	pts := p.points
+	pi := 0
+	var lastPoint, lastMoveTo Point
+	for _, verb := range p.verbs {
 		count := 0
-		switch seg.Verb {
-		case VerbMove, VerbLine:
-			extremas[0] = seg.Pts[0]
+		switch verb {
+		case VerbMove:
+			extremas[0] = pts[pi]
 			count = 1
+			lastMoveTo = pts[pi]
+			lastPoint = lastMoveTo
+			pi++
+		case VerbLine:
+			extremas[0] = pts[pi]
+			count = 1
+			lastPoint = pts[pi]
+			pi++
 		case VerbQuad:
-			count = computeQuadExtremas(lastPoint, seg.Pts[0], seg.Pts[1], &extremas)
+			count = computeQuadExtremas(lastPoint, pts[pi], pts[pi+1], &extremas)
+			lastPoint = pts[pi+1]
+			pi += 2
 		case VerbCubic:
-			count = computeCubicExtremas(lastPoint, seg.Pts[0], seg.Pts[1], seg.Pts[2], &extremas)
+			count = computeCubicExtremas(lastPoint, pts[pi], pts[pi+1], pts[pi+2], &extremas)
+			lastPoint = pts[pi+2]
+			pi += 3
+		default:
+			lastPoint = lastMoveTo
 		}
-		lastPoint = iter.lastPoint
 		for _, e := range extremas[:count] {
 			mn.X = minf(mn.X, e.X)
 			mn.Y = minf(mn.Y, e.Y)
