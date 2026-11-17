@@ -645,7 +645,7 @@ func (r *Renderer) compositeSlides(w, h uint32, camX, camY, zoom float64, solo s
 			if hasHairline(t.Root()) {
 				resvg.Render(t, tf, over.AsMut())
 			} else {
-				drawCulled(t.Root(), tf, cover, over.AsMut())
+				drawCulled(t.Root(), tf, cover, cover, over.AsMut())
 			}
 		}
 		def := skia.DefaultPixmapPaint()

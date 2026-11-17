@@ -47,10 +47,11 @@ func (r *Renderer) renderView(w, h uint32, camX, camY, zoom float64, bg [3]uint8
 	dirty := r.dirty
 	r.dirty = nil
 	p := r.painter()
+	if v := r.view; v != nil && len(dirty) > 0 && !repaint(p, v, underBackdrops(merge(dirty), r.Layers, r.Order)) {
+		// A band panicked half painted: paint the view afresh.
+		r.view = nil
+	}
 	if v := r.view; v != nil {
-		for _, d := range underBackdrops(merge(dirty), r.Layers, r.Order) {
-			repaint(p, v, d)
-		}
 		ox, oy := int64(vx)-int64(v.x0), int64(vy)-int64(v.y0)
 		exact := math.Abs(v.zoom-zoom) < 1e-9
 		if exact && ox >= 0 && oy >= 0 && ox+int64(w) <= int64(v.pw) && oy+int64(h) <= int64(v.ph) {
@@ -99,14 +100,15 @@ func (r *Renderer) renderView(w, h uint32, camX, camY, zoom float64, bg [3]uint8
 		}
 		pix = pm.Data()
 	}
-	if !p.paint(solo, zoom, bg, x0, y0, cw, ch, pix) {
+	band := p.band(ch)
+	if !p.paintBands(solo, zoom, bg, x0, y0, cw, ch, band, pix, nil) {
 		// Callers read w×h×4 bytes whatever happens.
 		r.Pixels = resize(r.Pixels, int(w*h*4))
 		return
 	}
 	r.MsPerMP = float64(time.Since(t).Seconds()*1e9) / float64(cw*ch)
 	r.Pixels = cropInto(r.Pixels, pix, cw, margin, margin, w, h)
-	r.view = &view{pix: pix, pw: cw, ph: ch, x0: x0, y0: y0, zoom: zoom, bg: bg, solo: solo}
+	r.view = &view{pix: pix, pw: cw, ph: ch, band: band, x0: x0, y0: y0, zoom: zoom, bg: bg, solo: solo}
 }
 
 // cropInto copies a w×h window of pix (pw wide) into out, reusing its allocation.
@@ -120,25 +122,31 @@ func cropInto(out, pix []byte, pw, x, y, w, h uint32) []byte {
 	return out
 }
 
-// repaint repaints the doc-space rectangle d inside the cached view.
-func repaint(p *painter, v *view, d Rect) {
+// repaint repaints the parts of the cached view that the doc-space rectangles touch. The rasterizer chops a
+// curve at its pixmap's edges and flattens each piece on its own, so a curve cut at other edges than the
+// full paint's moves its antialiased edge by up to ~30 levels along the cut piece (a rotated shadow's
+// ellipse showed it): each part is painted in the band the full paint of the view painted it in, at that
+// band's size and origin. False if a band panicked (its part is left half painted).
+func repaint(p *painter, v *view, dirty []Rect) bool {
 	z := v.zoom
-	x0 := max(i32(math.Floor(d.X*z))-2, v.x0)
-	y0 := max(i32(math.Floor(d.Y*z))-2, v.y0)
-	x1 := min(i32(math.Ceil((d.X+d.W)*z))+2, v.x0+int32(v.pw))
-	y1 := min(i32(math.Ceil((d.Y+d.H)*z))+2, v.y0+int32(v.ph))
-	if x1 <= x0 || y1 <= y0 {
-		return
+	band := int32(v.band)
+	parts := make([]area, (int32(v.ph)+band-1)/band)
+	for _, d := range dirty {
+		x0 := max(i32(math.Floor(d.X*z))-2, v.x0)
+		y0 := max(i32(math.Floor(d.Y*z))-2, v.y0)
+		x1 := min(i32(math.Ceil((d.X+d.W)*z))+2, v.x0+int32(v.pw))
+		y1 := min(i32(math.Ceil((d.Y+d.H)*z))+2, v.y0+int32(v.ph))
+		if x1 <= x0 || y1 <= y0 {
+			continue
+		}
+		for b := (y0 - v.y0) / band; b <= (y1-1-v.y0)/band; b++ {
+			by := v.y0 + b*band
+			a := area{x0, max(y0, by), x1, min(y1, by+band)}
+			if o := parts[b]; !o.empty() {
+				a = area{min(a.x0, o.x0), min(a.y0, o.y0), max(a.x1, o.x1), max(a.y1, o.y1)}
+			}
+			parts[b] = a
+		}
 	}
-	w, h := uint32(x1-x0), uint32(y1-y0)
-	part := make([]byte, int(w*h*4))
-	if !p.paint(v.solo, z, v.bg, x0, y0, w, h, part) {
-		return
-	}
-	stride, pw := int(v.pw)*4, int(w)*4
-	ox, oy := int(x0-v.x0), int(y0-v.y0)
-	for row := 0; row < int(h); row++ {
-		at := (oy+row)*stride + ox*4
-		copy(v.pix[at:at+pw], part[row*pw:(row+1)*pw])
-	}
+	return p.paintBands(v.solo, z, v.bg, v.x0, v.y0, v.pw, v.ph, v.band, v.pix, parts)
 }

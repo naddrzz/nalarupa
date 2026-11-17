@@ -44,8 +44,9 @@ var (
 )
 
 type scenario struct {
-	Doc       string           `json:"doc"` // under testdata
-	Live      bool             `json:"live"`
+	Doc  string `json:"doc"` // under testdata
+	Live bool   `json:"live"`
+	// Tolerance applies to the frames served from a cached view that edits have repainted; others are exact.
 	Tolerance *tolerance       `json:"tolerance"`
 	Steps     []map[string]any `json:"steps"`
 }
@@ -54,6 +55,14 @@ type tolerance struct {
 	MaxDelta int     `json:"maxDelta"`
 	MaxShare float64 `json:"maxShare"`
 	Why      string  `json:"why"`
+}
+
+// tolFor is the tolerance of a frame: the scenario's for a repainted one, none otherwise.
+func tolFor(sc scenario, repainted bool) *tolerance {
+	if repainted {
+		return sc.Tolerance
+	}
+	return nil
 }
 
 type golden struct {
@@ -77,7 +86,10 @@ func rectJSON(r Rect) []float64 { return []float64{r.X, r.Y, r.W, r.H} }
 
 // runScenario replays the steps as `nalarupa-cli canvas` does: the log entries (as decoded JSON) and the
 // RGB bytes of each render step.
-func runScenario(t *testing.T, sc scenario, data string, threads int) ([]any, map[int][]byte) {
+// runScenario also returns which frames were served from a cached view that edits have repainted since its full
+// paint (Rust repaints those differently, see the scenarios' tolerance). Each repaint is checked against a
+// full paint of the same view: they may differ by 1 per channel at most.
+func runScenario(t *testing.T, sc scenario, data string, threads int) ([]any, map[int][]byte, map[int]bool) {
 	t.Helper()
 	d, err := doc.Load(filepath.Join(testdata, filepath.FromSlash(sc.Doc)))
 	if err != nil {
@@ -109,6 +121,9 @@ func runScenario(t *testing.T, sc scenario, data string, threads int) ([]any, ma
 	slid := map[string]bool{}
 	var logs []any
 	frames := map[int][]byte{}
+	repainted := map[int]bool{}
+	// patched: the cached view holds repaints.
+	patched := false
 	for i, s := range sc.Steps {
 		op := str(s, "op")
 		id := str(s, "id")
@@ -142,7 +157,29 @@ func runScenario(t *testing.T, sc scenario, data string, threads int) ([]any, ma
 				}
 				return 0
 			}
-			px := r.Render(w, h, camAt(0), camAt(1), num(s, "zoom", 1), bg, str(s, "solo"), s["sharp"] != false)
+			zoom, sharp := num(s, "zoom", 1), s["sharp"] != false
+			had, edited := r.view, len(r.dirty) > 0
+			// A live zoom frame painted for the viewport alone (see renderView) is a full paint.
+			live := had != nil && !sharp && r.MsPerMP == 0 && math.Abs(had.zoom-fmin(fmax(zoom, 0.01), 256)) >= 1e-9
+			px := r.Render(w, h, camAt(0), camAt(1), zoom, bg, str(s, "solo"), sharp)
+			switch v := r.view; {
+			case v != had:
+				patched = false
+			case v != nil && edited:
+				patched = true
+				full := make([]byte, len(v.pix))
+				if !r.painter().paintBands(v.solo, v.zoom, v.bg, v.x0, v.y0, v.pw, v.ph, v.band, full, nil) {
+					t.Fatalf("step %d: full paint failed", i)
+				}
+				worst := 0
+				for k := range full {
+					worst = max(worst, absInt(int(full[k])-int(v.pix[k])))
+				}
+				if worst > 1 {
+					t.Errorf("step %d: the repainted view differs from a full paint of it by up to %d", i, worst)
+				}
+			}
+			repainted[i] = patched && r.view == had && !live
 			rgb := make([]byte, 0, len(px)/4*3)
 			for p := 0; p+3 < len(px); p += 4 {
 				rgb = append(rgb, px[p], px[p+1], px[p+2])
@@ -256,7 +293,7 @@ func runScenario(t *testing.T, sc scenario, data string, threads int) ([]any, ma
 		e["op"] = op
 		logs = append(logs, decodeJSON(t, mustJSON(e)))
 	}
-	return logs, frames
+	return logs, frames, repainted
 }
 
 func mustJSON(v any) string {
@@ -511,7 +548,7 @@ func TestCanvasParity(t *testing.T) {
 			if cli == "" {
 				threads = want.Threads
 			}
-			got, frames := runScenario(t, sc, data, threads)
+			got, frames, repainted := runScenario(t, sc, data, threads)
 			if len(got) != len(want.Log) {
 				t.Fatalf("%d log entries, want %d", len(got), len(want.Log))
 			}
@@ -532,7 +569,7 @@ func TestCanvasParity(t *testing.T) {
 				}
 				if wf, ok := wantFrames[i]; ok {
 					w := int(want.Log[i].(map[string]any)["width"].(float64))
-					if msg := compareRGB(frames[i], wf, w, sc.Tolerance); msg != "" {
+					if msg := compareRGB(frames[i], wf, w, tolFor(sc, repainted[i])); msg != "" {
 						t.Errorf("step %d render: %s", i, msg)
 					}
 				}

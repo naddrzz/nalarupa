@@ -1,6 +1,8 @@
 # Sync and slides: slides start on the first frame that shows them, reflow their siblings, settle and expire on a pinned
 # clock; a node that gains a background blur stops sliding, and one that holds a blur appears in place; reduced motion;
 # a script node's finished background run redraws its layer.
+# frames within 1: Go repaints an edit in the bands the full paint of the view used, so it equals a full paint; Rust's
+# resvg path repaints the dirty rectangle alone, where cut curves shift their antialiased edges (phase 10a).
 {"cmd":"open","path":"slides.pen"}
 {"cmd":"render","w":220,"h":160,"cam":[-10,-10],"zoom":0.25,"bg":[30,30,30]}
 {"cmd":"update","ids":["n1"],"props":{"enabled":true}}

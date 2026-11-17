@@ -1,5 +1,6 @@
 {
  "doc": "canvas/docs/slides.pen",
+ "tolerance": {"maxDelta": 48, "maxShare": 0.0005, "why": "Edits repaint in the bands the full paint of the view used, so they equal a full paint; Rust's resvg path repaints the dirty rectangle alone, where cut curves shift their antialiased edges (phase 10a)"},
  "steps": [
   {
    "op": "sync"

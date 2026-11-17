@@ -9,7 +9,8 @@
 // lines and files, painted with the band count recorded there, plus gzipped frames and the screenshots as
 // <name>.<step>.<k>.png); with it, with the CLI's live
 // output. NALARUPA_UPDATE_GOLDEN=1 (with NALARUPA_CLI) rewrites them. A sequence whose first line is `# live` holds
-// platform- or font-dependent output and is compared live only.
+// platform- or font-dependent output and is compared live only. A `# frames within <n>: <why>` line lets its frames
+// differ by n (at most 2) per channel.
 //
 // The editor package's commands join the dispatcher here, so the editor sequences (editor-*.jsonl) replay too.
 package engine_test
@@ -336,14 +337,24 @@ func TestReplayParity(t *testing.T) {
 				steps = append(steps, i)
 			}
 			slices.Sort(steps)
+			within := 0
+			if m := framesWithin.FindSubmatch(src); m != nil {
+				within, _ = strconv.Atoi(string(m[1]))
+				if within > maxFramesWithin {
+					t.Fatalf("# frames within %d: at most %d is allowed", within, maxFramesWithin)
+				}
+			}
 			for _, i := range steps {
 				g, w := got.frames[i], want.frames[i]
 				if !bytes.Equal(g, w) {
 					diff := 0
 					for k := range min(len(g), len(w)) {
-						if g[k] != w[k] {
+						if d := int(g[k]) - int(w[k]); d > within || -d > within {
 							diff++
 						}
+					}
+					if diff == 0 && len(g) == len(w) {
+						continue
 					}
 					t.Errorf("frame of step %d: %d bytes, want %d; %d channels differ", i, len(g), len(w), diff)
 				}
@@ -398,9 +409,15 @@ func names(m map[string][]byte) map[string]string {
 // (DCT and quantisation rounding, chroma subsampling; see the 4d and 7c parity).
 const jpegDelta = 12
 
+// maxFramesWithin caps a `# frames within` allowance: more would hide real rendering differences.
+const maxFramesWithin = 2
+
 var (
-	pdfPage     = regexp.MustCompile(`/Type\s*/Page\b`)
-	pdfMediaBox = regexp.MustCompile(`/MediaBox\s*\[([^\]]*)\]`)
+	// framesWithin is a sequence's `# frames within <n>: <why>` line: its frames may differ by n per channel.
+	// n is at most maxFramesWithin.
+	framesWithin = regexp.MustCompile(`(?m)^# frames within (\d+):`)
+	pdfPage      = regexp.MustCompile(`/Type\s*/Page\b`)
+	pdfMediaBox  = regexp.MustCompile(`/MediaBox\s*\[([^\]]*)\]`)
 )
 
 // pdfSummary is a PDF's page count and page sizes: the files are written by different PDF writers (the bytes are

@@ -186,6 +186,8 @@ type Layer struct {
 type view struct {
 	pix    []byte
 	pw, ph uint32
+	// band is the height of the bands its full paint was cut into; repaints cut the same.
+	band   uint32
 	x0, y0 int32
 	zoom   float64
 	bg     [3]uint8
