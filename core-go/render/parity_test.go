@@ -176,7 +176,8 @@ func runScenario(t *testing.T, sc scenario, data string, threads int) ([]any, ma
 				fw, fh := min(max(w, 1), 8192), min(max(h, 1), 8192)
 				ox := int64(math.Round(camAt(0)*had.zoom)) - int64(had.x0)
 				oy := int64(math.Round(camAt(1)*had.zoom)) - int64(had.y0)
-				rebanded = had.ph != fh+2*margin && had.band != r.painter().band(fh+2*margin) &&
+				vy := int32(oy) + had.y0
+				rebanded = had.ph != fh+2*margin && !sameBandsOver(had.y0, had.ph, had.band, vy-margin, fh+2*margin, r.painter().band(fh+2*margin), vy, vy+int32(fh)) &&
 					ox >= 0 && oy >= 0 && ox+int64(fw) <= int64(had.pw) && oy+int64(fh) <= int64(had.ph)
 			}
 			px := r.Render(w, h, camAt(0), camAt(1), zoom, bg, str(s, "solo"), sharp)

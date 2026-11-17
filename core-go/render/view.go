@@ -55,11 +55,11 @@ func (r *Renderer) renderView(w, h uint32, camX, camY, zoom float64, bg [3]uint8
 		ox, oy := int64(vx)-int64(v.x0), int64(vy)-int64(v.y0)
 		exact := math.Abs(v.zoom-zoom) < 1e-9
 		// The bands a curve is cut at move its antialiased edges, and their height follows the paint's height
-		// and the core count: below 128-row bands (fewer cores than a view has 128-row bands) a view painted
-		// for another frame height is not what a full paint of this frame gives (smoke: an edited canvas equals
-		// a solo render), so such a frame paints afresh. A view of this height keeps its bands, even after the
-		// core count changed (its repaints cut them too).
-		sameBands := v.ph == h+2*margin || v.band == p.band(h+2*margin)
+		// and the core count: a view painted for another frame height is not what a full paint of this frame
+		// gives (smoke: an edited canvas equals a solo render) unless the bands over the visible rows start and
+		// end on the same rows, the last, shorter band included. Otherwise the frame paints afresh. A view of
+		// this height keeps its bands, even after the core count changed (its repaints cut them too).
+		sameBands := v.ph == h+2*margin || sameBandsOver(v.y0, v.ph, v.band, vy-margin, h+2*margin, p.band(h+2*margin), vy, vy+int32(h))
 		if exact && sameBands && ox >= 0 && oy >= 0 && ox+int64(w) <= int64(v.pw) && oy+int64(h) <= int64(v.ph) {
 			r.Pixels = cropInto(r.Pixels, v.pix, v.pw, uint32(ox), uint32(oy), w, h)
 			return
@@ -115,6 +115,25 @@ func (r *Renderer) renderView(w, h uint32, camX, camY, zoom float64, bg [3]uint8
 	r.MsPerMP = float64(time.Since(t).Seconds()*1e9) / float64(cw*ch)
 	r.Pixels = cropInto(r.Pixels, pix, cw, margin, margin, w, h)
 	r.view = &view{pix: pix, pw: cw, ph: ch, band: band, x0: x0, y0: y0, zoom: zoom, bg: bg, solo: solo}
+}
+
+// sameBandsOver reports whether two paints in bands, rows [y0, y0+h) in bands of band rows and rows
+// [fy0, fy0+fh) in bands of fband rows (each one's last band ends with its paint), cut rows [from, to)
+// into the same bands.
+func sameBandsOver(y0 int32, h, band uint32, fy0 int32, fh, fband uint32, from, to int32) bool {
+	bandAt := func(y, y0 int32, h, band uint32) (int32, int32) {
+		start := y0 + (y-y0)/int32(band)*int32(band)
+		return start, min(start+int32(band), y0+int32(h))
+	}
+	for y := from; y < to; {
+		s, e := bandAt(y, y0, h, band)
+		fs, fe := bandAt(y, fy0, fh, fband)
+		if s != fs || e != fe {
+			return false
+		}
+		y = e
+	}
+	return true
 }
 
 // cropInto copies a w×h window of pix (pw wide) into out, reusing its allocation.

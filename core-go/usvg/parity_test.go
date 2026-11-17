@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -91,9 +92,11 @@ func parity(t *testing.T, dir string, minDocs int) {
 				got = dumpTree(tree)
 			}
 			if path, g, w := diff(t, roundTrip(t, got), roundTrip(t, want)); path != "" {
-				if why, ok := platformLibm[stem]; ok && cli != "" && matchesGolden(t, got, golden) {
-					t.Logf("first difference at %s: got %s, want %s; Go equals the golden (%s)", path, g, w, why)
-					return
+				if ex, ok := glibcLibm[stem]; ok && cli != "" && runtime.GOOS == "linux" {
+					if all := diffs(roundTrip(t, got), roundTrip(t, want), ""); onlyExpected(all, ex.leaves) {
+						t.Logf("%d differences, each one the expected glibc rounding (%s)", len(all), ex.why)
+						return
+					}
 				}
 				t.Errorf("first difference at %s: got %s, want %s", path, g, w)
 			}
@@ -101,22 +104,80 @@ func parity(t *testing.T, dir string, minDocs int) {
 	}
 }
 
-// platformLibm lists, with why, the documents whose tree depends on an f32 libm function that a platform's C
-// library rounds off by over half an ulp: Rust calls it, Go's is correctly rounded. Live, such a document may
-// differ from the CLI as long as it equals the committed golden.
-var platformLibm = map[string]string{
-	"markers-orient": "glibc's atan2f(20, 50) is 0x3EC2D1BC, the correctly rounded value (Go's, and the golden's) 0x3EC2D1BB; the marker's rotation follows it",
+// glibcLibm lists the documents whose tree depends on an f32 libm function that glibc rounds off by over half
+// an ulp where Go's is correctly rounded, as the Windows CRT's (and so the goldens') are here. Live on Linux, such a
+// document may differ from the CLI only at the listed leaves, each by the listed pair: Go's value, glibc's.
+var glibcLibm = map[string]struct {
+	why    string
+	leaves map[string][2]string
+}{
+	"markers-orient": {
+		why: "glibc's atan2f(20, 50) is 0x3EC2D1BC, correctly rounded 0x3EC2D1BB; the marker's rotation follows it",
+		// The sine of the rotation, 0x3EBE26EB (with glibc 0x3EBE26EC), and its negation, in the transforms of both markers.
+		leaves: map[string][2]string{
+			".root.children[0].children[5].children[0].transform[1]":                {"1052649195", "1052649196"},
+			".root.children[0].children[5].children[0].transform[2]":                {"3200132843", "3200132844"},
+			".root.children[0].children[5].children[0].absTransform[1]":             {"1052649195", "1052649196"},
+			".root.children[0].children[5].children[0].absTransform[2]":             {"3200132843", "3200132844"},
+			".root.children[0].children[5].children[0].children[0].absTransform[1]": {"1052649195", "1052649196"},
+			".root.children[0].children[5].children[0].children[0].absTransform[2]": {"3200132843", "3200132844"},
+			".root.children[0].children[5].children[1].transform[1]":                {"1052649195", "1052649196"},
+			".root.children[0].children[5].children[1].transform[2]":                {"3200132843", "3200132844"},
+			".root.children[0].children[5].children[1].absTransform[1]":             {"1052649195", "1052649196"},
+			".root.children[0].children[5].children[1].absTransform[2]":             {"3200132843", "3200132844"},
+			".root.children[0].children[5].children[1].children[0].absTransform[1]": {"1052649195", "1052649196"},
+			".root.children[0].children[5].children[1].children[0].absTransform[2]": {"3200132843", "3200132844"},
+		},
+	},
 }
 
-// matchesGolden reports whether got equals the committed golden at path.
-func matchesGolden(t *testing.T, got any, path string) bool {
-	t.Helper()
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return false
+// leafDiff is one differing leaf: its path, Go's value and the CLI's (as JSON).
+type leafDiff struct{ path, got, want string }
+
+// diffs lists every differing leaf of got and want (a structural difference is one leaf at its path).
+func diffs(got, want any, path string) []leafDiff {
+	show := func(v any) string { b, _ := json.Marshal(v); return string(b) }
+	switch w := want.(type) {
+	case map[string]any:
+		g, ok := got.(map[string]any)
+		if !ok || len(g) != len(w) {
+			return []leafDiff{{path, show(got), show(want)}}
+		}
+		var out []leafDiff
+		for k, wv := range w {
+			gv, ok := g[k]
+			if !ok {
+				out = append(out, leafDiff{path + "." + k, "missing", show(wv)})
+				continue
+			}
+			out = append(out, diffs(gv, wv, path+"."+k)...)
+		}
+		return out
+	case []any:
+		g, ok := got.([]any)
+		if !ok || len(g) != len(w) {
+			return []leafDiff{{path, show(got), show(want)}}
+		}
+		var out []leafDiff
+		for i := range w {
+			out = append(out, diffs(g[i], w[i], fmt.Sprintf("%s[%d]", path, i))...)
+		}
+		return out
 	}
-	p, _, _ := diff(t, roundTrip(t, got), roundTrip(t, b))
-	return p == ""
+	if !reflect.DeepEqual(got, want) {
+		return []leafDiff{{path, show(got), show(want)}}
+	}
+	return nil
+}
+
+// onlyExpected reports whether every difference is a listed leaf with exactly its listed pair of values.
+func onlyExpected(all []leafDiff, leaves map[string][2]string) bool {
+	for _, d := range all {
+		if pair, ok := leaves[d.path]; !ok || pair != [2]string{d.got, d.want} {
+			return false
+		}
+	}
+	return len(all) > 0
 }
 
 // roundTrip decodes v (or JSON bytes) into generic JSON values with exact numbers.

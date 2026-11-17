@@ -111,3 +111,24 @@ func TestRepaintAfterAResizeMatchesFullRender(t *testing.T) {
 		}
 	}
 }
+
+// Bands of the same height are not enough: at 2 threads a 400-row frame's view (1424 rows) and a 399-row one's
+// (1423) both cut 712-row bands, but the last ends a row apart, and a curve that band cuts shifts its
+// antialiasing in the visible rows. Such a frame paints afresh, so it equals a full render.
+func TestCropNeedsTheSameBandExtents(t *testing.T) {
+	d := openJSON(t, `{"version":"2.19","children":[{"type":"frame","id":"root","x":0,"y":0,"width":400,"height":400,"layout":"none","fill":"#eeeeee","children":[
+		{"type":"ellipse","id":"e","x":-200,"y":150,"width":900,"height":2700,"fill":"#ff00ff"}]}]}`)
+	white := [3]uint8{255, 255, 255}
+	r := &Renderer{Threads: 2}
+	r.Sync(offline(t, d))
+	r.Render(400, 400, 0, 0, 1, white, "", true)
+	live := slices.Clone(r.Render(400, 399, 0, 0, 1, white, "", true))
+	full := r.Render(400, 399, 0, 0, 1, white, "root", true)
+	worst := 0
+	for j := range live {
+		worst = max(worst, abs8(live[j], full[j]))
+	}
+	if worst > 0 {
+		t.Errorf("a frame cropped from a view whose last band ends elsewhere differs from a full render by up to %d", worst)
+	}
+}
