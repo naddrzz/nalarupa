@@ -1,4 +1,4 @@
-// Bridge to the Rust core (nalarupa_core.dll / .so / .dylib) through bun:ffi.
+// Bridge to the core (nalarupa_core.dll / .so / .dylib) through bun:ffi.
 import { CString, dlopen, FFIType, suffix, toArrayBuffer } from 'bun:ffi'
 import { existsSync } from 'node:fs'
 import type { M } from './geometry'
@@ -8,12 +8,11 @@ const name = `${process.platform === 'win32' ? '' : 'lib'}nalarupa_core.${suffix
 const candidates = [
   process.env.NALARUPA_CORE,
   join(dirname(process.execPath), name),
-  join(import.meta.dir, '..', '..', 'core', 'target', 'release', name),
-  join(import.meta.dir, '..', '..', 'core', 'target', 'debug', name),
+  join(import.meta.dir, '..', '..', 'core-go', 'out', name),
 ].filter((p): p is string => !!p)
 const libPath = candidates.find((p) => existsSync(p))
 if (!libPath) {
-  throw new Error(`Nalarupa core library not found. Build it with \`cargo build --release\` in core/. Looked in:\n${candidates.join('\n')}`)
+  throw new Error(`Nalarupa core library not found. Build it with build.sh (or build.ps1 on Windows) in core-go/. Looked in:\n${candidates.join('\n')}`)
 }
 
 const lib = dlopen(libPath, {

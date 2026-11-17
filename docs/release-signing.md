@@ -21,8 +21,9 @@ needs an Apple Developer Program membership.
 
 What the workflow does with them:
 
-1. Signs `libnalarupa_core.dylib` and the GPUIX addon, then the `nalarupa` executable and the bundle, with the
-   hardened runtime and `packaging/macos/entitlements.plist` (the exceptions a Bun-compiled executable needs).
+1. Signs `libnalarupa_core.dylib` (the Go core, built by `core-go/build.sh`) and the GPUIX addon, then the `nalarupa`
+   executable and the bundle, with the hardened runtime and `packaging/macos/entitlements.plist` (the exceptions a
+   Bun-compiled executable needs).
 2. Signs the `.dmg`, submits it to Apple's notary service, waits, and staples the ticket.
 3. Quarantines a copy of the app as a browser download would and fails the job if Gatekeeper rejects a notarized
    build.

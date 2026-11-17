@@ -1,6 +1,7 @@
 #!/bin/sh
-# set-version.sh X.Y.Z: stamp the release version into app/package.json and core/Cargo.toml (the MCP server
-# reports CARGO_PKG_VERSION). release.yml runs it in its own checkout before building; nothing is committed.
+# set-version.sh X.Y.Z: stamp the release version into app/package.json (the MCP server reports it, see
+# core-go/build.sh) and core/Cargo.toml (the Rust parity oracle's CARGO_PKG_VERSION). release.yml runs it in its
+# own checkout before building; nothing is committed.
 set -e
 v=$1
 # Canonical x.y.z: Cargo rejects leading zeros (1.02.3), the Windows version resource needs numeric parts.

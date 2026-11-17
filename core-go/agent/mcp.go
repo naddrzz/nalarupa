@@ -26,8 +26,9 @@ import (
 // DefaultMCPPort is the first port the server tries; it takes the first free one of the 20 from here.
 const DefaultMCPPort = 47700
 
-// version is the core's version (Rust's CARGO_PKG_VERSION).
-const version = "0.1.0"
+// version is the core's version (Rust's CARGO_PKG_VERSION): build.sh sets it from app/package.json, which
+// packaging/set-version.sh stamps for a release.
+var version = "0.1.0"
 
 const mcpInstructions = "Nalarupa is a desktop design editor (infinite canvas, .pen documents). " +
 	"Call get_editor_state first, then read_guide before the first execute. Edit the canvas only through execute; " +

@@ -14,6 +14,8 @@ jobs:
   checks:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
+    # Every app check and GUI suite runs on the Go core built below.
+    env: { NALARUPA_CORE: "${{ github.workspace }}/core-go/out/libnalarupa_core.so" }
     steps:
       - uses: actions/checkout@v4
         with: { persist-credentials: false }
@@ -27,17 +29,19 @@ jobs:
         with: { workspaces: core }
       - uses: oven-sh/setup-bun@v2
         with: { bun-version: 1.4.3 }
+      # The Rust core stays as the parity oracle: its CLI is what the Go parity tests compare with.
       - run: cargo build --release && cargo test --release
         working-directory: core
-      # The Go port of the core (one small module dependency, so no module cache); the parity tests run against the
+      # The Go core (one small module dependency, so no module cache); the parity tests run against the
       # CLI just built, the text ones live with the fonts installed above and a variable font (OFL Maven Pro, pinned).
       # cgo builds the vendored quickjs-ng (core-go/script/qjs) with the runner's gcc and links the pinned wgpu-native
       # (core-go/shader/gpu, fetched by go generate); its GPU tests run on lavapipe (mesa-vulkan-drivers above).
+      # build.sh then builds the library the app loads (core-go/out).
       - uses: actions/setup-go@v5
         with: { go-version-file: core-go/go.mod, cache: false }
-      - run: curl -fsSL -o "$NALARUPA_VARIABLE_FONT" 'https://raw.githubusercontent.com/google/fonts/cc39c4c2c304bc368c9b7c311ea2bcc6013299fe/ofl/mavenpro/MavenPro%5Bwght%5D.ttf' && go generate ./shader/gpu && go vet ./... && go test ./...
+      - run: curl -fsSL -o "$NALARUPA_VARIABLE_FONT" 'https://raw.githubusercontent.com/google/fonts/cc39c4c2c304bc368c9b7c311ea2bcc6013299fe/ofl/mavenpro/MavenPro%5Bwght%5D.ttf' && go generate ./shader/gpu && go vet ./... && go test ./... && bash build.sh
         working-directory: core-go
-        env: { CGO_ENABLED: "1", NALARUPA_CLI: ../core/target/release/nalarupa-cli, NALARUPA_VARIABLE_FONT: "${{ runner.temp }}/MavenPro.ttf" }
+        env: { CGO_ENABLED: "1", NALARUPA_CLI: "${{ github.workspace }}/core/target/release/nalarupa-cli", NALARUPA_VARIABLE_FONT: "${{ runner.temp }}/MavenPro.ttf" }
       - run: bun install --frozen-lockfile && bun run typecheck && bun run smoke && bun run editor-check && bun run mcp-check && bun run doc-check && bun run script-check && bun run chat-check && bun run mcp-install-check && bun run drag-check && bun run viewport-check && bun run issues-check && bun run layout-check && bun run text-check && bun run scriptnode-check && bun run shader-check && bun run paint-check && bun run component-check
         working-directory: app
       # Step timeouts: a hung suite fails its step, which claude-ci-fix picks up, instead of cancelling the job.
@@ -61,6 +65,9 @@ jobs:
     # Required like checks: the merge gate waits for it, and a failure starts claude-ci-fix.
     timeout-minutes: 60
     defaults: { run: { shell: bash } }
+    # Every app check and GUI suite runs on the Go core built below; the packaged exe steps clear it, so they load
+    # the core copied next to dist/nalarupa.exe.
+    env: { NALARUPA_CORE: "${{ github.workspace }}/core-go/out/nalarupa_core.dll" }
     steps:
       - uses: actions/checkout@v4
         with: { persist-credentials: false }
@@ -68,17 +75,19 @@ jobs:
         with: { workspaces: core }
       - uses: oven-sh/setup-bun@v2
         with: { bun-version: 1.4.3 }
+      # The Rust core stays as the parity oracle: its CLI is what the Go parity tests compare with.
       - id: core
         run: cargo build --release && cargo test --release
         working-directory: core
       - uses: actions/setup-go@v5
         with: { go-version-file: core-go/go.mod, cache: false }
       # cgo builds the vendored quickjs-ng (core-go/script/qjs) with the image's MinGW-w64 gcc and links the pinned
-      # wgpu-native MinGW build (core-go/shader/gpu, fetched by go generate); its GPU tests run on WARP.
+      # wgpu-native MinGW build (core-go/shader/gpu, fetched by go generate); its GPU tests run on WARP. build.sh then
+      # builds the dll the app loads (core-go/out).
       - id: core-go
-        run: curl -fsSL -o "$NALARUPA_VARIABLE_FONT" 'https://raw.githubusercontent.com/google/fonts/cc39c4c2c304bc368c9b7c311ea2bcc6013299fe/ofl/mavenpro/MavenPro%5Bwght%5D.ttf' && go generate ./shader/gpu && go vet ./... && go test ./...
+        run: curl -fsSL -o "$NALARUPA_VARIABLE_FONT" 'https://raw.githubusercontent.com/google/fonts/cc39c4c2c304bc368c9b7c311ea2bcc6013299fe/ofl/mavenpro/MavenPro%5Bwght%5D.ttf' && go generate ./shader/gpu && go vet ./... && go test ./... && bash build.sh
         working-directory: core-go
-        env: { CGO_ENABLED: "1", CC: "C:/mingw64/bin/gcc.exe", NALARUPA_CLI: ../core/target/release/nalarupa-cli.exe, NALARUPA_VARIABLE_FONT: "${{ runner.temp }}/MavenPro.ttf" }
+        env: { CGO_ENABLED: "1", CC: "C:/mingw64/bin/gcc.exe", NALARUPA_CLI: "${{ github.workspace }}/core/target/release/nalarupa-cli.exe", NALARUPA_VARIABLE_FONT: "${{ runner.temp }}/MavenPro.ttf" }
       - id: app
         run: bun install --frozen-lockfile && bun run typecheck && bun run smoke && bun run editor-check && bun run mcp-check && bun run doc-check && bun run script-check && bun run chat-check && bun run drag-check && bun run viewport-check && bun run issues-check
         working-directory: app
@@ -118,10 +127,12 @@ jobs:
       - if: ${{ !cancelled() && steps.display.outcome == 'success' }}
         run: bun run build && bun run exe-check
         working-directory: app
+        env: { NALARUPA_CORE: "" }
         timeout-minutes: 10
       - if: ${{ !cancelled() && steps.display.outcome == 'success' }}
         run: bun run window-check dist/nalarupa.exe
         working-directory: app
+        env: { NALARUPA_CORE: "" }
         timeout-minutes: 10
       - uses: actions/upload-artifact@v4
         if: always()

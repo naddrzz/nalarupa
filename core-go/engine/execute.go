@@ -6,6 +6,8 @@ package engine
 // back, keeps it clean if it was, and stores the snippet under the editId the agent repairs it with.
 
 import (
+	"time"
+
 	"github.com/naddrzz/nalarupa/core-go/export"
 	"github.com/naddrzz/nalarupa/core-go/jsonv"
 	"github.com/naddrzz/nalarupa/core-go/script"
@@ -104,6 +106,12 @@ func (e *Engine) CallTool(name string, args jsonv.Value) ToolOut {
 	out := e.execute(c.args, script.Call{Stop: stop, Locker: e})
 	e.endExecute(c)
 	return out
+}
+
+// ExecuteWithin runs one `execute` call with the wall-clock budget (script.rs `execute_within`) under the engine
+// lock, which the caller holds; call Finish on the answer once the lock is released.
+func (e *Engine) ExecuteWithin(args jsonv.Value, budget time.Duration) ToolOut {
+	return e.execute(args, script.Call{Budget: budget})
 }
 
 // execute runs one call (script.rs `execute_within`/`execute_shared` and `finish`) under the engine lock; with

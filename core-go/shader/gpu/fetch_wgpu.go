@@ -25,6 +25,7 @@ const version = "v29.0.1.1"
 var assets = map[string][2]string{
 	"windows_amd64": {"wgpu-windows-x86_64-gnu-release.zip", "d471e3614733c1d4ddd61bfd19868356477d0d37bf531bf8c6cb64a7f579bd2a"},
 	"linux_amd64":   {"wgpu-linux-x86_64-release.zip", "95a4d90c071005a98d03eab348beaa6b07e16eb00d1dcdb9f8348f75eb97ec5a"},
+	"darwin_arm64":  {"wgpu-macos-aarch64-release.zip", "a5797a37b1adf720bcd5dcffb291edbbd5b7b14be0a3874c28e6393a655a7a3e"},
 }
 
 // The archive members kept, and where they go under the platform folder.

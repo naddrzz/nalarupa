@@ -1,5 +1,5 @@
 name: claude-setup
-description: Prepares a GitHub-hosted Ubuntu runner for the Claude jobs the same way ci.yml's checks job does, with a headless Wayland desktop, the Rust core built and app deps installed.
+description: Prepares a GitHub-hosted Ubuntu runner for the Claude jobs the same way ci.yml's checks job does, with a headless Wayland desktop, the Go core built (core-go/out, which the app finds by default), the Rust core built as the parity oracle (its CLI is what the Go parity tests compare with) and app deps installed.
 runs:
   using: composite
   steps:
@@ -23,6 +23,14 @@ runs:
     - shell: bash
       working-directory: core
       run: cargo build --release
+    # The Go core: cgo builds the vendored quickjs-ng with the runner's gcc and links the pinned wgpu-native (fetched by
+    # go generate) into core-go/out/libnalarupa_core.so.
+    - uses: actions/setup-go@v5
+      with: { go-version-file: core-go/go.mod, cache: false }
+    - shell: bash
+      working-directory: core-go
+      env: { CGO_ENABLED: "1" }
+      run: go generate ./shader/gpu && bash build.sh
     - shell: bash
       working-directory: app
       run: bun install --frozen-lockfile
