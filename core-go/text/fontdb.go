@@ -218,6 +218,42 @@ func (db *fontDB) loadFile(path string) {
 	db.loadSource(&source{path: path})
 }
 
+// loadPrepared adds the faces of data: faces when they were prepared from these bytes, else parsed now.
+func (db *fontDB) loadPrepared(data []byte, faces []*faceInfo) {
+	if faces == nil {
+		db.loadData(data)
+		return
+	}
+	for _, f := range faces {
+		db.push(f)
+	}
+}
+
+// prepareFaces parses the faces of a font file's bytes as loadData would, and each one's shaping font (the slow
+// part: the whole glyph table), so a download can do it before the faces join a database.
+func prepareFaces(data []byte) []*faceInfo {
+	src := &source{data: data}
+	r, size, done, ok := src.open()
+	if !ok {
+		return nil
+	}
+	defer done()
+	n, ok := fontsInCollection(r, size)
+	if !ok {
+		n = 1
+	} else if 12+4*int64(n) > size {
+		return nil
+	}
+	var out []*faceInfo
+	for i := uint32(0); i < n; i++ {
+		if f, ok := parseFaceInfo(src, r, size, i); ok {
+			f.font()
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
 func (db *fontDB) loadSource(src *source) {
 	r, size, done, ok := src.open()
 	if !ok {

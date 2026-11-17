@@ -213,6 +213,36 @@ func TestDownloadVariable(t *testing.T) {
 	noMore(t, ready)
 }
 
+// A downloaded font is parsed for shaping on the download's goroutine: Downloaded, which the engine calls under
+// its lock, only adds the faces (a CJK font's glyph table took a second to parse on a slow machine, and every
+// call waited for it).
+func TestDownloadParsesOffTheOwner(t *testing.T) {
+	family, _, data := systemFace(t, fonts(t))
+	compact := compactFamily(family)
+	g := newFake(t, map[string][]byte{
+		"/metadata/fonts": metadata(t, map[string][]string{family: {"wght", "opsz"}}),
+		"/gh/ofl/" + strings.ToLower(compact) + "/" + compact + "%5Bopsz,wght%5D.ttf": data,
+	})
+	f, ready := onlineFonts(t, g.downloader())
+	f.Ensure(layout.TextStyle{Family: family, Size: 16, Weight: 400})
+	next(t, ready)
+	if !f.Downloaded(family, 400, false) {
+		t.Fatal("the download adds a face")
+	}
+	n := 0
+	for _, x := range f.db.faces() {
+		if x.hasName(family) {
+			n++
+			if x.shaper == nil {
+				t.Fatal("the face was not parsed before Downloaded")
+			}
+		}
+	}
+	if n == 0 {
+		t.Fatal("no face of the family")
+	}
+}
+
 // The license folders are tried in order; the metadata is fetched once, cached on disk, and serves the
 // italic file name too.
 func TestDownloadLicenseFallthrough(t *testing.T) {

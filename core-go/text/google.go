@@ -5,6 +5,7 @@ package text
 // CSS API links to. Files land in the same cache paths as Rust's, so either core reuses the other's.
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -36,6 +37,48 @@ type downloader struct {
 	mu sync.Mutex
 	// Axis tags per lowercase family, read once (nil until then).
 	axes map[string][]string
+
+	// prepared holds the faces a download parsed, by file, until Fonts.loadCached takes them.
+	preparedMu sync.Mutex
+	prepared   map[string]preparedFile
+}
+
+type preparedFile struct {
+	data  []byte
+	faces []*faceInfo
+}
+
+// prepare parses the first of files that exists (prepareFaces), for take.
+func (d *downloader) prepare(files ...string) {
+	for _, file := range files {
+		b, err := os.ReadFile(file)
+		if err != nil {
+			continue
+		}
+		faces := prepareFaces(b)
+		d.preparedMu.Lock()
+		if d.prepared == nil {
+			d.prepared = map[string]preparedFile{}
+		}
+		d.prepared[file] = preparedFile{b, faces}
+		d.preparedMu.Unlock()
+		return
+	}
+}
+
+// take returns, once, the faces prepared from file when it still holds data; nil otherwise.
+func (d *downloader) take(file string, data []byte) []*faceInfo {
+	d.preparedMu.Lock()
+	defer d.preparedMu.Unlock()
+	p, ok := d.prepared[file]
+	if !ok {
+		return nil
+	}
+	delete(d.prepared, file)
+	if !bytes.Equal(p.data, data) {
+		return nil
+	}
+	return p.faces
 }
 
 func newDownloader() *downloader {

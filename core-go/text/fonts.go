@@ -178,6 +178,9 @@ func (f *Fonts) fetch(family string, weight uint16, italic bool) bool {
 		func() {
 			defer func() { recover() }()
 			dl.download(cache, family, weight, italic)
+			// Parsed here, not in Downloaded: a large font (a CJK one) takes long to parse, and the owner calls
+			// Downloaded under its lock.
+			dl.prepare(varFile(cache, family, italic), staticFile(cache, family, weight, italic))
 		}()
 		if ready != nil {
 			ready(family, weight, italic)
@@ -195,7 +198,7 @@ func (f *Fonts) loadCached(family string, weight uint16, italic bool) bool {
 	}
 	// Before the exact-face check: a cached static instance must not shadow the variable font.
 	if b, err := os.ReadFile(varFile(f.cache, family, italic)); err == nil {
-		f.db.loadData(b)
+		f.db.loadPrepared(b, f.dl.take(varFile(f.cache, family, italic), b))
 		preferVariable(f.db, f.cache)
 		f.fontsChanged()
 		return true
@@ -210,7 +213,7 @@ func (f *Fonts) loadCached(family string, weight uint16, italic bool) bool {
 	if err != nil {
 		return false
 	}
-	f.db.loadData(b)
+	f.db.loadPrepared(b, f.dl.take(staticFile(f.cache, family, weight, italic), b))
 	f.fontsChanged()
 	return true
 }
