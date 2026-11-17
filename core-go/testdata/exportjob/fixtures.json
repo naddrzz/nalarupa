@@ -71,6 +71,6 @@
  "tolerance": {
   "exportjob/fmt-jpg@1/doc/out/s1.jpeg": {"maxDelta": 72, "maxShare": 0.37, "meanDelta": 0.76, "why": "encoder: Go's image/jpeg differs from jpeg-encoder in its DCT and quantisation rounding (4d)"},
   "exportjob/fmt-jpeg@2/doc/out/s3.jpeg": {"maxDelta": 84, "maxShare": 0.78, "meanDelta": 0.45, "why": "encoder: Go's image/jpeg always subsamples chroma 2x2, jpeg-encoder keeps full chroma at quality 90 and above (4d)"},
-  "exportjob/slides-jpg/doc/out/sld01.jpeg": {"maxDelta": 84, "maxShare": 0.11, "meanDelta": 0.2, "why": "encoder: Go's image/jpeg differs from jpeg-encoder in its DCT and quantisation rounding (4d)"}
+  "exportjob/slides-jpg/doc/out/sld01.jpeg": {"maxDelta": 84, "maxShare": 0.12, "meanDelta": 0.2, "why": "encoder: Go's image/jpeg differs from jpeg-encoder in its DCT and quantisation rounding (4d); live text, so the share follows the installed fonts (Windows measured 10.96%, Linux 11.10%)"}
  }
 }

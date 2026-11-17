@@ -100,7 +100,7 @@ func (d *Doc) Save(path string) error {
 		RemoveFile(tmp)
 		return fmt.Errorf("cannot write %s: %s", tmp, IOError(err))
 	}
-	if err := os.Rename(tmp, target); err != nil {
+	if err := Rename(tmp, target); err != nil {
 		RemoveFile(tmp)
 		return fmt.Errorf("cannot save %s: %s", path, IOError(err))
 	}

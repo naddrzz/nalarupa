@@ -12,6 +12,8 @@ func systemErrno(e syscall.Errno) syscall.Errno { return e }
 
 func removeFile(path string) error { return syscall.Unlink(path) }
 
+func rename(from, to string) error { return syscall.Rename(from, to) }
+
 // systemMessage is strerror's text as Rust reports it: Go's table writes it in lower case, and a code outside
 // it is libc's "Unknown error N" ("Unknown error: N" on macOS) where Go says "errno N".
 func systemMessage(e syscall.Errno) string {

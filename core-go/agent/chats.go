@@ -72,7 +72,7 @@ func (j *chatSave) write() error {
 		}
 	}
 	if err == nil {
-		err = os.Rename(tmp, j.path)
+		err = doc.Rename(tmp, j.path)
 	}
 	if err != nil {
 		return errors.New(doc.IOError(err))

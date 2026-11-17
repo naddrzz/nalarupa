@@ -54,7 +54,13 @@ func (r *Renderer) renderView(w, h uint32, camX, camY, zoom float64, bg [3]uint8
 	if v := r.view; v != nil {
 		ox, oy := int64(vx)-int64(v.x0), int64(vy)-int64(v.y0)
 		exact := math.Abs(v.zoom-zoom) < 1e-9
-		if exact && ox >= 0 && oy >= 0 && ox+int64(w) <= int64(v.pw) && oy+int64(h) <= int64(v.ph) {
+		// The bands a curve is cut at move its antialiased edges, and their height follows the paint's height
+		// and the core count: below 128-row bands (fewer cores than a view has 128-row bands) a view painted
+		// for another frame height is not what a full paint of this frame gives (smoke: an edited canvas equals
+		// a solo render), so such a frame paints afresh. A view of this height keeps its bands, even after the
+		// core count changed (its repaints cut them too).
+		sameBands := v.ph == h+2*margin || v.band == p.band(h+2*margin)
+		if exact && sameBands && ox >= 0 && oy >= 0 && ox+int64(w) <= int64(v.pw) && oy+int64(h) <= int64(v.ph) {
 			r.Pixels = cropInto(r.Pixels, v.pix, v.pw, uint32(ox), uint32(oy), w, h)
 			return
 		}

@@ -37,6 +37,16 @@ func RemoveFile(path string) error {
 	return nil
 }
 
+// Rename is Rust's `fs::rename`: one rename(2) on Unix (MoveFileExW replacing an existing file on Windows).
+// Go's os.Rename checks for a folder at the destination first and reports "file exists" where the system
+// call, and so Rust, reports "is a directory" or "directory not empty".
+func Rename(from, to string) error {
+	if err := rename(from, to); err != nil {
+		return &os.LinkError{Op: "rename", Old: from, New: to, Err: err}
+	}
+	return nil
+}
+
 // CreateDirAll is Rust's `fs::create_dir_all`: it walks up from path until a folder is created or exists
 // (a missing parent is created first), then creates the rest downwards. Unlike os.MkdirAll, a file in the way
 // reports what creating that folder reports (on Windows "already exists", where Go says "not found").

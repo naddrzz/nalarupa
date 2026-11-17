@@ -1,6 +1,7 @@
 package doc
 
 import (
+	"os"
 	"strconv"
 	"strings"
 	"syscall"
@@ -20,6 +21,16 @@ func removeFile(path string) error {
 		return err
 	}
 	return syscall.DeleteFile(p)
+}
+
+// rename is os.Rename's MoveFileExW with MOVEFILE_REPLACE_EXISTING, the call Rust makes; Go adds no check on
+// Windows.
+func rename(from, to string) error {
+	err := os.Rename(from, to)
+	if le, ok := err.(*os.LinkError); ok {
+		return le.Err
+	}
+	return err
 }
 
 // asciiSpace is what Rust's `trim_ascii_end` trims.

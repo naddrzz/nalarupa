@@ -42,7 +42,7 @@ func (e *Engine) SaveSettings() error {
 	tmp := path + ".tmp"
 	err := os.WriteFile(tmp, text, 0o666)
 	if err == nil {
-		err = os.Rename(tmp, path)
+		err = doc.Rename(tmp, path)
 	}
 	if err != nil {
 		doc.RemoveFile(tmp) // a failed save leaves no copy of the new settings (an API key) behind

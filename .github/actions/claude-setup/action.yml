@@ -15,7 +15,7 @@ runs:
       run: |
         sudo apt-get update -qq
         sudo apt-get install -y -qq --no-install-recommends sway grim mesa-vulkan-drivers libvulkan1 \
-          libxkbcommon0 libxkbcommon-x11-0 libwayland-client0 libfontconfig1 fonts-noto-core fonts-noto-color-emoji >/dev/null
+          libxkbcommon0 libxkbcommon-x11-0 libwayland-client0 libfontconfig1 fonts-noto-core fonts-noto-color-emoji poppler-utils >/dev/null
     - uses: Swatinem/rust-cache@v2
       with: { workspaces: core }
     - uses: oven-sh/setup-bun@v2

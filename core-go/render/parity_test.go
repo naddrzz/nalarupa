@@ -128,8 +128,9 @@ func runScenario(t *testing.T, sc scenario, data string, threads int) ([]any, ma
 	var logs []any
 	frames := map[int][]byte{}
 	repainted := map[int]bool{}
-	// patched: the cached view holds repaints.
-	patched := false
+	// patched: the cached view holds repaints. rustPatched: Rust serves its frames from a repainted view that Go
+	// replaced because its bands differed (see rebanded below).
+	patched, rustPatched := false, false
 	for i, s := range sc.Steps {
 		op := str(s, "op")
 		id := str(s, "id")
@@ -167,6 +168,17 @@ func runScenario(t *testing.T, sc scenario, data string, threads int) ([]any, ma
 			had, edited := r.view, len(r.dirty) > 0
 			// A live zoom frame painted for the viewport alone (see renderView) is a full paint.
 			live := had != nil && !sharp && r.MsPerMP == 0 && math.Abs(had.zoom-fmin(fmax(zoom, 0.01), 256)) >= 1e-9
+			// Rust crops a frame of another height from its cached view too; Go paints it afresh when the bands
+			// differ (see renderView), so where that view holds repaints Rust's frames are repainted ones until
+			// its view is replaced.
+			rebanded := false
+			if had != nil && (patched || edited) && str(s, "solo") == had.solo && math.Abs(had.zoom-fmin(fmax(zoom, 0.01), 256)) < 1e-9 {
+				fw, fh := min(max(w, 1), 8192), min(max(h, 1), 8192)
+				ox := int64(math.Round(camAt(0)*had.zoom)) - int64(had.x0)
+				oy := int64(math.Round(camAt(1)*had.zoom)) - int64(had.y0)
+				rebanded = had.ph != fh+2*margin && had.band != r.painter().band(fh+2*margin) &&
+					ox >= 0 && oy >= 0 && ox+int64(fw) <= int64(had.pw) && oy+int64(fh) <= int64(had.ph)
+			}
 			px := r.Render(w, h, camAt(0), camAt(1), zoom, bg, str(s, "solo"), sharp)
 			switch v := r.view; {
 			case v != had:
@@ -185,7 +197,13 @@ func runScenario(t *testing.T, sc scenario, data string, threads int) ([]any, ma
 					t.Errorf("step %d: the repainted view differs from a full paint of it by up to %d", i, worst)
 				}
 			}
-			repainted[i] = patched && r.view == had && !live
+			switch {
+			case rebanded:
+				rustPatched = true
+			case r.view != had:
+				rustPatched = false
+			}
+			repainted[i] = patched && r.view == had && !live || rustPatched && !live
 			rgb := make([]byte, 0, len(px)/4*3)
 			for p := 0; p+3 < len(px); p += 4 {
 				rgb = append(rgb, px[p], px[p+1], px[p+2])

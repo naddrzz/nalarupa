@@ -80,3 +80,34 @@ func TestRepaintKeepsTheViewsBands(t *testing.T) {
 		t.Errorf("a repaint after the thread count changed differs from the view's full paint by up to %d", worst)
 	}
 }
+
+// A frame of another height than the cached view's paints afresh when the bands would differ: the edited
+// canvas still equals a full render (smoke: a 320x180 frame came first, 4 cores).
+func TestRepaintAfterAResizeMatchesFullRender(t *testing.T) {
+	js := `{"version":"2.19","children":[{"type":"frame","id":"root","x":0,"y":0,"width":400,"height":400,"layout":"none","fill":"#eeeeee","children":[
+		{"type":"ellipse","id":"e","x":100,"y":200,"width":120,"height":80,"fill":"#ff00ff80","flipY":true,"rotation":45,
+		 "effect":{"type":"shadow","offset":{"x":10,"y":10},"blur":4,"color":"#00000080"}}]}]}`
+	white := [3]uint8{255, 255, 255}
+	for _, threads := range []int{1, 4, 16} {
+		d := openJSON(t, js)
+		cx := offline(t, d)
+		r := &Renderer{Threads: threads}
+		r.Sync(cx)
+		r.Render(320, 180, 0, 0, 1, white, "", true)
+		fr := func(solo string) []byte { return slices.Clone(r.Render(400, 400, 0, 0, 1, white, solo, true)) }
+		fr("")
+		for _, x := range []int64{101, 100} {
+			node(d, 0, 0).Set("x", jsonv.Int(x))
+			r.Sync(cx)
+		}
+		live := fr("")
+		full := fr("root")
+		worst := 0
+		for j := range live {
+			worst = max(worst, abs8(live[j], full[j]))
+		}
+		if worst > 1 {
+			t.Errorf("%d threads: the edited canvas differs from a full render by up to %d", threads, worst)
+		}
+	}
+}
