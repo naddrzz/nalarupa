@@ -1,0 +1,360 @@
+{
+ "blend@1": {
+  "width": 200,
+  "height": 200
+ },
+ "blend@2": {
+  "width": 400,
+  "height": 400
+ },
+ "broken-refs@1": {
+  "width": 200,
+  "height": 200
+ },
+ "broken-refs@2": {
+  "width": 400,
+  "height": 400
+ },
+ "color-interpolation@1": {
+  "width": 200,
+  "height": 200
+ },
+ "color-interpolation@2": {
+  "width": 400,
+  "height": 400
+ },
+ "color-matrix@1": {
+  "width": 200,
+  "height": 200
+ },
+ "color-matrix@2": {
+  "width": 400,
+  "height": 400
+ },
+ "component-transfer@1": {
+  "width": 200,
+  "height": 200
+ },
+ "component-transfer@2": {
+  "width": 400,
+  "height": 400
+ },
+ "composite@1": {
+  "width": 200,
+  "height": 200
+ },
+ "composite@2": {
+  "width": 400,
+  "height": 400
+ },
+ "convolve-matrix@1": {
+  "panic": true
+ },
+ "convolve-matrix@2": {
+  "panic": true
+ },
+ "displacement-map@1": {
+  "width": 200,
+  "height": 200
+ },
+ "displacement-map@2": {
+  "width": 400,
+  "height": 400
+ },
+ "drop-shadow@1": {
+  "width": 200,
+  "height": 200
+ },
+ "drop-shadow@2": {
+  "width": 400,
+  "height": 400
+ },
+ "effects-like@1": {
+  "width": 200,
+  "height": 200
+ },
+ "effects-like@2": {
+  "width": 400,
+  "height": 400
+ },
+ "export-effects.blends@1": {
+  "width": 400,
+  "height": 200
+ },
+ "export-effects.blends@2": {
+  "width": 800,
+  "height": 400
+ },
+ "export-effects.glass@1": {
+  "width": 300,
+  "height": 200
+ },
+ "export-effects.glass@2": {
+  "width": 600,
+  "height": 400
+ },
+ "export-effects.shadows@1": {
+  "width": 500,
+  "height": 313
+ },
+ "export-effects.shadows@2": {
+  "width": 1000,
+  "height": 626
+ },
+ "filter-contexts@1": {
+  "width": 200,
+  "height": 200
+ },
+ "filter-contexts@2": {
+  "width": 400,
+  "height": 400
+ },
+ "filter-group-isolation@1": {
+  "width": 200,
+  "height": 200
+ },
+ "filter-group-isolation@2": {
+  "width": 400,
+  "height": 400
+ },
+ "filter-transform-skew@1": {
+  "width": 200,
+  "height": 200
+ },
+ "filter-transform-skew@2": {
+  "width": 400,
+  "height": 400
+ },
+ "flood@1": {
+  "width": 200,
+  "height": 200
+ },
+ "flood@2": {
+  "width": 400,
+  "height": 400
+ },
+ "functions-basic@1": {
+  "width": 200,
+  "height": 200
+ },
+ "functions-basic@2": {
+  "width": 400,
+  "height": 400
+ },
+ "functions-drop-shadow@1": {
+  "width": 200,
+  "height": 200
+ },
+ "functions-drop-shadow@2": {
+  "width": 400,
+  "height": 400
+ },
+ "functions-invalid@1": {
+  "width": 200,
+  "height": 200
+ },
+ "functions-invalid@2": {
+  "width": 400,
+  "height": 400
+ },
+ "functions-zero-bbox@1": {
+  "width": 200,
+  "height": 200
+ },
+ "functions-zero-bbox@2": {
+  "width": 400,
+  "height": 400
+ },
+ "gaussian-blur@1": {
+  "width": 200,
+  "height": 200
+ },
+ "gaussian-blur@2": {
+  "width": 400,
+  "height": 400
+ },
+ "href-cycle@1": {
+  "width": 200,
+  "height": 200
+ },
+ "href-cycle@2": {
+  "width": 400,
+  "height": 400
+ },
+ "image-data@1": {
+  "width": 200,
+  "height": 200
+ },
+ "image-data@2": {
+  "width": 400,
+  "height": 400
+ },
+ "image-element@1": {
+  "width": 200,
+  "height": 200
+ },
+ "image-element@2": {
+  "width": 400,
+  "height": 400
+ },
+ "image-file@1": {
+  "width": 200,
+  "height": 200
+ },
+ "image-file@2": {
+  "width": 400,
+  "height": 400
+ },
+ "image-ids-taken@1": {
+  "width": 200,
+  "height": 200
+ },
+ "image-ids-taken@2": {
+  "width": 400,
+  "height": 400
+ },
+ "image-ids@1": {
+  "width": 200,
+  "height": 200
+ },
+ "image-ids@2": {
+  "width": 400,
+  "height": 400
+ },
+ "image-pattern@1": {
+  "width": 200,
+  "height": 200
+ },
+ "image-pattern@2": {
+  "width": 400,
+  "height": 400
+ },
+ "image-recursive@1": {
+  "width": 200,
+  "height": 200
+ },
+ "image-recursive@2": {
+  "width": 400,
+  "height": 400
+ },
+ "image-shared-gradient@1": {
+  "width": 200,
+  "height": 200
+ },
+ "image-shared-gradient@2": {
+  "width": 400,
+  "height": 400
+ },
+ "image-single-gradient@1": {
+  "width": 200,
+  "height": 200
+ },
+ "image-single-gradient@2": {
+  "width": 400,
+  "height": 400
+ },
+ "inputs-results@1": {
+  "width": 200,
+  "height": 200
+ },
+ "inputs-results@2": {
+  "width": 400,
+  "height": 400
+ },
+ "lighting-diffuse@1": {
+  "width": 200,
+  "height": 200
+ },
+ "lighting-diffuse@2": {
+  "width": 400,
+  "height": 400
+ },
+ "lighting-specular@1": {
+  "width": 200,
+  "height": 200
+ },
+ "lighting-specular@2": {
+  "width": 400,
+  "height": 400
+ },
+ "merge@1": {
+  "width": 200,
+  "height": 200
+ },
+ "merge@2": {
+  "width": 400,
+  "height": 400
+ },
+ "morphology@1": {
+  "width": 200,
+  "height": 200
+ },
+ "morphology@2": {
+  "width": 400,
+  "height": 400
+ },
+ "nested-svg-image@1": {
+  "width": 200,
+  "height": 200
+ },
+ "nested-svg-image@2": {
+  "width": 400,
+  "height": 400
+ },
+ "offset-tile@1": {
+  "width": 200,
+  "height": 200
+ },
+ "offset-tile@2": {
+  "width": 400,
+  "height": 400
+ },
+ "percent-lengths@1": {
+  "width": 300,
+  "height": 150
+ },
+ "percent-lengths@2": {
+  "width": 600,
+  "height": 300
+ },
+ "regions-invalid@1": {
+  "width": 200,
+  "height": 200
+ },
+ "regions-invalid@2": {
+  "width": 400,
+  "height": 400
+ },
+ "regions-units@1": {
+  "width": 200,
+  "height": 200
+ },
+ "regions-units@2": {
+  "width": 400,
+  "height": 400
+ },
+ "regions-zero-bbox@1": {
+  "width": 200,
+  "height": 200
+ },
+ "regions-zero-bbox@2": {
+  "width": 400,
+  "height": 400
+ },
+ "shared-filters@1": {
+  "width": 200,
+  "height": 200
+ },
+ "shared-filters@2": {
+  "width": 400,
+  "height": 400
+ },
+ "turbulence@1": {
+  "width": 200,
+  "height": 200
+ },
+ "turbulence@2": {
+  "width": 400,
+  "height": 400
+ }
+}

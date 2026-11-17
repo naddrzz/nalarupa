@@ -1,0 +1,22 @@
+{
+  "why": "Pixel parity of Render with nalarupa-cli shader-render on the same adapter: every channel within tol (premultiplied bytes). Cases marked vulkanGap rely on shader.rs's strict_spirv (NoContraction), which wgpu-native cannot apply; on a hardware Vulkan adapter (not llvmpipe/lavapipe) their difference is logged, not checked.",
+  "cases": [
+    {"name": "demo", "frag": "../demo.frag", "node": "../demo.node.json", "outline": {"kind": "rrect", "radii": [4, 8, 0, 12]}},
+    {"name": "annotations", "frag": "../annotations.frag", "node": "../annotations.node.json", "outline": {"kind": "ellipse"}, "backdrop": true},
+    {"name": "bvec", "frag": "../bvec.frag", "node": "../bvec.node.json", "outline": {"kind": "ellipse"}},
+    {"name": "es3", "frag": "../es3.frag", "w": 90, "h": 60, "scale": 2, "uniforms": {"input": "../svg/tiny.png", "output": 0.5, "active": 1.5}, "outline": {"kind": "rrect", "radii": [0, 0, 0, 0]}},
+    {"name": "reserved", "frag": "../reserved.frag", "w": 100, "h": 100, "scale": 1, "uniforms": {"buffer": "../svg/tiny.png", "patch": [0.2, 0.4, 0.6], "c": [1, 0.5, 0.25, 1]}, "outline": {"kind": "rrect", "radii": [0, 0, 0, 0]}},
+    {"name": "image", "frag": "image.frag", "w": 70, "h": 45, "scale": 2, "uniforms": {"img": "../../svg/tiny.png", "missing": "nope.png"}, "outline": {"kind": "rrect", "radii": [0, 0, 0, 0]}},
+    {"name": "clamp", "frag": "clamp.frag", "w": 64, "h": 64, "scale": 1, "outline": {"kind": "rrect", "radii": [0, 0, 0, 0]}},
+    {"name": "glass-backdrop", "frag": "../glass.frag", "w": 120, "h": 70, "scale": 2, "outline": {"kind": "rrect", "radii": [16, 16, 16, 16]}, "backdrop": true},
+    {"name": "glass-no-backdrop", "frag": "../glass.frag", "w": 120, "h": 70, "scale": 2, "outline": {"kind": "rrect", "radii": [16, 16, 16, 16]}},
+    {"name": "glass-backdrop-capped", "frag": "../glass.frag", "w": 1500, "h": 300, "scale": 2, "outline": {"kind": "ellipse"}, "backdrop": true},
+    {"name": "sdf-rrect", "frag": "sdf.frag", "w": 300, "h": 200, "scale": 2, "outline": {"kind": "rrect", "radii": [40, 10, 0, 80]}},
+    {"name": "sdf-ellipse", "frag": "sdf.frag", "w": 150, "h": 70, "scale": 2, "outline": {"kind": "ellipse"}},
+    {"name": "sdf-path", "frag": "sdf.frag", "w": 300, "h": 200, "scale": 1, "outline": {"kind": "path", "d": "M150 0A150 100 0 1 0 150 200A150 100 0 1 0 150 0ZM150 50A50 50 0 1 1 150 150A50 50 0 1 1 150 50Z", "x": 0, "y": 0, "evenodd": true}},
+    {"name": "sdf-capped", "frag": "sdf.frag", "w": 1500, "h": 700, "scale": 2, "outline": {"kind": "ellipse"}},
+    {"name": "tiles", "frag": "../plain.frag", "w": 900, "h": 700, "scale": 2, "outline": {"kind": "rrect", "radii": [0, 0, 0, 0]}},
+    {"name": "max-side", "frag": "../plain.frag", "w": 2100, "h": 2100, "scale": 2, "outline": {"kind": "rrect", "radii": [0, 0, 0, 0]}},
+    {"name": "noise", "frag": "noise.frag", "w": 160, "h": 120, "scale": 2, "outline": {"kind": "rrect", "radii": [0, 0, 0, 0]}, "vulkanGap": true}
+  ]
+}

@@ -1,0 +1,347 @@
+{
+  "size": [
+    1128792064,
+    1128792064
+  ],
+  "root": {
+    "kind": "group",
+    "id": "",
+    "transform": [
+      1065353216,
+      0,
+      0,
+      1065353216,
+      0,
+      0
+    ],
+    "absTransform": [
+      1065353216,
+      0,
+      0,
+      1065353216,
+      0,
+      0
+    ],
+    "opacity": 1065353216,
+    "blendMode": "normal",
+    "isolate": false,
+    "clipPath": null,
+    "mask": null,
+    "filters": [],
+    "bbox": [
+      0,
+      0,
+      1120403456,
+      1101004800
+    ],
+    "absBbox": [
+      0,
+      0,
+      1120403456,
+      1101004800
+    ],
+    "strokeBbox": [
+      0,
+      0,
+      1120403456,
+      1101266944
+    ],
+    "absStrokeBbox": [
+      0,
+      0,
+      1120403456,
+      1101266944
+    ],
+    "layerBbox": [
+      0,
+      0,
+      1128792064,
+      1128792064
+    ],
+    "absLayerBbox": [
+      0,
+      0,
+      1128792064,
+      1128792064
+    ],
+    "children": [
+      {
+        "kind": "group",
+        "id": "",
+        "transform": [
+          1065353216,
+          0,
+          0,
+          1065353216,
+          0,
+          0
+        ],
+        "absTransform": [
+          1065353216,
+          0,
+          0,
+          1065353216,
+          0,
+          0
+        ],
+        "opacity": 1065353216,
+        "blendMode": "normal",
+        "isolate": false,
+        "clipPath": null,
+        "mask": null,
+        "filters": [
+          {
+            "id": "user",
+            "rect": [
+              0,
+              0,
+              1128792064,
+              1128792064
+            ],
+            "primitives": [
+              {
+                "rect": [
+                  0,
+                  0,
+                  1128792064,
+                  1128792064
+                ],
+                "colorInterpolation": "linearRGB",
+                "result": "result1",
+                "kind": {
+                  "type": "flood",
+                  "color": [
+                    0,
+                    0,
+                    0
+                  ],
+                  "opacity": 1065353216
+                }
+              }
+            ]
+          }
+        ],
+        "bbox": [
+          1092616192,
+          1101004800,
+          1120403456,
+          1101004800
+        ],
+        "absBbox": [
+          1092616192,
+          1101004800,
+          1120403456,
+          1101004800
+        ],
+        "strokeBbox": [
+          1092616192,
+          1100742656,
+          1120403456,
+          1101266944
+        ],
+        "absStrokeBbox": [
+          1092616192,
+          1100742656,
+          1120403456,
+          1101266944
+        ],
+        "layerBbox": [
+          0,
+          0,
+          1128792064,
+          1128792064
+        ],
+        "absLayerBbox": [
+          0,
+          0,
+          1128792064,
+          1128792064
+        ],
+        "children": [
+          {
+            "kind": "path",
+            "id": "",
+            "visible": true,
+            "fill": {
+              "paint": {
+                "type": "color",
+                "color": [
+                  0,
+                  0,
+                  0
+                ]
+              },
+              "opacity": 1065353216,
+              "rule": "nonzero"
+            },
+            "stroke": {
+              "paint": {
+                "type": "color",
+                "color": [
+                  0,
+                  0,
+                  0
+                ]
+              },
+              "dasharray": null,
+              "dashoffset": 0,
+              "miterlimit": 1082130432,
+              "opacity": 1065353216,
+              "width": 1065353216,
+              "linecap": "butt",
+              "linejoin": "miter"
+            },
+            "paintOrder": "fill-and-stroke",
+            "renderingMode": "geometric-precision",
+            "absTransform": [
+              1065353216,
+              0,
+              0,
+              1065353216,
+              0,
+              0
+            ],
+            "bbox": [
+              1092616192,
+              1101004800,
+              1120403456,
+              1101004800
+            ],
+            "absBbox": [
+              1092616192,
+              1101004800,
+              1120403456,
+              1101004800
+            ],
+            "strokeBbox": [
+              1092616192,
+              1100742656,
+              1120403456,
+              1101266944
+            ],
+            "absStrokeBbox": [
+              1092616192,
+              1100742656,
+              1120403456,
+              1101266944
+            ],
+            "segments": [
+              [
+                "M",
+                1092616192,
+                1101004800
+              ],
+              [
+                "L",
+                1120403456,
+                1101004800
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "kind": "group",
+        "id": "",
+        "transform": [
+          1065353216,
+          0,
+          0,
+          1065353216,
+          0,
+          0
+        ],
+        "absTransform": [
+          1065353216,
+          0,
+          0,
+          1065353216,
+          0,
+          0
+        ],
+        "opacity": 1065353216,
+        "blendMode": "normal",
+        "isolate": false,
+        "clipPath": null,
+        "mask": null,
+        "filters": [
+          {
+            "id": "user",
+            "rect": [
+              0,
+              0,
+              1128792064,
+              1128792064
+            ],
+            "primitives": [
+              {
+                "rect": [
+                  0,
+                  0,
+                  1128792064,
+                  1128792064
+                ],
+                "colorInterpolation": "linearRGB",
+                "result": "result1",
+                "kind": {
+                  "type": "flood",
+                  "color": [
+                    0,
+                    0,
+                    0
+                  ],
+                  "opacity": 1065353216
+                }
+              }
+            ]
+          }
+        ],
+        "bbox": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "absBbox": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "strokeBbox": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "absStrokeBbox": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "layerBbox": [
+          0,
+          0,
+          1128792064,
+          1128792064
+        ],
+        "absLayerBbox": [
+          0,
+          0,
+          1128792064,
+          1128792064
+        ],
+        "children": []
+      }
+    ]
+  },
+  "linearGradients": [],
+  "radialGradients": [],
+  "patterns": [],
+  "clipPaths": [],
+  "masks": [],
+  "filters": [
+    "user"
+  ]
+}

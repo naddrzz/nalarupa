@@ -1,0 +1,153 @@
+{
+  "size": [
+    1092616192,
+    1092616192
+  ],
+  "root": {
+    "kind": "group",
+    "id": "",
+    "transform": [
+      1065353216,
+      0,
+      0,
+      1065353216,
+      0,
+      0
+    ],
+    "absTransform": [
+      1065353216,
+      0,
+      0,
+      1065353216,
+      0,
+      0
+    ],
+    "opacity": 1065353216,
+    "blendMode": "normal",
+    "isolate": false,
+    "clipPath": null,
+    "mask": null,
+    "filters": [],
+    "bbox": [
+      0,
+      0,
+      1084227584,
+      1084227584
+    ],
+    "absBbox": [
+      0,
+      0,
+      1084227584,
+      1084227584
+    ],
+    "strokeBbox": [
+      0,
+      0,
+      1084227584,
+      1084227584
+    ],
+    "absStrokeBbox": [
+      0,
+      0,
+      1084227584,
+      1084227584
+    ],
+    "layerBbox": [
+      0,
+      0,
+      1084227584,
+      1084227584
+    ],
+    "absLayerBbox": [
+      0,
+      0,
+      1084227584,
+      1084227584
+    ],
+    "children": [
+      {
+        "kind": "path",
+        "id": "r",
+        "visible": true,
+        "fill": {
+          "paint": {
+            "type": "color",
+            "color": [
+              0,
+              0,
+              0
+            ]
+          },
+          "opacity": 1065353216,
+          "rule": "nonzero"
+        },
+        "stroke": null,
+        "paintOrder": "fill-and-stroke",
+        "renderingMode": "geometric-precision",
+        "absTransform": [
+          1065353216,
+          0,
+          0,
+          1065353216,
+          0,
+          0
+        ],
+        "bbox": [
+          0,
+          0,
+          1084227584,
+          1084227584
+        ],
+        "absBbox": [
+          0,
+          0,
+          1084227584,
+          1084227584
+        ],
+        "strokeBbox": [
+          0,
+          0,
+          1084227584,
+          1084227584
+        ],
+        "absStrokeBbox": [
+          0,
+          0,
+          1084227584,
+          1084227584
+        ],
+        "segments": [
+          [
+            "M",
+            0,
+            0
+          ],
+          [
+            "L",
+            1084227584,
+            0
+          ],
+          [
+            "L",
+            1084227584,
+            1084227584
+          ],
+          [
+            "L",
+            0,
+            1084227584
+          ],
+          [
+            "Z"
+          ]
+        ]
+      }
+    ]
+  },
+  "linearGradients": [],
+  "radialGradients": [],
+  "patterns": [],
+  "clipPaths": [],
+  "masks": [],
+  "filters": []
+}

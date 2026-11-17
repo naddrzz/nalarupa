@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="200">
+  <filter id="f1"><feImage xlink:href="#r1"/></filter>
+  <rect id="r1" x="36" y="36" width="120" height="120" fill="green" filter="url(#f1)"/>
+  <filter id="f2"><feImage xlink:href="#u1"/></filter>
+  <rect id="r2" x="5" y="5" width="10" height="10" fill="red"/>
+  <use id="u1" xlink:href="#r2" x="20"/>
+  <rect x="160" y="10" width="30" height="30" filter="url(#f2)"/>
+</svg>

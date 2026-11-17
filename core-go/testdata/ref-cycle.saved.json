@@ -1,0 +1,93 @@
+{
+  "version": "2.19",
+  "children": [
+    {
+      "type": "ref",
+      "id": "A",
+      "ref": "B",
+      "reusable": true,
+      "x": 0,
+      "y": 0,
+      "width": 10,
+      "height": 10
+    },
+    {
+      "type": "ref",
+      "id": "B",
+      "ref": "A",
+      "reusable": true,
+      "x": 50,
+      "y": 0,
+      "width": 20,
+      "height": 20
+    },
+    {
+      "type": "ref",
+      "id": "self",
+      "ref": "self",
+      "reusable": true,
+      "x": 100,
+      "y": 0,
+      "width": 30,
+      "height": 30
+    },
+    {
+      "type": "ref",
+      "id": "useA",
+      "ref": "A",
+      "x": 0,
+      "y": 100
+    },
+    {
+      "type": "frame",
+      "id": "P",
+      "reusable": true,
+      "x": 200,
+      "y": 0,
+      "layout": "vertical",
+      "padding": 2,
+      "children": [
+        {
+          "type": "rectangle",
+          "id": "pr",
+          "width": 8,
+          "height": 4
+        },
+        {
+          "type": "ref",
+          "id": "pq",
+          "ref": "Q"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "Q",
+      "reusable": true,
+      "x": 300,
+      "y": 0,
+      "padding": 3,
+      "children": [
+        {
+          "type": "ref",
+          "id": "qp",
+          "ref": "P",
+          "enabled": false
+        },
+        {
+          "type": "rectangle",
+          "id": "qr",
+          "width": 6,
+          "height": 6
+        }
+      ]
+    },
+    {
+      "type": "ref",
+      "id": "useP",
+      "ref": "P",
+      "x": 200,
+      "y": 300
+    }
+  ]
+}

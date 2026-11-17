@@ -1,0 +1,123 @@
+{
+ "corpora": {
+  "usvg": {
+   "dir": "testdata/usvg",
+   "scales": [
+    1,
+    2
+   ]
+  },
+  "filter": {
+   "dir": "testdata/usvg/filter",
+   "scales": [
+    1,
+    2
+   ]
+  },
+  "render": {
+   "dir": "testdata/render/svg",
+   "scales": [
+    1,
+    2
+   ]
+  },
+  "images": {
+   "dir": "testdata/render/images",
+   "scales": [
+    1
+   ]
+  },
+  "text": {
+   "dir": "testdata/usvg/text",
+   "scales": [
+    1,
+    2
+   ],
+   "live": true
+  }
+ },
+ "tolerance": {
+  "render/blend-opacity": {
+   "maxDelta": 1,
+   "maxShare": 0.001,
+   "why": "rcpps: tiny-skia's highp recip_fast (color-dodge and color-burn) is _mm_rcp_ps, Go divides exactly"
+  },
+  "images/images-jpeg": {
+   "maxDelta": 3,
+   "maxShare": 0.05,
+   "why": "decoder: Go's JPEG IDCT differs from zune-jpeg's, by up to 3 levels on about 3.5% of the pixels (chroma upsampling and color conversion are zune-jpeg's)"
+  },
+  "export/effects.shadows.q1@1": {
+   "maxDelta": 106,
+   "maxShare": 0.025,
+   "meanDelta": 0.32,
+   "why": "encoder: Go's image/jpeg differs from jpeg-encoder in its DCT and quantisation rounding"
+  },
+  "export/effects.shadows.q80@1": {
+   "maxDelta": 88,
+   "maxShare": 0.167,
+   "meanDelta": 0.42,
+   "why": "encoder: Go's image/jpeg differs from jpeg-encoder in its DCT and quantisation rounding"
+  },
+  "export/effects.shadows.q100@1": {
+   "maxDelta": 108,
+   "maxShare": 0.098,
+   "meanDelta": 0.19,
+   "why": "encoder: Go's image/jpeg always subsamples chroma 2x2, jpeg-encoder keeps full chroma at quality 90 and above"
+  },
+  "export/effects.shadows.q80@0.01": {
+   "maxDelta": 98,
+   "maxShare": 1,
+   "meanDelta": 8.4,
+   "why": "encoder (DCT and quantisation rounding); the export is a few pixels at the scale clamped from 0.01, so every pixel is a block edge"
+  },
+  "export/images.imgs.q1@1": {
+   "maxDelta": 32,
+   "maxShare": 0.0056,
+   "meanDelta": 0.11,
+   "why": "encoder: Go's image/jpeg differs from jpeg-encoder in its DCT and quantisation rounding"
+  },
+  "export/images.imgs.q80@1": {
+   "maxDelta": 10,
+   "maxShare": 0.0054,
+   "meanDelta": 0.01,
+   "why": "encoder: Go's image/jpeg differs from jpeg-encoder in its DCT and quantisation rounding"
+  },
+  "export/images.imgs.q100@1": {
+   "maxDelta": 2,
+   "maxShare": 0.0009,
+   "meanDelta": 0.001,
+   "why": "encoder: Go's image/jpeg always subsamples chroma 2x2, jpeg-encoder keeps full chroma at quality 90 and above"
+  },
+  "export/images.imgs.q80@0.01": {
+   "maxDelta": 61,
+   "maxShare": 0.82,
+   "meanDelta": 4.36,
+   "why": "encoder (DCT and quantisation rounding); the export is a few pixels at the scale clamped from 0.01, so every pixel is a block edge"
+  },
+  "export/shapes.fills.q1@1": {
+   "maxDelta": 172,
+   "maxShare": 0.048,
+   "meanDelta": 0.7,
+   "why": "encoder: Go's image/jpeg differs from jpeg-encoder in its DCT and quantisation rounding"
+  },
+  "export/shapes.fills.q80@1": {
+   "maxDelta": 141,
+   "maxShare": 0.224,
+   "meanDelta": 0.7,
+   "why": "encoder: Go's image/jpeg differs from jpeg-encoder in its DCT and quantisation rounding"
+  },
+  "export/shapes.fills.q100@1": {
+   "maxDelta": 140,
+   "maxShare": 0.091,
+   "meanDelta": 0.37,
+   "why": "encoder: Go's image/jpeg always subsamples chroma 2x2, jpeg-encoder keeps full chroma at quality 90 and above"
+  },
+  "export/shapes.fills.q80@0.01": {
+   "maxDelta": 143,
+   "maxShare": 1,
+   "meanDelta": 7.61,
+   "why": "encoder (DCT and quantisation rounding); the export is a few pixels at the scale clamped from 0.01, so every pixel is a block edge"
+  }
+ }
+}

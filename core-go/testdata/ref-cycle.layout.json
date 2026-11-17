@@ -1,0 +1,147 @@
+[
+  {
+    "id": "A",
+    "type": "frame",
+    "x": 0.0,
+    "y": 0.0,
+    "w": 10.0,
+    "h": 10.0,
+    "problem": null,
+    "children": []
+  },
+  {
+    "id": "B",
+    "type": "frame",
+    "x": 50.0,
+    "y": 0.0,
+    "w": 20.0,
+    "h": 20.0,
+    "problem": null,
+    "children": []
+  },
+  {
+    "id": "self",
+    "type": "frame",
+    "x": 100.0,
+    "y": 0.0,
+    "w": 30.0,
+    "h": 30.0,
+    "problem": null,
+    "children": []
+  },
+  {
+    "id": "useA",
+    "type": "frame",
+    "x": 0.0,
+    "y": 100.0,
+    "w": 10.0,
+    "h": 10.0,
+    "problem": null,
+    "children": []
+  },
+  {
+    "id": "P",
+    "type": "frame",
+    "x": 200.0,
+    "y": 0.0,
+    "w": 16.0,
+    "h": 20.0,
+    "problem": null,
+    "children": [
+      {
+        "id": "pr",
+        "type": "rectangle",
+        "x": 202.0,
+        "y": 2.0,
+        "w": 8.0,
+        "h": 4.0,
+        "problem": null,
+        "children": []
+      },
+      {
+        "id": "pq",
+        "type": "frame",
+        "x": 202.0,
+        "y": 6.0,
+        "w": 12.0,
+        "h": 12.0,
+        "problem": null,
+        "children": [
+          {
+            "id": "pq/qr",
+            "type": "rectangle",
+            "x": 205.0,
+            "y": 9.0,
+            "w": 6.0,
+            "h": 6.0,
+            "problem": null,
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "Q",
+    "type": "frame",
+    "x": 300.0,
+    "y": 0.0,
+    "w": 12.0,
+    "h": 12.0,
+    "problem": null,
+    "children": [
+      {
+        "id": "qr",
+        "type": "rectangle",
+        "x": 303.0,
+        "y": 3.0,
+        "w": 6.0,
+        "h": 6.0,
+        "problem": null,
+        "children": []
+      }
+    ]
+  },
+  {
+    "id": "useP",
+    "type": "frame",
+    "x": 200.0,
+    "y": 300.0,
+    "w": 16.0,
+    "h": 20.0,
+    "problem": null,
+    "children": [
+      {
+        "id": "useP/pr",
+        "type": "rectangle",
+        "x": 202.0,
+        "y": 302.0,
+        "w": 8.0,
+        "h": 4.0,
+        "problem": null,
+        "children": []
+      },
+      {
+        "id": "useP/pq",
+        "type": "frame",
+        "x": 202.0,
+        "y": 306.0,
+        "w": 12.0,
+        "h": 12.0,
+        "problem": null,
+        "children": [
+          {
+            "id": "useP/pq/qr",
+            "type": "rectangle",
+            "x": 205.0,
+            "y": 309.0,
+            "w": 6.0,
+            "h": 6.0,
+            "problem": null,
+            "children": []
+          }
+        ]
+      }
+    ]
+  }
+]

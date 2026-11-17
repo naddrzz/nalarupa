@@ -1,0 +1,27 @@
+{
+  "version": "2.19",
+  "themes": {"mode": ["light", "dark"]},
+  "variables": {
+    "brand": {"type": "color", "value": [{"value": "#3366FF"}, {"value": "#99BBFF", "theme": {"mode": "dark"}}]},
+    "gap": {"type": "number", "value": 12}
+  },
+  "children": [
+    {"type": "frame", "id": "board", "name": "Board", "x": 0, "y": 0, "width": 600, "height": 400, "layout": "none", "fill": "#FFFFFF", "children": [
+      {"type": "rectangle", "id": "hero", "name": "Hero", "x": 20, "y": 20, "width": 200, "height": 120, "fill": "$brand", "cornerRadius": 8},
+      {"type": "ellipse", "id": "dot", "name": "Dot", "x": 260, "y": 40, "width": 40, "height": 40, "fill": "#FF8800"},
+      {"type": "path", "id": "wave", "name": "Wave", "x": 20, "y": 200, "width": 120, "height": 40, "geometry": "M0 20 C30 0 90 40 120 20", "stroke": {"thickness": 2, "fill": "#333333"}},
+      {"type": "frame", "id": "stack", "name": "Stack", "x": 320, "y": 20, "layout": "vertical", "gap": "$gap", "padding": 10, "fill": "#F2F2F2", "children": [
+        {"type": "rectangle", "id": "s1", "name": "S1", "width": 80, "height": 20, "fill": "#CCCCCC"},
+        {"type": "rectangle", "id": "s2", "name": "S2", "width": 80, "height": 20, "fill": "#BBBBBB"}
+      ]}
+    ]},
+    {"type": "frame", "id": "button", "name": "Button", "reusable": true, "x": 700, "y": 0, "width": 120, "height": 40, "layout": "none", "fill": "#222222", "children": [
+      {"type": "rectangle", "id": "btnbg", "name": "Bg", "x": 4, "y": 4, "width": 112, "height": 32, "fill": "$brand"},
+      {"type": "ellipse", "id": "btnicon", "name": "Icon", "x": 10, "y": 12, "width": 16, "height": 16, "fill": "#FFFFFF"}
+    ]},
+    {"type": "ref", "id": "ok", "name": "OK button", "ref": "button", "x": 700, "y": 100, "descendants": {"btnbg": {"fill": "#00AA55"}}},
+    {"type": "frame", "id": "dark", "name": "Dark", "x": 700, "y": 200, "width": 200, "height": 100, "layout": "none", "theme": {"mode": "dark"}, "fill": "$brand", "children": [
+      {"type": "rectangle", "id": "inDark", "name": "In dark", "x": 10, "y": 10, "width": "$gap", "height": 10, "fill": "$brand"}
+    ]}
+  ]
+}

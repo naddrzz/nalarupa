@@ -1,0 +1,266 @@
+{
+ "doc": "canvas/docs/slides.pen",
+ "tolerance": {"maxDelta": 48, "maxShare": 0.0005, "why": "Edits repaint in the bands the full paint of the view used, so they equal a full paint; Rust's resvg path repaints the dirty rectangle alone, where cut curves shift their antialiased edges (phase 10a)"},
+ "steps": [
+  {
+   "op": "sync"
+  },
+  {
+   "op": "render",
+   "w": 900,
+   "h": 520,
+   "cam": [
+    -10,
+    -10
+   ],
+   "zoom": 1,
+   "bg": [
+    30,
+    30,
+    30
+   ]
+  },
+  {
+   "op": "update",
+   "id": "n1",
+   "props": {
+    "enabled": true
+   }
+  },
+  {
+   "op": "slide",
+   "id": "n1"
+  },
+  {
+   "op": "sync"
+  },
+  {
+   "op": "render",
+   "w": 900,
+   "h": 520,
+   "cam": [
+    -10,
+    -10
+   ],
+   "zoom": 1,
+   "bg": [
+    30,
+    30,
+    30
+   ]
+  },
+  {
+   "op": "tick",
+   "ms": 50
+  },
+  {
+   "op": "render",
+   "w": 900,
+   "h": 520,
+   "cam": [
+    -10,
+    -10
+   ],
+   "zoom": 1,
+   "bg": [
+    30,
+    30,
+    30
+   ]
+  },
+  {
+   "op": "tick",
+   "ms": 100
+  },
+  {
+   "op": "render",
+   "w": 900,
+   "h": 520,
+   "cam": [
+    -10,
+    -10
+   ],
+   "zoom": 1,
+   "bg": [
+    30,
+    30,
+    30
+   ]
+  },
+  {
+   "op": "update",
+   "id": "n2",
+   "props": {
+    "enabled": true
+   }
+  },
+  {
+   "op": "slide",
+   "id": "n2"
+  },
+  {
+   "op": "sync"
+  },
+  {
+   "op": "tick",
+   "ms": 30
+  },
+  {
+   "op": "render",
+   "w": 900,
+   "h": 520,
+   "cam": [
+    -10,
+    -10
+   ],
+   "zoom": 1,
+   "bg": [
+    30,
+    30,
+    30
+   ]
+  },
+  {
+   "op": "update",
+   "id": "n3",
+   "props": {
+    "enabled": true
+   }
+  },
+  {
+   "op": "slide",
+   "id": "n3"
+  },
+  {
+   "op": "sync"
+  },
+  {
+   "op": "render",
+   "w": 900,
+   "h": 520,
+   "cam": [
+    -10,
+    -10
+   ],
+   "zoom": 1,
+   "bg": [
+    30,
+    30,
+    30
+   ]
+  },
+  {
+   "op": "tick",
+   "ms": 80
+  },
+  {
+   "op": "render",
+   "w": 900,
+   "h": 520,
+   "cam": [
+    -10,
+    -10
+   ],
+   "zoom": 1,
+   "bg": [
+    30,
+    30,
+    30
+   ]
+  },
+  {
+   "op": "render",
+   "w": 900,
+   "h": 520,
+   "cam": [
+    -10,
+    -10
+   ],
+   "zoom": 1,
+   "bg": [
+    30,
+    30,
+    30
+   ],
+   "solo": "free"
+  },
+  {
+   "op": "tick",
+   "ms": 200
+  },
+  {
+   "op": "render",
+   "w": 900,
+   "h": 520,
+   "cam": [
+    -10,
+    -10
+   ],
+   "zoom": 1,
+   "bg": [
+    30,
+    30,
+    30
+   ]
+  },
+  {
+   "op": "tick",
+   "ms": 400
+  },
+  {
+   "op": "render",
+   "w": 900,
+   "h": 520,
+   "cam": [
+    -10,
+    -10
+   ],
+   "zoom": 1,
+   "bg": [
+    30,
+    30,
+    30
+   ]
+  },
+  {
+   "op": "sync"
+  },
+  {
+   "op": "render",
+   "w": 900,
+   "h": 520,
+   "cam": [
+    -10,
+    -10
+   ],
+   "zoom": 1,
+   "bg": [
+    30,
+    30,
+    30
+   ]
+  },
+  {
+   "op": "tick",
+   "ms": 2500
+  },
+  {
+   "op": "sync"
+  },
+  {
+   "op": "render",
+   "w": 900,
+   "h": 520,
+   "cam": [
+    -10,
+    -10
+   ],
+   "zoom": 1,
+   "bg": [
+    30,
+    30,
+    30
+   ]
+  }
+ ]
+}

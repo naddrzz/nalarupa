@@ -1,0 +1,1 @@
+{"threads":12,"log":[{"bounds":[0,0,393,852],"dirty":[[-64,-64,521,980]],"dropped":false,"op":"sync","order":["mob01"],"rebuilt":[["mob01"]],"settled":false,"slides":[]},{"file":"1.rgb","height":300,"op":"render","slides":[],"width":420},{"file":"2.rgb","height":300,"op":"render","slides":[],"width":300}]}

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="60" color="#123456" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path id="inherit-svg" d="M5 5h20v20h-20z"/>
+  <g color="#ff8800">
+    <path id="inherit-g" d="M35 5h20v20h-20z"/>
+    <path id="fill-cc" d="M65 5h20v20h-20z" fill="currentColor" color="#00ff00"/>
+    <g style="color: rgb(10, 20, 30)">
+      <circle id="style-color" cx="15" cy="45" r="8" fill="currentColor" stroke="none"/>
+    </g>
+    <circle id="cc-inherit-kw" cx="45" cy="45" r="8" color="inherit"/>
+    <circle id="cc-invalid" cx="75" cy="45" r="8" color="nonsense"/>
+  </g>
+</svg>

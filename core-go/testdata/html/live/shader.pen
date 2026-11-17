@@ -1,0 +1,9 @@
+{
+  "version": "2.19",
+  "children": [
+    {"type": "frame", "id": "shaded", "x": 0, "y": 0, "width": 200, "height": 120, "layout": "none", "fill": "#fff", "children": [
+      {"type": "rectangle", "id": "s1", "x": 10, "y": 10, "width": 80, "height": 50, "cornerRadius": 8, "fill": {"type": "shader", "url": "./plain.frag"}},
+      {"type": "ellipse", "id": "s2", "x": 100, "y": 10, "width": 60, "height": 60, "fill": ["#000", {"type": "shader", "url": "./plain.frag", "opacity": 0.5}]}
+    ]}
+  ]
+}

@@ -1,0 +1,162 @@
+{
+  "version": "2.19",
+  "children": [
+    {
+      "type": "frame",
+      "id": "root",
+      "x": 0,
+      "y": 0,
+      "width": 400,
+      "height": 300,
+      "layout": "none",
+      "strokeWidth": {
+        "top": 1,
+        "right": 2,
+        "bottom": 1,
+        "left": 1
+      },
+      "effect": [
+        {
+          "type": "shadow",
+          "shadowType": "outer",
+          "blur": 4
+        },
+        {
+          "type": "blur",
+          "radius": 2
+        }
+      ],
+      "children": [
+        {
+          "type": "icon",
+          "id": "ic",
+          "fill": "#000000",
+          "icon": "home",
+          "x": 10,
+          "y": 10,
+          "width": 24,
+          "height": 24,
+          "library": "lucide"
+        },
+        {
+          "type": "rectangle",
+          "id": "st",
+          "x": 50,
+          "y": 10,
+          "width": 40,
+          "height": 40,
+          "stroke": "#FF0000",
+          "strokeWidth": 2,
+          "strokeLinejoin": "bevel",
+          "strokeLinecap": "round",
+          "strokeAlignment": "outer"
+        },
+        {
+          "type": "rectangle",
+          "id": "st2",
+          "x": 100,
+          "y": 10,
+          "width": 40,
+          "height": 40,
+          "stroke": "#00FF00",
+          "strokeWidth": 0,
+          "strokeLinejoin": "miter",
+          "strokeLinecap": "butt",
+          "strokeAlignment": "inner"
+        },
+        {
+          "type": "ellipse",
+          "id": "arc",
+          "x": 150,
+          "y": 10,
+          "width": 40,
+          "height": 40,
+          "sweepAngle": -90.5,
+          "effect": {
+            "type": "shadow",
+            "shadowType": "outer"
+          }
+        },
+        {
+          "type": "frame",
+          "id": "lg",
+          "x": 10,
+          "y": 100,
+          "layout": "vertical",
+          "gap": 5,
+          "padding": 4,
+          "children": [
+            {
+              "type": "rectangle",
+              "id": "lg1",
+              "width": 30,
+              "height": 10
+            },
+            {
+              "type": "rectangle",
+              "id": "lg2",
+              "width": 20,
+              "height": 10
+            }
+          ],
+          "clip": false
+        },
+        {
+          "type": "group",
+          "id": "pg",
+          "x": 200,
+          "y": 100,
+          "children": [
+            {
+              "type": "rectangle",
+              "id": "pg1",
+              "x": 0,
+              "y": 0,
+              "width": 30,
+              "height": 10
+            }
+          ]
+        }
+      ],
+      "strokeLinejoin": "round"
+    },
+    {
+      "type": "frame",
+      "id": "comp",
+      "reusable": true,
+      "x": 500,
+      "y": 0,
+      "width": 50,
+      "height": 50,
+      "children": [
+        {
+          "type": "rectangle",
+          "id": "inner",
+          "width": 10,
+          "height": 10
+        }
+      ]
+    },
+    {
+      "type": "ref",
+      "id": "inst",
+      "ref": "comp",
+      "x": 500,
+      "y": 100,
+      "sweepAngle": -45.0,
+      "descendants": {
+        "inner": {
+          "type": "icon",
+          "stroke": [],
+          "width": 12,
+          "height": 12,
+          "icon": "star",
+          "strokeWidth": 1,
+          "strokeLinejoin": "miter",
+          "strokeLinecap": "butt",
+          "strokeAlignment": "inner"
+        }
+      }
+    }
+  ]
+}

@@ -525,6 +525,113 @@ fn components(k: &Kind, v: Option<&Value>, w: f64, h: f64) -> Vec<f64> {
     }
 }
 
+/// Pixel size of a `w`×`h` node's image at `scale`, at most `MAX_SIDE` per side.
+fn pixels(w: f64, h: f64, scale: f64) -> (u32, u32) {
+    ((w * scale).ceil().clamp(1.0, MAX_SIDE) as u32, (h * scale).ceil().clamp(1.0, MAX_SIDE) as u32)
+}
+
+/// The uniform block for a `w`×`h` node drawn at `pw`×`ph` pixels: given values (else defaults), then `nr_unit`.
+fn pack(prog: &Program, uniforms: Option<&Map<String, Value>>, w: f64, h: f64, pw: u32, ph: u32) -> Vec<u8> {
+    let mut ubo = vec![0u8; prog.size as usize];
+    let mut put = |member: &str, vals: &[f64]| {
+        if let Some(&(off, int)) = prog.layout.get(member) {
+            for (i, v) in vals.iter().enumerate() {
+                let at = off as usize + i * 4;
+                if at + 4 <= ubo.len() {
+                    let bytes = if int { (*v as i32).to_le_bytes() } else { (*v as f32).to_le_bytes() };
+                    ubo[at..at + 4].copy_from_slice(&bytes);
+                }
+            }
+        }
+    };
+    for u in &prog.uniforms {
+        if !matches!(u.kind, Kind::Image | Kind::Sdf | Kind::Backdrop) {
+            put(&u.member, &components(&u.kind, uniforms.and_then(|m| m.get(&u.name)), w, h));
+        }
+    }
+    put("nr_unit", &[w / pw as f64, h / ph as f64, h, 0.0]);
+    ubo
+}
+
+/// Test-only, the Go port's oracle (`nalarupa-cli shader-transpile`): `{error}` when `transpile` fails, else
+/// `{glsl}` plus `{compileError}` when naga rejects it, or `{layout, ubo}`: the uniforms with the block layout
+/// and the block packed from `uniforms` (hex) for a `w`×`h` node at `scale`.
+#[doc(hidden)]
+pub fn oracle_transpile(src: &str, uniforms: Option<&Map<String, Value>>, w: f64, h: f64, scale: f64) -> Value {
+    let glsl = match transpile(src) {
+        Ok((glsl, _)) => glsl,
+        Err(e) => return json!({"error": e}),
+    };
+    let p = match compile(src) {
+        Ok(p) => p,
+        Err(e) => return json!({"glsl": glsl, "compileError": e}),
+    };
+    let kind = |k: &Kind| match k {
+        Kind::Float(d) => json!(["float", d]),
+        Kind::Int(d) => json!(["int", d]),
+        Kind::Bool(b) => json!(["bool", b]),
+        Kind::Vec(v, int) => json!(["vec", v, int]),
+        Kind::Color(c, alpha) => json!(["color", c, alpha]),
+        Kind::Resolution(int) => json!(["resolution", int]),
+        Kind::Time => json!(["time"]),
+        Kind::Mouse(int) => json!(["mouse", int]),
+        Kind::Image => json!(["image"]),
+        Kind::Sdf => json!(["sdf"]),
+        Kind::Backdrop => json!(["backdrop"]),
+        Kind::Zero => json!(["zero"]),
+    };
+    let mut members: Vec<(&String, &(u32, bool))> = p.layout.iter().collect();
+    members.sort_by_key(|(_, (off, _))| *off);
+    let (pw, ph) = pixels(w, h, scale);
+    let ubo: String = pack(&p, uniforms, w, h, pw, ph).iter().map(|b| format!("{b:02x}")).collect();
+    json!({
+        "glsl": glsl,
+        "layout": {
+            "size": p.size,
+            "members": members.iter().map(|(name, (off, int))| json!([name, off, int])).collect::<Vec<_>>(),
+            "uniforms": p.uniforms.iter().map(|u| json!({"name": u.name, "member": u.member, "type": u.ty, "kind": kind(&u.kind)})).collect::<Vec<_>>(),
+        },
+        "ubo": ubo,
+    })
+}
+
+/// Test-only, the Go port's oracle (`nalarupa-cli shader-sdf`): the `@sdf` texels as computed (top row
+/// first) and the half floats handed to the GPU (bottom row first), with the texture size.
+#[doc(hidden)]
+pub fn oracle_sdf(outline: &Outline, w: f64, h: f64, dpi: f64) -> (usize, usize, Vec<[f32; 4]>, Vec<u16>) {
+    let (sw, sh, px) = sdf_texels(outline, w, h, dpi);
+    let half = half_rows(sw, sh, &px);
+    (sw, sh, px, half)
+}
+
+/// Test-only, the Go port's oracle (`nalarupa-cli shader-render`): `render` with sampler images loaded from
+/// `dir` and, when `backdrop`, `oracle_backdrop` behind the node, plus the adapter it ran on.
+#[doc(hidden)]
+#[allow(clippy::too_many_arguments)]
+pub fn oracle_render(src: &str, uniforms: Option<&Map<String, Value>>, w: f64, h: f64, scale: f64, outline: &Outline, dir: &std::path::Path, backdrop: bool) -> Result<(tiny_skia::Pixmap, String), String> {
+    let mut image = |u: &str| crate::svg::decode_image(dir.join(u).to_str()?);
+    let mut behind = |bw: u32, bh: u32| oracle_backdrop(bw, bh);
+    let pm = render(src, uniforms, w, h, scale, outline, &mut image, if backdrop { Some(&mut behind as &mut Backdrop<'_>) } else { None })?;
+    Ok((pm, adapter()?))
+}
+
+/// Test-only: the oracle's backdrop, opaque with red = column and green = row, each 0 to 255 across the pixmap.
+#[doc(hidden)]
+pub fn oracle_backdrop(w: u32, h: u32) -> Option<tiny_skia::Pixmap> {
+    let mut p = tiny_skia::Pixmap::new(w, h)?;
+    for (i, px) in p.data_mut().chunks_exact_mut(4).enumerate() {
+        let (x, y) = (i as u32 % w, i as u32 / w);
+        px.copy_from_slice(&[(x * 255 / (w - 1).max(1)) as u8, (y * 255 / (h - 1).max(1)) as u8, 64, 255]);
+    }
+    Some(p)
+}
+
+thread_local! {
+    /// Test-only: when set, the `@backdrop` SVGs built by svg.rs on this thread, in order.
+    #[doc(hidden)]
+    pub static BACKDROP_TAP: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
 /// A texture handed to the shader: RGBA8 (premultiplied, top row first) or RGBA16F.
 enum Tex {
     Rgba8(u32, u32, Vec<u8>),
@@ -557,6 +664,12 @@ fn f16(v: f32) -> u16 {
 /// `@sdf` texture: R = signed distance to the outline in node units (positive inside),
 /// G/B = its gradient per texel with y up, A = 1; rows bottom-up (GL orientation).
 fn sdf(outline: &Outline, w: f64, h: f64, dpi: f64) -> Tex {
+    let (sw, sh, px) = sdf_texels(outline, w, h, dpi);
+    Tex::Half(sw as u32, sh as u32, half_rows(sw, sh, &px))
+}
+
+/// The `@sdf` texels (top row first) and the texture size.
+fn sdf_texels(outline: &Outline, w: f64, h: f64, dpi: f64) -> (usize, usize, Vec<[f32; 4]>) {
     let r = (w.max(h) * dpi).max(1e-9);
     let s = dpi * r.min(SDF_MAX) / r;
     let (sw, sh) = ((w * s).ceil().max(1.0) as usize, (h * s).ceil().max(1.0) as usize);
@@ -598,13 +711,18 @@ fn sdf(outline: &Outline, w: f64, h: f64, dpi: f64) -> Tex {
         }
         Outline::Path { d, x, y, evenodd } => path_sdf(d, *x, *y, *evenodd, sw, sh, w, h, s, &mut px),
     }
+    (sw, sh, px)
+}
+
+/// Texels as half floats, rows bottom-up (GL orientation).
+fn half_rows(sw: usize, sh: usize, px: &[[f32; 4]]) -> Vec<u16> {
     let mut out = Vec::with_capacity(sw * sh * 4);
     for row in (0..sh).rev() {
         for p in &px[row * sw..(row + 1) * sw] {
             out.extend(p.map(f16));
         }
     }
-    Tex::Half(sw as u32, sh as u32, out)
+    out
 }
 
 /// Signed distance from (x, y) to the ellipse with semi-axes a, b (positive inside) and the unit
@@ -870,19 +988,8 @@ pub fn render(src: &str, uniforms: Option<&Map<String, Value>>, w: f64, h: f64, 
     }
     let prog = program(src);
     let prog = prog.as_ref().as_ref().map_err(Clone::clone)?;
-    let (pw, ph) = ((w * scale).ceil().clamp(1.0, MAX_SIDE) as u32, (h * scale).ceil().clamp(1.0, MAX_SIDE) as u32);
-    let mut ubo = vec![0u8; prog.size as usize];
-    let mut put = |member: &str, vals: &[f64]| {
-        if let Some(&(off, int)) = prog.layout.get(member) {
-            for (i, v) in vals.iter().enumerate() {
-                let at = off as usize + i * 4;
-                if at + 4 <= ubo.len() {
-                    let bytes = if int { (*v as i32).to_le_bytes() } else { (*v as f32).to_le_bytes() };
-                    ubo[at..at + 4].copy_from_slice(&bytes);
-                }
-            }
-        }
-    };
+    let (pw, ph) = pixels(w, h, scale);
+    let ubo = pack(prog, uniforms, w, h, pw, ph);
     let mut textures = Vec::new();
     for u in &prog.uniforms {
         let given = uniforms.and_then(|m| m.get(&u.name));
@@ -903,10 +1010,9 @@ pub fn render(src: &str, uniforms: Option<&Map<String, Value>>, w: f64, h: f64, 
                 });
                 textures.push((tex.unwrap_or(Tex::Rgba8(1, 1, vec![0; 4])), wgpu::AddressMode::MirrorRepeat));
             }
-            k => put(&u.member, &components(k, given, w, h)),
+            _ => {}
         }
     }
-    put("nr_unit", &[w / pw as f64, h / ph as f64, h, 0.0]);
 
     let mut guard = GPU.lock().unwrap_or_else(|e| e.into_inner());
     let gpu = match guard.get_or_insert_with(gpu_init) {

@@ -1,0 +1,30 @@
+# Execute rollback: a thrown Error (its line), a bad node and a non-Error throw roll every operation of the call back
+# and answer with an editId; a clean document stays clean; the repair with `edits` against the stored snippet is
+# accepted and committed as one step (its editId forgotten); failed repairs (find not found, ambiguous) keep the
+# stored snippet; the rolled-back inserts take their slides with them.
+{"cmd":"open","path":"shapes.pen"}
+{"cmd":"tool","name":"execute","args":{"__seed":3,"input":"const f = Insert('home', {type: 'rectangle', name: 'Gone', width: 10, height: 10});\nUpdate('r1', {width: 10});\nthrow new Error('boom ' + f.length);"}}
+{"cmd":"state"}
+{"cmd":"doc"}
+{"cmd":"render","w":400,"h":260}
+{"cmd":"tool","name":"execute","args":{"__seed":4,"input":"Update('r1', {width: 11});\nInsert('home', {type: 'nonsense'});"}}
+{"cmd":"tool","name":"execute","args":{"__seed":20,"input":"Update('r1', {width: 12});\nthrow 42;"}}
+{"cmd":"state"}
+{"cmd":"undo"}
+{"cmd":"doc"}
+{"cmd":"tool","name":"execute","args":{"__seed":7,"editId":"e5bd5cb","edits":[{"find":"nothing here","replace":"x"}]}}
+{"cmd":"tool","name":"execute","args":{"__seed":8,"input":"Update('r1', {width: 13});\nUpdate('r1', {width: 13});\nthrow new TypeError('twice');"}}
+{"cmd":"tool","name":"execute","args":{"__seed":9,"editId":"e932249","edits":[{"find":"Update('r1', {width: 13});","replace":"Update('r1', {width: 14});"}]}}
+{"cmd":"tool","name":"execute","args":{"__seed":9,"editId":"e932249","input":"x","edits":[{"find":"a","replace":"b"}]}}
+{"cmd":"tool","name":"execute","args":{"__seed":9,"editId":"e932249","edits":[{"find":"Update('r1', {width: 13});","replace":"Update('r1', {width: 14});","all":true},{"find":"throw new TypeError('twice');","replace":"Print('ok');"}]}}
+{"cmd":"tool","name":"execute","args":{"__seed":9,"editId":"e932249","edits":[{"find":"x","replace":"y"}]}}
+{"cmd":"state"}
+{"cmd":"tool","name":"execute","args":{"__seed":10,"editId":"e13cc2","edits":[{"find":"throw new Error('boom ' + f.length);\nnothing","replace":"x"}]}}
+{"cmd":"tool","name":"execute","args":{"__seed":10,"editId":"e13cc2","edits":[{"find":"throw new Error('boom ' + f.length);","replace":"Print('fixed', f.length);"}]}}
+{"cmd":"tool","name":"execute","args":{"__seed":11,"editId":"e8aa145","edits":[{"find":"{type: 'nonsense'}","replace":"{type: 'ellipse', width: 5, height: 5}"}]}}
+{"cmd":"tool","name":"execute","args":{"__seed":12,"editId":"e8aa145","edits":[{"find":"type: 'nonsense'","replace":"type: 'rectangle', width: 5, height: 5, fill: 3"}]}}
+{"cmd":"doc"}
+{"cmd":"undo"}
+{"cmd":"undo"}
+{"cmd":"doc"}
+{"cmd":"poll"}

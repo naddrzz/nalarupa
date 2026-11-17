@@ -1,0 +1,43 @@
+{
+ "version": "2.19",
+ "children": [
+  {
+   "type": "frame",
+   "id": "f",
+   "x": 0,
+   "y": 0,
+   "width": 1920,
+   "height": 1080,
+   "layout": "none",
+   "fill": "#0f1115",
+   "children": [
+    {
+     "type": "text",
+     "id": "t",
+     "x": 160,
+     "y": 587,
+     "width": 1600,
+     "textGrowth": "fixed-width",
+     "content": "Say one thing,\nbeautifully.",
+     "fontSize": 120,
+     "fontWeight": "700",
+     "lineHeight": 1.05,
+     "fill": "#f4f1ea"
+    },
+    {
+     "type": "text",
+     "id": "t2",
+     "x": 160,
+     "y": 100,
+     "width": 200,
+     "height": 40,
+     "textGrowth": "fixed-width-height",
+     "content": "A fixed box its lines run out of, and words wider than it",
+     "fontSize": "30",
+     "lineHeight": 0.8,
+     "fill": "#38bdf8"
+    }
+   ]
+  }
+ ]
+}

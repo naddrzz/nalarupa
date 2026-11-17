@@ -1,0 +1,3 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="400" height="200">
+<g font-family="Bahnschrift" font-size="20"><text x="10" y="30" font-stretch="condensed">condensed</text><text x="10" y="60" font-stretch="semi-expanded" font-weight="bolder">bolder</text><text x="10" y="90" font-weight="lighter">lighter</text></g><text x="10" y="130" font-family="Arial" font-size="20" style="font-variation-settings: 'wght' 800, 'wdth' 90">explicit variations</text>
+</svg>

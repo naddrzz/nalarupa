@@ -1,0 +1,738 @@
+{
+ "bad-gzip@1": {
+  "error": "provided data has a malformed GZip content"
+ },
+ "bad-gzip@2": {
+  "error": "provided data has a malformed GZip content"
+ },
+ "clip-edge@1": {
+  "width": 200,
+  "height": 60
+ },
+ "clip-edge@2": {
+  "width": 400,
+  "height": 120
+ },
+ "clip-nested@1": {
+  "width": 200,
+  "height": 100
+ },
+ "clip-nested@2": {
+  "width": 400,
+  "height": 200
+ },
+ "clip-units@1": {
+  "width": 200,
+  "height": 100
+ },
+ "clip-units@2": {
+  "width": 400,
+  "height": 200
+ },
+ "context-paint@1": {
+  "width": 200,
+  "height": 100
+ },
+ "context-paint@2": {
+  "width": 400,
+  "height": 200
+ },
+ "css-selectors@1": {
+  "width": 200,
+  "height": 100
+ },
+ "css-selectors@2": {
+  "width": 400,
+  "height": 200
+ },
+ "css-specificity@1": {
+  "width": 200,
+  "height": 100
+ },
+ "css-specificity@2": {
+  "width": 400,
+  "height": 200
+ },
+ "dasharray@1": {
+  "width": 200,
+  "height": 100
+ },
+ "dasharray@2": {
+  "width": 400,
+  "height": 200
+ },
+ "depth-limit@1": {
+  "error": "SVG data parsing failed cause nodes limit reached"
+ },
+ "depth-limit@2": {
+  "error": "SVG data parsing failed cause nodes limit reached"
+ },
+ "display-none@1": {
+  "width": 100,
+  "height": 100
+ },
+ "display-none@2": {
+  "width": 200,
+  "height": 200
+ },
+ "doc-gzip@1": {
+  "width": 40,
+  "height": 20
+ },
+ "doc-gzip@2": {
+  "width": 80,
+  "height": 40
+ },
+ "elements-limit@1": {
+  "error": "SVG data parsing failed cause nodes limit reached"
+ },
+ "elements-limit@2": {
+  "error": "SVG data parsing failed cause nodes limit reached"
+ },
+ "empty-doc@1": {
+  "error": "SVG data parsing failed cause the document does not have a root node"
+ },
+ "empty-doc@2": {
+  "error": "SVG data parsing failed cause the document does not have a root node"
+ },
+ "entities@1": {
+  "width": 100,
+  "height": 50
+ },
+ "entities@2": {
+  "width": 200,
+  "height": 100
+ },
+ "export-effects.blends@1": {
+  "width": 400,
+  "height": 200
+ },
+ "export-effects.blends@2": {
+  "width": 800,
+  "height": 400
+ },
+ "export-effects.glass@1": {
+  "width": 300,
+  "height": 200
+ },
+ "export-effects.glass@2": {
+  "width": 600,
+  "height": 400
+ },
+ "export-effects.shadows@1": {
+  "width": 500,
+  "height": 313
+ },
+ "export-effects.shadows@2": {
+  "width": 1000,
+  "height": 626
+ },
+ "export-gradients.conic@1": {
+  "width": 1010,
+  "height": 200
+ },
+ "export-gradients.conic@2": {
+  "width": 2020,
+  "height": 400
+ },
+ "export-gradients.mesh@1": {
+  "width": 300,
+  "height": 200
+ },
+ "export-gradients.mesh@2": {
+  "width": 600,
+  "height": 400
+ },
+ "export-images.icons@1": {
+  "width": 200,
+  "height": 120
+ },
+ "export-images.icons@2": {
+  "width": 400,
+  "height": 240
+ },
+ "export-images.imgs@1": {
+  "width": 400,
+  "height": 300
+ },
+ "export-images.imgs@2": {
+  "width": 800,
+  "height": 600
+ },
+ "export-images.shader@1": {
+  "width": 200,
+  "height": 120
+ },
+ "export-images.shader@2": {
+  "width": 400,
+  "height": 240
+ },
+ "export-shapes.basic@1": {
+  "width": 400,
+  "height": 300
+ },
+ "export-shapes.basic@2": {
+  "width": 800,
+  "height": 600
+ },
+ "export-shapes.fills@1": {
+  "width": 400,
+  "height": 300
+ },
+ "export-shapes.fills@2": {
+  "width": 800,
+  "height": 600
+ },
+ "export-shapes.flipped@1": {
+  "width": 102,
+  "height": 62
+ },
+ "export-shapes.flipped@2": {
+  "width": 204,
+  "height": 124
+ },
+ "export-shapes.slotted@1": {
+  "width": 120,
+  "height": 90
+ },
+ "export-shapes.slotted@2": {
+  "width": 240,
+  "height": 180
+ },
+ "export-shapes.turned@1": {
+  "width": 117,
+  "height": 102
+ },
+ "export-shapes.turned@2": {
+  "width": 234,
+  "height": 204
+ },
+ "fill-rule@1": {
+  "width": 200,
+  "height": 60
+ },
+ "fill-rule@2": {
+  "width": 400,
+  "height": 120
+ },
+ "grad-stops@1": {
+  "width": 200,
+  "height": 100
+ },
+ "grad-stops@2": {
+  "width": 400,
+  "height": 200
+ },
+ "groups-flatten@1": {
+  "width": 100,
+  "height": 100
+ },
+ "groups-flatten@2": {
+  "width": 200,
+  "height": 200
+ },
+ "icon-currentcolor@1": {
+  "width": 100,
+  "height": 60
+ },
+ "icon-currentcolor@2": {
+  "width": 200,
+  "height": 120
+ },
+ "icon-dot@1": {
+  "width": 16,
+  "height": 8
+ },
+ "icon-dot@2": {
+  "width": 32,
+  "height": 16
+ },
+ "icon-nested-svg@1": {
+  "width": 200,
+  "height": 120
+ },
+ "icon-nested-svg@2": {
+  "width": 400,
+  "height": 240
+ },
+ "icon-rect-radii@1": {
+  "width": 200,
+  "height": 100
+ },
+ "icon-rect-radii@2": {
+  "width": 400,
+  "height": 200
+ },
+ "icon-shapes@1": {
+  "width": 120,
+  "height": 80
+ },
+ "icon-shapes@2": {
+  "width": 240,
+  "height": 160
+ },
+ "icon-star@1": {
+  "width": 24,
+  "height": 24
+ },
+ "icon-star@2": {
+  "width": 48,
+  "height": 48
+ },
+ "img-data@1": {
+  "width": 200,
+  "height": 60
+ },
+ "img-data@2": {
+  "width": 400,
+  "height": 120
+ },
+ "img-deep@1": {
+  "width": 40,
+  "height": 20
+ },
+ "img-deep@2": {
+  "width": 80,
+  "height": 40
+ },
+ "img-file@1": {
+  "width": 200,
+  "height": 60
+ },
+ "img-file@2": {
+  "width": 400,
+  "height": 120
+ },
+ "img-nested-svg@1": {
+  "width": 200,
+  "height": 80
+ },
+ "img-nested-svg@2": {
+  "width": 400,
+  "height": 160
+ },
+ "img-par@1": {
+  "width": 300,
+  "height": 100
+ },
+ "img-par@2": {
+  "width": 600,
+  "height": 200
+ },
+ "inherit@1": {
+  "width": 100,
+  "height": 100
+ },
+ "inherit@2": {
+  "width": 200,
+  "height": 200
+ },
+ "lg-degenerate@1": {
+  "width": 200,
+  "height": 100
+ },
+ "lg-degenerate@2": {
+  "width": 400,
+  "height": 200
+ },
+ "lg-href-chain@1": {
+  "width": 200,
+  "height": 100
+ },
+ "lg-href-chain@2": {
+  "width": 400,
+  "height": 200
+ },
+ "lg-spread-transform@1": {
+  "width": 200,
+  "height": 100
+ },
+ "lg-spread-transform@2": {
+  "width": 400,
+  "height": 200
+ },
+ "markers-basic@1": {
+  "width": 200,
+  "height": 100
+ },
+ "markers-basic@2": {
+  "width": 400,
+  "height": 200
+ },
+ "markers-orient@1": {
+  "width": 200,
+  "height": 100
+ },
+ "markers-orient@2": {
+  "width": 400,
+  "height": 200
+ },
+ "markers-shapes@1": {
+  "width": 200,
+  "height": 100
+ },
+ "markers-shapes@2": {
+  "width": 400,
+  "height": 200
+ },
+ "mask-empty@1": {
+  "width": 200,
+  "height": 60
+ },
+ "mask-empty@2": {
+  "width": 400,
+  "height": 120
+ },
+ "mask-nested@1": {
+  "width": 200,
+  "height": 100
+ },
+ "mask-nested@2": {
+  "width": 400,
+  "height": 200
+ },
+ "mask-units@1": {
+  "width": 200,
+  "height": 100
+ },
+ "mask-units@2": {
+  "width": 400,
+  "height": 200
+ },
+ "nested-svg-overflow@1": {
+  "width": 300,
+  "height": 100
+ },
+ "nested-svg-overflow@2": {
+  "width": 600,
+  "height": 200
+ },
+ "not-utf8@1": {
+  "error": "provided data has not an UTF-8 encoding"
+ },
+ "not-utf8@2": {
+  "error": "provided data has not an UTF-8 encoding"
+ },
+ "opacity-blend@1": {
+  "width": 200,
+  "height": 100
+ },
+ "opacity-blend@2": {
+  "width": 400,
+  "height": 200
+ },
+ "paint-fallback@1": {
+  "width": 200,
+  "height": 60
+ },
+ "paint-fallback@2": {
+  "width": 400,
+  "height": 120
+ },
+ "paint-order@1": {
+  "width": 200,
+  "height": 40
+ },
+ "paint-order@2": {
+  "width": 400,
+  "height": 80
+ },
+ "path-absolute@1": {
+  "width": 200,
+  "height": 100
+ },
+ "path-absolute@2": {
+  "width": 400,
+  "height": 200
+ },
+ "path-arcs@1": {
+  "width": 200,
+  "height": 120
+ },
+ "path-arcs@2": {
+  "width": 400,
+  "height": 240
+ },
+ "path-invalid@1": {
+  "width": 200,
+  "height": 60
+ },
+ "path-invalid@2": {
+  "width": 400,
+  "height": 120
+ },
+ "path-relative@1": {
+  "width": 200,
+  "height": 100
+ },
+ "path-relative@2": {
+  "width": 400,
+  "height": 200
+ },
+ "path-smooth@1": {
+  "width": 200,
+  "height": 60
+ },
+ "path-smooth@2": {
+  "width": 400,
+  "height": 120
+ },
+ "pattern-basic@1": {
+  "width": 200,
+  "height": 100
+ },
+ "pattern-basic@2": {
+  "width": 400,
+  "height": 200
+ },
+ "pattern-href@1": {
+  "width": 200,
+  "height": 100
+ },
+ "pattern-href@2": {
+  "width": 400,
+  "height": 200
+ },
+ "recursive-refs@1": {
+  "width": 200,
+  "height": 60
+ },
+ "recursive-refs@2": {
+  "width": 400,
+  "height": 120
+ },
+ "rg-basic@1": {
+  "width": 200,
+  "height": 100
+ },
+ "rg-basic@2": {
+  "width": 400,
+  "height": 200
+ },
+ "root-no-ns@1": {
+  "width": 10,
+  "height": 10
+ },
+ "root-no-ns@2": {
+  "width": 20,
+  "height": 20
+ },
+ "root-not-svg@1": {
+  "error": "SVG data parsing failed cause the document does not have a root node"
+ },
+ "root-not-svg@2": {
+  "error": "SVG data parsing failed cause the document does not have a root node"
+ },
+ "root-other-ns@1": {
+  "error": "SVG data parsing failed cause the document does not have a root node"
+ },
+ "root-other-ns@2": {
+  "error": "SVG data parsing failed cause the document does not have a root node"
+ },
+ "shape-rendering@1": {
+  "width": 200,
+  "height": 40
+ },
+ "shape-rendering@2": {
+  "width": 400,
+  "height": 80
+ },
+ "size-negative@1": {
+  "error": "SVG has an invalid size"
+ },
+ "size-negative@2": {
+  "error": "SVG has an invalid size"
+ },
+ "size-none@1": {
+  "width": 5,
+  "height": 5
+ },
+ "size-none@2": {
+  "width": 10,
+  "height": 10
+ },
+ "size-percent@1": {
+  "width": 20,
+  "height": 20
+ },
+ "size-percent@2": {
+  "width": 40,
+  "height": 40
+ },
+ "size-viewbox-only@1": {
+  "width": 30,
+  "height": 15
+ },
+ "size-viewbox-only@2": {
+  "width": 60,
+  "height": 30
+ },
+ "size-width-only@1": {
+  "width": 60,
+  "height": 15
+ },
+ "size-width-only@2": {
+  "width": 120,
+  "height": 30
+ },
+ "size-zero@1": {
+  "error": "SVG has an invalid size"
+ },
+ "size-zero@2": {
+  "error": "SVG has an invalid size"
+ },
+ "stroke-props@1": {
+  "width": 200,
+  "height": 100
+ },
+ "stroke-props@2": {
+  "width": 400,
+  "height": 200
+ },
+ "switch@1": {
+  "width": 100,
+  "height": 100
+ },
+ "switch@2": {
+  "width": 200,
+  "height": 200
+ },
+ "transform-origin@1": {
+  "width": 200,
+  "height": 100
+ },
+ "transform-origin@2": {
+  "width": 400,
+  "height": 200
+ },
+ "transforms@1": {
+  "width": 300,
+  "height": 200
+ },
+ "transforms@2": {
+  "width": 600,
+  "height": 400
+ },
+ "units@1": {
+  "width": 378,
+  "height": 192
+ },
+ "units@2": {
+  "width": 756,
+  "height": 384
+ },
+ "use-basic@1": {
+  "width": 200,
+  "height": 100
+ },
+ "use-basic@2": {
+  "width": 400,
+  "height": 200
+ },
+ "use-cycle-mutual@1": {
+  "error": "SVG data parsing failed cause nodes limit reached"
+ },
+ "use-cycle-mutual@2": {
+  "error": "SVG data parsing failed cause nodes limit reached"
+ },
+ "use-cycle@1": {
+  "width": 100,
+  "height": 60
+ },
+ "use-cycle@2": {
+  "width": 200,
+  "height": 120
+ },
+ "use-symbol@1": {
+  "width": 300,
+  "height": 100
+ },
+ "use-symbol@2": {
+  "width": 600,
+  "height": 200
+ },
+ "viewbox-garbage@1": {
+  "width": 20,
+  "height": 20
+ },
+ "viewbox-garbage@2": {
+  "width": 40,
+  "height": 40
+ },
+ "viewbox-invalid@1": {
+  "width": 20,
+  "height": 20
+ },
+ "viewbox-invalid@2": {
+  "width": 40,
+  "height": 40
+ },
+ "viewbox-par@1": {
+  "width": 100,
+  "height": 40
+ },
+ "viewbox-par@2": {
+  "width": 200,
+  "height": 80
+ },
+ "visibility@1": {
+  "width": 100,
+  "height": 100
+ },
+ "visibility@2": {
+  "width": 200,
+  "height": 200
+ },
+ "xml-bad-entity@1": {
+  "error": "SVG data parsing failed cause unknown entity reference 'unknown' at 1:97"
+ },
+ "xml-bad-entity@2": {
+  "error": "SVG data parsing failed cause unknown entity reference 'unknown' at 1:97"
+ },
+ "xml-dup-attr@1": {
+  "error": "SVG data parsing failed cause attribute 'width' at 1:80 is already defined"
+ },
+ "xml-dup-attr@2": {
+  "error": "SVG data parsing failed cause attribute 'width' at 1:80 is already defined"
+ },
+ "xml-entity-loop@1": {
+  "error": "SVG data parsing failed cause a possible entity reference loop is detected at 3:18"
+ },
+ "xml-entity-loop@2": {
+  "error": "SVG data parsing failed cause a possible entity reference loop is detected at 3:18"
+ },
+ "xml-space@1": {
+  "width": 100,
+  "height": 50
+ },
+ "xml-space@2": {
+  "width": 200,
+  "height": 100
+ },
+ "xml-text-only@1": {
+  "error": "SVG data parsing failed cause unknown token at 1:1"
+ },
+ "xml-text-only@2": {
+  "error": "SVG data parsing failed cause unknown token at 1:1"
+ },
+ "xml-unclosed@1": {
+  "error": "SVG data parsing failed cause expected 'g' tag, not 'svg' at 1:95"
+ },
+ "xml-unclosed@2": {
+  "error": "SVG data parsing failed cause expected 'g' tag, not 'svg' at 1:95"
+ },
+ "xml-unquoted-attr@1": {
+  "error": "SVG data parsing failed cause expected a quote not '5' at 1:76"
+ },
+ "xml-unquoted-attr@2": {
+  "error": "SVG data parsing failed cause expected a quote not '5' at 1:76"
+ },
+ "zero-length@1": {
+  "width": 200,
+  "height": 40
+ },
+ "zero-length@2": {
+  "width": 400,
+  "height": 80
+ }
+}

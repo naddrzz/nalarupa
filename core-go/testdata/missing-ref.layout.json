@@ -1,0 +1,95 @@
+[
+  {
+    "id": "lost",
+    "type": "frame",
+    "x": 10.0,
+    "y": 20.0,
+    "w": 120.0,
+    "h": 40.0,
+    "problem": "missing component",
+    "children": []
+  },
+  {
+    "id": "holder",
+    "type": "frame",
+    "x": 0.0,
+    "y": 100.0,
+    "w": 100.0,
+    "h": 140.0,
+    "problem": null,
+    "children": [
+      {
+        "id": "lost2",
+        "type": "frame",
+        "x": 10.0,
+        "y": 110.0,
+        "w": 50.0,
+        "h": 50.0,
+        "problem": "missing component",
+        "children": []
+      },
+      {
+        "id": "after",
+        "type": "rectangle",
+        "x": 10.0,
+        "y": 170.0,
+        "w": 80.0,
+        "h": 20.0,
+        "problem": null,
+        "children": []
+      },
+      {
+        "id": "noref",
+        "type": "frame",
+        "x": 10.0,
+        "y": 200.0,
+        "w": 30.0,
+        "h": 30.0,
+        "problem": "missing component",
+        "children": []
+      }
+    ]
+  },
+  {
+    "id": "comp",
+    "type": "frame",
+    "x": 300.0,
+    "y": 0.0,
+    "w": 100.0,
+    "h": 100.0,
+    "problem": null,
+    "children": [
+      {
+        "id": "inner",
+        "type": "frame",
+        "x": 300.0,
+        "y": 0.0,
+        "w": 20.0,
+        "h": 20.0,
+        "problem": "missing component",
+        "children": []
+      }
+    ]
+  },
+  {
+    "id": "inst",
+    "type": "frame",
+    "x": 300.0,
+    "y": 200.0,
+    "w": 100.0,
+    "h": 100.0,
+    "problem": null,
+    "children": [
+      {
+        "id": "inst/inner",
+        "type": "frame",
+        "x": 300.0,
+        "y": 200.0,
+        "w": 40.0,
+        "h": 20.0,
+        "problem": "missing component",
+        "children": []
+      }
+    ]
+  }
+]

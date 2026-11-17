@@ -1,0 +1,2 @@
+# Goldens are compared byte for byte with what the Rust core writes (LF): no line-ending conversion.
+* -text

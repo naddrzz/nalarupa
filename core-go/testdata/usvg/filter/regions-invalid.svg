@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="200">
+  <filter id="zero-w" width="0"><feFlood/></filter>
+  <filter id="neg-h" height="-1"><feFlood/></filter>
+  <filter id="bad-prim"><feFlood result="a"/><feOffset width="0"/><feFlood/></filter>
+  <filter id="bad-first"><feOffset height="-5"/><feFlood/></filter>
+  <filter id="bad-unknown"><feFlood/><desc width="0"/><feFlood/></filter>
+  <filter id="unknown-el"><feFlood/><foo/><feOffset/></filter>
+  <filter id="prim-obb-zero" primitiveUnits="objectBoundingBox" filterUnits="userSpaceOnUse"><feFlood width="0"/></filter>
+  <rect x="10" y="10" width="50" height="40" fill="blue" filter="url(#zero-w)"/>
+  <rect x="70" y="10" width="50" height="40" fill="blue" filter="url(#neg-h)"/>
+  <rect x="130" y="10" width="50" height="40" fill="blue" filter="url(#bad-prim)"/>
+  <rect x="10" y="60" width="50" height="40" fill="blue" filter="url(#bad-first)"/>
+  <rect x="70" y="60" width="50" height="40" fill="blue" filter="url(#bad-unknown)"/>
+  <rect x="130" y="60" width="50" height="40" fill="blue" filter="url(#unknown-el)"/>
+  <rect x="10" y="110" width="50" height="40" fill="blue" filter="url(#prim-obb-zero)"/>
+</svg>

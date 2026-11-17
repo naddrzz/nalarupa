@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="200">
+  <filter id="f1"><feImage href="../res/with-images.svg"/></filter>
+  <rect x="10" y="10" width="80" height="60" fill="blue" filter="url(#f1)"/>
+  <image x="100" y="10" width="80" height="60" href="data:image/svg+xml;utf8,&lt;svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'&gt;&lt;filter id='g'&gt;&lt;feFlood flood-color='red'/&gt;&lt;/filter&gt;&lt;rect width='5' height='5' filter='url(%23g)'/&gt;&lt;/svg&gt;"/>
+</svg>

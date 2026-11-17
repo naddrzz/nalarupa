@@ -1,0 +1,30 @@
+{
+  "version": "2.19",
+  "children": [
+    {"type": "frame", "id": "f", "x": 0, "y": 0, "width": 600, "height": 400, "layout": "none", "fill": "#ffffff", "children": [
+      {"type": "rectangle", "id": "card", "x": 20, "y": 20, "width": 560, "height": 360, "fill": "#dbeafe"},
+      {"type": "ellipse", "id": "dot", "x": 40, "y": 40, "width": 100, "height": 100, "fill": "#ef4444"},
+      {"type": "ellipse", "id": "ring", "x": 160, "y": 40, "width": 100, "height": 100, "fill": "#22c55e", "innerRadius": 0.6},
+      {"type": "path", "id": "holes", "x": 280, "y": 40, "width": 100, "height": 100, "geometry": "M0 0H100V100H0ZM25 25H75V75H25Z", "fill": "#000000", "fillRule": "evenodd"},
+      {"type": "rectangle", "id": "in", "x": 400, "y": 40, "width": 80, "height": 80, "stroke": "#000000", "strokeWidth": 8, "strokeAlignment": "inside"},
+      {"type": "rectangle", "id": "out", "x": 400, "y": 160, "width": 80, "height": 80, "stroke": "#000000", "strokeWidth": 8, "strokeAlignment": "outside"},
+      {"type": "rectangle", "id": "sides", "x": 280, "y": 160, "width": 100, "height": 80, "stroke": "#000000", "strokeWidth": {"top": 10, "left": 2}, "strokeAlignment": "center"},
+      {"type": "path", "id": "cap", "x": 40, "y": 180, "width": 200, "height": 0, "geometry": "M0 0 L200 0", "stroke": "#000000", "strokeWidth": 12, "strokeLinecap": "square"},
+      {"type": "path", "id": "curve", "x": 40, "y": 220, "width": 200, "height": 100, "geometry": "M0 100 C50 0 150 0 200 100", "stroke": "#000000", "strokeWidth": 6, "strokeLinecap": "round"},
+      {"type": "rectangle", "id": "rot", "x": 480, "y": 280, "width": 80, "height": 40, "fill": "#a855f7", "rotation": 30},
+      {"type": "rectangle", "id": "flip", "x": 380, "y": 280, "width": 60, "height": 40, "fill": "#f97316", "flipY": true, "rotation": 45},
+      {"type": "frame", "id": "clip", "x": 250, "y": 300, "width": 60, "height": 60, "layout": "none", "clip": true, "children": [
+        {"type": "rectangle", "id": "spill", "x": 30, "y": 30, "width": 80, "height": 80, "fill": "#14b8a6"}
+      ]},
+      {"type": "group", "id": "grp", "children": [
+        {"type": "rectangle", "id": "g1", "x": 500, "y": 180, "width": 30, "height": 30, "fill": "#000000"},
+        {"type": "polygon", "id": "g2", "x": 540, "y": 180, "width": 40, "height": 40, "polygonCount": 3, "fill": "#0000ff"}
+      ]},
+      {"type": "frame", "id": "ph", "x": 40, "y": 340, "width": 60, "height": 40, "placeholder": true},
+      {"type": "rectangle", "id": "pend", "x": 120, "y": 340, "width": 60, "height": 40, "cornerRadius": [10, 0, 10, 0], "fill": {"type": "image", "url": "nalarupa:pending-1"}}
+    ]},
+    {"type": "frame", "id": "far", "x": 800, "y": 100, "width": 200, "height": 200, "layout": "none", "fill": "#334155", "flipX": true, "cornerRadius": [30, 0, 0, 0], "clip": true, "children": [
+      {"type": "rectangle", "id": "far1", "x": 150, "y": 150, "width": 100, "height": 100, "fill": {"type": "image", "url": "pencil:pending-2"}}
+    ]}
+  ]
+}

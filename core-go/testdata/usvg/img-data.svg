@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="60">
+  <image id="png" x="5" y="5" width="30" height="20" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAIAAAASFvFNAAAAEklEQVR4nGP4z8AAQVDqPwMDAEHSBfsl0XwmAAAAAElFTkSuQmCC"/>
+  <image id="jpeg" x="40" y="5" width="25" height="20" href="data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/wAARCAAEAAUDAREAAhEAAxEA/9k="/>
+  <image id="jpg-mime" x="70" y="5" width="25" height="20" href="data:image/jpg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/wAARCAAEAAUDAREAAhEAAxEA/9k="/>
+  <image id="gif" x="100" y="5" width="20" height="30" href="data:image/gif;base64,R0lGODlhAgADAIAAAP8AAAAAACwAAAAAAgADAAACAkQBADs="/>
+  <image id="webp" x="125" y="5" width="35" height="25" href="data:image/webp;base64,UklGRhUAAABXRUJQVlA4TAkAAAAvBgABAAAAAAA="/>
+  <image id="sniffed" x="165" y="5" width="30" height="20" href="data:;base64,iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAIAAAASFvFNAAAAEklEQVR4nGP4z8AAQVDqPwMDAEHSBfsl0XwmAAAAAElFTkSuQmCC"/>
+  <image id="wrong-mime" x="5" y="35" width="30" height="20" href="data:image/png;base64,R0lGODlhAgADAIAAAP8AAAAAACwAAAAAAgADAAACAkQBADs="/>
+  <image id="unknown-mime" x="40" y="35" width="30" height="20" href="data:application/octet-stream;base64,iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAIAAAASFvFNAAAAEklEQVR4nGP4z8AAQVDqPwMDAEHSBfsl0XwmAAAAAElFTkSuQmCC"/>
+  <image id="garbage" x="75" y="35" width="30" height="20" href="data:image/png;base64,AAAA"/>
+  <image id="no-size" x="110" y="35" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAIAAAASFvFNAAAAEklEQVR4nGP4z8AAQVDqPwMDAEHSBfsl0XwmAAAAAElFTkSuQmCC"/>
+</svg>

@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="296" height="260">
+<rect width="296" height="260" fill="#e8f0ff"/>
+<image x="10" y="10" width="52" height="36" preserveAspectRatio="none" image-rendering="optimizeQuality" href="img/anim.gif"/>
+<image x="66" y="10" width="52" height="36" preserveAspectRatio="none" image-rendering="optimizeQuality" href="img/lossless.webp"/>
+<image x="122" y="10" width="52" height="36" preserveAspectRatio="none" image-rendering="optimizeQuality" href="img/lossless-rgb.webp"/>
+<image x="178" y="10" width="52" height="36" preserveAspectRatio="none" image-rendering="optimizeQuality" href="img/lossy.webp"/>
+<image x="234" y="10" width="52" height="36" preserveAspectRatio="none" image-rendering="optimizeQuality" href="img/lossy-alpha.webp"/>
+<image x="10" y="50" width="52" height="36" preserveAspectRatio="none" image-rendering="optimizeSpeed" href="img/anim.gif"/>
+<image x="66" y="50" width="52" height="36" preserveAspectRatio="none" image-rendering="optimizeSpeed" href="img/lossless.webp"/>
+<image x="122" y="50" width="52" height="36" preserveAspectRatio="none" image-rendering="optimizeSpeed" href="img/lossless-rgb.webp"/>
+<image x="178" y="50" width="52" height="36" preserveAspectRatio="none" image-rendering="optimizeSpeed" href="img/lossy.webp"/>
+<image x="234" y="50" width="52" height="36" preserveAspectRatio="none" image-rendering="optimizeSpeed" href="img/lossy-alpha.webp"/>
+<image x="10" y="90" width="52" height="36" preserveAspectRatio="none" image-rendering="smooth" href="img/anim.gif" transform="rotate(7 36 108)"/>
+<image x="66" y="90" width="52" height="36" preserveAspectRatio="none" image-rendering="smooth" href="img/lossless.webp" transform="rotate(7 92 108)"/>
+<image x="122" y="90" width="52" height="36" preserveAspectRatio="none" image-rendering="smooth" href="img/lossless-rgb.webp" transform="rotate(7 148 108)"/>
+<image x="178" y="90" width="52" height="36" preserveAspectRatio="none" image-rendering="smooth" href="img/lossy.webp" transform="rotate(7 204 108)"/>
+<image x="234" y="90" width="52" height="36" preserveAspectRatio="none" image-rendering="smooth" href="img/lossy-alpha.webp" transform="rotate(7 260 108)"/>
+<image x="10" y="130" width="52" height="36" preserveAspectRatio="none" image-rendering="high-quality" href="img/anim.gif"/>
+<image x="66" y="130" width="52" height="36" preserveAspectRatio="none" image-rendering="high-quality" href="img/lossless.webp"/>
+<image x="122" y="130" width="52" height="36" preserveAspectRatio="none" image-rendering="high-quality" href="img/lossless-rgb.webp"/>
+<image x="178" y="130" width="52" height="36" preserveAspectRatio="none" image-rendering="high-quality" href="img/lossy.webp"/>
+<image x="234" y="130" width="52" height="36" preserveAspectRatio="none" image-rendering="high-quality" href="img/lossy-alpha.webp"/>
+<image x="10" y="170" width="52" height="36" preserveAspectRatio="none" image-rendering="crisp-edges" href="img/anim.gif"/>
+<image x="66" y="170" width="52" height="36" preserveAspectRatio="none" image-rendering="crisp-edges" href="img/lossless.webp"/>
+<image x="122" y="170" width="52" height="36" preserveAspectRatio="none" image-rendering="crisp-edges" href="img/lossless-rgb.webp"/>
+<image x="178" y="170" width="52" height="36" preserveAspectRatio="none" image-rendering="crisp-edges" href="img/lossy.webp"/>
+<image x="234" y="170" width="52" height="36" preserveAspectRatio="none" image-rendering="crisp-edges" href="img/lossy-alpha.webp"/>
+<image x="10" y="210" width="52" height="36" preserveAspectRatio="none" image-rendering="pixelated" href="img/anim.gif"/>
+<image x="66" y="210" width="52" height="36" preserveAspectRatio="none" image-rendering="pixelated" href="img/lossless.webp"/>
+<image x="122" y="210" width="52" height="36" preserveAspectRatio="none" image-rendering="pixelated" href="img/lossless-rgb.webp"/>
+<image x="178" y="210" width="52" height="36" preserveAspectRatio="none" image-rendering="pixelated" href="img/lossy.webp"/>
+<image x="234" y="210" width="52" height="36" preserveAspectRatio="none" image-rendering="pixelated" href="img/lossy-alpha.webp"/>
+</svg>

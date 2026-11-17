@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="200">
+  <filter id="f1"><feSpecularLighting specularExponent="20" specularConstant="1.5" surfaceScale="5" lighting-color="#bbbbbb"><fePointLight x="-5000" y="-10000" z="20000"/></feSpecularLighting></filter>
+  <filter id="f2"><feSpecularLighting specularExponent="128"><feDistantLight azimuth="235" elevation="40"/></feSpecularLighting></filter>
+  <filter id="f3"><feSpecularLighting specularExponent="129"><feDistantLight/></feSpecularLighting></filter>
+  <filter id="f4"><feSpecularLighting specularExponent="0.5"><feDistantLight/></feSpecularLighting></filter>
+  <filter id="f5"><feSpecularLighting><feSpotLight x="1" y="2" z="3" limitingConeAngle="-15"/></feSpecularLighting></filter>
+  <filter id="f6"><feSpecularLighting/></filter>
+  <rect x="10" y="10" width="50" height="40" fill="blue" filter="url(#f1)"/>
+  <rect x="70" y="10" width="50" height="40" fill="blue" filter="url(#f2)"/>
+  <rect x="130" y="10" width="50" height="40" fill="blue" filter="url(#f3)"/>
+  <rect x="10" y="60" width="50" height="40" fill="blue" filter="url(#f4)"/>
+  <rect x="70" y="60" width="50" height="40" fill="blue" filter="url(#f5)"/>
+  <rect x="130" y="60" width="50" height="40" fill="blue" filter="url(#f6)"/>
+</svg>

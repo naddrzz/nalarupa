@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="200">
+  <filter id="f1"><feImage href="../res/red-3x2.png" preserveAspectRatio="xMidYMid slice"/></filter>
+  <filter id="f2"><feImage href="../res/inner.svg"/></filter>
+  <filter id="f3"><feImage href="../res/missing.png"/></filter>
+  <filter id="f4"><feImage href="../res/tile-5x4.jpg" image-rendering="crisp-edges"/><feImage href="../res/dot-2x3.gif" preserveAspectRatio="xMinYMin slice"/></filter>
+  <rect x="10" y="10" width="50" height="40" fill="blue" filter="url(#f1)"/>
+  <rect x="70" y="10" width="50" height="40" fill="blue" filter="url(#f2)"/>
+  <rect x="130" y="10" width="50" height="40" fill="blue" filter="url(#f3)"/>
+  <rect x="10" y="60" width="50" height="40" fill="blue" filter="url(#f4)"/>
+</svg>

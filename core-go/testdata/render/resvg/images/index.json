@@ -1,0 +1,22 @@
+{
+ "image-svg-missing@1": {
+  "width": 240,
+  "height": 120
+ },
+ "images-gif-webp@1": {
+  "width": 296,
+  "height": 260
+ },
+ "images-jpeg@1": {
+  "width": 240,
+  "height": 260
+ },
+ "images-png@1": {
+  "width": 352,
+  "height": 260
+ },
+ "nested@1": {
+  "width": 40,
+  "height": 40
+ }
+}

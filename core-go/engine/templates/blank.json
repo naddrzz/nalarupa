@@ -1,0 +1,6 @@
+{
+  "version": "2.19",
+  "children": [
+    {"type": "frame", "id": "frm01", "name": "Desktop", "x": 0, "y": 0, "width": 1440, "height": 900, "fill": "#FFFFFF", "layout": "none", "clip": true}
+  ]
+}

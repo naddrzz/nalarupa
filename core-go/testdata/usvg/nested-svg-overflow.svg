@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="300" height="100">
+  <svg id="clipped" x="10" y="10" width="40" height="40" viewBox="0 0 10 10"><circle cx="5" cy="5" r="8" fill="#a00"/></svg>
+  <svg id="visible" x="60" y="10" width="40" height="40" viewBox="0 0 10 10" overflow="visible"><circle cx="5" cy="5" r="8" fill="#0a0"/></svg>
+  <svg id="auto" x="110" y="10" width="40" height="40" overflow="auto"><circle cx="5" cy="5" r="8"/></svg>
+  <svg id="style-scroll" x="160" y="10" width="40" height="40" style="overflow:scroll" viewBox="0 0 20 10" preserveAspectRatio="xMinYMid slice"><rect width="30" height="30"/></svg>
+  <svg id="no-size" x="210" y="10"><rect width="30" height="30" fill="#00a"/></svg>
+  <svg id="zero" x="250" y="10" width="0" height="40"><rect width="30" height="30"/></svg>
+  <svg id="pct" x="10" y="60" width="50%" height="30%" viewBox="0 0 10 10" opacity="0.5" transform="translate(5 5)"><rect width="10" height="10" fill="#0aa"/></svg>
+</svg>

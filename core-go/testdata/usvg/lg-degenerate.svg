@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+  <defs>
+    <linearGradient id="zero-len" x1="0.5" y1="0.5" x2="0.5" y2="0.5"><stop offset="0" stop-color="#f00"/><stop offset="1" stop-color="#00f" stop-opacity="0.5"/></linearGradient>
+    <linearGradient id="obb"><stop offset="0" stop-color="#f00"/><stop offset="1" stop-color="#00f"/></linearGradient>
+    <linearGradient id="user" gradientUnits="userSpaceOnUse" x1="0" x2="100"><stop offset="0" stop-color="#f00"/><stop offset="1" stop-color="#00f"/></linearGradient>
+    <linearGradient id="singular" gradientTransform="scale(0)"><stop offset="0" stop-color="#f00"/><stop offset="1" stop-color="#00f"/></linearGradient>
+  </defs>
+  <rect id="r-zero-len" x="5" y="5" width="40" height="30" fill="url(#zero-len)"/>
+  <path id="vline-obb" d="M60 5 V35" stroke="url(#obb)" stroke-width="4"/>
+  <path id="vline-obb-fallback" d="M70 5 V35" stroke="url(#obb) #0a0" stroke-width="4"/>
+  <path id="hline-obb" d="M80 20 H120" stroke="url(#obb)" stroke-width="4"/>
+  <path id="vline-user" d="M130 5 V35" stroke="url(#user)" stroke-width="4"/>
+  <rect id="r-singular" x="5" y="50" width="40" height="30" fill="url(#singular)"/>
+</svg>

@@ -6,7 +6,7 @@
 
 <p align="center">
   An infinite-canvas design editor with AI agents.<br>
-  <b>Rust</b> core, <b>GPU-native</b> UI (GPUIX: React on top of GPUI).
+  <b>Go</b> core, <b>GPU-native</b> UI (GPUIX: React on top of GPUI).
 </p>
 
 <p align="center">
@@ -75,7 +75,9 @@ The logo combines a wayang *gunungan* that doubles as a pen nib (the pen tool), 
 - Export nodes to **PNG, JPEG, WebP, SVG, HTML+CSS**, and decks to **PDF**.
 - Built-in **MCP server** (`http://127.0.0.1:47700/mcp`) for external agents: Claude Code, Cursor, Codex.
   The *Connect* button writes their config only when you click it.
-- Headless `nalarupa-cli` for rendering and exporting without the UI.
+- Headless `nalarupa-cli` for rendering and exporting without the UI (`render`, `svg`, `html`, `exec`, `mcp`; build it
+  with `bash build.sh cli` in `core-go/`, after `go generate ./shader/gpu` and with MinGW gcc as `CC` on Windows, see
+  Development).
 - `.nala` document format (readable JSON); `.pen` documents open too.
 
 ### Accessibility
@@ -111,11 +113,17 @@ lives in `%LOCALAPPDATA%\Nalarupa` on Windows, `~/Library/Application Support/Na
 
 ## Development
 
-Requirements: [Rust](https://rustup.rs) stable and [Bun](https://bun.sh) ≥ 1.3.
+Requirements: [Go](https://go.dev) (the version in `core-go/go.mod`), a C compiler for cgo (MinGW-w64 gcc on Windows,
+set as `CC`) and [Bun](https://bun.sh) ≥ 1.3.
 
 ```bash
-cd core && cargo build --release
+cd core-go && go generate ./shader/gpu && CGO_ENABLED=1 bash build.sh
 ```
+
+`go generate` fetches the pinned wgpu-native release once; `build.sh` (or `build.ps1` on Windows) builds the core into
+`core-go/out/`, where the app finds it. `NALARUPA_CORE=<full path of the library>` points the app at another build.
+`core/` holds the Rust core the Go one was ported from: it stays as the parity oracle (the Go parity tests compare
+with its `nalarupa-cli`, see Checks) and needs [Rust](https://rustup.rs) stable.
 
 ```bash
 cd app && bun install && bun run dev
@@ -139,31 +147,35 @@ pushing a canonical `v<major>.<minor>.<patch>` tag (for example `v1.4.0`) releas
 ### Architecture
 
 ```
-app/  (Bun + @gpuix/react)                core/  (Rust, nalarupa_core.dll)
+app/  (Bun + @gpuix/react)                core-go/  (Go + cgo, nalarupa_core.dll)
 ┌──────────────────────────────┐  bun:ffi  ┌───────────────────────────────────────────────┐
 │ Home · Editor · Present      │──────────▶│ nr_call(json) → json   nr_render(...) → RGBA  │
-│ Layers/Slides · Inspector    │           │ doc.rs      document model (lossless)         │
-│ Agent chat · Canvas (<img>)  │◀── RGBA ──│ resolve.rs  components/refs, variables+themes │
-│ setImagePixels per frame     │           │ layout.rs   flexbox auto layout               │
-└──────────────────────────────┘           │ text.rs     rustybuzz + UAX #14, Google Fonts │
-                                           │ svg.rs → usvg 0.47 → raster.rs (vello_cpu)    │
- Claude Code / Cursor / Codex              │ render.rs   view cache + dirty rect + culling │
-   ── HTTP MCP 127.0.0.1:47700/mcp ───────▶│ script.rs   `execute` in QuickJS-NG (rquickjs)│
-                                           │ editor.rs   snap, marquee, layout, pen tool   │
-                                           │ mcp.rs      MCP streamable-HTTP + installer   │
-                                           │ agent.rs    Claude API loop │ Claude Code CLI │
-                                           │ html.rs     HTML+CSS export, PDF (krilla 0.8) │
+│ Layers/Slides · Inspector    │           │ doc/        document model (lossless)         │
+│ Agent chat · Canvas (<img>)  │◀── RGBA ──│ resolve/    components/refs, variables+themes │
+│ setImagePixels per frame     │           │ layout/     flexbox auto layout               │
+└──────────────────────────────┘           │ text/       go-text shaping + UAX #14, fonts  │
+                                           │ svg/ → usvg/ → resvg/ + skia/ (pure Go)       │
+ Claude Code / Cursor / Codex              │ render/     view cache + dirty rect + culling │
+   ── HTTP MCP 127.0.0.1:47700/mcp ───────▶│ script/     `execute` in QuickJS-NG (cgo)     │
+                                           │ shader/     GLSL fills on wgpu-native (cgo)   │
+                                           │ editor/     snap, marquee, layout, pen tool   │
+                                           │ agent/      MCP server, Claude API loop,      │
+                                           │             Claude Code CLI, AI Pen           │
+                                           │ html/ pdf/  HTML+CSS export, PDF              │
                                            └───────────────────────────────────────────────┘
 ```
 
 The agent guides live in `core/guide/*.md` (document schema, the `execute` API, components, slides, design,
-code).
+code); `core-go/guide/md/` holds the copies the Go core embeds, kept byte for byte equal by its tests.
 
 ### Checks
 
 ```bash
-cd core && cargo test
+cd core-go && go vet ./... && NALARUPA_CLI="$PWD/../core/target/release/nalarupa-cli" go test ./...
 ```
+
+With `NALARUPA_CLI` set to the Rust oracle (`cd core && cargo build --release && cargo test --release`) the parity
+tests compare with its live output; without it, with the committed goldens.
 
 ```bash
 cd app && bun run typecheck && bun run smoke && bun run e2e
@@ -243,7 +255,7 @@ cd app && bun run a11y-check && bun run motion-check && bun run window-check
   Wayland compositor (needs `sway`, `grim`, `mesa-vulkan-drivers`). CI does this on GitHub-hosted Ubuntu, and also runs the Windows-only checks on a Windows runner.
 - `bun run shots` regenerates the README screenshots in `docs/screenshots/`.
 
-Canvas performance:
+Canvas performance (the bench and the icon tool below are still Rust-only, run against the oracle core):
 
 ```bash
 cd core && cargo run --release --example bench -- file.nala 1600 1000

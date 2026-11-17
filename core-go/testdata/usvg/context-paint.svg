@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+  <defs>
+    <marker id="ctx" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="context-stroke" stroke="context-fill"/></marker>
+    <linearGradient id="g"><stop offset="0" stop-color="#f00"/><stop offset="1" stop-color="#00f"/></linearGradient>
+    <g id="sym"><rect width="10" height="10" fill="context-fill" stroke="context-stroke" stroke-width="2"/></g>
+  </defs>
+  <path id="colors" d="M10 20 L80 20" stroke="#c00" fill="#0c0" stroke-width="2" marker-start="url(#ctx)" marker-end="url(#ctx)"/>
+  <path id="gradient" d="M10 50 L80 70" stroke="url(#g)" fill="none" stroke-width="2" marker-end="url(#ctx)"/>
+  <path id="no-stroke" d="M100 20 L180 20" fill="#00c" marker-end="url(#ctx)"/>
+  <use id="use-ctx" href="#sym" x="110" y="40" fill="#fa0" stroke="#048"/>
+  <rect id="outside" x="140" y="40" width="10" height="10" fill="context-fill" stroke="context-stroke"/>
+</svg>

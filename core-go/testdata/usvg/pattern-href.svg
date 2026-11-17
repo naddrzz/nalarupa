@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="100">
+  <defs>
+    <pattern id="base" patternUnits="userSpaceOnUse" width="10" height="10"><rect width="5" height="5" fill="#c00"/><rect x="5" y="5" width="5" height="5" fill="#00c"/></pattern>
+    <pattern id="moved" href="#base" x="3" y="2" patternTransform="rotate(30)"/>
+    <pattern id="override" xlink:href="#moved" width="20"><circle cx="10" cy="5" r="4" fill="#0a0"/></pattern>
+    <pattern id="inner" patternUnits="userSpaceOnUse" width="4" height="4"><rect width="2" height="2" fill="#000"/></pattern>
+    <pattern id="nested" patternUnits="userSpaceOnUse" width="20" height="20"><rect width="15" height="15" fill="url(#inner)" stroke="#888"/></pattern>
+    <pattern id="with-g" patternUnits="userSpaceOnUse" width="12" height="12" patternTransform="matrix(1 0 0.2 1 0 0)"><g opacity="0.5" transform="translate(2 2)"><rect width="6" height="6" fill="#fa0"/></g></pattern>
+  </defs>
+  <rect id="r-base" x="5" y="5" width="40" height="30" fill="url(#base)"/>
+  <rect id="r-moved" x="50" y="5" width="40" height="30" fill="url(#moved)"/>
+  <rect id="r-override" x="95" y="5" width="40" height="30" fill="url(#override)"/>
+  <rect id="r-nested" x="140" y="5" width="40" height="30" fill="url(#nested)"/>
+  <rect id="r-with-g" x="5" y="50" width="40" height="30" fill="url(#with-g)" stroke="url(#base)" stroke-width="3"/>
+  <g transform="translate(50 50) scale(2)"><rect id="r-scaled" width="20" height="15" fill="url(#base)"/></g>
+</svg>

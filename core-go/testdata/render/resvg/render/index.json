@@ -1,0 +1,66 @@
+{
+ "blend-opacity@1": {
+  "width": 320,
+  "height": 180
+ },
+ "blend-opacity@2": {
+  "width": 640,
+  "height": 360
+ },
+ "clips@1": {
+  "width": 300,
+  "height": 200
+ },
+ "clips@2": {
+  "width": 600,
+  "height": 400
+ },
+ "filters-blur@1": {
+  "width": 320,
+  "height": 200
+ },
+ "filters-blur@2": {
+  "width": 640,
+  "height": 400
+ },
+ "filters-light@1": {
+  "width": 320,
+  "height": 220
+ },
+ "filters-light@2": {
+  "width": 640,
+  "height": 440
+ },
+ "filters-misc@1": {
+  "width": 320,
+  "height": 240
+ },
+ "filters-misc@2": {
+  "width": 640,
+  "height": 480
+ },
+ "layers@1": {
+  "width": 200,
+  "height": 160
+ },
+ "layers@2": {
+  "width": 400,
+  "height": 320
+ },
+ "masks@1": {
+  "width": 300,
+  "height": 200
+ },
+ "masks@2": {
+  "width": 600,
+  "height": 400
+ },
+ "paint@1": {
+  "width": 320,
+  "height": 220
+ },
+ "paint@2": {
+  "width": 640,
+  "height": 440
+ }
+}

@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="220">
+  <defs>
+    <linearGradient id="lpad" x1="0.2" x2="0.6" gradientTransform="rotate(20)"><stop offset="0" stop-color="#e00"/><stop offset="0.5" stop-color="#0e0" stop-opacity="0.5"/><stop offset="1" stop-color="#00e"/></linearGradient>
+    <linearGradient id="lref" href="#lpad" spreadMethod="reflect"/>
+    <linearGradient id="lrep" href="#lpad" spreadMethod="repeat"/>
+    <radialGradient id="rfoc" cx="0.5" cy="0.5" r="0.4" fx="0.3" fy="0.35" fr="0.05" spreadMethod="reflect"><stop offset="0" stop-color="#ff0"/><stop offset="1" stop-color="#039"/></radialGradient>
+    <radialGradient id="rrep" r="0.2" spreadMethod="repeat" gradientUnits="objectBoundingBox"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#c06" stop-opacity="0.4"/></radialGradient>
+    <pattern id="p" width="14" height="10" patternUnits="userSpaceOnUse" patternTransform="rotate(30) scale(1.4)"><rect width="7" height="5" fill="#09c"/><circle cx="10" cy="7" r="3" fill="#f60" opacity="0.7"/></pattern>
+    <pattern id="pbb" width="0.25" height="0.5" patternContentUnits="objectBoundingBox"><path d="M0 0 L0.25 0.5" stroke="#000" stroke-width="0.02"/></pattern>
+  </defs>
+  <rect width="320" height="220" fill="#f4f4f4"/>
+  <rect x="10" y="10" width="90" height="60" fill="url(#lpad)"/>
+  <rect x="110" y="10" width="90" height="60" fill="url(#lref)"/>
+  <rect x="210" y="10" width="90" height="60" fill="url(#lrep)" stroke="url(#rfoc)" stroke-width="6"/>
+  <circle cx="55" cy="120" r="40" fill="url(#rfoc)"/>
+  <ellipse cx="155" cy="120" rx="45" ry="35" fill="url(#rrep)"/>
+  <rect x="210" y="85" width="90" height="70" fill="url(#p)" stroke="url(#pbb)" stroke-width="10"/>
+  <path d="M15 175 Q60 150 100 200 T180 180" fill="none" stroke="url(#p)" stroke-width="12" stroke-linecap="round" stroke-dasharray="20 6 4 6"/>
+  <g shape-rendering="crispEdges"><path d="M200 170 l30 40 l30 -40 l30 40" fill="none" stroke="#333" stroke-width="3" stroke-linejoin="bevel"/><circle cx="215" cy="200" r="10" fill="#c00"/></g>
+  <path d="M190 215 h120" stroke="#000" stroke-width="0.4"/>
+  <polyline points="230,165 250,190 270,170" fill="none" stroke="#090" stroke-width="5" stroke-linejoin="miter" stroke-miterlimit="1.5" paint-order="stroke"/>
+</svg>

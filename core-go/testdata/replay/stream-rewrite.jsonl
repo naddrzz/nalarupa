@@ -1,0 +1,19 @@
+# A stream whose source changes before the end (not an append), whose earlier statement throws, or that only
+# grows by whitespace: the preview is rebuilt from scratch with the same seed; ending it leaves the document clean.
+{"cmd":"new","template":"empty"}
+{"cmd":"stream_update","key":"k","source":"Insert(document, {type: 'frame', name: 'A', x: 0, y: 0, width: 80, height: 60, fill: '#336699'})\nInsert(document, {type: 'frame', name: 'B', x: 100, y: 0, width: 80, height: 60, fill: '#e11d48'})\nq("}
+{"cmd":"render","w":260,"h":200,"cam":[-20,-20],"zoom":0.5,"bg":[30,30,30]}
+{"cmd":"stream_update","key":"k","source":"Insert(document, {type: 'frame', name: 'A', x: 0, y: 0, width: 80, height: 60, fill: '#336699'})\nInsert(document, {type: 'frame', name: 'B', x: 100, y: 0, width: 80, height: 60, fill: '#e11d48'})\nq("}
+{"cmd":"stream_update","key":"k","source":"Insert(document, {type: 'frame', name: 'A', x: 0, y: 0, width: 80, height: 60, fill: '#336699'})\nInsert(document, {type: 'frame', name: 'Z', x: 100, y: 80, width: 40, height: 40, fill: '#22c55e'})\nq("}
+{"cmd":"render","w":260,"h":200,"cam":[-20,-20],"zoom":0.5,"bg":[30,30,30]}
+{"cmd":"poll"}
+{"cmd":"stream_update","key":"k","source":"Insert(document, {type: 'frame', name: 'A', x: 0, y: 0, width: 80, height: 60, fill: '#336699'})\nif (true) Insert(document, {type: 'rectangle', name: 'R', width: 10, height: 10})\nelse g()\nInsert(document, {type: 'frame', name: 'Z', x: 100, y: 80, width: 40, height: 40, fill: '#22c55e'})\nq("}
+{"cmd":"stream_update","key":"k","source":"Update('missing', {x: 1})\nInsert(document, {type: 'frame', name: 'A', x: 0, y: 0, width: 80, height: 60, fill: '#336699'})\nq("}
+{"cmd":"render","w":260,"h":200,"cam":[-20,-20],"zoom":0.5,"bg":[30,30,30]}
+{"cmd":"stream_update","key":"k","source":"Insert(document, {type: 'frame', name: 'A', x: 0, y: 0, width: 80, height: 60, fill: '#336699'})\nq("}
+{"cmd":"stream_update","key":"k","source":"  \nInsert(document, {type: 'frame', name: 'A', x: 0, y: 0, width: 80, height: 60, fill: '#336699'})\nq("}
+{"cmd":"stream_end","key":"k"}
+{"cmd":"stream_end","key":"k"}
+{"cmd":"render","w":260,"h":200,"cam":[-20,-20],"zoom":0.5,"bg":[30,30,30]}
+{"cmd":"state"}
+{"cmd":"poll"}

@@ -1,3 +1,5 @@
 [core]
 project_name = "nalarupa"
 output_folder = "{project-root}/_bmad-output"
+communication_language = "Indonesian"
+document_output_language = "English"

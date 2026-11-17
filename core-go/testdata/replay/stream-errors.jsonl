@@ -1,0 +1,21 @@
+# Errors in a preview: a statement that throws until a later declaration hoists, a real error that stops the
+# preview there and rolls the final call back; an endless loop stalls at the 2 s budget; Generate is skipped; save as
+# into another folder rebuilds the preview from the relocated document; ending the streams leaves no preview.
+{"cmd":"open","path":"shapes.pen"}
+{"cmd":"stream_update","key":"e","source":"a = Insert(document, {type: 'frame', name: 'A', x: 0, y: 0, width: 40, height: 40, fill: '#336699'})\nmk('B')\nfunction mk","agent":"ag0"}
+{"cmd":"stream_update","key":"e","source":"a = Insert(document, {type: 'frame', name: 'A', x: 0, y: 0, width: 40, height: 40, fill: '#336699'})\nmk('B')\nfunction mk(n) { return Insert(document, {type: 'frame', name: n, x: 50, y: 0, width: 40, height: 40, fill: '#e11d48'}) }\nUpdate(","agent":"ag0"}
+{"cmd":"stream_update","key":"e","source":"a = Insert(document, {type: 'frame', name: 'A', x: 0, y: 0, width: 40, height: 40, fill: '#336699'})\nmk('B')\nfunction mk(n) { return Insert(document, {type: 'frame', name: n, x: 50, y: 0, width: 40, height: 40, fill: '#e11d48'}) }\nUpdate('nope', {x: 1})\nInsert(document, {type: 'frame', name: 'C', x: 100, y: 0, width: 40, height: 40})\nx = 1","agent":"ag0"}
+{"cmd":"render","w":260,"h":200,"cam":[-20,-20],"zoom":0.5,"bg":[30,30,30]}
+{"cmd":"tool","name":"execute","args":{"input":"a = Insert(document, {type: 'frame', name: 'A', x: 0, y: 0, width: 40, height: 40, fill: '#336699'})\nmk('B')\nfunction mk(n) { return Insert(document, {type: 'frame', name: n, x: 50, y: 0, width: 40, height: 40, fill: '#e11d48'}) }\nUpdate('nope', {x: 1})\nInsert(document, {type: 'frame', name: 'C', x: 100, y: 0, width: 40, height: 40})\n","__stream":"e","__agent":"ag0"}}
+{"cmd":"state"}
+{"cmd":"stream_update","key":"loop","source":"Insert(document, {type: 'frame', name: 'L', width: 10, height: 10})\nwhile (true) {}\nq(","agent":"ag0"}
+{"cmd":"stream_update","key":"loop","source":"Insert(document, {type: 'frame', name: 'L', width: 10, height: 10})\nwhile (true) {}\nq(1)\nz = 2\nq(","agent":"ag0"}
+{"cmd":"stream_update","key":"gen","source":"f = Insert(document, {type: 'frame', name: 'G', x: 0, y: 220, width: 40, height: 40})\nGenerate('ai', f, 'a cat')\nGenerate('svg', f, 'a cat')\nGenerate('nope', f, 'x')\nq(","agent":"ag0"}
+{"cmd":"render","w":260,"h":200,"cam":[-20,-20],"zoom":0.5,"bg":[30,30,30]}
+{"cmd":"poll"}
+{"cmd":"save","path":"b/moved.pen"}
+{"cmd":"stream_update","key":"gen","source":"f = Insert(document, {type: 'frame', name: 'G', x: 0, y: 220, width: 40, height: 40})\nGenerate('ai', f, 'a cat')\nGenerate('svg', f, 'a cat')\nGenerate('nope', f, 'x')\nUpdate('pic', {width: 70})\nq(","agent":"ag0"}
+{"cmd":"stream_end","key":"gen"}
+{"cmd":"stream_end","key":"loop"}
+{"cmd":"state"}
+{"cmd":"render","w":260,"h":200,"cam":[-20,-20],"zoom":0.5,"bg":[30,30,30]}

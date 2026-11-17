@@ -1,0 +1,32 @@
+{
+ "scale": 2,
+ "docs": [
+  {"name": "shapes", "doc": "svg/shapes.pen", "ids": ["basic", "fills", "flipped", "slotted", "turned"]},
+  {"name": "effects", "doc": "svg/effects.pen", "ids": ["shadows", "blends", "glass"]},
+  {"name": "gradients", "doc": "svg/gradients.pen", "ids": ["conic", "mesh"]},
+  {"name": "images", "doc": "svg/images.pen", "ids": ["imgs", "icons", "shader"]},
+  {"name": "templates-blank", "doc": "blank.pen", "ids": ["frm01"]},
+  {"name": "templates-mobile", "doc": "mobile.pen", "ids": ["mob01"]},
+  {"name": "text", "doc": "svg/live/text.pen", "ids": ["texts"]},
+  {"name": "multipage", "doc": "svg/shapes.pen", "ids": ["basic", "r1", "e2"]},
+  {"name": "damaged", "doc": "pdf/damaged.pen", "ids": ["damaged"]}
+ ],
+ "corpora": ["render/svg", "render/images", "usvg/filter", "usvg/text"],
+ "tolerance": {
+  "pdf": {"delta": 0, "maxShare": 0, "meanDelta": 0, "why": "Go's and Rust's PDFs of the same tree rasterise to the same pixels"},
+  "pdf/usvg-text-export-cff": {"delta": 8, "maxShare": 0.005, "meanDelta": 0.25, "why": "the CFF subset draws the outlines unhinted, Rust's keeps the font's hints (Windows measured 0.34% beyond 8, mean 0.19)"},
+  "pdf/usvg-text-export-variable": {"delta": 8, "maxShare": 0.001, "meanDelta": 0.02, "why": "instanced TrueType glyphs: the varied outlines round to integers as write-fonts does, implied points can round differently (Windows measured 0.043% beyond 8, mean 0.006)"},
+  "png": {"delta": 32, "maxShare": 0.015, "meanDelta": 1.5, "why": "the PDF rasterizer's anti-aliasing, glyph rendering and image smoothing are not resvg's (Windows measured at most 1.18% beyond 32, mean 1.28, outside the entries below)"},
+  "png.pdftoppm": {"delta": 32, "maxShare": 0.08, "meanDelta": 6, "why": "poppler's Splash anti-aliasing and image smoothing differ from resvg's like Windows' (bound set from the Windows outliers; on poppler 22.02 and the CI's every other case is within it)"},
+  "png.pdftoppm/images/p3": {"delta": 32, "maxShare": 0.6, "meanDelta": 68, "why": "the placeholder hatch of missing shaders is a tiling pattern, which poppler tiles from another origin than resvg and Windows.Data.Pdf (the stripes shift across the page), in Rust's PDF too (measured 56.8%, mean 65.6)"},
+  "png.pdftoppm/render-svg-paint": {"delta": 32, "maxShare": 0.12, "meanDelta": 10, "why": "poppler does not repeat or reflect linear and radial gradients whose PDF function shadings use PostScript functions (padded instead), in Rust's PDF too (measured 11.2%, mean 9.5)"},
+  "png.pdftoppm/render-images-images-gif-webp": {"delta": 32, "maxShare": 0.095, "meanDelta": 6.8, "why": "poppler draws upscaled images unsmoothed, resvg uses each image-rendering's filter (measured 8.78%, mean 6.29)"},
+  "png.windows/render-svg-paint": {"delta": 32, "maxShare": 0.25, "meanDelta": 26, "why": "Windows.Data.Pdf does not paint function shadings with PostScript functions (repeating and reflecting linear gradients), in Rust's PDF too (measured 24.1%, mean 25.2)"},
+  "png.windows/render-svg-filters-light": {"delta": 32, "maxShare": 0.045, "meanDelta": 4.2, "why": "the 4x filter raster of high-contrast lighting is downsampled by the PDF renderer (measured 4.3%, mean 4.07)"},
+  "png.windows/render-svg-filters-misc": {"delta": 32, "maxShare": 0.012, "meanDelta": 1.7, "why": "4x filter rasters downsampled by the PDF renderer (measured 1.03%, mean 1.58)"},
+  "png.windows/usvg-filter-functions-drop-shadow": {"delta": 32, "maxShare": 0.017, "meanDelta": 1.3, "why": "4x filter raster downsampled by the PDF renderer (measured 1.58%, mean 0.68)"},
+  "png.windows/render-images-images-gif-webp": {"delta": 32, "maxShare": 0.08, "meanDelta": 5.7, "why": "the PDF renderer smooths image samples its own way, resvg uses each image-rendering's filter (measured 7.5%, mean 5.47)"},
+  "png.windows/render-images-images-jpeg": {"delta": 32, "maxShare": 0.037, "meanDelta": 3.8, "why": "image smoothing as above, and Go's JPEG decode in the PNG (measured 3.46%, mean 3.59)"},
+  "png.windows/render-images-images-png": {"delta": 32, "maxShare": 0.065, "meanDelta": 5.1, "why": "image smoothing as above (measured 6.19%, mean 4.87)"}
+ }
+}

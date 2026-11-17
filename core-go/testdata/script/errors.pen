@@ -1,0 +1,32 @@
+{"version": "2.19", "children": [
+  {"type": "frame", "id": "runtime", "x": 0, "y": 0, "width": 1000, "height": 120, "layout": "horizontal", "gap": 10, "children": [
+    {"type": "script", "id": "type", "width": 160, "height": 100, "scriptUri": "./e-type.js"},
+    {"type": "script", "id": "throw", "width": 160, "height": 100, "scriptUri": "./e-throw.js"},
+    {"type": "script", "id": "value", "width": 160, "height": 100, "scriptUri": "./e-value.js"},
+    {"type": "script", "id": "ref", "width": 160, "height": 100, "scriptUri": "./e-ref.js"},
+    {"type": "script", "id": "fn", "width": 160, "height": 100, "scriptUri": "./e-fn.js"},
+    {"type": "script", "id": "syntax", "width": 160, "height": 100, "scriptUri": "./e-syntax.js"}
+  ]},
+  {"type": "frame", "id": "limits", "x": 0, "y": 200, "width": 600, "height": 120, "layout": "horizontal", "gap": 10, "children": [
+    {"type": "script", "id": "deep", "width": 160, "height": 100, "scriptUri": "./e-deep.js"},
+    {"type": "script", "id": "oom", "width": 160, "height": 100, "scriptUri": "./e-oom.js"},
+    {"type": "script", "id": "loop", "width": 160, "height": 100, "scriptUri": "./e-loop.js"}
+  ]},
+  {"type": "frame", "id": "output", "x": 0, "y": 400, "width": 1200, "height": 120, "layout": "horizontal", "gap": 10, "children": [
+    {"type": "script", "id": "none", "width": 160, "height": 100, "scriptUri": "./e-none.js"},
+    {"type": "script", "id": "object", "width": 160, "height": 100, "scriptUri": "./e-object.js"},
+    {"type": "script", "id": "many", "width": 160, "height": 100, "scriptUri": "./e-many.js"},
+    {"type": "script", "id": "reusable", "width": 160, "height": 100, "scriptUri": "./e-reusable.js"},
+    {"type": "script", "id": "connection", "width": 160, "height": 100, "scriptUri": "./e-connection.js"},
+    {"type": "script", "id": "child", "width": 160, "height": 100, "scriptUri": "./e-child.js"},
+    {"type": "script", "id": "dangling", "width": 160, "height": 100, "scriptUri": "./e-dangling.js"}
+  ]},
+  {"type": "frame", "id": "header", "x": 0, "y": 600, "width": 1000, "height": 120, "layout": "horizontal", "gap": 10, "children": [
+    {"type": "script", "id": "enum", "width": 160, "height": 100, "scriptUri": "./e-enum.js", "inputs": {"mode": "c"}},
+    {"type": "script", "id": "bad-header", "width": 160, "height": 100, "scriptUri": "./e-header.js"},
+    {"type": "script", "id": "noschema", "width": 160, "height": 100, "scriptUri": "./e-noschema.js"},
+    {"type": "script", "id": "missing", "width": 160, "height": 100, "scriptUri": "./nowhere/e-missing.js"},
+    {"type": "script", "id": "empty", "width": 160, "height": 100},
+    {"type": "script", "id": "hidden", "width": 160, "height": 100, "enabled": false, "scriptUri": "./e-type.js"}
+  ]}
+]}

@@ -1,0 +1,264 @@
+{
+ "doc": "svg/shapes.pen",
+ "crt": {
+  "maxDelta": 64,
+  "maxShare": 0.0002,
+  "why": "Windows CRT cos: with 4 cores a band edge cuts ellipse e3 near its lowest point, the Rust clipper's exact chop fails on a cos the CRT rounds off by over half an ulp and falls back to its search, 11 pixels at zoom 0.6"
+ },
+ "steps": [
+  {
+   "op": "sync"
+  },
+  {
+   "op": "render",
+   "w": 400,
+   "h": 300,
+   "cam": [
+    0,
+    0
+   ],
+   "zoom": 1,
+   "bg": [
+    30,
+    30,
+    30
+   ]
+  },
+  {
+   "op": "render",
+   "w": 400,
+   "h": 300,
+   "cam": [
+    100,
+    50
+   ],
+   "zoom": 1,
+   "bg": [
+    30,
+    30,
+    30
+   ]
+  },
+  {
+   "op": "render",
+   "w": 400,
+   "h": 300,
+   "cam": [
+    -300,
+    -200
+   ],
+   "zoom": 1,
+   "bg": [
+    30,
+    30,
+    30
+   ]
+  },
+  {
+   "op": "render",
+   "w": 400,
+   "h": 300,
+   "cam": [
+    1200,
+    0
+   ],
+   "zoom": 1,
+   "bg": [
+    30,
+    30,
+    30
+   ]
+  },
+  {
+   "op": "render",
+   "w": 400,
+   "h": 300,
+   "cam": [
+    1200,
+    0
+   ],
+   "zoom": 1.25,
+   "bg": [
+    30,
+    30,
+    30
+   ],
+   "sharp": false
+  },
+  {
+   "op": "render",
+   "w": 400,
+   "h": 300,
+   "cam": [
+    1200,
+    0
+   ],
+   "zoom": 1.25,
+   "bg": [
+    30,
+    30,
+    30
+   ],
+   "sharp": false,
+   "slow": true
+  },
+  {
+   "op": "render",
+   "w": 400,
+   "h": 300,
+   "cam": [
+    1200,
+    0
+   ],
+   "zoom": 1.25,
+   "bg": [
+    30,
+    30,
+    30
+   ]
+  },
+  {
+   "op": "render",
+   "w": 400,
+   "h": 300,
+   "cam": [
+    1200,
+    0
+   ],
+   "zoom": 0.5,
+   "bg": [
+    30,
+    30,
+    30
+   ],
+   "sharp": false,
+   "slow": true
+  },
+  {
+   "op": "render",
+   "w": 400,
+   "h": 300,
+   "cam": [
+    1250,
+    10
+   ],
+   "zoom": 0.6,
+   "bg": [
+    30,
+    30,
+    30
+   ],
+   "sharp": false,
+   "slow": true
+  },
+  {
+   "op": "render",
+   "w": 400,
+   "h": 300,
+   "cam": [
+    1250,
+    10
+   ],
+   "zoom": 0.6,
+   "bg": [
+    30,
+    30,
+    30
+   ]
+  },
+  {
+   "op": "render",
+   "w": 400,
+   "h": 300,
+   "cam": [
+    -300,
+    -200
+   ],
+   "zoom": 0.6,
+   "bg": [
+    30,
+    30,
+    30
+   ]
+  },
+  {
+   "op": "render",
+   "w": 500,
+   "h": 300,
+   "cam": [
+    -300,
+    -200
+   ],
+   "zoom": 0.6,
+   "bg": [
+    30,
+    30,
+    30
+   ]
+  },
+  {
+   "op": "render",
+   "w": 500,
+   "h": 300,
+   "cam": [
+    -310,
+    -190
+   ],
+   "zoom": 0.6,
+   "bg": [
+    30,
+    30,
+    30
+   ]
+  },
+  {
+   "op": "render",
+   "w": 500,
+   "h": 300,
+   "cam": [
+    -310,
+    -190
+   ],
+   "zoom": 0.1,
+   "bg": [
+    30,
+    30,
+    30
+   ],
+   "sharp": false,
+   "slow": true
+  },
+  {
+   "op": "render",
+   "w": 500,
+   "h": 300,
+   "cam": [
+    -310,
+    -190
+   ],
+   "zoom": 8,
+   "bg": [
+    30,
+    30,
+    30
+   ],
+   "sharp": false,
+   "slow": true
+  },
+  {
+   "op": "render",
+   "w": 500,
+   "h": 300,
+   "cam": [
+    10,
+    20
+   ],
+   "zoom": 8,
+   "bg": [
+    30,
+    30,
+    30
+   ]
+  }
+ ]
+}

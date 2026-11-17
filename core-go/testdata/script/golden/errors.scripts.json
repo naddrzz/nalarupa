@@ -1,0 +1,382 @@
+[
+  {
+    "id": "runtime",
+    "type": "frame",
+    "x": 0.0,
+    "y": 0.0,
+    "w": 1000.0,
+    "h": 120.0,
+    "problem": null,
+    "children": [
+      {
+        "id": "type",
+        "type": "script",
+        "x": 0.0,
+        "y": 0.0,
+        "w": 160.0,
+        "h": 100.0,
+        "problem": null,
+        "children": [],
+        "status": {
+          "kind": "error",
+          "title": "Script runtime error",
+          "description": "TypeError: cannot read property 'boom' of null\n    at <anonymous> (e-type.js:3:1)\n    at <anonymous> (e-type.js:6:11)",
+          "code": "  1: /** @schema 2.19 */\n  2: const a = 1;\n> 3: null.boom;\n  4: return [];"
+        }
+      },
+      {
+        "id": "throw",
+        "type": "script",
+        "x": 170.0,
+        "y": 0.0,
+        "w": 160.0,
+        "h": 100.0,
+        "problem": null,
+        "children": [],
+        "status": {
+          "kind": "error",
+          "title": "Script runtime error",
+          "description": "RangeError: bad size 160\n    at draw (e-throw.js:3:38)\n    at <anonymous> (e-throw.js:5:8)\n    at <anonymous> (e-throw.js:7:11)",
+          "code": "  1: /** @schema 2.19 */\n  2: function draw() {\n> 3:   throw new RangeError(\"bad size \" + nalarupa.width);\n  4: }\n  5: return draw();"
+        }
+      },
+      {
+        "id": "value",
+        "type": "script",
+        "x": 340.0,
+        "y": 0.0,
+        "w": 160.0,
+        "h": 100.0,
+        "problem": null,
+        "children": [],
+        "status": {
+          "kind": "error",
+          "title": "Script runtime error",
+          "description": "[object Object]",
+          "code": null
+        }
+      },
+      {
+        "id": "ref",
+        "type": "script",
+        "x": 510.0,
+        "y": 0.0,
+        "w": 160.0,
+        "h": 100.0,
+        "problem": null,
+        "children": [],
+        "status": {
+          "kind": "error",
+          "title": "Script runtime error",
+          "description": "ReferenceError: missingName is not defined\n    at <anonymous> (e-ref.js:3:1)\n    at <anonymous> (e-ref.js:5:11)",
+          "code": "  1: /** @schema 2.19 */\n  2: \n> 3: missingName();"
+        }
+      },
+      {
+        "id": "fn",
+        "type": "script",
+        "x": 680.0,
+        "y": 0.0,
+        "w": 160.0,
+        "h": 100.0,
+        "problem": null,
+        "children": [],
+        "status": {
+          "kind": "error",
+          "title": "Script runtime error",
+          "description": "Error converting from js 'undefined' into type 'string'",
+          "code": null
+        }
+      },
+      {
+        "id": "syntax",
+        "type": "script",
+        "x": 850.0,
+        "y": 0.0,
+        "w": 160.0,
+        "h": 100.0,
+        "problem": "partially clipped",
+        "children": [],
+        "status": {
+          "kind": "error",
+          "title": "Script compile error",
+          "description": "SyntaxError: variable name expected\n    at e-syntax.js:2:7",
+          "code": "  1: /** @schema 2.19 */\n> 2: const = 3"
+        }
+      }
+    ]
+  },
+  {
+    "id": "limits",
+    "type": "frame",
+    "x": 0.0,
+    "y": 200.0,
+    "w": 600.0,
+    "h": 120.0,
+    "problem": null,
+    "children": [
+      {
+        "id": "deep",
+        "type": "script",
+        "x": 0.0,
+        "y": 200.0,
+        "w": 160.0,
+        "h": 100.0,
+        "problem": null,
+        "children": [],
+        "status": {
+          "kind": "error",
+          "title": "Script runtime error",
+          "description": "RangeError: Maximum call stack size exceeded\n    at f (e-deep.js:2:30)\n    at f (e-deep.js:2:30)\n    at f (e-deep.js:2:30)\n    at f (e-deep.js:2:30)\n    at f (e-deep.js:2:30)\n    at f (e-deep.js:2:30)\n    at f (e-deep.js:2:30)\n    at f (e-deep.js:2:30)\n    at f (e-deep.js:2:30)\n    at f (e-deep.js:2:30)",
+          "code": "  1: /** @schema 2.19 */\n> 2: function f(n) { return f(n + 1) + 1 }\n  3: return f(0);"
+        }
+      },
+      {
+        "id": "oom",
+        "type": "script",
+        "x": 170.0,
+        "y": 200.0,
+        "w": 160.0,
+        "h": 100.0,
+        "problem": null,
+        "children": [],
+        "status": {
+          "kind": "error",
+          "title": "Script runtime error",
+          "description": "InternalError: out of memory\n    at <anonymous> (e-oom.js:3:35)\n    at <anonymous> (e-oom.js:5:11)",
+          "code": "  1: /** @schema 2.19 */\n  2: const a = [];\n> 3: for (;;) a.push(new Array(100000).fill(1.5));"
+        }
+      },
+      {
+        "id": "loop",
+        "type": "script",
+        "x": 340.0,
+        "y": 200.0,
+        "w": 160.0,
+        "h": 100.0,
+        "problem": null,
+        "children": [],
+        "status": {
+          "kind": "error",
+          "title": "Script runtime error",
+          "description": "InternalError: interrupted\n    at <anonymous> (e-loop.js:1:83)\n    at <anonymous> (e-loop.js:5:11)",
+          "code": "> 1: /** @schema 2.19 */\n  2: let n = 0;\n  3: while (true) { try { n++; } catch (e) {} }"
+        }
+      }
+    ]
+  },
+  {
+    "id": "output",
+    "type": "frame",
+    "x": 0.0,
+    "y": 400.0,
+    "w": 1200.0,
+    "h": 120.0,
+    "problem": null,
+    "children": [
+      {
+        "id": "none",
+        "type": "script",
+        "x": 0.0,
+        "y": 400.0,
+        "w": 160.0,
+        "h": 100.0,
+        "problem": null,
+        "children": [],
+        "status": {
+          "kind": "error",
+          "title": "Script runtime error",
+          "description": "Error: Script must return an array of nodes. Add a 'return [...]' statement at the end of your script.\n    at <anonymous> (e-none.js:4:57)",
+          "code": "  2: const a = 1;"
+        }
+      },
+      {
+        "id": "object",
+        "type": "script",
+        "x": 170.0,
+        "y": 400.0,
+        "w": 160.0,
+        "h": 100.0,
+        "problem": null,
+        "children": [],
+        "status": {
+          "kind": "error",
+          "title": "Invalid script output",
+          "description": "Script must return an array of nodes.",
+          "code": null
+        }
+      },
+      {
+        "id": "many",
+        "type": "script",
+        "x": 340.0,
+        "y": 400.0,
+        "w": 160.0,
+        "h": 100.0,
+        "problem": null,
+        "children": [],
+        "status": {
+          "kind": "error",
+          "title": "Too many nodes",
+          "description": "Script output cannot exceed 1000 nodes.",
+          "code": null
+        }
+      },
+      {
+        "id": "reusable",
+        "type": "script",
+        "x": 510.0,
+        "y": 400.0,
+        "w": 160.0,
+        "h": 100.0,
+        "problem": null,
+        "children": [],
+        "status": {
+          "kind": "error",
+          "title": "Invalid script output",
+          "description": "Reusable nodes are not supported in script outputs.",
+          "code": null
+        }
+      },
+      {
+        "id": "connection",
+        "type": "script",
+        "x": 680.0,
+        "y": 400.0,
+        "w": 160.0,
+        "h": 100.0,
+        "problem": null,
+        "children": [],
+        "status": {
+          "kind": "error",
+          "title": "Invalid script output",
+          "description": "Connection nodes are not supported in script outputs.",
+          "code": null
+        }
+      },
+      {
+        "id": "child",
+        "type": "script",
+        "x": 850.0,
+        "y": 400.0,
+        "w": 160.0,
+        "h": 100.0,
+        "problem": null,
+        "children": [],
+        "status": {
+          "kind": "error",
+          "title": "Error inserting script children",
+          "description": "Expected a node object, got \"text\"",
+          "code": null
+        }
+      },
+      {
+        "id": "dangling",
+        "type": "script",
+        "x": 1020.0,
+        "y": 400.0,
+        "w": 160.0,
+        "h": 100.0,
+        "problem": null,
+        "children": [],
+        "status": {
+          "kind": "error",
+          "title": "Component not found",
+          "description": "Component 'nowhere' could not be resolved.",
+          "code": null
+        }
+      }
+    ]
+  },
+  {
+    "id": "header",
+    "type": "frame",
+    "x": 0.0,
+    "y": 600.0,
+    "w": 1000.0,
+    "h": 120.0,
+    "problem": null,
+    "children": [
+      {
+        "id": "enum",
+        "type": "script",
+        "x": 0.0,
+        "y": 600.0,
+        "w": 160.0,
+        "h": 100.0,
+        "problem": null,
+        "children": [],
+        "status": {
+          "kind": "error",
+          "title": "Invalid input value",
+          "description": "Value 'c' is not allowed for input 'mode'. Must be one of: a, b",
+          "code": null
+        }
+      },
+      {
+        "id": "bad-header",
+        "type": "script",
+        "x": 170.0,
+        "y": 600.0,
+        "w": 160.0,
+        "h": 100.0,
+        "problem": null,
+        "children": [],
+        "status": {
+          "kind": "error",
+          "title": "@input number 'size' has unknown arg 'step'. Valid args: min, max",
+          "description": null,
+          "code": null
+        }
+      },
+      {
+        "id": "noschema",
+        "type": "script",
+        "x": 340.0,
+        "y": 600.0,
+        "w": 160.0,
+        "h": 100.0,
+        "problem": null,
+        "children": [],
+        "status": {
+          "kind": "error",
+          "title": "Missing @schema version tag",
+          "description": "Add /** @schema 2.19 */ to the top of the script.",
+          "code": null
+        }
+      },
+      {
+        "id": "missing",
+        "type": "script",
+        "x": 510.0,
+        "y": 600.0,
+        "w": 160.0,
+        "h": 100.0,
+        "problem": null,
+        "children": [],
+        "status": {
+          "kind": "error",
+          "title": "Script not found",
+          "description": "We could not find “./nowhere/e-missing.js” at this path. Check for typos or missing folders.",
+          "code": null
+        }
+      },
+      {
+        "id": "empty",
+        "type": "script",
+        "x": 680.0,
+        "y": 600.0,
+        "w": 160.0,
+        "h": 100.0,
+        "problem": null,
+        "children": [],
+        "status": {
+          "kind": "empty",
+          "title": "No script file selected",
+          "description": null,
+          "code": null
+        }
+      }
+    ]
+  }
+]

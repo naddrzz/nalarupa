@@ -1,0 +1,3 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="400" height="200">
+<text x="10" y="40" word-spacing="12" font-family="Arial" font-size="16">a few words here</text><text x="10" y="70" word-spacing="-3" letter-spacing="1" font-family="Arial" font-size="16">neg word spacing</text>
+</svg>

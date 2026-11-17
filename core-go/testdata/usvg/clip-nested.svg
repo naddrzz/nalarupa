@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+  <defs>
+    <clipPath id="outer"><rect width="30" height="100"/></clipPath>
+    <clipPath id="inner" clip-path="url(#outer)" transform="translate(5 5)"><circle cx="25" cy="25" r="20"/></clipPath>
+    <rect id="src" width="20" height="20"/>
+    <clipPath id="with-use"><use href="#src" x="60" y="10"/><use href="#grp" x="0"/></clipPath>
+    <g id="grp"><rect x="90" y="10" width="20" height="20"/></g>
+    <clipPath id="invalid-kids"><g><rect x="120" y="10" width="20" height="20"/></g><image href="data:image/gif;base64,R0lGODlhAgADAIAAAP8AAAAAACwAAAAAAgADAAACAkQBADs=" width="10" height="10"/><rect x="150" y="10" width="20" height="20"/><rect x="150" y="40" width="20" height="20" clip-path="url(#outer)"/></clipPath>
+    <clipPath id="child-clip"><rect x="0" y="60" width="40" height="40" clip-path="url(#outer)"/></clipPath>
+    <clipPath id="hidden-kids"><rect x="60" y="60" width="20" height="20" display="none"/><rect x="85" y="60" width="20" height="20" visibility="hidden"/><rect x="110" y="60" width="20" height="20"/></clipPath>
+  </defs>
+  <rect id="r-inner" width="60" height="60" fill="#c00" clip-path="url(#inner)"/>
+  <rect id="r-use" x="55" y="5" width="60" height="30" fill="#0a0" clip-path="url(#with-use)"/>
+  <rect id="r-invalid" x="115" y="5" width="70" height="60" fill="#00c" clip-path="url(#invalid-kids)"/>
+  <rect id="r-child-clip" y="55" width="50" height="45" fill="#aa0" clip-path="url(#child-clip)"/>
+  <rect id="r-hidden-kids" x="55" y="55" width="80" height="30" fill="#0aa" clip-path="url(#hidden-kids)"/>
+</svg>

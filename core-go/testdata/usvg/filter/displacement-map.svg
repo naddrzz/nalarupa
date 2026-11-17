@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="200">
+  <filter id="f1"><feTurbulence baseFrequency="0.05" result="t"/><feDisplacementMap in="SourceGraphic" in2="t" scale="20" xChannelSelector="R" yChannelSelector="B"/></filter>
+  <filter id="f2" primitiveUnits="objectBoundingBox"><feDisplacementMap scale="0.1" xChannelSelector="G" yChannelSelector="X"/></filter>
+  <filter id="f3"><feDisplacementMap/></filter>
+  <rect x="10" y="10" width="50" height="40" fill="blue" filter="url(#f1)"/>
+  <rect x="70" y="10" width="80" height="40" fill="blue" filter="url(#f2)"/>
+  <rect x="10" y="60" width="50" height="40" fill="blue" filter="url(#f3)"/>
+</svg>

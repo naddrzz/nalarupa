@@ -1,0 +1,23 @@
+{
+  "version": "2.19",
+  "children": [
+    {"type": "frame", "id": "s1", "name": "Cover", "x": 0, "y": 0, "width": 200, "height": 120, "fill": "#0f1115", "clip": true, "layout": "none", "children": [
+      {"type": "rectangle", "id": "bar", "x": 20, "y": 20, "width": 120, "height": 24, "cornerRadius": 6, "fill": "#ff6a3d"},
+      {"type": "ellipse", "id": "dot", "x": 140, "y": 60, "width": 40, "height": 40, "fill": {"type": "gradient", "gradientType": "linear", "rotation": 90, "colors": [{"color": "#2563eb", "position": 0}, {"color": "#22c55e", "position": 1}]}},
+      {"type": "rectangle", "id": "line", "x": 20, "y": 90, "width": 100, "height": 8, "fill": "#f4f1ea", "opacity": 0.5}
+    ]},
+    {"type": "frame", "id": "s2", "name": "Hidden", "enabled": false, "x": 220, "y": 0, "width": 200, "height": 120, "fill": "#ffffff", "children": [
+      {"type": "rectangle", "id": "s2a", "x": 10, "y": 10, "width": 50, "height": 50, "fill": "#000000"}
+    ]},
+    {"type": "frame", "id": "s3", "name": "Picture", "x": 440, "y": 0, "width": 200, "height": 120, "fill": "#f4f4f5", "layout": "horizontal", "gap": 10, "padding": 10, "children": [
+      {"type": "rectangle", "id": "photo", "width": 80, "height": 80, "fill": {"type": "image", "url": "pic.png", "mode": "fill"}},
+      {"type": "rectangle", "id": "card", "width": 60, "height": 40, "cornerRadius": 8, "fill": "#ffffff", "stroke": "#2563eb", "strokeWidth": 2}
+    ]},
+    {"type": "rectangle", "id": "r", "x": 0, "y": 160, "width": 60, "height": 30, "fill": "#22c55e"},
+    {"type": "frame", "id": "comp", "reusable": true, "x": 0, "y": 220, "width": 100, "height": 50, "fill": "#e5e7eb", "layout": "none", "children": [
+      {"type": "rectangle", "id": "kid", "x": 10, "y": 10, "width": 30, "height": 30, "fill": "#ef4444"}
+    ]},
+    {"type": "ref", "id": "inst", "ref": "comp", "x": 120, "y": 220},
+    {"type": "ref", "id": "inst2", "ref": "comp", "x": 240, "y": 220, "descendants": {"kid": {"enabled": false}}}
+  ]
+}

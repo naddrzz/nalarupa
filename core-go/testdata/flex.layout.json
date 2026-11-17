@@ -1,0 +1,425 @@
+[
+  {
+    "id": "row",
+    "type": "frame",
+    "x": 0.0,
+    "y": 0.0,
+    "w": 400.0,
+    "h": 80.0,
+    "problem": null,
+    "children": [
+      {
+        "id": "a",
+        "type": "rectangle",
+        "x": 40.0,
+        "y": 20.0,
+        "w": 50.0,
+        "h": 20.0,
+        "problem": null,
+        "children": []
+      },
+      {
+        "id": "b",
+        "type": "rectangle",
+        "x": 96.0,
+        "y": 10.0,
+        "w": 150.07611844574882,
+        "h": 40.0,
+        "problem": null,
+        "children": []
+      },
+      {
+        "id": "c",
+        "type": "rectangle",
+        "x": 252.07611844574882,
+        "y": 68.89087296526012,
+        "w": 120.0,
+        "h": 10.0,
+        "problem": "partially clipped",
+        "children": []
+      },
+      {
+        "id": "d",
+        "type": "rectangle",
+        "x": 380.0,
+        "y": 35.0,
+        "w": 30.0,
+        "h": 10.0,
+        "problem": null,
+        "children": []
+      },
+      {
+        "id": "abs",
+        "type": "rectangle",
+        "x": 390.0,
+        "y": 70.0,
+        "w": 30.0,
+        "h": 30.0,
+        "problem": "partially clipped",
+        "children": []
+      }
+    ]
+  },
+  {
+    "id": "col",
+    "type": "frame",
+    "x": 500.0,
+    "y": 0.0,
+    "w": 116.0,
+    "h": 300.0,
+    "problem": null,
+    "children": [
+      {
+        "id": "c1",
+        "type": "rectangle",
+        "x": 508.0,
+        "y": 8.0,
+        "w": 100.0,
+        "h": 20.0,
+        "problem": null,
+        "children": []
+      },
+      {
+        "id": "c2",
+        "type": "rectangle",
+        "x": 508.0,
+        "y": 32.0,
+        "w": 100.0,
+        "h": 234.0,
+        "problem": null,
+        "children": []
+      },
+      {
+        "id": "c3",
+        "type": "frame",
+        "x": 531.0,
+        "y": 270.0,
+        "w": 77.0,
+        "h": 5.0,
+        "problem": null,
+        "children": [
+          {
+            "id": "c3a",
+            "type": "rectangle",
+            "x": 531.0,
+            "y": 270.0,
+            "w": 77.0,
+            "h": 5.0,
+            "problem": null,
+            "children": []
+          }
+        ]
+      },
+      {
+        "id": "c4",
+        "type": "frame",
+        "x": 575.0,
+        "y": 279.0,
+        "w": 33.0,
+        "h": 0.0,
+        "problem": null,
+        "children": [
+          {
+            "id": "c4a",
+            "type": "rectangle",
+            "x": 577.0,
+            "y": 282.0,
+            "w": 44.0,
+            "h": 0.0,
+            "problem": null,
+            "children": []
+          }
+        ]
+      },
+      {
+        "id": "c5",
+        "type": "frame",
+        "x": 599.0,
+        "y": 283.0,
+        "w": 9.0,
+        "h": 9.0,
+        "problem": null,
+        "children": [
+          {
+            "id": "c5a",
+            "type": "rectangle",
+            "x": 599.0,
+            "y": 283.0,
+            "w": 9.0,
+            "h": 9.0,
+            "problem": null,
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "around",
+    "type": "frame",
+    "x": 0.0,
+    "y": 400.0,
+    "w": 300.0,
+    "h": 25.0,
+    "problem": null,
+    "children": [
+      {
+        "id": "reahv",
+        "type": "rectangle",
+        "x": 40.0,
+        "y": 400.0,
+        "w": 20.0,
+        "h": 5.0,
+        "problem": null,
+        "children": []
+      },
+      {
+        "id": "4RMXH",
+        "type": "rectangle",
+        "x": 140.0,
+        "y": 400.0,
+        "w": 20.0,
+        "h": 15.0,
+        "problem": null,
+        "children": []
+      },
+      {
+        "id": "LP4m0",
+        "type": "rectangle",
+        "x": 240.0,
+        "y": 400.0,
+        "w": 20.0,
+        "h": 25.0,
+        "problem": null,
+        "children": []
+      }
+    ]
+  },
+  {
+    "id": "between",
+    "type": "frame",
+    "x": 0.0,
+    "y": 500.0,
+    "w": 50.0,
+    "h": 25.0,
+    "problem": null,
+    "children": [
+      {
+        "id": "OUoR4",
+        "type": "rectangle",
+        "x": 0.0,
+        "y": 500.0,
+        "w": 20.0,
+        "h": 5.0,
+        "problem": null,
+        "children": []
+      },
+      {
+        "id": "vcmYr",
+        "type": "rectangle",
+        "x": 20.0,
+        "y": 500.0,
+        "w": 20.0,
+        "h": 15.0,
+        "problem": null,
+        "children": []
+      },
+      {
+        "id": "WhWMb",
+        "type": "rectangle",
+        "x": 40.0,
+        "y": 500.0,
+        "w": 20.0,
+        "h": 25.0,
+        "problem": "partially clipped",
+        "children": []
+      }
+    ]
+  },
+  {
+    "id": "clip",
+    "type": "frame",
+    "x": 0.0,
+    "y": 600.0,
+    "w": 100.0,
+    "h": 100.0,
+    "problem": null,
+    "children": [
+      {
+        "id": "inside",
+        "type": "rectangle",
+        "x": 10.0,
+        "y": 610.0,
+        "w": 20.0,
+        "h": 20.0,
+        "problem": null,
+        "children": []
+      },
+      {
+        "id": "edge",
+        "type": "rectangle",
+        "x": 90.0,
+        "y": 690.0,
+        "w": 20.0,
+        "h": 20.0,
+        "problem": "partially clipped",
+        "children": []
+      },
+      {
+        "id": "out",
+        "type": "rectangle",
+        "x": 200.0,
+        "y": 600.0,
+        "w": 20.0,
+        "h": 20.0,
+        "problem": "fully clipped",
+        "children": []
+      },
+      {
+        "id": "zero",
+        "type": "rectangle",
+        "x": 200.0,
+        "y": 600.0,
+        "w": 0.0,
+        "h": 20.0,
+        "problem": null,
+        "children": []
+      },
+      {
+        "id": "spun",
+        "type": "ellipse",
+        "x": 50.0,
+        "y": 650.0,
+        "w": 80.0,
+        "h": 20.0,
+        "problem": "partially clipped",
+        "children": []
+      }
+    ]
+  },
+  {
+    "id": "grp",
+    "type": "group",
+    "x": 590.0,
+    "y": 605.0,
+    "w": 65.0,
+    "h": 40.0,
+    "problem": null,
+    "children": [
+      {
+        "id": "g1",
+        "type": "rectangle",
+        "x": 590.0,
+        "y": 605.0,
+        "w": 30.0,
+        "h": 10.0,
+        "problem": null,
+        "children": []
+      },
+      {
+        "id": "g2",
+        "type": "group",
+        "x": 645.0,
+        "y": 635.0,
+        "w": 10.0,
+        "h": 10.0,
+        "problem": null,
+        "children": [
+          {
+            "id": "g2a",
+            "type": "polygon",
+            "x": 645.0,
+            "y": 635.0,
+            "w": 10.0,
+            "h": 10.0,
+            "problem": null,
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "hug",
+    "type": "frame",
+    "x": 800.0,
+    "y": 0.0,
+    "w": 116.0,
+    "h": 886.25,
+    "problem": null,
+    "children": [
+      {
+        "id": "hg",
+        "type": "group",
+        "x": 808.0,
+        "y": 6.0,
+        "w": 10.0,
+        "h": 10.0,
+        "problem": null,
+        "children": [
+          {
+            "id": "hg1",
+            "type": "rectangle",
+            "x": 808.0,
+            "y": 6.0,
+            "w": 10.0,
+            "h": 10.0,
+            "problem": null,
+            "children": []
+          }
+        ]
+      },
+      {
+        "id": "hr",
+        "type": "frame",
+        "x": 808.0,
+        "y": 28.0,
+        "w": 44.0,
+        "h": 16.0,
+        "problem": null,
+        "children": [
+          {
+            "id": "hl",
+            "type": "line",
+            "x": 808.0,
+            "y": 28.0,
+            "w": 25.0,
+            "h": 1.0,
+            "problem": null,
+            "children": []
+          },
+          {
+            "id": "hi",
+            "type": "icon",
+            "x": 836.0,
+            "y": 28.0,
+            "w": 16.0,
+            "h": 16.0,
+            "problem": null,
+            "children": []
+          }
+        ]
+      },
+      {
+        "id": "hp",
+        "type": "path",
+        "x": 808.0,
+        "y": 56.0,
+        "w": 100.0,
+        "h": 12.25,
+        "problem": null,
+        "children": []
+      },
+      {
+        "id": "hb",
+        "type": "browser",
+        "x": 808.0,
+        "y": 80.25,
+        "w": 100.0,
+        "h": 800.0,
+        "problem": null,
+        "children": []
+      }
+    ]
+  }
+]

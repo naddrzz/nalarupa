@@ -1,0 +1,1210 @@
+{
+  "fill_rect_aa_subpixel": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "fill_rect_noaa_subpixel": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "fill_rect_aa_alpha_over_bg": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "fill_rect_transform": {
+    "kind": "pixmap",
+    "width": 24,
+    "height": 24
+  },
+  "fill_rect_transform_noaa": {
+    "kind": "pixmap",
+    "width": 24,
+    "height": 24
+  },
+  "fill_rect_straddle": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "fill_circle_aa": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "fill_circle_noaa": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "fill_oval_alpha": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "star_winding_aa": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "star_winding_noaa": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "star_evenodd_aa": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "star_evenodd_noaa": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "quads_aa": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "quads_noaa_evenodd": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "cubics_aa": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "cubics_noaa": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "cubics_evenodd_aa": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "path_transform_skew": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "path_transform_flip_noaa": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "path_outside": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "path_straddle_aa": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "path_straddle_noaa": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "path_subpixel_triangle": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "path_open_contours": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "path_hole_winding": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "path_large_coords_straddle": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "fill_color_float": {
+    "kind": "pixmap",
+    "width": 8,
+    "height": 8
+  },
+  "hairline_aa": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "hairline_noaa": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "hairline_aa_round_cap": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "hairline_noaa_square_cap": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "hairline_aa_straddle": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "hairline_alpha_over_bg": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "stroke_w05_aa": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "stroke_w05_noaa": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "stroke_w1_aa": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "stroke_w1_noaa": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "stroke_w3_cap_butt": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "stroke_w3_cap_round": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "stroke_w3_cap_square": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "stroke_w3_join_miter": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "stroke_w3_join_miter-clip": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "stroke_w3_join_round": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "stroke_w3_join_bevel": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "stroke_miter_limit_low": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "stroke_closed_rect_noaa": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "stroke_dash": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "stroke_dash_hairline": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "stroke_dash_round_caps": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "stroke_dash_invalid_undashed": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "stroke_scaled_below_1px": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "stroke_scaled_below_1px_multiply": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "stroke_transform_skew": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "linear_2stops_pad": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "linear_2stops_reflect": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "linear_2stops_repeat": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "linear_4stops_pad": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "linear_4stops_reflect": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "linear_4stops_repeat": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "linear_transparent_hq": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "linear_transparent": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "linear_transform": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "linear_degenerate_pad": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "linear_degenerate_repeat": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "linear_degenerate_reflect": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "linear_single_stop": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "linear_no_stops_skipped": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "linear_singular_transform_skipped": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "radial_simple_pad": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "radial_simple_reflect": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "radial_simple_repeat": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "radial_focal_on_circle": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "radial_focal_well_behaved": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "radial_focal_greater": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "radial_focal_greater_repeat": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "radial_strip": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "radial_concentric": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "radial_two_radii": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "radial_transform_hq": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "radial_degenerate_pad": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "radial_degenerate_repeat": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "radial_negative_radius_skipped": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "sweep_pad": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "sweep_partial_pad": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "sweep_partial_repeat": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "sweep_partial_reflect": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "sweep_reversed_skipped": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "sweep_degenerate_equal_angles": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "radial_swapped_smaller": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "radial_swapped_well_behaved": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "radial_focal_far_repeat": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "radial_focal_on_circle_reflect": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "radial_strip_repeat": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "radial_start_bigger": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "linear_stops_inside": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "linear_stops_unsorted": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "linear_many_stops_repeat": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "linear_3stops_lowp": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "linear_2stops_lowp_noaa": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "radial_lowp": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "gradient_hairline": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "gradient_stroke_scaled_below_1px": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "sweep_full_repeat_transform": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "ring_evenodd_aa_64": {
+    "kind": "pixmap",
+    "width": 64,
+    "height": 64
+  },
+  "ring_winding_noaa_64": {
+    "kind": "pixmap",
+    "width": 64,
+    "height": 64
+  },
+  "polygon_many_edges_aa_64": {
+    "kind": "pixmap",
+    "width": 64,
+    "height": 64
+  },
+  "polygon_many_edges_noaa_64": {
+    "kind": "pixmap",
+    "width": 64,
+    "height": 64
+  },
+  "stroke_thin_rotated": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "stroke_wide_round_join_64": {
+    "kind": "pixmap",
+    "width": 64,
+    "height": 64
+  },
+  "src_pattern": {
+    "kind": "pixmap",
+    "width": 8,
+    "height": 8
+  },
+  "src_gradient": {
+    "kind": "pixmap",
+    "width": 12,
+    "height": 10
+  },
+  "pattern_nearest_pad": {
+    "kind": "pixmap",
+    "width": 24,
+    "height": 24
+  },
+  "pattern_nearest_reflect": {
+    "kind": "pixmap",
+    "width": 24,
+    "height": 24
+  },
+  "pattern_nearest_repeat": {
+    "kind": "pixmap",
+    "width": 24,
+    "height": 24
+  },
+  "pattern_bilinear_pad": {
+    "kind": "pixmap",
+    "width": 24,
+    "height": 24
+  },
+  "pattern_bilinear_reflect": {
+    "kind": "pixmap",
+    "width": 24,
+    "height": 24
+  },
+  "pattern_bilinear_repeat": {
+    "kind": "pixmap",
+    "width": 24,
+    "height": 24
+  },
+  "pattern_bicubic_pad": {
+    "kind": "pixmap",
+    "width": 24,
+    "height": 24
+  },
+  "pattern_bicubic_reflect": {
+    "kind": "pixmap",
+    "width": 24,
+    "height": 24
+  },
+  "pattern_bicubic_repeat": {
+    "kind": "pixmap",
+    "width": 24,
+    "height": 24
+  },
+  "pattern_opacity_identity": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "pattern_bicubic_upscale": {
+    "kind": "pixmap",
+    "width": 24,
+    "height": 24
+  },
+  "pattern_singular_skipped": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_clear": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_clear_hq": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_source": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_source_hq": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_destination": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_destination_hq": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_source-over": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_source-over_hq": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_destination-over": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_destination-over_hq": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_source-in": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_source-in_hq": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_destination-in": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_destination-in_hq": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_source-out": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_source-out_hq": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_destination-out": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_destination-out_hq": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_source-atop": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_source-atop_hq": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_destination-atop": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_destination-atop_hq": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_xor": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_xor_hq": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_plus": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_plus_hq": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_modulate": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_modulate_hq": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_screen": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_screen_hq": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_overlay": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_overlay_hq": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_darken": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_darken_hq": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_lighten": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_lighten_hq": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_color-dodge": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_color-dodge_hq": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_color-burn": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_color-burn_hq": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_hard-light": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_hard-light_hq": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_soft-light": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_soft-light_hq": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_difference": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_difference_hq": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_exclusion": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_exclusion_hq": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_multiply": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_multiply_hq": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_hue": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_hue_hq": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_saturation": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_saturation_hq": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_color": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_color_hq": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_luminosity": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_luminosity_hq": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_hue_clipcolor_dark_over_yellow": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_hue_clipcolor_yellow_over_dark": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_saturation_clipcolor_dark_over_yellow": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_saturation_clipcolor_yellow_over_dark": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_color_clipcolor_dark_over_yellow": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_color_clipcolor_yellow_over_dark": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_luminosity_clipcolor_dark_over_yellow": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_luminosity_clipcolor_yellow_over_dark": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "blend_color-dodge_gradients": {
+    "kind": "pixmap",
+    "width": 64,
+    "height": 64
+  },
+  "blend_color-burn_gradients": {
+    "kind": "pixmap",
+    "width": 64,
+    "height": 64
+  },
+  "blend_soft-light_gradients": {
+    "kind": "pixmap",
+    "width": 64,
+    "height": 64
+  },
+  "blend_hue_gradients": {
+    "kind": "pixmap",
+    "width": 64,
+    "height": 64
+  },
+  "blend_saturation_gradients": {
+    "kind": "pixmap",
+    "width": 64,
+    "height": 64
+  },
+  "blend_color_gradients": {
+    "kind": "pixmap",
+    "width": 64,
+    "height": 64
+  },
+  "blend_luminosity_gradients": {
+    "kind": "pixmap",
+    "width": 64,
+    "height": 64
+  },
+  "blend_overlay_gradients": {
+    "kind": "pixmap",
+    "width": 64,
+    "height": 64
+  },
+  "mask_path_aa": {
+    "kind": "mask",
+    "width": 24,
+    "height": 24
+  },
+  "mask_path_noaa": {
+    "kind": "mask",
+    "width": 24,
+    "height": 24
+  },
+  "mask_star_evenodd_transform": {
+    "kind": "mask",
+    "width": 24,
+    "height": 24
+  },
+  "mask_intersect": {
+    "kind": "mask",
+    "width": 24,
+    "height": 24
+  },
+  "mask_invert": {
+    "kind": "mask",
+    "width": 24,
+    "height": 24
+  },
+  "mask_cubic_layers": {
+    "kind": "mask",
+    "width": 24,
+    "height": 24
+  },
+  "src_mask_pixmap": {
+    "kind": "pixmap",
+    "width": 24,
+    "height": 24
+  },
+  "mask_from_alpha": {
+    "kind": "mask",
+    "width": 24,
+    "height": 24
+  },
+  "mask_from_luminance": {
+    "kind": "mask",
+    "width": 24,
+    "height": 24
+  },
+  "mask_from_luminance_inverted": {
+    "kind": "mask",
+    "width": 24,
+    "height": 24
+  },
+  "clip_fill_path": {
+    "kind": "pixmap",
+    "width": 24,
+    "height": 24
+  },
+  "clip_fill_rect_identity": {
+    "kind": "pixmap",
+    "width": 24,
+    "height": 24
+  },
+  "clip_fill_path_noaa_hq": {
+    "kind": "pixmap",
+    "width": 24,
+    "height": 24
+  },
+  "clip_stroke_path": {
+    "kind": "pixmap",
+    "width": 24,
+    "height": 24
+  },
+  "clip_stroke_hairline": {
+    "kind": "pixmap",
+    "width": 24,
+    "height": 24
+  },
+  "clip_draw_pixmap": {
+    "kind": "pixmap",
+    "width": 24,
+    "height": 24
+  },
+  "apply_mask_alpha": {
+    "kind": "pixmap",
+    "width": 24,
+    "height": 24
+  },
+  "apply_mask_luminance": {
+    "kind": "pixmap",
+    "width": 24,
+    "height": 24
+  },
+  "apply_mask_size_mismatch_noop": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "draw_pixmap_default": {
+    "kind": "pixmap",
+    "width": 24,
+    "height": 24
+  },
+  "draw_pixmap_opacity": {
+    "kind": "pixmap",
+    "width": 24,
+    "height": 24
+  },
+  "draw_pixmap_multiply": {
+    "kind": "pixmap",
+    "width": 24,
+    "height": 24
+  },
+  "draw_pixmap_offscreen": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "draw_pixmap_nearest_transform": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "draw_pixmap_bilinear_transform": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "draw_pixmap_bicubic_transform": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "draw_pixmap_bilinear_screen_scaled": {
+    "kind": "pixmap",
+    "width": 32,
+    "height": 32
+  },
+  "colorspace_gamma2": {
+    "kind": "pixmap",
+    "width": 24,
+    "height": 24
+  },
+  "colorspace_simple-srgb": {
+    "kind": "pixmap",
+    "width": 24,
+    "height": 24
+  },
+  "colorspace_full-srgb": {
+    "kind": "pixmap",
+    "width": 24,
+    "height": 24
+  },
+  "colorspace_full_srgb_linear_gradient": {
+    "kind": "pixmap",
+    "width": 24,
+    "height": 24
+  },
+  "colorspace_gamma2_multiply": {
+    "kind": "pixmap",
+    "width": 24,
+    "height": 24
+  },
+  "degenerate_zero_width": null,
+  "degenerate_zero_height_mask": null,
+  "degenerate_huge_pixmap": null,
+  "degenerate_empty_path": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "degenerate_line_fill": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "degenerate_nan_transform": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "degenerate_negative_stroke_width": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "degenerate_huge_coords": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "huge_coords_aa_1e9": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "huge_coords_noaa_1e30": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "degenerate_transparent_paint": {
+    "kind": "pixmap",
+    "width": 16,
+    "height": 16
+  },
+  "tiler_wide_pixmap": {
+    "kind": "pixmap",
+    "width": 8300,
+    "height": 3
+  },
+  "tiler_wide_mask": {
+    "kind": "mask",
+    "width": 8300,
+    "height": 3
+  },
+  "tiler_wide_clip": {
+    "kind": "pixmap",
+    "width": 8300,
+    "height": 3
+  }
+}

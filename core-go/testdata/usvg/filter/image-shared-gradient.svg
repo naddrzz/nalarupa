@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="200">
+  <linearGradient id="lg" x1="0" x2="1"><stop offset="0" stop-color="red"/><stop offset="1" stop-color="blue"/></linearGradient>
+  <rect id="src" x="0" y="0" width="30" height="20" fill="url(#lg)"/>
+  <filter id="shared" filterUnits="userSpaceOnUse" x="0" y="0" width="200" height="200"><feImage xlink:href="#src"/></filter>
+  <filter id="own"><feImage xlink:href="#src"/></filter>
+  <rect x="10" y="10" width="50" height="40" fill="blue" filter="url(#shared)"/>
+  <rect x="70" y="10" width="50" height="40" fill="blue" filter="url(#shared)"/>
+  <rect x="130" y="10" width="50" height="40" fill="blue" filter="url(#own)"/>
+  <rect x="10" y="60" width="50" height="40" fill="url(#lg)"/>
+</svg>

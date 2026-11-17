@@ -1,0 +1,51 @@
+# Sync and slides: slides start on the first frame that shows them, reflow their siblings, settle and expire on a pinned
+# clock; a node that gains a background blur stops sliding, and one that holds a blur appears in place; reduced motion;
+# a script node's finished background run redraws its layer.
+# frames within 1: Go repaints an edit in the bands the full paint of the view used, so it equals a full paint; Rust's
+# resvg path repaints the dirty rectangle alone, where cut curves shift their antialiased edges (phase 10a).
+# repaint pixels 4: with 4 cores (the hosted Windows runner) a band edge of the full paint cuts a curve, whose shifted
+# antialiasing Go's banded repaints keep and Rust's dirty-rectangle repaints do not (1 pixel, 14 levels).
+{"cmd":"open","path":"slides.pen"}
+{"cmd":"render","w":220,"h":160,"cam":[-10,-10],"zoom":0.25,"bg":[30,30,30]}
+{"cmd":"update","ids":["n1"],"props":{"enabled":true}}
+{"cmd":"slide_in","id":"n1"}
+{"cmd":"update","ids":["n3"],"props":{"enabled":true}}
+{"cmd":"slide_in","id":"n3"}
+{"cmd":"slide_in","id":"n3"}
+{"cmd":"state"}
+{"cmd":"render","w":220,"h":160,"cam":[-10,-10],"zoom":0.25,"bg":[30,30,30]}
+{"cmd":"tick","ms":100}
+{"cmd":"render","w":220,"h":160,"cam":[-10,-10],"zoom":0.25,"bg":[30,30,30]}
+{"cmd":"update","ids":["n3"],"props":{"effect":{"type":"background_blur","radius":8}}}
+{"cmd":"render","w":220,"h":160,"cam":[-10,-10],"zoom":0.25,"bg":[30,30,30]}
+{"cmd":"update","ids":["cover"],"props":{"enabled":true,"effect":[{"type":"background_blur","radius":4}]}}
+{"cmd":"slide_in","id":"cover"}
+{"cmd":"tick","ms":150}
+{"cmd":"render","w":220,"h":160,"cam":[-10,-10],"zoom":0.25,"bg":[30,30,30]}
+{"cmd":"tick","ms":1000}
+{"cmd":"render","w":220,"h":160,"cam":[-10,-10],"zoom":0.25,"bg":[30,30,30]}
+{"cmd":"state"}
+{"cmd":"reduce_motion","on":true}
+{"cmd":"update","ids":["n2"],"props":{"enabled":true}}
+{"cmd":"slide_in","id":"n2"}
+{"cmd":"reduce_motion","on":false}
+{"cmd":"update","ids":["m1"],"props":{"enabled":true}}
+{"cmd":"slide_in","id":"m1"}
+{"cmd":"render","w":220,"h":160,"cam":[-10,-10],"zoom":0.25,"bg":[30,30,30]}
+{"cmd":"undo"}
+{"cmd":"render","w":220,"h":160,"cam":[-10,-10],"zoom":0.25,"bg":[30,30,30]}
+{"cmd":"tick","ms":3000}
+{"cmd":"render","w":220,"h":160,"cam":[-10,-10],"zoom":0.25,"bg":[30,30,30]}
+{"cmd":"state"}
+{"cmd":"update","ids":["s3"],"props":{"x":10}}
+{"cmd":"slide_in","id":"s3"}
+{"cmd":"new","template":"empty"}
+{"cmd":"state"}
+{"cmd":"open","path":"scripted.pen"}
+{"cmd":"tool","name":"get_editor_state"}
+{"cmd":"settle"}
+{"cmd":"render","w":200,"h":180,"cam":[0,0],"zoom":0.75}
+{"cmd":"update","ids":["grid"],"props":{"width":180}}
+{"cmd":"render","w":200,"h":180,"cam":[0,0],"zoom":0.75}
+{"cmd":"settle"}
+{"cmd":"render","w":200,"h":180,"cam":[0,0],"zoom":0.75}

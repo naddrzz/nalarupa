@@ -1,0 +1,24 @@
+{
+  "steps": [
+    {
+      "text": "Error: Error: first call fails (line 3)\nAll operations in this call have been rolled back.\nIMPORTANT: fix this by calling execute again with `editId: \"e11441\"` and an `edits` list of {find, replace} patches — do not resend the whole snippet.",
+      "error": true,
+      "globals": {}
+    },
+    {
+      "text": "OK\n\n## Created nodes by name\n\"Screen\": \"pZRth\" (= page)\n\"Header\": \"41NkG\"\n\"Card\": \"BrKHi\"\n\"Screen 2\": \"91lUC\"\n\nGlobal variables carry over to later calls: page\n\n## Print output\n{\"x\":830,\"y\":0} [\"Screen\",\"Header\",\"Card\",\"Screen 2\",\"Header\",\"Card\"]\n\n## Issues detected (fix them in the next call)\n- \"Card\" (BrKHi): x/y are ignored inside a flex layout parent\n",
+      "error": false,
+      "globals": {
+        "page": "pZRth"
+      }
+    },
+    {
+      "text": "OK\n\nGlobal variables carry over to later calls: page\n\n## Print output\n[[\"Screen\",0,{\"x\":0,\"y\":0,\"width\":390,\"height\":844}],[\"Card\",1,{\"x\":16,\"y\":16,\"width\":358,\"height\":120}]]\n",
+      "error": false,
+      "globals": {
+        "page": "pZRth"
+      }
+    }
+  ],
+  "saved": "{\n  \"version\": \"2.19\",\n  \"children\": [\n    {\n      \"type\": \"frame\",\n      \"name\": \"Screen\",\n      \"width\": 390,\n      \"height\": 844,\n      \"layout\": \"vertical\",\n      \"gap\": 12,\n      \"padding\": 16,\n      \"fill\": \"#F5F5F5\",\n      \"id\": \"pZRth\",\n      \"children\": [\n        {\n          \"type\": \"rectangle\",\n          \"name\": \"Card\",\n          \"width\": \"fill_container\",\n          \"height\": 120,\n          \"fill\": \"#EEEEEE\",\n          \"x\": 5,\n          \"id\": \"BrKHi\"\n        }\n      ]\n    },\n    {\n      \"type\": \"frame\",\n      \"name\": \"Screen 2\",\n      \"width\": 390,\n      \"height\": 844,\n      \"layout\": \"vertical\",\n      \"gap\": 12,\n      \"padding\": 16,\n      \"fill\": \"#FFFFFF\",\n      \"id\": \"91lUC\",\n      \"children\": [\n        {\n          \"type\": \"rectangle\",\n          \"name\": \"Header\",\n          \"width\": \"fill_container\",\n          \"height\": 64,\n          \"fill\": \"#222222\",\n          \"id\": \"NtTRb\"\n        },\n        {\n          \"type\": \"rectangle\",\n          \"name\": \"Card\",\n          \"width\": \"fill_container\",\n          \"height\": 120,\n          \"fill\": \"#EEEEEE\",\n          \"x\": 5,\n          \"id\": \"cnfl4\"\n        }\n      ],\n      \"x\": 440\n    }\n  ]\n}"
+}

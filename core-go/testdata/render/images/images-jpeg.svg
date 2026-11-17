@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="240" height="260">
+<rect width="240" height="260" fill="#e8f0ff"/>
+<image x="10" y="10" width="52" height="36" preserveAspectRatio="none" image-rendering="optimizeQuality" href="img/q85.jpg"/>
+<image x="66" y="10" width="52" height="36" preserveAspectRatio="none" image-rendering="optimizeQuality" href="img/q85-444.jpg"/>
+<image x="122" y="10" width="52" height="36" preserveAspectRatio="none" image-rendering="optimizeQuality" href="img/prog.jpg"/>
+<image x="178" y="10" width="52" height="36" preserveAspectRatio="none" image-rendering="optimizeQuality" href="img/gray.jpg"/>
+<image x="10" y="50" width="52" height="36" preserveAspectRatio="none" image-rendering="optimizeSpeed" href="img/q85.jpg"/>
+<image x="66" y="50" width="52" height="36" preserveAspectRatio="none" image-rendering="optimizeSpeed" href="img/q85-444.jpg"/>
+<image x="122" y="50" width="52" height="36" preserveAspectRatio="none" image-rendering="optimizeSpeed" href="img/prog.jpg"/>
+<image x="178" y="50" width="52" height="36" preserveAspectRatio="none" image-rendering="optimizeSpeed" href="img/gray.jpg"/>
+<image x="10" y="90" width="52" height="36" preserveAspectRatio="none" image-rendering="smooth" href="img/q85.jpg" transform="rotate(7 36 108)"/>
+<image x="66" y="90" width="52" height="36" preserveAspectRatio="none" image-rendering="smooth" href="img/q85-444.jpg" transform="rotate(7 92 108)"/>
+<image x="122" y="90" width="52" height="36" preserveAspectRatio="none" image-rendering="smooth" href="img/prog.jpg" transform="rotate(7 148 108)"/>
+<image x="178" y="90" width="52" height="36" preserveAspectRatio="none" image-rendering="smooth" href="img/gray.jpg" transform="rotate(7 204 108)"/>
+<image x="10" y="130" width="52" height="36" preserveAspectRatio="none" image-rendering="high-quality" href="img/q85.jpg"/>
+<image x="66" y="130" width="52" height="36" preserveAspectRatio="none" image-rendering="high-quality" href="img/q85-444.jpg"/>
+<image x="122" y="130" width="52" height="36" preserveAspectRatio="none" image-rendering="high-quality" href="img/prog.jpg"/>
+<image x="178" y="130" width="52" height="36" preserveAspectRatio="none" image-rendering="high-quality" href="img/gray.jpg"/>
+<image x="10" y="170" width="52" height="36" preserveAspectRatio="none" image-rendering="crisp-edges" href="img/q85.jpg"/>
+<image x="66" y="170" width="52" height="36" preserveAspectRatio="none" image-rendering="crisp-edges" href="img/q85-444.jpg"/>
+<image x="122" y="170" width="52" height="36" preserveAspectRatio="none" image-rendering="crisp-edges" href="img/prog.jpg"/>
+<image x="178" y="170" width="52" height="36" preserveAspectRatio="none" image-rendering="crisp-edges" href="img/gray.jpg"/>
+<image x="10" y="210" width="52" height="36" preserveAspectRatio="none" image-rendering="pixelated" href="img/q85.jpg"/>
+<image x="66" y="210" width="52" height="36" preserveAspectRatio="none" image-rendering="pixelated" href="img/q85-444.jpg"/>
+<image x="122" y="210" width="52" height="36" preserveAspectRatio="none" image-rendering="pixelated" href="img/prog.jpg"/>
+<image x="178" y="210" width="52" height="36" preserveAspectRatio="none" image-rendering="pixelated" href="img/gray.jpg"/>
+</svg>

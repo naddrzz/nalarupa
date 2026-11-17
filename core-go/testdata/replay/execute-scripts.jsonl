@@ -1,0 +1,10 @@
+# Execute with script nodes: a call inserts a script node and takes a screenshot of its frame, which shows the
+# node's output once it has run (Finish runs it without the lock and redraws from the call's document); an export
+# of it too; then a screenshot of the node that has run already. The node runs with an input and size no other
+# sequence uses, in a document of its own: script runs and their slots are process-wide, and the Go replays share
+# one process.
+{"cmd":"open","path":"shapes.pen"}
+{"cmd":"tool","name":"execute","png":true,"args":{"__seed":3,"input":"const s = Insert('home', {type: 'script', name: 'Grid 2', width: 150, height: 40, scriptUri: './grid.js', input: {cols: 5}});\nTakeScreenshot('home');\nExport(s, 'png', 'shots', {scale: 1});"}}
+{"cmd":"settle"}
+{"cmd":"tool","name":"execute","png":true,"args":{"__seed":4,"input":"TakeScreenshot(Get(n => n.name === 'Grid 2' ? n.id : undefined)[0]);"}}
+{"cmd":"doc"}

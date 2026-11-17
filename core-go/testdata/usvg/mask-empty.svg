@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="60">
+  <defs>
+    <mask id="empty"/>
+    <mask id="zero" width="0" height="1"><rect width="200" height="60" fill="#fff"/></mask>
+    <mask id="hidden-content"><rect width="200" height="60" fill="#fff" display="none"/></mask>
+    <mask id="obb"><rect width="200" height="60" fill="#fff"/></mask>
+  </defs>
+  <rect id="r-empty" x="5" y="5" width="20" height="20" mask="url(#empty)"/>
+  <rect id="r-missing" x="30" y="5" width="20" height="20" mask="url(#nope)"/>
+  <rect id="r-zero" x="55" y="5" width="20" height="20" mask="url(#zero)"/>
+  <rect id="r-hidden" x="80" y="5" width="20" height="20" mask="url(#hidden-content)"/>
+  <path id="line-obb" d="M110 5 V30" stroke="#000" mask="url(#obb)"/>
+  <rect id="r-none" x="130" y="5" width="20" height="20" mask="none"/>
+</svg>

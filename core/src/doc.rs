@@ -1102,4 +1102,20 @@ mod tests {
         assert_eq!(root["children"][0]["fill"]["url"], "./images/x.jpg");
         assert!(Doc::same_dir(Path::new("/p/a/../a/"), Path::new("/p/a")));
     }
+
+    /// The Go port's id golden (core-go/testdata/ids.json) is what `reseed` + `gen_id` produce here;
+    /// a failure prints the ids to write back into it.
+    #[test]
+    fn ids_match_the_go_golden() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../core-go/testdata/ids.json");
+        let runs: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        for run in runs.as_array().unwrap() {
+            reseed(run["seed"].as_u64().unwrap());
+            let want: Vec<&str> = run["ids"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+            let d = Doc::new();
+            let got: Vec<String> = (0..want.len()).map(|_| d.gen_id()).collect();
+            assert_eq!(want.len(), 100);
+            assert_eq!(got, want, "seed {}", run["seed"]);
+        }
+    }
 }

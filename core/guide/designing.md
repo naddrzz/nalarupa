@@ -13,9 +13,9 @@
    With an existing style (variables, components, finished screens), extend
    it; a new direction is for a blank canvas, a requested new look, variations.
 4. **Post it** before you build, so the user can redirect you: as your first
-   chat message, before any tool call. Your prompt's editor state holds the
-   existing style (variables, fonts, components); without it, look first
-   (`get_editor_state`, or `GetVariables` and `Get` on a screen), then post:
+   chat message, before any tool call but the look below. Your prompt's editor
+   state holds the existing style (variables, fonts, components); only without
+   it, look first (`get_editor_state`, or `GetVariables` and `Get`), then post:
    `Framing:` the line from step 2
    `Direction:` concept · palette · type · signature move
    `Why:` one line on why it beats the other directions

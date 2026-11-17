@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="240">
+  <defs>
+    <filter id="turb" x="0" y="0" width="100%" height="100%"><feTurbulence type="turbulence" baseFrequency="0.05 0.08" numOctaves="3" seed="7"/></filter>
+    <filter id="frac" x="0" y="0" width="100%" height="100%"><feTurbulence type="fractalNoise" baseFrequency="0.07" numOctaves="2" seed="-3" stitchTiles="stitch"/></filter>
+    <filter id="disp" x="-10%" y="-10%" width="120%" height="120%"><feTurbulence baseFrequency="0.1" numOctaves="1" result="t"/><feDisplacementMap in="SourceGraphic" in2="t" scale="12" xChannelSelector="R" yChannelSelector="B"/></filter>
+    <filter id="morph" x="-20%" y="-20%" width="140%" height="140%"><feMorphology operator="dilate" radius="2 1" result="d"/><feMorphology in="SourceGraphic" operator="erode" radius="1.5"/><feMerge><feMergeNode in="d"/><feMergeNode/></feMerge></filter>
+    <filter id="tile" x="0" y="0" width="100%" height="100%"><feFlood flood-color="#0a6" flood-opacity="0.8" x="5" y="5" width="12" height="10" result="f"/><feOffset dx="3" dy="2" in="f" result="o"/><feTile in="o"/></filter>
+    <filter id="conv"><feConvolveMatrix order="3" kernelMatrix="1 -1 1 -1 4 -1 1 -1 1" edgeMode="duplicate" preserveAlpha="true"/></filter>
+    <filter id="conv2"><feConvolveMatrix order="3 2" kernelMatrix="1 2 1 0 1 0" divisor="5" bias="0.1" edgeMode="wrap" targetX="0"/></filter>
+    <filter id="cm"><feColorMatrix type="hueRotate" values="70" result="h"/><feColorMatrix in="h" type="saturate" values="0.3" result="s"/><feComponentTransfer in="s"><feFuncR type="table" tableValues="0 0.5 1"/><feFuncG type="gamma" amplitude="1.2" exponent="0.7" offset="0.05"/><feFuncB type="discrete" tableValues="0 0.3 0.7 1"/><feFuncA type="linear" slope="0.8" intercept="0.1"/></feComponentTransfer></filter>
+    <filter id="blend"><feFlood flood-color="#36f" result="f"/><feBlend in="SourceGraphic" in2="f" mode="color-burn" result="b"/><feComposite in="b" in2="SourceAlpha" operator="atop"/></filter>
+    <filter id="sub" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="2" x="10%" y="0" width="60%" height="90%"/></filter>
+    <linearGradient id="g"><stop offset="0" stop-color="#f60"/><stop offset="1" stop-color="#60f"/></linearGradient>
+  </defs>
+  <rect width="320" height="240" fill="#fff"/>
+  <rect x="5" y="5" width="70" height="70" filter="url(#turb)"/>
+  <rect x="85" y="5" width="70" height="70" filter="url(#frac)" transform="rotate(5 120 40)"/>
+  <g filter="url(#disp)"><rect x="170" y="10" width="60" height="60" fill="url(#g)"/><path d="M175 40 h50" stroke="#000" stroke-width="3"/></g>
+  <g filter="url(#morph)"><path d="M250 15 l25 50 l25 -50" stroke="#c00" stroke-width="4" fill="none"/></g>
+  <rect x="5" y="85" width="70" height="70" filter="url(#tile)"/>
+  <rect x="85" y="85" width="70" height="70" fill="url(#g)" filter="url(#conv)"/>
+  <circle cx="200" cy="120" r="32" fill="url(#g)" filter="url(#conv2)"/>
+  <rect x="245" y="85" width="70" height="70" fill="url(#g)" opacity="0.9" filter="url(#cm)"/>
+  <circle cx="40" cy="200" r="32" fill="#ec4" filter="url(#blend)"/>
+  <rect x="90" y="170" width="70" height="60" fill="url(#g)" filter="url(#sub)"/>
+  <g filter="url(#turb)" transform="translate(180 170) scale(0.5)"><rect width="250" height="120" fill="red"/></g>
+</svg>

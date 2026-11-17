@@ -1,5 +1,5 @@
 name: claude-setup
-description: Prepares a GitHub-hosted Ubuntu runner for the Claude jobs the same way ci.yml's checks job does, with a headless Wayland desktop, the Rust core built and app deps installed.
+description: Prepares a GitHub-hosted Ubuntu runner for the Claude jobs the same way ci.yml's checks job does, with a headless Wayland desktop, the Go core built (core-go/out, which the app finds by default), the Rust core built as the parity oracle (its CLI is what the Go parity tests compare with) and app deps installed.
 runs:
   using: composite
   steps:
@@ -15,7 +15,7 @@ runs:
       run: |
         sudo apt-get update -qq
         sudo apt-get install -y -qq --no-install-recommends sway grim mesa-vulkan-drivers libvulkan1 \
-          libxkbcommon0 libxkbcommon-x11-0 libwayland-client0 libfontconfig1 fonts-noto-core fonts-noto-color-emoji >/dev/null
+          libxkbcommon0 libxkbcommon-x11-0 libwayland-client0 libfontconfig1 fonts-noto-core fonts-noto-color-emoji poppler-utils >/dev/null
     - uses: Swatinem/rust-cache@v2
       with: { workspaces: core }
     - uses: oven-sh/setup-bun@v2
@@ -23,6 +23,21 @@ runs:
     - shell: bash
       working-directory: core
       run: cargo build --release
+    # The Go core: cgo builds the vendored quickjs-ng with the runner's gcc and links the pinned wgpu-native (fetched by
+    # go generate) into core-go/out/libnalarupa_core.so.
+    - uses: actions/setup-go@v5
+      with: { go-version-file: core-go/go.mod, cache: false }
+    - shell: bash
+      working-directory: core-go
+      env: { CGO_ENABLED: "1" }
+      run: go generate ./shader/gpu && bash build.sh
+    # What the Go parity tests need, as ci.yml sets it, exported to every later step (and so to Claude's commands):
+    # the Rust oracle's CLI, and a font with a wght axis (in CI the variable-font case fails without one).
+    - shell: bash
+      run: |
+        curl -fsSL -o "$RUNNER_TEMP/MavenPro.ttf" 'https://raw.githubusercontent.com/google/fonts/cc39c4c2c304bc368c9b7c311ea2bcc6013299fe/ofl/mavenpro/MavenPro%5Bwght%5D.ttf'
+        echo "NALARUPA_VARIABLE_FONT=$RUNNER_TEMP/MavenPro.ttf" >> "$GITHUB_ENV"
+        echo "NALARUPA_CLI=$GITHUB_WORKSPACE/core/target/release/nalarupa-cli" >> "$GITHUB_ENV"
     - shell: bash
       working-directory: app
       run: bun install --frozen-lockfile

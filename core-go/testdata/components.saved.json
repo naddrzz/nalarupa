@@ -1,0 +1,181 @@
+{
+  "version": "2.19",
+  "children": [
+    {
+      "type": "frame",
+      "id": "card",
+      "name": "Card",
+      "reusable": true,
+      "x": 0,
+      "y": 0,
+      "width": 200,
+      "layout": "vertical",
+      "padding": [
+        16,
+        12
+      ],
+      "gap": 8,
+      "fill": "#FFFFFF",
+      "metadata": {
+        "tags": [
+          "a",
+          "b"
+        ],
+        "empty": {},
+        "list": [],
+        "none": null,
+        "ok": true
+      },
+      "children": [
+        {
+          "type": "rectangle",
+          "id": "media",
+          "width": "fill_container",
+          "height": 100,
+          "fill": "#DDDDDD",
+          "cornerRadius": [
+            8,
+            8,
+            0,
+            0
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "row",
+          "width": "fill_container",
+          "gap": 4,
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "ellipse",
+              "id": "dot",
+              "width": 12,
+              "height": 12,
+              "fill": "#FF0000"
+            },
+            {
+              "type": "rectangle",
+              "id": "bar",
+              "width": 60.0,
+              "height": 6.5
+            }
+          ]
+        },
+        {
+          "type": "ref",
+          "id": "badge",
+          "ref": "pill"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "pill",
+      "name": "Pill \"v2\" — café ✓   </tag> & \t tab \u0001 /slash 😀 ",
+      "reusable": true,
+      "x": 300,
+      "y": 0,
+      "padding": [
+        4,
+        10
+      ],
+      "children": [
+        {
+          "type": "rectangle",
+          "id": "pillDot",
+          "width": 30,
+          "height": 8
+        }
+      ]
+    },
+    {
+      "type": "ref",
+      "id": "card2",
+      "ref": "card",
+      "x": 0,
+      "y": 300,
+      "width": 260,
+      "descendants": {
+        "media": {
+          "height": 140
+        },
+        "badge/pillDot": {
+          "width": 50
+        },
+        "bar": {
+          "type": "ellipse",
+          "width": 20,
+          "height": 20
+        }
+      }
+    },
+    {
+      "type": "ref",
+      "id": "v",
+      "ref": "card",
+      "reusable": true,
+      "x": 600,
+      "y": 0,
+      "width": 150,
+      "descendants": {
+        "dot": {
+          "width": 30,
+          "height": 30
+        }
+      }
+    },
+    {
+      "type": "ref",
+      "id": "vi",
+      "ref": "v",
+      "x": 600,
+      "y": 400
+    },
+    {
+      "type": "frame",
+      "id": "grid",
+      "x": 900,
+      "y": 0,
+      "gap": 20,
+      "padding": 20,
+      "alignItems": "end",
+      "children": [
+        {
+          "type": "ref",
+          "id": "g1",
+          "ref": "pill"
+        },
+        {
+          "type": "ref",
+          "ref": "pill",
+          "padding": 12,
+          "id": "TlKVJ"
+        },
+        {
+          "type": "ref",
+          "id": "YpPXN",
+          "ref": "pill",
+          "descendants": {
+            "pillDot": {
+              "height": 40
+            }
+          }
+        },
+        {
+          "type": "rectangle",
+          "id": "L2dh1",
+          "width": 10,
+          "height": 10
+        },
+        {
+          "type": "rectangle",
+          "id": "sgahZ",
+          "width": 10,
+          "height": 15
+        }
+      ]
+    }
+  ]
+}

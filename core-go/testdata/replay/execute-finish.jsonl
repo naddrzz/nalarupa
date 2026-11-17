@@ -1,0 +1,12 @@
+# Execute output finished after the lock: screenshots (a frame, `document`, a nested node, a missing and a hidden
+# node), Export in each format into the document's folder, refused paths (the open document, a dot file, a
+# misnamed PDF or HTML file, a file Export did not write, an unknown format, a missing node), an icon the offline
+# engine cannot fetch (its warning) and exporting the same file again after a fix.
+{"cmd":"open","path":"shapes.pen"}
+{"cmd":"copy","from":"gen.png","to":"taken/r1.png"}
+{"cmd":"tool","name":"execute","png":true,"args":{"__seed":5,"input":"TakeScreenshot(['home', 'document', 'r1', 'nope']);\nUpdate('far', {enabled: false});\nTakeScreenshot('far');\nInsert('home', {type: 'icon', name: 'Star', library: 'lucide', icon: 'star', width: 24, height: 24, fill: '#000000'});"}}
+{"cmd":"tool","name":"execute","png":true,"args":{"__seed":6,"input":"Export(['home', 'card'], 'png', 'out', {scale: 1});\nExport('home', 'webp', 'out');\nExport(['home'], 'svg', 'out');\nExport(['card'], 'jpeg', 'out', {scale: 1, quality: 80});\nExport(['home', 'card'], 'pdf', 'deck.pdf');\nExport(['home'], 'html-css', 'page.html');"}}
+{"cmd":"tool","name":"execute","args":{"__seed":7,"input":"Export('home', 'pdf', 'shapes.pen');\nExport('home', 'pdf', '.hidden.pdf');\nExport('home', 'html', 'page.txt');\nExport('r1', 'png', 'taken');\nExport('home', 'gif', 'out');\nExport('nope', 'png', 'out');"}}
+{"cmd":"tool","name":"execute","args":{"__seed":8,"input":"Update('r1', {fill: '#ff0000'});\nExport('r1', 'png', 'out', {scale: 1});"}}
+{"cmd":"tool","name":"execute","args":{"__seed":9,"input":"Update('r1', {fill: '#00ff00'});\nExport('r1', 'png', 'out', {scale: 1});"}}
+{"cmd":"poll"}

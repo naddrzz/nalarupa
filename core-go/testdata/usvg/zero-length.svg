@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="40" stroke="#000" stroke-width="6">
+  <path id="m-z" d="M10 20 Z" stroke-linecap="round"/>
+  <path id="m-l-same" d="M30 20 L30 20" stroke-linecap="round"/>
+  <path id="m-l-same-butt" d="M50 20 L50 20"/>
+  <path id="sub-zero" d="M70 20 L90 20 M100 20 L100 20" stroke-linecap="square"/>
+  <path id="h0" d="M120 20 h0" stroke-linecap="square"/>
+  <line id="line0" x1="140" y1="20" x2="140" y2="20" stroke-linecap="round"/>
+  <path id="m-m" d="M160 20 M170 20 L180 20"/>
+  <polyline id="poly-one" points="190 20" stroke-linecap="round"/>
+</svg>

@@ -1,6 +1,6 @@
 // Build a self-contained dist/: `bun scripts/package.ts`
 //   nalarupa(.exe)            Bun-compiled GPUIX front-end
-//   nalarupa_core.(dll|so|dylib)   Rust core (cargo build --release in ../core first)
+//   nalarupa_core.(dll|so|dylib)   the core (build.sh or build.ps1 in ../core-go first)
 //   gpuix-native.<target>.node     GPUI renderer addon
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -46,8 +46,8 @@ function useOwnIconGroup(path: string) {
 }
 
 const core = `${process.platform === 'win32' ? '' : 'lib'}nalarupa_core.${suffix}`
-const coreSrc = join(root, '..', 'core', 'target', 'release', core)
-if (!existsSync(coreSrc)) throw new Error(`missing ${coreSrc}: run cargo build --release in core/`)
+const coreSrc = join(root, '..', 'core-go', 'out', core)
+if (!existsSync(coreSrc)) throw new Error(`missing ${coreSrc}: run build.sh (or build.ps1 on Windows) in core-go/`)
 copyFileSync(coreSrc, join(dist, core))
 
 const gpuix = join(root, 'node_modules', '@gpuix')

@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+  <style type="text/css"><![CDATA[
+    #r1 { fill: #0a0 }
+    .c { fill: #a00 }
+    rect { fill: #00a }
+    .late { fill: #111 }
+    .late { fill: #222 }
+    .imp { fill: #f80 !important }
+    #r5 { fill: #08f }
+  ]]></style>
+  <style type="text/foo">rect { stroke: red }</style>
+  <rect id="r1" class="c" width="10" height="10"/>
+  <rect id="r2" class="c" x="15" width="10" height="10" fill="#fff"/>
+  <rect id="r3" class="late" x="30" width="10" height="10" style="fill:#333"/>
+  <rect id="r4" class="imp" x="45" width="10" height="10" style="fill:#444"/>
+  <rect id="r5" class="imp" x="60" width="10" height="10"/>
+  <rect id="r6" x="75" width="10" height="10" style="fill:#555 !important; fill:#666"/>
+  <rect id="r7" x="90" width="10" height="10" style="fill: bogus; stroke:#123"/>
+  <rect id="r8" x="105" width="10" height="10" fill="#777" style="fill:inherit"/>
+</svg>

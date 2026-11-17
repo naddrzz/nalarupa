@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100" stroke="#000" stroke-width="2" fill="none">
+  <path id="even" d="M10 10H190" stroke-dasharray="5 3"/>
+  <path id="odd" d="M10 20H190" stroke-dasharray="5,3,1"/>
+  <path id="zeros" d="M10 30H190" stroke-dasharray="0 0"/>
+  <path id="some-zero" d="M10 40H190" stroke-dasharray="0 4"/>
+  <path id="negative" d="M10 50H190" stroke-dasharray="5 -3"/>
+  <path id="percent" d="M10 60H190" stroke-dasharray="5% 2%"/>
+  <path id="units" d="M10 70H190" stroke-dasharray="1mm 2px" stroke-dashoffset="3"/>
+  <path id="offset-neg" d="M10 80H190" stroke-dasharray="6 2" stroke-dashoffset="-4"/>
+  <path id="none" d="M10 90H190" stroke-dasharray="none" stroke-dashoffset="1em"/>
+  <path id="bogus" d="M10 95H190" stroke-dasharray="5 x"/>
+</svg>

@@ -1,0 +1,188 @@
+{
+ "doc": "canvas/docs/slides.pen",
+ "tolerance": {"maxDelta": 48, "maxShare": 0.0008, "why": "Edits repaint in the bands the full paint of the view used, so they equal a full paint; Rust's resvg path repaints the dirty rectangle alone, where cut curves shift their antialiased edges (phase 10a)"},
+ "steps": [
+  {
+   "op": "sync"
+  },
+  {
+   "op": "update",
+   "id": "n1",
+   "props": {
+    "enabled": true
+   }
+  },
+  {
+   "op": "slide",
+   "id": "n1"
+  },
+  {
+   "op": "update",
+   "id": "m1",
+   "props": {
+    "enabled": true
+   }
+  },
+  {
+   "op": "sync"
+  },
+  {
+   "op": "render",
+   "w": 420,
+   "h": 520,
+   "cam": [
+    -10,
+    -10
+   ],
+   "zoom": 1,
+   "bg": [
+    30,
+    30,
+    30
+   ]
+  },
+  {
+   "op": "tick",
+   "ms": 100
+  },
+  {
+   "op": "render",
+   "w": 420,
+   "h": 520,
+   "cam": [
+    -10,
+    -10
+   ],
+   "zoom": 1,
+   "bg": [
+    30,
+    30,
+    30
+   ]
+  },
+  {
+   "op": "update",
+   "id": "n1",
+   "props": {
+    "fill": "#000000"
+   }
+  },
+  {
+   "op": "sync"
+  },
+  {
+   "op": "tick",
+   "ms": 50
+  },
+  {
+   "op": "render",
+   "w": 420,
+   "h": 520,
+   "cam": [
+    -10,
+    -10
+   ],
+   "zoom": 1,
+   "bg": [
+    30,
+    30,
+    30
+   ]
+  },
+  {
+   "op": "tick",
+   "ms": 600
+  },
+  {
+   "op": "sync"
+  },
+  {
+   "op": "render",
+   "w": 420,
+   "h": 520,
+   "cam": [
+    -10,
+    -10
+   ],
+   "zoom": 1,
+   "bg": [
+    30,
+    30,
+    30
+   ]
+  },
+  {
+   "op": "update",
+   "id": "n3",
+   "props": {
+    "enabled": true
+   }
+  },
+  {
+   "op": "slide",
+   "id": "n3"
+  },
+  {
+   "op": "sync"
+  },
+  {
+   "op": "render",
+   "w": 500,
+   "h": 500,
+   "cam": [
+    420,
+    -20
+   ],
+   "zoom": 1,
+   "bg": [
+    30,
+    30,
+    30
+   ]
+  },
+  {
+   "op": "tick",
+   "ms": 60
+  },
+  {
+   "op": "render",
+   "w": 500,
+   "h": 500,
+   "cam": [
+    420,
+    -20
+   ],
+   "zoom": 1,
+   "bg": [
+    30,
+    30,
+    30
+   ]
+  },
+  {
+   "op": "update",
+   "id": "cover",
+   "props": {
+    "enabled": true
+   }
+  },
+  {
+   "op": "sync"
+  },
+  {
+   "op": "render",
+   "w": 500,
+   "h": 500,
+   "cam": [
+    420,
+    -20
+   ],
+   "zoom": 1,
+   "bg": [
+    30,
+    30,
+    30
+   ]
+  }
+ ]
+}

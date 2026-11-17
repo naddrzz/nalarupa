@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+  <defs>
+    <linearGradient id="pad" x1="0.4" x2="0.6"><stop offset="0" stop-color="#f00"/><stop offset="1" stop-color="#00f"/></linearGradient>
+    <linearGradient id="reflect" href="#pad" spreadMethod="reflect"/>
+    <linearGradient id="repeat" href="#pad" spreadMethod="repeat"/>
+    <linearGradient id="bogus-spread" href="#pad" spreadMethod="mirror"/>
+    <linearGradient id="rot" href="#pad" gradientTransform="rotate(45 0.5 0.5)"/>
+    <linearGradient id="user-tr" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="20" y2="0" gradientTransform="translate(10 50) scale(2) skewX(10)" spreadMethod="repeat"><stop offset="0" stop-color="#000"/><stop offset="1" stop-color="#fff"/></linearGradient>
+    <linearGradient id="pct" x1="10%" y1="0%" x2="90%" y2="100%"><stop offset="0" stop-color="#0a0"/><stop offset="1" stop-color="#a0a"/></linearGradient>
+  </defs>
+  <rect id="r-pad" x="5" y="5" width="40" height="30" fill="url(#pad)"/>
+  <rect id="r-reflect" x="50" y="5" width="40" height="30" fill="url(#reflect)"/>
+  <rect id="r-repeat" x="95" y="5" width="40" height="30" fill="url(#repeat)"/>
+  <rect id="r-bogus" x="140" y="5" width="40" height="30" fill="url(#bogus-spread)"/>
+  <rect id="r-rot" x="5" y="50" width="40" height="30" fill="url(#rot)" fill-opacity="0.5"/>
+  <rect id="r-user-tr" x="50" y="50" width="40" height="30" fill="url(#user-tr)"/>
+  <rect id="r-pct" x="95" y="50" width="40" height="30" fill="url(#pct)" transform="rotate(10)"/>
+</svg>

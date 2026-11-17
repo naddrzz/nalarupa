@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120">
+  <path id="flags00" d="M10 20 A15 10 0 0 0 40 20" fill="none" stroke="#000"/>
+  <path id="flags01" d="M50 20 A15 10 0 0 1 80 20" fill="none" stroke="#000"/>
+  <path id="flags10" d="M90 20 A15 10 0 1 0 120 20" fill="none" stroke="#000"/>
+  <path id="flags11" d="M130 20 A15 10 0 1 1 160 20" fill="none" stroke="#000"/>
+  <path id="rx-zero" d="M10 60 A0 10 0 0 1 40 60" fill="none" stroke="#000"/>
+  <path id="ry-zero" d="M50 60 a10 0 0 0 1 30 0" fill="none" stroke="#000"/>
+  <path id="too-small" d="M90 60 A2 2 0 0 1 120 60" fill="none" stroke="#000"/>
+  <path id="negative-r" d="M130 60 A-15 -10 45 0 0 160 60" fill="none" stroke="#000"/>
+  <path id="same-point" d="M10 100 A10 10 0 0 1 10 100 L20 100" fill="none" stroke="#000"/>
+  <path id="compact-flags" d="M50 100a10 10 0 1130 0" fill="none" stroke="#000"/>
+  <path id="rotated" d="M100 100 A20 8 60 1 1 130 90" fill="none" stroke="#000"/>
+  <path id="bad-flag" d="M150 100 L160 100 A10 10 0 2 1 180 100" fill="none" stroke="#000"/>
+</svg>

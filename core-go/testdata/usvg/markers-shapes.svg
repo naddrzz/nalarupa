@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+  <defs>
+    <marker id="m" markerWidth="4" markerHeight="4" refX="2" refY="2"><circle cx="2" cy="2" r="2" fill="#c00"/></marker>
+    <marker id="nested" markerWidth="6" markerHeight="6" refX="3" refY="3"><path d="M0 3 H6" stroke="#000" marker-end="url(#m)"/></marker>
+  </defs>
+  <line id="line" x1="10" y1="10" x2="60" y2="10" stroke="#000" marker-start="url(#m)" marker-end="url(#m)"/>
+  <polyline id="polyline" points="10,30 30,50 50,30 70,50" fill="none" stroke="#000" marker-mid="url(#m)"/>
+  <polygon id="polygon" points="100,10 140,10 120,40" fill="none" stroke="#000" marker-start="url(#m)" marker-mid="url(#m)" marker-end="url(#m)"/>
+  <rect id="rect-ignored" x="150" y="10" width="20" height="20" stroke="#000" marker-start="url(#m)"/>
+  <path id="nested-marker" d="M10 80 H80" stroke="#000" marker-end="url(#nested)"/>
+  <path id="missing" d="M100 80 H180" stroke="#000" marker-end="url(#none)"/>
+</svg>

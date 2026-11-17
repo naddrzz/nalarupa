@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="240" height="120">
+  <rect width="240" height="120" fill="#fafafa"/>
+  <image x="10" y="10" width="100" height="100" href="nested.svg"/>
+  <image x="120" y="10" width="50" height="100" href="nested.svg" preserveAspectRatio="xMidYMid slice" transform="rotate(-10 145 60)"/>
+  <image x="180" y="10" width="50" height="50" href="img/does-not-exist.png"/>
+  <image x="180" y="65" width="50" height="50" href="data:image/png;base64,AAAA"/>
+  <image x="60" y="60" width="80" height="50" opacity="0.6" href="img/rgba.png"/>
+</svg>

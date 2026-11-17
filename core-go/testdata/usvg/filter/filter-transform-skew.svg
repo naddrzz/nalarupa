@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="200">
+  <filter id="f1"><feGaussianBlur stdDeviation="3"/><feOffset dx="2" dy="2"/></filter>
+  <g transform="skewX(20)"><rect x="10" y="10" width="50" height="40" filter="url(#f1)"/></g>
+  <g transform="rotate(45 100 100) scale(1.5)"><rect x="60" y="60" width="30" height="30" filter="url(#f1)"/></g>
+</svg>

@@ -1,0 +1,6 @@
+{
+ "disabled.hidden": "hidden is hidden (or inside a hidden layer); show it before exporting",
+ "disabled.r2": "r2 is hidden (or inside a hidden layer); show it before exporting",
+ "shapes.basic/nope": "node not found: basic/nope",
+ "shapes.nope": "node not found: nope"
+}

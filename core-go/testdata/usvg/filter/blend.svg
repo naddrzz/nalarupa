@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="200">
+  <filter id="f1"><feFlood flood-color="red" result="a"/><feBlend in="SourceGraphic" in2="a" mode="multiply"/></filter>
+  <filter id="f2"><feBlend mode="color-dodge" in2="SourceAlpha"/></filter>
+  <filter id="f3"><feOffset dx="3"/><feBlend mode="bogus"/><feBlend in="missing" in2="result1" mode="luminosity"/></filter>
+  <rect x="10" y="10" width="50" height="40" fill="blue" filter="url(#f1)"/>
+  <rect x="70" y="10" width="50" height="40" fill="blue" filter="url(#f2)"/>
+  <rect x="130" y="10" width="50" height="40" fill="blue" filter="url(#f3)"/>
+</svg>

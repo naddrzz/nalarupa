@@ -1,0 +1,16 @@
+{
+  "version": "2.19",
+  "children": [
+    {"type": "frame", "id": "conic", "x": 0, "y": 0, "width": 300, "height": 200, "layout": "none", "children": [
+      {"type": "rectangle", "id": "c1", "x": 10, "y": 10, "width": 120, "height": 80, "fill": {"type": "gradient", "gradientType": "angular", "colors": [{"color": "#f00", "position": 0}, {"color": "#0f0", "position": 0.5}, {"color": "#00f8", "position": 1}]}},
+      {"type": "ellipse", "id": "c2", "x": 150, "y": 10, "width": 100, "height": 100, "fill": {"type": "gradient", "gradientType": "angular", "rotation": 37, "center": {"x": 0.31, "y": 0.42}, "size": {"width": 0.5, "height": 1.5}, "colors": [{"color": "#ff0", "position": 0.2}, {"color": "#0ff", "position": 0.8}], "opacity": 0.6}},
+      {"type": "rectangle", "id": "c3", "x": 10, "y": 120, "width": 1000, "height": 40, "fill": {"type": "gradient", "gradientType": "angular", "colors": [{"color": "#000", "position": 0}, {"color": "#fff0", "position": 1}]}}
+    ]},
+    {"type": "frame", "id": "mesh", "x": 350, "y": 0, "width": 300, "height": 200, "layout": "none", "children": [
+      {"type": "rectangle", "id": "m1", "x": 10, "y": 10, "width": 140, "height": 100, "fill": {"type": "mesh_gradient", "columns": 2, "rows": 2, "points": [[0, 0], [1, 0], [0, 1], [1, 1]], "colors": ["#ff0000", "#00ff00", "#0000ff", "#ffffff80"]}},
+      {"type": "rectangle", "id": "m2", "x": 160, "y": 10, "width": 120, "height": 120, "fill": {"type": "mesh_gradient", "columns": 3, "rows": 2, "points": [[0, 0], {"position": [0.5, 0.1], "bottomHandle": [0.1, 0.3]}, [1, 0], [0, 1], {"position": [0.6, 0.8], "leftHandle": [-0.3, 0.1], "rightHandle": [0.2, -0.1]}, [1, 1]], "colors": ["#f00", "#ff0", "#0f0", "#0ff", "#00f", "#f0f"], "opacity": 0.5}},
+      {"type": "rectangle", "id": "m3", "x": 10, "y": 130, "width": 60, "height": 60, "fill": [{"type": "mesh_gradient", "columns": 2, "rows": 2, "points": [[0, 0], [1, 0]], "colors": ["#f00", "#0f0"]}, "#abc"]},
+      {"type": "rectangle", "id": "m4", "x": 80, "y": 130, "width": 60, "height": 60, "fill": {"type": "mesh_gradient", "columns": 2, "rows": 1, "points": [[0, 0], [1, 0]], "colors": ["#f00", "#0f0"]}}
+    ]}
+  ]
+}

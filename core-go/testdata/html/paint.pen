@@ -1,0 +1,26 @@
+{
+  "version": "2.19",
+  "children": [
+    {"type": "frame", "id": "fills", "x": 0, "y": 0, "width": 500, "height": 400, "layout": "none", "fill": "#ffffff", "children": [
+      {"type": "rectangle", "id": "solid", "x": 10, "y": 10, "width": 60, "height": 40, "fill": ["#ff0000", "#0000ff80", {"type": "color", "color": "#00ff00", "enabled": false}], "cornerRadius": 6},
+      {"type": "rectangle", "id": "lin", "x": 80, "y": 10, "width": 60, "height": 40, "fill": {"type": "gradient", "rotation": 90, "opacity": 0.6, "colors": [{"color": "#f00", "position": 0}, {"color": "#00f", "position": 1}]}},
+      {"type": "rectangle", "id": "lin2", "x": 150, "y": 10, "width": 60, "height": 40, "fill": {"type": "gradient", "rotation": 30, "center": {"x": 0.3, "y": 0.6}, "size": {"width": 1, "height": 0.5}, "colors": [{"color": "#0f0", "position": 0.2}, {"color": "nope", "position": 0.9}]}},
+      {"type": "rectangle", "id": "rad", "x": 220, "y": 10, "width": 60, "height": 40, "fill": {"type": "gradient", "gradientType": "radial", "center": {"x": 0.3, "y": 0.4}, "size": {"width": 0.5, "height": 1}, "colors": [{"color": "#00f", "position": 1.5}, {"color": "#f00", "position": 0}]}},
+      {"type": "ellipse", "id": "rad2", "x": 290, "y": 10, "width": 60, "height": 40, "fill": {"type": "gradient", "gradientType": "radial", "rotation": 37, "size": {"width": 0.3, "height": 0.8}, "colors": [{"color": "#f80", "position": 0}, {"color": "#08f", "position": 1}]}},
+      {"type": "rectangle", "id": "ang", "x": 360, "y": 10, "width": 60, "height": 40, "fill": {"type": "gradient", "gradientType": "angular", "rotation": 90, "center": {"x": 0.25, "y": 0.75}, "colors": [{"color": "#f0f", "position": 0}, {"color": "#0ff", "position": 1}]}},
+      {"type": "rectangle", "id": "img1", "x": 10, "y": 60, "width": 60, "height": 40, "fill": {"type": "image", "url": "pic.png", "mode": "fill"}},
+      {"type": "rectangle", "id": "img2", "x": 80, "y": 60, "width": 60, "height": 40, "fill": [{"type": "image", "url": "pic.png", "mode": "fit"}, {"type": "image", "url": "tile.png", "mode": "tile", "opacity": 0.5}, "#00ff0080"]},
+      {"type": "rectangle", "id": "img3", "x": 150, "y": 60, "width": 60, "height": 40, "fill": {"type": "image", "url": "a b'c.png", "mode": "crop"}, "stroke": "#000", "strokeWidth": 2, "strokeAlignment": "inner"},
+      {"type": "rectangle", "id": "mesh", "x": 220, "y": 60, "width": 60, "height": 40, "fill": {"type": "mesh_gradient", "columns": 2, "rows": 2, "colors": ["#ff0000", "#00ff00", "#0000ff", "#ffff00"], "points": [[0, 0], [1, 0], [0, 1], [1, 1]]}},
+      {"type": "rectangle", "id": "mesh2", "x": 290, "y": 60, "width": 60, "height": 40, "fill": ["#ffffff", {"type": "mesh_gradient", "opacity": 0.5, "columns": 2, "rows": 2, "colors": ["#f00", "#0f0", "#00f", "#ff0"], "points": [[0, 0], [1, 0], [0, 1], [1, 1]]}]},
+      {"type": "rectangle", "id": "shade", "x": 360, "y": 60, "width": 60, "height": 40, "fill": [{"type": "shader", "url": "missing.frag"}, "#cccccc"]},
+      {"type": "rectangle", "id": "bl1", "x": 10, "y": 110, "width": 60, "height": 40, "fill": ["#ffee00", {"type": "color", "color": "#00ffff", "blendMode": "multiply"}]},
+      {"type": "rectangle", "id": "bl2", "x": 80, "y": 110, "width": 60, "height": 40, "fill": [{"type": "color", "color": "#00ffff", "blendMode": "colorBurn"}, "#ff000080"]},
+      {"type": "frame", "id": "bl3", "x": 150, "y": 110, "width": 100, "height": 60, "layout": "horizontal", "padding": 5, "fill": {"type": "color", "color": "#0ff", "blendMode": "screen"}, "children": [
+        {"type": "rectangle", "id": "bl3a", "width": 20, "height": 20, "fill": "#f00"},
+        {"type": "rectangle", "id": "bl3b", "width": 20, "height": 20, "fill": ["#ffee00", {"type": "image", "url": "pic.png", "opacity": 0.4, "blendMode": "overlay"}]}
+      ]},
+      {"type": "ellipse", "id": "clear", "x": 260, "y": 110, "width": 40, "height": 40, "fill": "#ff000000", "opacity": 0.7}
+    ]}
+  ]
+}

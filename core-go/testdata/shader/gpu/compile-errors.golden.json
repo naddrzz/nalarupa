@@ -1,0 +1,22 @@
+[
+  "line 2: Unknown variable: oops",
+  "line 1: Expected Semicolon, found RightBrace",
+  "line 2: Expected LeftParen, integer literal, float literal or bool literal, found Semicolon",
+  "line 0: unsupported matrix of the form matCx2 (in this case mat2x2) in std140 block layout. See https://github.com/gfx-rs/wgpu/issues/4375",
+  "shader validation: Function [0] 'f' is invalid",
+  "line 1: UnfinishedBlock",
+  "line 1: Unknown function 'undefinedFn'",
+  "shader validation: Function [0] 'nr_main' is invalid",
+  "line 1: Invalid swizzle for vector \"q\"",
+  "line 1: Variable already declared: x",
+  "line 2: Function already defined",
+  "line 1: Constructor expects 4 components, found 2",
+  "line 0: UnexpectedCharacter\nline 1: Expected LeftParen, integer literal, float literal or bool literal, found Semicolon",
+  "shader validation: Function [0] 'nr_main' is invalid",
+  "shader validation: Function [0] 'nr_main' is invalid",
+  "",
+  "Unknown annotation directive: @bogus",
+  "No color output found. Expected `out vec4 \u003cname\u003e` or `gl_FragColor`.",
+  "",
+  "line 4: Unknown variable: s"
+]

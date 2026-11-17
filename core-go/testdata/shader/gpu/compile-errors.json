@@ -1,0 +1,22 @@
+[
+  "void main() {\n  gl_FragColor = vec4(oops);\n}",
+  "void main() { gl_FragColor = vec4(1.0) }",
+  "void main() { gl_FragColor = vec4(1.0);\n float x = ;\n}",
+  "uniform mat2 m; void main() { gl_FragColor = vec4(m[0], 0.0, 1.0); }",
+  "float f() { } void main() { gl_FragColor = vec4(f()); }",
+  "#if 1\nvoid main() { gl_FragColor = vec4(1.0); }",
+  "void main() { gl_FragColor = vec4(1.0); undefinedFn(2.0); }",
+  "void main() { int a = 1.5; gl_FragColor = vec4(a); }",
+  "void main() { vec3 v = vec3(1.0); gl_FragColor = vec4(v.q); }",
+  "void main() { float x = 1.0; float x = 2.0; gl_FragColor = vec4(x); }",
+  "void main() { gl_FragColor = vec4(1.0); }\nvoid main() { }",
+  "void main() { gl_FragColor = vec4(1.0, 2.0); }",
+  "void main() { gl_FragColor = vec4(1.0) + \"s\"; }",
+  "void main() { uint u = 1u; gl_FragColor = vec4(float(u >> 40u)); }",
+  "void main() { float a[2]; a[5] = 1.0; gl_FragColor = vec4(a[0]); }",
+  "void main() { gl_FragColor = vec4(dFdxFine(1.0)); }",
+  "/** @bogus */ uniform float x; void main() { gl_FragColor = vec4(x); }",
+  "void main() { }",
+  "void main() { gl_FragColor = vec4(gl_PointCoord, 0.0, 1.0); }",
+  "#version 300 es\nprecision highp float;\nout vec4 o;\nvoid main() { o = texture2D(s, vec2(0.0)); }"
+]

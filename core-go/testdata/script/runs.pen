@@ -1,0 +1,19 @@
+{"version": "2.19", "children": [
+  {"type": "frame", "id": "comp", "x": 0, "y": 600, "width": 20, "height": 12, "reusable": true, "fill": "#2255ee", "cornerRadius": 3},
+  {"type": "frame", "id": "bars", "x": 0, "y": 0, "width": 240, "height": 140, "layout": "none", "fill": "#ffffff", "children": [
+    {"type": "script", "id": "chart", "x": 10, "y": 10, "width": 220, "height": 120, "scriptUri": "./bars.js",
+     "inputs": {"count": 7, "color": "#e0482b", "mode": "stacked", "rounded": true, "unused": 3}},
+    {"type": "script", "id": "clamped", "x": 150, "y": 90, "width": 80, "height": 40, "scriptUri": "./bars.js",
+     "inputs": {"count": 40, "mode": "grouped", "color": null}}
+  ]},
+  {"type": "frame", "id": "flow", "x": 300, "y": 0, "width": 260, "height": 220, "layout": "vertical", "padding": 10, "gap": 8, "fill": "#f4f4f4", "children": [
+    {"type": "script", "id": "grid", "width": "fill_container", "height": 90, "clip": true, "scriptUri": "./grid.js", "inputs": {"cols": " 5 ", "gap": "x"}},
+    {"type": "script", "id": "shapes", "width": 120, "height": 70, "scriptUri": "file://./shapes.js"},
+    {"type": "frame", "id": "after", "width": "fill_container", "height": 10, "fill": "#999999"}
+  ]},
+  {"type": "frame", "id": "old", "x": 0, "y": 200, "width": 220, "height": 120, "layout": "none", "fill": "#ffffff", "children": [
+    {"type": "script", "id": "legacy", "x": 0, "y": 0, "width": 120, "height": 120, "scriptUri": "./legacy.js"},
+    {"type": "script", "id": "async", "x": 120, "y": 0, "width": 100, "height": 60, "scriptUri": "./async.js"},
+    {"type": "script", "id": "rotated", "x": 140, "y": 70, "width": 60, "height": 40, "rotation": 20, "opacity": 0.6, "scriptUri": "./shapes.js"}
+  ]}
+]}

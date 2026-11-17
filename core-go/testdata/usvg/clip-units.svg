@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+  <defs>
+    <clipPath id="user"><circle cx="25" cy="25" r="15"/></clipPath>
+    <clipPath id="obb" clipPathUnits="objectBoundingBox"><circle cx="0.5" cy="0.5" r="0.4"/></clipPath>
+    <clipPath id="obb-tr" clipPathUnits="objectBoundingBox" transform="translate(0.1 0)"><rect width="0.5" height="1"/></clipPath>
+    <clipPath id="rule"><path d="M100 0h40v40h-40z M110 10h20v20h-20z" clip-rule="evenodd"/></clipPath>
+    <clipPath id="rule-inh" clip-rule="evenodd"><path d="M150 0h40v40h-40z M160 10h20v20h-20z"/></clipPath>
+    <clipPath id="styled"><rect x="0" y="50" width="20" height="20" fill="none" stroke="#f00" stroke-width="9" opacity="0.1" fill-rule="evenodd"/></clipPath>
+  </defs>
+  <rect id="r-user" x="5" y="5" width="40" height="40" fill="#c00" clip-path="url(#user)"/>
+  <rect id="r-obb" x="50" y="5" width="40" height="30" fill="#0a0" clip-path="url(#obb)"/>
+  <rect id="r-obb-tr" x="50" y="50" width="40" height="30" fill="#0aa" clip-path="url(#obb-tr)"/>
+  <rect id="r-rule" x="100" width="40" height="40" fill="#00c" clip-path="url(#rule)"/>
+  <rect id="r-rule-inh" x="150" width="40" height="40" fill="#a0a" clip-path="url(#rule-inh)"/>
+  <g clip-path="url(#styled)"><rect id="r-styled" y="50" width="40" height="40"/></g>
+</svg>

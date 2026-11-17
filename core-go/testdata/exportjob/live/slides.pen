@@ -1,0 +1,31 @@
+{
+  "version": "2.19",
+  "variables": {
+    "slide-bg": {"type": "color", "value": "#0F1115"},
+    "slide-fg": {"type": "color", "value": "#F4F1EA"},
+    "slide-muted": {"type": "color", "value": "#9AA0AA"},
+    "slide-accent": {"type": "color", "value": "#FF6A3D"},
+    "font-display": {"type": "string", "value": "Inter"}
+  },
+  "children": [
+    {"type": "frame", "id": "sld01", "name": "01 Cover", "x": 0, "y": 0, "width": 1920, "height": 1080, "fill": "$slide-bg", "clip": true,
+     "layout": "vertical", "padding": [160, 160], "gap": 32, "justifyContent": "end",
+     "children": [
+       {"type": "text", "id": "sld01a", "name": "Kicker", "content": "NALARUPA DECK", "fontFamily": "$font-display", "fontSize": 28, "fontWeight": "600", "letterSpacing": 4, "fill": "$slide-accent"},
+       {"type": "text", "id": "sld01b", "name": "Title", "content": "Say one thing,\nbeautifully.", "fontFamily": "$font-display", "fontSize": 120, "fontWeight": "700", "lineHeight": 1.05, "fill": "$slide-fg", "textGrowth": "fixed-width", "width": "fill_container"},
+       {"type": "text", "id": "sld01c", "name": "Subtitle", "content": "Ask the agent to turn your outline into slides.", "fontFamily": "$font-display", "fontSize": 36, "fill": "$slide-muted"}
+     ]},
+    {"type": "frame", "id": "sld02", "name": "02 Idea", "x": 2020, "y": 0, "width": 1920, "height": 1080, "fill": "$slide-bg", "clip": true,
+     "layout": "horizontal", "padding": [160, 160], "gap": 120, "alignItems": "center",
+     "children": [
+       {"type": "text", "id": "sld02a", "name": "Statement", "content": "One idea per slide.", "fontFamily": "$font-display", "fontSize": 96, "fontWeight": "700", "fill": "$slide-fg", "textGrowth": "fixed-width", "width": "fill_container"},
+       {"type": "frame", "id": "sld02b", "name": "Accent Block", "width": 520, "height": 520, "cornerRadius": 260, "fill": {"type": "gradient", "gradientType": "linear", "rotation": 135, "colors": [{"color": "#FF6A3D", "position": 0}, {"color": "#FFB547", "position": 1}]}}
+     ]},
+    {"type": "frame", "id": "sld03", "name": "03 Closing", "x": 4040, "y": 0, "width": 1920, "height": 1080, "fill": "$slide-accent", "clip": true,
+     "layout": "vertical", "padding": [160, 160], "justifyContent": "center", "alignItems": "center", "gap": 24,
+     "children": [
+       {"type": "text", "id": "sld03a", "name": "Thanks", "content": "Thank you.", "fontFamily": "$font-display", "fontSize": 140, "fontWeight": "700", "fill": "#0F1115"},
+       {"type": "text", "id": "sld03b", "name": "Contact", "content": "hello@example.com", "fontFamily": "$font-display", "fontSize": 36, "fill": "#0F1115"}
+     ]}
+  ]
+}

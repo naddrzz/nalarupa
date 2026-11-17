@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="60" color="#08f">
+  <defs><linearGradient id="g"><stop offset="0" stop-color="#f00"/><stop offset="1" stop-color="#00f"/></linearGradient><rect id="notpaint" width="1" height="1"/></defs>
+  <rect id="missing-red" x="5" y="5" width="20" height="20" fill="url(#missing) red"/>
+  <rect id="missing" x="30" y="5" width="20" height="20" fill="url(#missing)"/>
+  <rect id="missing-none" x="55" y="5" width="20" height="20" fill="url(#missing) none" stroke="#000"/>
+  <rect id="missing-cc" x="80" y="5" width="20" height="20" fill="url(#missing) currentColor"/>
+  <rect id="found-fallback" x="105" y="5" width="20" height="20" fill="url(#g) #0f0"/>
+  <rect id="not-a-server" x="130" y="5" width="20" height="20" fill="url(#notpaint)"/>
+  <rect id="stroke-missing" x="155" y="5" width="20" height="20" stroke="url(#missing)" stroke-width="3"/>
+  <rect id="none" x="5" y="35" width="20" height="20" fill="none"/>
+  <rect id="invalid" x="30" y="35" width="20" height="20" fill="notacolor"/>
+  <rect id="rgba" x="55" y="35" width="20" height="20" fill="rgba(255,0,0,0.5)" fill-opacity="0.5"/>
+  <rect id="hsl" x="80" y="35" width="20" height="20" fill="hsl(120, 100%, 25%)"/>
+  <rect id="named" x="105" y="35" width="20" height="20" fill="cornflowerblue" stroke="transparent"/>
+  <rect id="hex4" x="130" y="35" width="20" height="20" fill="#f008"/>
+  <rect id="url-quoted" x="155" y="35" width="20" height="20" fill="url('#g')"/>
+</svg>

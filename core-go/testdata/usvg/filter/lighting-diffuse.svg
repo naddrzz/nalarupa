@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="200">
+  <filter id="f1"><feDiffuseLighting surfaceScale="3" diffuseConstant="0.7" lighting-color="rgb(255, 128, 0)"><feDistantLight azimuth="45" elevation="30"/></feDiffuseLighting></filter>
+  <filter id="f2"><feDiffuseLighting in="SourceAlpha" lighting-color="currentColor" color="#36f"><fePointLight x="10" y="20" z="30"/></feDiffuseLighting></filter>
+  <filter id="f3"><feDiffuseLighting lighting-color="currentColor"><feSpotLight x="5" y="6" z="7" pointsAtX="50" pointsAtY="60" pointsAtZ="-1" specularExponent="8" limitingConeAngle="30"/></feDiffuseLighting></filter>
+  <filter id="f4"><feDiffuseLighting lighting-color="nonsense"><feSpotLight specularExponent="-2"/><fePointLight/></feDiffuseLighting></filter>
+  <filter id="f5"><feDiffuseLighting><desc>no light</desc></feDiffuseLighting></filter>
+  <filter id="f6"><feDiffuseLighting lighting-color="#00ff0080"><feDistantLight/></feDiffuseLighting></filter>
+  <g color="red">
+    <rect x="10" y="10" width="50" height="40" fill="blue" filter="url(#f1)"/>
+    <rect x="70" y="10" width="50" height="40" fill="blue" filter="url(#f2)"/>
+    <rect x="130" y="10" width="50" height="40" fill="blue" filter="url(#f3)"/>
+  </g>
+  <rect x="10" y="60" width="50" height="40" fill="blue" filter="url(#f3)"/>
+  <rect x="70" y="60" width="50" height="40" fill="blue" filter="url(#f4)"/>
+  <rect x="130" y="60" width="50" height="40" fill="blue" filter="url(#f5)"/>
+  <rect x="10" y="110" width="50" height="40" fill="blue" filter="url(#f6)"/>
+</svg>

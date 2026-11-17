@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="400" height="200">
+<defs><path id="curve" d="M 20 150 C 100 20 300 20 380 150"/></defs><text font-family="Arial" font-size="18"><textPath xlink:href="#curve">Text on a cubic curve path</textPath></text>
+<text font-family="Arial" font-size="18" fill="blue"><textPath xlink:href="#curve" startOffset="40">offset 40</textPath></text>
+</svg>

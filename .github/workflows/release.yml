@@ -7,13 +7,13 @@ name: release
 # number, stamps it into the build (packaging/set-version.sh), builds all three, then tags the commit and attaches
 # the files to a draft GitHub Release for the maintainer to publish. A manual run picks the bump (patch, minor or
 # major) and whether to publish. A tag pushed by hand releases that version. Pull requests that touch the
-# packaging only build.
+# packaging or the Go core (the library it ships) only build.
 on:
   push:
     branches: [main]
     tags: ["v*"]
   pull_request:
-    paths: [".github/workflows/release.yml", "packaging/**", "app/scripts/package.ts"]
+    paths: [".github/workflows/release.yml", "packaging/**", "app/scripts/package.ts", "core-go/**"]
   workflow_dispatch:
     inputs:
       bump:
@@ -84,13 +84,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { persist-credentials: false }
-      - uses: Swatinem/rust-cache@v2
-        with: { workspaces: core }
+      - uses: actions/setup-go@v5
+        with: { go-version-file: core-go/go.mod, cache: false }
       - uses: oven-sh/setup-bun@v2
         with: { bun-version: 1.4.3 }
       - run: sh packaging/set-version.sh "$VERSION"
-      - run: cargo build --release
-        working-directory: core
+      # The Go core: cgo builds the vendored quickjs-ng with the image's MinGW-w64 gcc and links the pinned wgpu-native
+      # MinGW build (fetched by go generate) into out/nalarupa_core.dll, which package.ts copies into dist/.
+      - run: go generate ./shader/gpu && bash build.sh
+        working-directory: core-go
+        env: { CGO_ENABLED: "1", CC: "C:/mingw64/bin/gcc.exe" }
       - run: bun install --frozen-lockfile && bun run build
         working-directory: app
       # Launch the compiled exe once before shipping it.
@@ -129,13 +132,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { persist-credentials: false }
-      - uses: Swatinem/rust-cache@v2
-        with: { workspaces: core }
+      - uses: actions/setup-go@v5
+        with: { go-version-file: core-go/go.mod, cache: false }
       - uses: oven-sh/setup-bun@v2
         with: { bun-version: 1.4.3 }
       - run: sh packaging/set-version.sh "$VERSION"
-      - run: cargo build --release
-        working-directory: core
+      # The Go core with the pinned wgpu-native (Metal) linked in: out/libnalarupa_core.dylib, signed below as before.
+      - run: go generate ./shader/gpu && bash build.sh
+        working-directory: core-go
+        env: { CGO_ENABLED: "1" }
       - run: bun install --frozen-lockfile && bun run build
         working-directory: app
       # Launch the compiled binary once before shipping it.
@@ -235,13 +240,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { persist-credentials: false }
-      - uses: Swatinem/rust-cache@v2
-        with: { workspaces: core }
+      - uses: actions/setup-go@v5
+        with: { go-version-file: core-go/go.mod, cache: false }
       - uses: oven-sh/setup-bun@v2
         with: { bun-version: 1.4.3 }
       - run: sh packaging/set-version.sh "$VERSION"
-      - run: cargo build --release
-        working-directory: core
+      # The Go core, built here so it needs no newer glibc than this runner's: out/libnalarupa_core.so.
+      - run: go generate ./shader/gpu && bash build.sh
+        working-directory: core-go
+        env: { CGO_ENABLED: "1" }
       - run: bun install --frozen-lockfile && bun run build
         working-directory: app
       - name: Tarball

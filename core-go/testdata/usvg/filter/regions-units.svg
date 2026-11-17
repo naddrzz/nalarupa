@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="200">
+  <filter id="obb" x="0.1" y="-20%" width="1.5" height="140%"><feFlood/></filter>
+  <filter id="user" filterUnits="userSpaceOnUse" x="5" y="5" width="50%" height="30%"><feFlood/></filter>
+  <filter id="default"><feGaussianBlur stdDeviation="1"/></filter>
+  <filter id="prim" primitiveUnits="objectBoundingBox" filterUnits="userSpaceOnUse">
+    <feOffset x="0.1" y="0.2" width="0.5" height="0.6" dx="0.1"/>
+    <feOffset x="10%" width="50%"/>
+    <feGaussianBlur stdDeviation="0.01"/>
+  </filter>
+  <filter id="sub" filterUnits="userSpaceOnUse" x="0" y="0" width="200" height="200">
+    <feFlood x="10" y="20" width="30" height="40"/>
+    <feOffset x="5" width="50"/>
+    <feOffset y="10%" height="25%"/>
+  </filter>
+  <rect x="10" y="10" width="50" height="40" fill="blue" filter="url(#obb)"/>
+  <rect x="70" y="10" width="50" height="40" fill="blue" filter="url(#user)"/>
+  <rect x="130" y="10" width="50" height="40" fill="blue" filter="url(#default)" transform="rotate(10 150 30)"/>
+  <rect x="10" y="60" width="50" height="40" fill="blue" filter="url(#prim)"/>
+  <rect x="70" y="60" width="50" height="40" fill="blue" filter="url(#sub)"/>
+  <g filter="url(#obb)" transform="translate(5 120) scale(2 0.5)"><rect width="20" height="30"/><rect x="30" width="10" height="10"/></g>
+</svg>

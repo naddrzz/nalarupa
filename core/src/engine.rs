@@ -517,7 +517,8 @@ impl Engine {
         }
         let room = self.doc.parent_of(id).is_some_and(|(p, _)| self.renderer.can_slide_into(&self.doc, &p));
         if self.slid.insert(id.to_string()) && room {
-            self.renderer.slides.push(crate::render::Slide::new(id));
+            // The renderer's clock is the wall clock unless a replay pinned it.
+            self.renderer.slides.push(crate::render::Slide::new_at(id, self.renderer.now()));
         }
     }
 
@@ -1822,10 +1823,16 @@ mod tests {
         let mut e = Engine::new(dir.clone());
         e.offline();
         let face = e.fonts.db.faces().find(|f| f.weight.0 == 400 && f.style == resvg::usvg::fontdb::Style::Normal).expect("a system font");
-        let (family, id) = (face.families[0].0.clone(), face.id);
+        let family = face.families[0].0.clone();
         let (resvg::usvg::fontdb::Source::File(p) | resvg::usvg::fontdb::Source::SharedFile(p, _)) = &face.source else { panic!("font from a file") };
         let bytes = std::fs::read(p).unwrap();
-        std::sync::Arc::make_mut(&mut e.fonts.db).remove_face(id);
+        // Remove every face of the family: a system with several regular faces of it (or a variable one) would
+        // still have it loaded, and the cached copy would add nothing.
+        let ids: Vec<_> = e.fonts.db.faces().filter(|f| f.families.iter().any(|(n, _)| *n == family)).map(|f| f.id).collect();
+        let db = std::sync::Arc::make_mut(&mut e.fonts.db);
+        for id in ids {
+            db.remove_face(id);
+        }
         let _ = std::fs::create_dir_all(dir.join("fonts"));
         std::fs::write(dir.join("fonts").join(format!("{}-400.ttf", family.replace(' ', "_"))), bytes).unwrap();
         let before = e.version;

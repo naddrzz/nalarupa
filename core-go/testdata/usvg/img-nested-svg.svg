@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="80">
+  <image id="file" x="5" y="5" width="40" height="20" href="res/inner.svg"/>
+  <image id="file-svgz" x="50" y="5" width="40" height="20" href="res/inner.svgz"/>
+  <image id="data-b64" x="95" y="5" width="40" height="20" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyMCIgaGVpZ2h0PSIxMCIgdmlld0JveD0iMCAwIDIwIDEwIj48cmVjdCB3aWR0aD0iMjAiIGhlaWdodD0iMTAiIGZpbGw9IiMwYTAiLz48Y2lyY2xlIGN4PSIxMCIgY3k9IjUiIHI9IjQiIGZpbGw9IiNjMDAiLz48L3N2Zz4="/>
+  <image id="data-pct" x="140" y="5" width="40" height="20" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2220%22 height=%2210%22 viewBox=%220 0 20 10%22%3E%3Crect width=%2220%22 height=%2210%22 fill=%22%230a0%22/%3E%3Ccircle cx=%2210%22 cy=%225%22 r=%224%22 fill=%22%23c00%22/%3E%3C/svg%3E"/>
+  <image id="data-utf8" x="5" y="40" width="40" height="20" href="data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='10' viewBox='0 0 20 10'%3E%3Crect width='20' height='10' fill='%230a0'/%3E%3Ccircle cx='10' cy='5' r='4' fill='%23c00'/%3E%3C/svg%3E"/>
+  <image id="text-plain" x="50" y="40" width="40" height="20" href="data:text/plain;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyMCIgaGVpZ2h0PSIxMCIgdmlld0JveD0iMCAwIDIwIDEwIj48cmVjdCB3aWR0aD0iMjAiIGhlaWdodD0iMTAiIGZpbGw9IiMwYTAiLz48Y2lyY2xlIGN4PSIxMCIgY3k9IjUiIHI9IjQiIGZpbGw9IiNjMDAiLz48L3N2Zz4="/>
+  <image id="file-with-images" x="95" y="40" width="40" height="20" href="res/with-images.svg"/>
+  <image id="bad-svg" x="140" y="40" width="40" height="20" href="data:image/svg+xml,%3Csvg%3E"/>
+</svg>

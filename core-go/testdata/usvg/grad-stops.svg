@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+  <defs>
+    <linearGradient id="single"><stop offset="0.3" stop-color="#c00" stop-opacity="0.5"/></linearGradient>
+    <linearGradient id="none"/>
+    <linearGradient id="order"><stop offset="0.8" stop-color="#f00"/><stop offset="0.2" stop-color="#0f0"/><stop offset="1" stop-color="#00f"/></linearGradient>
+    <linearGradient id="clamp"><stop offset="-1" stop-color="#f00"/><stop offset="150%" stop-color="#00f"/><stop offset="2" stop-color="#0f0"/></linearGradient>
+    <linearGradient id="pct"><stop offset="25%" stop-color="#f00"/><stop offset="75%" style="stop-color:#00f; stop-opacity:0.3"/></linearGradient>
+    <linearGradient id="same"><stop offset="0.5" stop-color="#f00"/><stop offset="0.5" stop-color="#0f0"/><stop offset="0.5" stop-color="#00f"/><stop offset="1" stop-color="#000"/></linearGradient>
+    <linearGradient id="defaults"><stop/><stop offset="1" stop-color="currentColor" color="#0a0"/><stop offset="1" stop-color="bogus" stop-opacity="2"/></linearGradient>
+    <linearGradient id="non-stop"><rect/><stop offset="0" stop-color="#f00"/><g><stop offset="1" stop-color="#00f"/></g></linearGradient>
+  </defs>
+  <rect id="r-single" x="5" y="5" width="40" height="30" fill="url(#single)"/>
+  <rect id="r-none" x="50" y="5" width="40" height="30" fill="url(#none)"/>
+  <rect id="r-order" x="95" y="5" width="40" height="30" fill="url(#order)"/>
+  <rect id="r-clamp" x="140" y="5" width="40" height="30" fill="url(#clamp)"/>
+  <rect id="r-pct" x="5" y="50" width="40" height="30" fill="url(#pct)"/>
+  <rect id="r-same" x="50" y="50" width="40" height="30" fill="url(#same)"/>
+  <rect id="r-defaults" x="95" y="50" width="40" height="30" fill="url(#defaults)"/>
+  <rect id="r-non-stop" x="140" y="50" width="40" height="30" fill="url(#non-stop)"/>
+</svg>
