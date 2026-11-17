@@ -52,10 +52,16 @@ func flattenText(t *Text, cache *converterCache) (*Group, skia.NonZeroRect, bool
 		// first, so the path is sized once (a long line otherwise regrows it many times).
 		hasExplicitVariations := len(span.variations) != 0
 		outlines := make([]*skia.Path, len(span.positionedGlyphs))
-		verbs, points := 0, 0
+		// runs[k] is the room for the k-th run of outline glyphs (an image glyph ends a path and starts the next).
+		type room struct{ verbs, points int }
+		runs := []room{{}}
 		for gi := range span.positionedGlyphs {
 			g := &span.positionedGlyphs[gi]
-			if colr, image := cache.glyphImage(g.Font, g.ID); colr || image {
+			colr, image := cache.glyphImage(g.Font, g.ID)
+			if image && !colr {
+				runs = append(runs, room{})
+			}
+			if colr || image {
 				continue
 			}
 			// Variations bypass the outline cache: with explicit ones, or an automatic opsz.
@@ -69,11 +75,12 @@ func flattenText(t *Text, cache *converterCache) (*Group, skia.NonZeroRect, bool
 			}
 			if outline != nil {
 				outlines[gi] = outline
-				verbs += outline.Len()
-				points += outline.PointsLen()
+				runs[len(runs)-1].verbs += outline.Len()
+				runs[len(runs)-1].points += outline.PointsLen()
 			}
 		}
-		b := skia.NewPathBuilderWithCapacity(verbs, points)
+		b := skia.NewPathBuilderWithCapacity(runs[0].verbs, runs[0].points)
+		run := 0
 		for gi := range span.positionedGlyphs {
 			g := &span.positionedGlyphs[gi]
 			colr, image := cache.glyphImage(g.Font, g.ID)
@@ -82,6 +89,8 @@ func flattenText(t *Text, cache *converterCache) (*Group, skia.NonZeroRect, bool
 			}
 			if image {
 				children = pushOutlinePaths(span, &b, children, mode)
+				run++
+				b = skia.NewPathBuilderWithCapacity(runs[run].verbs, runs[run].points)
 				continue // an SVG or bitmap glyph; not ported
 			}
 			if outline := outlines[gi]; outline != nil {

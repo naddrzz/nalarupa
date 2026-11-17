@@ -431,7 +431,15 @@ func layoutText(t *Text, resolver *FontResolver, db *text.Database) ([]Span, ski
 // convertSpan is convert_span: the span's visible clusters and the bounding box of every visible
 // cluster of the chunk from font metrics (not glyph outlines).
 func convertSpan(span *TextSpan, clusters []glyphCluster, textTS skia.Transform) ([]glyphCluster, skia.NonZeroRect, bool) {
-	spanClusters := make([]glyphCluster, 0, len(clusters))
+	// Sized to the span's own clusters: a chunk of many styled spans would otherwise get room for the whole
+	// chunk once per span.
+	n := 0
+	for i := range clusters {
+		if clusters[i].visible && spanContains(span, clusters[i].byteIdx) {
+			n++
+		}
+	}
+	spanClusters := make([]glyphCluster, 0, n)
 	b := skia.NewPathBuilder()
 	for i := range clusters {
 		c := &clusters[i]

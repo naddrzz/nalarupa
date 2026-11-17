@@ -265,8 +265,11 @@ func TestLatePreparationIsDropped(t *testing.T) {
 	if path = os.Getenv("NALARUPA_VARIABLE_FONT"); path != "" {
 		db := newDB()
 		db.loadFile(path)
-		if fs := db.faces(); len(fs) > 0 && fs[0].isVariable() {
-			family = fs[0].families[0].name
+		for _, x := range db.faces() {
+			if x.isVariable() {
+				family = x.families[0].name
+				break
+			}
 		}
 	} else {
 		for _, x := range fonts(t).db.faces() {

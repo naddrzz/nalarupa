@@ -62,8 +62,9 @@ type Database struct {
 	// shapes memoises Shape: text is converted again on every rebuild (a sliding node's snapshot, a landed
 	// font), and shaping is deterministic in its inputs. Keyed by the shaper, which stands for the face and
 	// its variations.
-	shapesMu sync.Mutex
-	shapes   map[shapeMemoKey][]ShapedGlyph
+	shapesMu     sync.Mutex
+	shapes       map[shapeMemoKey][]ShapedGlyph
+	shapesGlyphs int // glyphs held in shapes
 }
 
 type shapeMemoKey struct {
@@ -72,11 +73,13 @@ type shapeMemoKey struct {
 	rtl, smallCaps, kerning bool
 }
 
-// maxShapeMemo bounds the shaping memo; past it the memo starts over. A run longer than maxShapeMemoText is
-// not kept (a pasted line of minified JSON would hold megabytes for nothing).
+// maxShapeMemo and maxShapeMemoGlyphs (about 6 MB of glyphs) bound the shaping memo; past either it starts
+// over. A run longer than maxShapeMemoText is not kept (a pasted line of minified JSON would hold megabytes for
+// nothing).
 const (
-	maxShapeMemo     = 1 << 13
-	maxShapeMemoText = 1 << 12
+	maxShapeMemo       = 1 << 13
+	maxShapeMemoGlyphs = 1 << 18
+	maxShapeMemoText   = 1 << 12
 )
 
 // NewDatabase is an empty database (fontdb::Database::new()).
@@ -281,10 +284,11 @@ func (d *Database) Shape(id FaceID, text string, rtl, smallCaps, kerning bool, v
 	}
 	out = shapeRun(hb, text, rtl, smallCaps, kerning)
 	d.shapesMu.Lock()
-	if d.shapes == nil || len(d.shapes) >= maxShapeMemo {
-		d.shapes = map[shapeMemoKey][]ShapedGlyph{}
+	if d.shapes == nil || len(d.shapes) >= maxShapeMemo || d.shapesGlyphs+len(out) > maxShapeMemoGlyphs {
+		d.shapes, d.shapesGlyphs = map[shapeMemoKey][]ShapedGlyph{}, 0
 	}
 	d.shapes[k] = out
+	d.shapesGlyphs += len(out)
 	d.shapesMu.Unlock()
 	return out, true
 }
