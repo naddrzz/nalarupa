@@ -24,6 +24,9 @@ __attribute__((constructor(101))) static void save_suspend_signal(void) {
 	have_saved = sigaction(SIGPWR, NULL, &saved) == 0;
 }
 
+// POSIX has no compare-and-swap for a disposition, so this check-then-set is only safe while nothing else installs a
+// SIGPWR handler: it runs once (pthread_once), from the Go init while the host loads this library, before any call
+// returns to the host; the engine installs its handler when its VM starts, before the library is loaded.
 static void restore_suspend_signal(void) {
 	struct sigaction cur;
 	if (!have_saved || (saved.sa_flags & SA_ONSTACK) || sigaction(SIGPWR, NULL, &cur) != 0) {
