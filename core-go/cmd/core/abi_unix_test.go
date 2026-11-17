@@ -15,7 +15,10 @@ import (
 // leaves the thread's signal stack as it was.
 func TestACallFromAForeignThreadLeavesItsSignalStack(t *testing.T) {
 	for range 3 {
-		out, same := cthread.Call(`{"cmd":"state"}`)
+		out, same, err := cthread.Call(`{"cmd":"state"}`)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if !strings.HasPrefix(out, `{"ok":true`) {
 			t.Fatalf("answer %q", out)
 		}
