@@ -12,6 +12,7 @@ import "unsafe"
 // init starts taking the jobs the C entry points queue (bridge_unix.c), each on its own goroutine: calls from the app's
 // thread and from a worker run side by side, as they do on Windows.
 func init() {
+	C.nr_restore_signals()
 	go func() {
 		for {
 			job := C.nr_next_job()

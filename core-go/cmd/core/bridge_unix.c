@@ -6,8 +6,41 @@
 // JavaScript engine's collector, which suspends a thread with a signal and then scans its stack, would find the
 // handler on that stack instead of the thread's, back off and retry forever (chat-check hung the Linux CI).
 #include <pthread.h>
+#include <signal.h>
 #include <stdlib.h>
 #include "bridge_unix.h"
+
+#ifdef SIGPWR
+// The same engine suspends a thread with SIGPWR (Linux), and its handler backs off and retries when it runs on an
+// alternate signal stack. Loading the Go runtime adds SA_ONSTACK to every handler already installed, and Bun gives
+// its main thread an alternate stack (for its crash handler): from then on a collection that scanned the main thread
+// from a helper thread retried forever (e2e hung on Linux). saved is the handler before the runtime started; restore
+// takes the flag off again while the handler is still that one. The engine sends SIGPWR only to its own threads.
+static struct sigaction saved;
+static int have_saved;
+
+// Priority 101 runs before the Go runtime's own initializer, which sets the flag.
+__attribute__((constructor(101))) static void save_suspend_signal(void) {
+	have_saved = sigaction(SIGPWR, NULL, &saved) == 0;
+}
+
+static void restore_suspend_signal(void) {
+	struct sigaction cur;
+	if (!have_saved || (saved.sa_flags & SA_ONSTACK) || sigaction(SIGPWR, NULL, &cur) != 0) {
+		return;
+	}
+	if ((cur.sa_flags & SA_ONSTACK) && cur.sa_handler == saved.sa_handler) {
+		cur.sa_flags &= ~SA_ONSTACK;
+		sigaction(SIGPWR, &cur, NULL);
+	}
+}
+#else
+static void restore_suspend_signal(void) {}
+#endif
+
+static pthread_once_t restored = PTHREAD_ONCE_INIT;
+
+void nr_restore_signals(void) { pthread_once(&restored, restore_suspend_signal); }
 
 static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t queued = PTHREAD_COND_INITIALIZER; // a job was queued
@@ -15,6 +48,7 @@ static pthread_cond_t finished = PTHREAD_COND_INITIALIZER; // a job is done
 static nr_job *head, *tail;
 
 static void *submit(nr_job *job) {
+	nr_restore_signals();
 	pthread_mutex_lock(&mu);
 	job->done = 0;
 	job->next = NULL;

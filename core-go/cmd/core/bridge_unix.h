@@ -16,6 +16,7 @@ typedef struct nr_job {
 	struct nr_job *next;
 } nr_job;
 
+void nr_restore_signals(void);
 nr_job *nr_next_job(void);
 void nr_finish(nr_job *job, void *out);
 void *nr_call(const void *ptr, uint32_t n);
