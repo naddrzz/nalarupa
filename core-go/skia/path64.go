@@ -1,6 +1,10 @@
 package skia
 
-import "math"
+import (
+	"math"
+
+	"github.com/naddrzz/nalarupa/core-go/libm"
+)
 
 // Double precision cubic intersections (path64/), from SkPathOps; used by the edge clipper to chop
 // monotonic cubics at an X or Y value. Every product is converted explicitly, as in float32 code, so it is
@@ -564,76 +568,38 @@ func cubic64VerticalIntersect(cubic *cubic64, axisIntercept float64, roots *[3]f
 	return count
 }
 
-// p64DD is a double-double number hi + lo, |lo| <= ulp(hi)/2, for p64Cos and p64Acos.
-type p64DD struct{ hi, lo float64 }
-
-// p64TwoSum returns a + b exactly as a normalized double-double.
-func p64TwoSum(a, b float64) p64DD {
-	s := a + b
-	bb := s - a
-	return p64DD{s, (a - (s - bb)) + (b - bb)}
-}
-
-func (x p64DD) add(y p64DD) p64DD {
-	s := p64TwoSum(x.hi, y.hi)
-	t := p64TwoSum(x.lo, y.lo)
-	s = p64TwoSum(s.hi, s.lo+t.hi)
-	return p64TwoSum(s.hi, s.lo+t.lo)
-}
-
-func (x p64DD) neg() p64DD { return p64DD{-x.hi, -x.lo} }
-
-func (x p64DD) mul(y p64DD) p64DD {
-	p := float64(x.hi * y.hi)
-	e := math.FMA(x.hi, y.hi, -p) // the exact rounding error of the product
-	e += float64(x.hi*y.lo) + float64(x.lo*y.hi)
-	return p64TwoSum(p, e)
-}
-
-func (x p64DD) divF(d float64) p64DD {
-	q := x.hi / d
-	r := x.add(p64DD{q, 0}.mul(p64DD{d, 0}).neg())
-	return p64TwoSum(q, (r.hi+r.lo)/d)
-}
-
-func (x p64DD) div(y p64DD) p64DD {
-	q := x.hi / y.hi
-	r := x.add(p64DD{q, 0}.mul(y).neg())
-	return p64TwoSum(q, (r.hi+r.lo)/y.hi)
-}
-
 // p64PiDD is pi as a double-double.
-var p64PiDD = p64DD{3.141592653589793, 1.2246467991473532e-16}
+var p64PiDD = libm.DD{Hi: 3.141592653589793, Lo: 1.2246467991473532e-16}
 
 // p64CosSinDD returns cos(x) and sin(x) for |x| <= pi, by Taylor series after reducing to |x| <= pi/2.
-func p64CosSinDD(x p64DD) (p64DD, p64DD) {
+func p64CosSinDD(x libm.DD) (libm.DD, libm.DD) {
 	negCos, negSin := false, false
-	if x.hi < 0 {
-		x = x.neg()
+	if x.Hi < 0 {
+		x = x.Neg()
 		negSin = true
 	}
-	if x.hi > math.Pi/2 {
+	if x.Hi > math.Pi/2 {
 		// cos(x) = -cos(pi - x), sin(x) = sin(pi - x)
-		x = p64PiDD.add(x.neg())
+		x = p64PiDD.Add(x.Neg())
 		negCos = true
 	}
-	x2 := x.mul(x)
-	c, s := p64DD{1, 0}, x
-	ct, st := p64DD{1, 0}, x
+	x2 := x.Mul(x)
+	c, s := libm.DD{Hi: 1}, x
+	ct, st := libm.DD{Hi: 1}, x
 	for k := 1; k <= 30; k++ {
-		ct = ct.mul(x2).divF(float64((2*k - 1) * (2 * k))).neg()
-		st = st.mul(x2).divF(float64((2 * k) * (2*k + 1))).neg()
-		c = c.add(ct)
-		s = s.add(st)
-		if math.Abs(ct.hi) < 1e-34 && math.Abs(st.hi) < 1e-34 {
+		ct = ct.Mul(x2).Div(libm.DD{Hi: float64((2*k - 1) * (2 * k))}).Neg()
+		st = st.Mul(x2).Div(libm.DD{Hi: float64((2 * k) * (2*k + 1))}).Neg()
+		c = c.Add(ct)
+		s = s.Add(st)
+		if math.Abs(ct.Hi) < 1e-34 && math.Abs(st.Hi) < 1e-34 {
 			break
 		}
 	}
 	if negCos {
-		c = c.neg()
+		c = c.Neg()
 	}
 	if negSin {
-		s = s.neg()
+		s = s.Neg()
 	}
 	return c, s
 }
@@ -644,8 +610,8 @@ func p64Cos(x float64) float64 {
 	if !(math.Abs(x) <= math.Pi) {
 		return math.Cos(x)
 	}
-	c, _ := p64CosSinDD(p64DD{x, 0})
-	return c.hi + c.lo
+	c, _ := p64CosSinDD(libm.DD{Hi: x})
+	return c.Hi + c.Lo
 }
 
 // p64Acos is f64::acos, correctly rounded except in vanishingly rare cases: math.Acos refined by
@@ -654,10 +620,10 @@ func p64Acos(x float64) float64 {
 	if !(x > -1 && x < 1) {
 		return math.Acos(x) // NaN, 0 for 1, pi for -1 (both correctly rounded)
 	}
-	t := p64DD{math.Acos(x), 0}
+	t := libm.DD{Hi: math.Acos(x)}
 	for range 2 {
 		c, s := p64CosSinDD(t)
-		t = t.add(c.add(p64DD{-x, 0}).div(s))
+		t = t.Add(c.Add(libm.DD{Hi: -x}).Div(s))
 	}
-	return t.hi + t.lo
+	return t.Hi + t.Lo
 }

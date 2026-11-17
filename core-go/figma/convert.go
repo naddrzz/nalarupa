@@ -29,16 +29,11 @@ func (d *doc) convert(e *node, up []jsonv.Value, parentFlow bool, depth int) *js
 		return nil
 	}
 	d.budget--
-	if jsonv.StrIs(get(e.p, "type"), "INSTANCE") {
+	instance := jsonv.StrIs(get(e.p, "type"), "INSTANCE")
+	if instance {
 		swapped := real(get(e.p, "overriddenSymbolID"))
 		d.bind(e.p, up, get(e.p, "parameterConsumptionMap", "entries"))
-		for _, a := range arr(get(e.p, "componentPropRefs")) {
-			if truthy(get(a, "defID")) && truthy(get(a, "componentPropNodeField")) {
-				entry := jsonv.NewArray(obj("variableField", jsonv.Clone(get(a, "componentPropNodeField")),
-					"variableData", obj("value", obj("propRefValue", obj("defId", jsonv.Clone(get(a, "defID")))))))
-				d.bind(e.p, up, entry)
-			}
-		}
+		d.bindPropRefs(e.p, up)
 		symbol := get(e.p, "symbolData", "symbolID")
 		if real(get(e.p, "overriddenSymbolID")) {
 			symbol = get(e.p, "overriddenSymbolID")
@@ -68,6 +63,10 @@ func (d *doc) convert(e *node, up []jsonv.Value, parentFlow bool, depth int) *js
 		}
 	}
 	d.bind(e.p, up, get(e.p, "parameterConsumptionMap", "entries"))
+	// A symbol's layers take its component properties (text, visibility) from the instance above them.
+	if !instance {
+		d.bindPropRefs(e.p, up)
+	}
 	d.applyStyles(e.p, with(up, scope(e.p)))
 	p := e.p
 	var ty string
@@ -134,7 +133,7 @@ func (d *doc) convert(e *node, up []jsonv.Value, parentFlow bool, depth int) *js
 		if mirrored {
 			rot = libm.Atan2(-m10, -m00)
 		}
-		c, s := libm.Cos(rot), libm.Sin(rot)
+		s, c := libm.SinCos(rot)
 		if !flow {
 			o.Set("x", jsonv.Float(m02))
 			o.Set("y", jsonv.Float(m12))

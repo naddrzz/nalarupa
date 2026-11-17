@@ -378,7 +378,7 @@ func PathWrite(e *engine.Engine, id string, hasID bool, parent string, contours 
 			if jsonv.IsTrue(jsonv.Get(n, "flipY")) {
 				fy = -1
 			}
-			cos, sin := libm.Cos(t), libm.Sin(t)
+			sin, cos := libm.SinCos(t)
 			dx := float64(float64(cos*fx)*ox) - float64(float64(sin*fy)*oy)
 			dy := float64(float64(sin*fx)*ox) + float64(float64(cos*fy)*oy)
 			x, _ := jsonv.F64(jsonv.Get(n, "x"))

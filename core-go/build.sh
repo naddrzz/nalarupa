@@ -31,6 +31,7 @@ esac
 # The MCP server reports the app's version (packaging/set-version.sh stamps it into app/package.json).
 version=$(sed -n 's/^  "version": "\([^"]*\)".*/\1/p' ../app/package.json)
 ldflags="$ldflags -X github.com/naddrzz/nalarupa/core-go/agent.version=${version:?no version in app/package.json}"
+mkdir -p out
 if [ "${1:-}" = cli ]; then
   out=out/nalarupa-cli$exe
   CGO_ENABLED=1 go build -trimpath -ldflags "$ldflags" -o "$out" ./cmd/cli

@@ -486,6 +486,18 @@ func (d *doc) propRef(chain []jsonv.Value, n jsonv.Value, depth int) jsonv.Value
 	return n
 }
 
+// bindPropRefs binds the node's fields that reference component properties (`componentPropRefs`) to the
+// values assigned up the tree.
+func (d *doc) bindPropRefs(p *jsonv.Object, up []jsonv.Value) {
+	for _, a := range arr(get(p, "componentPropRefs")) {
+		if truthy(get(a, "defID")) && truthy(get(a, "componentPropNodeField")) {
+			entry := jsonv.NewArray(obj("variableField", jsonv.Clone(get(a, "componentPropNodeField")),
+				"variableData", obj("value", obj("propRefValue", obj("defId", jsonv.Clone(get(a, "defID")))))))
+			d.bind(p, up, entry)
+		}
+	}
+}
+
 // bind applies node properties bound to variables / component properties.
 func (d *doc) bind(p *jsonv.Object, up []jsonv.Value, entries jsonv.Value) {
 	if !isArr(entries) {

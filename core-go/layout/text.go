@@ -78,7 +78,8 @@ type TextMeasurer interface {
 	Metrics(st TextStyle) Metrics
 	// Width is the advance of text (trailing spaces included) plus letter spacing after every cluster.
 	Width(text string, st TextStyle) float64
-	// Wrap breaks text into lines no wider than maxW: `\n` always breaks, trailing spaces hang, and a
-	// maxW of 0 puts one word per line. An infinite maxW only breaks at `\n`.
+	// Wrap breaks text into lines no wider than maxW: `\n` and the other UAX #14 mandatory breaks (CR, U+2028,
+	// …) always break, trailing spaces hang, and a maxW of 0 puts one word per line. An infinite maxW only
+	// breaks at the mandatory breaks.
 	Wrap(text string, maxW float64, st TextStyle) []resolve.Line
 }

@@ -45,6 +45,18 @@ func TestPathsFollowRust(t *testing.T) {
 		if !SamePath(`c:\docs\a.pen`, `C:/docs/a.pen`) {
 			t.Error("drive letters compare upper-cased")
 		}
+		// UNC and device prefixes compare by their parts, whichever separators they are written with (as Rust's Path does).
+		for _, c := range []struct {
+			a, b string
+			same bool
+		}{
+			{`\\srv\share\a`, `//srv/share/a`, true}, {`\\srv/share\a`, `\\srv\share\a`, true}, {`/\srv\share\a`, `\\srv\share\a`, true},
+			{`\\.\pipe\x`, `\\./pipe\x`, true}, {`//srv/share/a`, `/srv/share/a`, false}, {`\\SRV\share\a`, `\\srv\share\a`, false},
+		} {
+			if SamePath(c.a, c.b) != c.same {
+				t.Errorf("SamePath(%q, %q) != %v", c.a, c.b, c.same)
+			}
+		}
 	} else if got := JoinPath("/docs/x", "/lib.pen"); got != "/lib.pen" {
 		t.Errorf("rooted join: %q", got)
 	}

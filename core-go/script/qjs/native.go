@@ -84,5 +84,7 @@ func (r *Runtime) repanic() {
 func (r *Runtime) Global(name string) Value {
 	n := C.CString(name)
 	defer C.free(unsafe.Pointer(n))
-	return Value{C.qjs_global(r.ctx, n)}
+	v := Value{C.qjs_global(r.ctx, n)}
+	r.afterJS(v)
+	return v
 }

@@ -28,6 +28,11 @@ func (s *IDSource) Reseed(seed uint64) {
 func (s *IDSource) Next() uint64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.next()
+}
+
+// next is Next with s.mu held.
+func (s *IDSource) next() uint64 {
 	// Only the zero value holds 0 (seeds are made odd and xorshift never reaches 0), which would stay 0: it is
 	// seed 0 made odd as `reseed` makes it.
 	x := s.seed
@@ -57,9 +62,16 @@ func (s *IDSource) SetState(state uint64) {
 
 // Resume restores the sequence of seed after draws values (script.rs `resume_ids`).
 func (s *IDSource) Resume(seed, draws uint64) {
-	s.Reseed(seed)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.resume(seed, draws)
+}
+
+// resume is Resume with s.mu held.
+func (s *IDSource) resume(seed, draws uint64) {
+	s.seed = seed | 1
 	for range draws {
-		s.Next()
+		s.next()
 	}
 }
 
@@ -68,12 +80,15 @@ const idsReach = 1 << 20
 
 // Drawn is how many values the sequence of seed has produced, given it stood at from before (script.rs
 // `ids_drawn`): it draws a probe and finds it further down the sequence; false when it is out of reach. It
-// leaves the sequence right after the probe's position.
+// leaves the sequence right after the probe's position. It holds the lock throughout, so no other draw lands
+// between the probe and the search.
 func (s *IDSource) Drawn(seed, from uint64) (uint64, bool) {
-	probe := s.Next()
-	s.Resume(seed, from)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	probe := s.next()
+	s.resume(seed, from)
 	for n := from; n < from+idsReach; n++ {
-		if s.Next() == probe {
+		if s.next() == probe {
 			return n, true
 		}
 	}

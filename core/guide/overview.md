@@ -44,7 +44,8 @@ grown from a sample brief: read one for the reasoning, then compose your own.
 - The document root holds only screens, slides, component frames and other
   large containers. Never put loose text, icons or buttons at the root.
 - New screens are top-level frames with `clip: true`. Place them with
-  `FindEmptySpace` so they never overlap existing work. Put components above
+  `FindEmptySpace` so they do not overlap existing work (it searches up to
+  20000 px from its anchor; on a wider canvas check the spot). Put components above
   or to the left of screens.
 - While you work on a top-level frame set `placeholder: true`; set it back to
   `false` the moment that frame is finished.

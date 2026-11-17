@@ -1,11 +1,14 @@
 package doc
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/naddrzz/nalarupa/core-go/jsonv"
@@ -417,6 +420,45 @@ func TestZeroIDSourceIsSeedOne(t *testing.T) {
 	d.IDs = &IDSource{}
 	if a, b := d.GenID(), d.GenID(); a == "" || a == b {
 		t.Fatal(a, b)
+	}
+}
+
+// RemoveFile removes a file but never a folder, even an empty one, and reports the system's error for it.
+func TestRemoveFileNeverRemovesAFolder(t *testing.T) {
+	dir := t.TempDir()
+	file, sub := filepath.Join(dir, "a.json"), filepath.Join(dir, "sub")
+	if err := os.WriteFile(file, nil, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(sub, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveFile(file); err != nil {
+		t.Fatal(err)
+	}
+	err := RemoveFile(sub)
+	if err == nil || !strings.Contains(IOError(err), "(os error ") {
+		t.Fatal(err)
+	}
+	if st, err := os.Stat(sub); err != nil || !st.IsDir() {
+		t.Fatal("the folder was removed")
+	}
+	if err := RemoveFile(file); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatal(err)
+	}
+}
+
+// An errno outside Go's table reads as libc's strerror text, as Rust shows it.
+func TestUnknownErrnoReadsAsLibc(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows messages come from FormatMessageW")
+	}
+	want := "Unknown error 4000"
+	if runtime.GOOS == "darwin" {
+		want = "Unknown error: 4000"
+	}
+	if got := systemMessage(syscall.Errno(4000)); got != want {
+		t.Fatal(got)
 	}
 }
 

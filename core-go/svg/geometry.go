@@ -143,8 +143,8 @@ func ellipseD(n *resolve.RNode) string {
 	start := fOr(n, "startAngle", 0)
 	sweep := clamp(fOr(n, "sweepAngle", 360), -360, 360)
 	pt := func(a, k float64) (float64, float64) {
-		r := toRad(a)
-		return cx + float64(rx*k*libm.Cos(r)), cy - float64(ry*k*libm.Sin(r))
+		sin, cos := libm.SinCos(toRad(a))
+		return cx + float64(rx*k*cos), cy - float64(ry*k*sin)
 	}
 	full := func(k float64) string {
 		return "M" + f(cx+rx*k) + " " + f(cy) + "A" + f(rx*k) + " " + f(ry*k) + " 0 1 0 " + f(cx-rx*k) + " " + f(cy) +
@@ -190,8 +190,8 @@ func polygonD(n *resolve.RNode) string {
 	cx, cy, rx, ry := n.X+n.W/2, n.Y+n.H/2, n.W/2, n.H/2
 	pts := make([][2]float64, count)
 	for i := range pts {
-		a := toRad(-90 + 360*float64(i)/float64(count))
-		pts[i] = [2]float64{cx + float64(rx*libm.Cos(a)), cy + float64(ry*libm.Sin(a))}
+		sin, cos := libm.SinCos(toRad(-90 + 360*float64(i)/float64(count)))
+		pts[i] = [2]float64{cx + float64(rx*cos), cy + float64(ry*sin)}
 	}
 	r := 0.0
 	cr, _ := n.P.Get("cornerRadius")
@@ -464,7 +464,8 @@ func flips(n *resolve.RNode) (float64, float64) {
 func OwnMatrix(n *resolve.RNode) [6]float64 {
 	t := -toRad(fOr(n, "rotation", 0))
 	sx, sy := flips(n)
-	a, b, c, d := libm.Cos(t)*sx, libm.Sin(t)*sx, -libm.Sin(t)*sy, libm.Cos(t)*sy
+	sin, cos := libm.SinCos(t)
+	a, b, c, d := cos*sx, sin*sx, -sin*sy, cos*sy
 	px, py := n.X-n.BX, n.Y-n.BY
 	return [6]float64{a, b, c, d, px - float64(a*px) - float64(c*py), py - float64(b*px) - float64(d*py)}
 }

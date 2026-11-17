@@ -501,6 +501,17 @@ impl Doc {
         n.clone()
     }
 
+    /// Binds the node's fields that reference component properties (`componentPropRefs`) to the values
+    /// assigned up the tree.
+    fn bind_prop_refs(&self, p: &mut Value, up: &[&Value]) {
+        for a in arr(&p["componentPropRefs"]) {
+            if truthy(&a["defID"]) && truthy(&a["componentPropNodeField"]) {
+                let entry = json!([{"variableField": a["componentPropNodeField"], "variableData": {"value": {"propRefValue": {"defId": a["defID"]}}}}]);
+                self.bind(p, up, &entry);
+            }
+        }
+    }
+
     /// Node properties bound to variables / component properties (`resolveNodeVariables`).
     fn bind(&self, p: &mut Value, up: &[&Value], entries: &Value) {
         let Some(entries) = entries.as_array() else { return };
@@ -694,16 +705,12 @@ impl Doc {
             return None;
         }
         self.budget.set(self.budget.get() - 1);
-        if e.p["type"] == "INSTANCE" {
+        let instance = e.p["type"] == "INSTANCE";
+        if instance {
             let swapped = real(&e.p["overriddenSymbolID"]);
             let entries = e.p["parameterConsumptionMap"]["entries"].clone();
             self.bind(&mut e.p, up, &entries);
-            for a in arr(&e.p["componentPropRefs"]) {
-                if truthy(&a["defID"]) && truthy(&a["componentPropNodeField"]) {
-                    let entry = json!([{"variableField": a["componentPropNodeField"], "variableData": {"value": {"propRefValue": {"defId": a["defID"]}}}}]);
-                    self.bind(&mut e.p, up, &entry);
-                }
-            }
+            self.bind_prop_refs(&mut e.p, up);
             let symbol = if real(&e.p["overriddenSymbolID"]) { e.p["overriddenSymbolID"].clone() } else { e.p["symbolData"]["symbolID"].clone() };
             if let Some(mut l) = key(&symbol).and_then(|k| self.subtree(&k, depth + 1)) {
                 let ovr = arr(&e.p["symbolData"]["symbolOverrides"]);
@@ -726,6 +733,10 @@ impl Doc {
         }
         let entries = e.p["parameterConsumptionMap"]["entries"].clone();
         self.bind(&mut e.p, up, &entries);
+        // A symbol's layers take its component properties (text, visibility) from the instance above them.
+        if !instance {
+            self.bind_prop_refs(&mut e.p, up);
+        }
         let own = scope(&e.p);
         let chain: Vec<&Value> = up.iter().copied().chain([&own]).collect();
         self.apply_styles(&mut e.p, &chain);

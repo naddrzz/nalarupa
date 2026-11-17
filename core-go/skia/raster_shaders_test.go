@@ -424,6 +424,11 @@ func TestPattern(t *testing.T) {
 	if NewPattern(pm, SpreadModePad, FilterQualityNearest, 1, shSingular).pushStages(ColorSpaceLinear, p) || len(p.stages) != 0 {
 		t.Error("non-invertible transform: want false and no stages")
 	}
+	// Nor does an empty pixmap (only a zero PixmapRef can be one), which the gather stage could not sample.
+	p = newRasterPipelineBuilder()
+	if NewPattern(PixmapRef{}, SpreadModePad, FilterQualityNearest, 1, Identity()).pushStages(ColorSpaceLinear, p) || len(p.stages) != 0 {
+		t.Error("empty pixmap: want false and no stages")
+	}
 
 	c := s.clone().(*Pattern)
 	c.applyOpacity(0.5)

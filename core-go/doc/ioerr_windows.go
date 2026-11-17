@@ -14,6 +14,14 @@ func systemErrno(e syscall.Errno) syscall.Errno {
 	return e
 }
 
+func removeFile(path string) error {
+	p, err := syscall.UTF16PtrFromString(path)
+	if err != nil {
+		return err
+	}
+	return syscall.DeleteFile(p)
+}
+
 // asciiSpace is what Rust's `trim_ascii_end` trims.
 const asciiSpace = " \t\n\f\r"
 

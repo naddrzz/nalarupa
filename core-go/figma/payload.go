@@ -79,6 +79,7 @@ func message(b []byte) (*jsonv.Object, error) {
 	if len(b) < 12 || (string(b[:8]) != "fig-kiwi" && string(b[:8]) != "fig-jam.") {
 		return nil, errors.New("not a Figma archive")
 	}
+	// Every chunk is checked, but only the first two are kept: a run of empty ones costs no memory.
 	var chunks [][]byte
 	for i := 12; i+4 < len(b); {
 		n := uint64(binary.LittleEndian.Uint32(b[i:]))
@@ -86,7 +87,9 @@ func message(b []byte) (*jsonv.Object, error) {
 		if end > uint64(len(b)) {
 			return nil, errors.New("truncated Figma archive")
 		}
-		chunks = append(chunks, b[i+4:end])
+		if len(chunks) < 2 {
+			chunks = append(chunks, b[i+4:end])
+		}
 		i = int(end)
 	}
 	if len(chunks) < 2 {

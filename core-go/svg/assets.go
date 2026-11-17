@@ -614,7 +614,7 @@ func svgTooDeep(href string) bool {
 	} else {
 		return false
 	}
-	return maxDepth(b, MaxSVGDepth) > MaxSVGDepth
+	return svgDepth(b, MaxSVGDepth) > MaxSVGDepth
 }
 
 func unhex(c byte) (byte, bool) {
@@ -695,6 +695,18 @@ func forgivingBase64(in []byte) ([]byte, bool) {
 	}
 	out, err := base64.RawStdEncoding.DecodeString(string(s))
 	return out, err == nil
+}
+
+// svgDepth is maxDepth of an SVG image as usvg parses it: gzip data (SVGZ) is measured decompressed, and
+// counts as too deep when it is broken or larger than maxSVGZBytes, since usvg would inflate it unbounded.
+func svgDepth(b []byte, limit int) int {
+	if len(b) >= 2 && b[0] == 0x1f && b[1] == 0x8b {
+		var ok bool
+		if b, ok = gunzipCapped(b); !ok {
+			return limit + 1
+		}
+	}
+	return maxDepth(b, limit)
 }
 
 // maxDepth is how deeply markup nests elements (comments, CDATA, PIs and the doctype skipped); it stops

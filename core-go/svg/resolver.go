@@ -14,7 +14,7 @@ func ImageHrefResolver() usvg.ImageHrefResolver {
 		ResolveData: func(mime string, data []byte, opt *usvg.Options) (usvg.ImageKind, bool) {
 			depth := 0
 			if isSVGPayload(mime, data) {
-				depth = maxDepth(data, MaxSVGDepth-used)
+				depth = svgDepth(data, MaxSVGDepth-used)
 			}
 			if used+depth > MaxSVGDepth {
 				return nil, false

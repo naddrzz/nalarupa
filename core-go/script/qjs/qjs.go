@@ -189,13 +189,19 @@ func (r *Runtime) Free(v Value) { C.JS_FreeValue(r.ctx, v.v) }
 func (r *Runtime) NewString(s string) Value { return Value{C.new_string(r.ctx, s)} }
 
 // Get is v's property k. A throwing getter gives TagException.
-func (r *Runtime) Get(v Value, k string) Value { return Value{C.get_prop(r.ctx, v.v, k)} }
+func (r *Runtime) Get(v Value, k string) Value {
+	p := Value{C.get_prop(r.ctx, v.v, k)}
+	r.afterJS(p)
+	return p
+}
 
 // ToString is JS ToString(v); false when it throws, with the exception pending.
 func (r *Runtime) ToString(v Value) (string, bool) {
 	var n C.size_t
 	p := C.JS_ToCStringLen2(r.ctx, &n, v.v, false)
 	if p == nil {
+		// A toString that ran a panicking native: raise it again.
+		r.repanic()
 		return "", false
 	}
 	defer C.JS_FreeCString(r.ctx, p)

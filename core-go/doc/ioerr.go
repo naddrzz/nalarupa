@@ -28,12 +28,13 @@ func IOError(err error) string {
 	return err.Error()
 }
 
-// RemoveFile is Rust's `fs::remove_file`: it removes a file (or link) but never a folder.
+// RemoveFile is Rust's `fs::remove_file`: it removes a file (or link) but never a folder, with the one system
+// call Rust makes (unlink, DeleteFileW), which fails on a folder.
 func RemoveFile(path string) error {
-	if st, err := os.Lstat(path); err == nil && st.IsDir() {
-		return &fs.PathError{Op: "remove", Path: path, Err: syscall.EISDIR}
+	if err := removeFile(path); err != nil {
+		return &fs.PathError{Op: "remove", Path: path, Err: err}
 	}
-	return os.Remove(path)
+	return nil
 }
 
 // CreateDirAll is Rust's `fs::create_dir_all`: it walks up from path until a folder is created or exists

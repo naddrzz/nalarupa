@@ -7,13 +7,13 @@ name: release
 # number, stamps it into the build (packaging/set-version.sh), builds all three, then tags the commit and attaches
 # the files to a draft GitHub Release for the maintainer to publish. A manual run picks the bump (patch, minor or
 # major) and whether to publish. A tag pushed by hand releases that version. Pull requests that touch the
-# packaging only build.
+# packaging or the Go core (the library it ships) only build.
 on:
   push:
     branches: [main]
     tags: ["v*"]
   pull_request:
-    paths: [".github/workflows/release.yml", "packaging/**", "app/scripts/package.ts", "core-go/build.sh", "core-go/shader/gpu/**"]
+    paths: [".github/workflows/release.yml", "packaging/**", "app/scripts/package.ts", "core-go/**"]
   workflow_dispatch:
     inputs:
       bump:

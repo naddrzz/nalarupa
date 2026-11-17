@@ -335,6 +335,31 @@ func TestDeeplyNestedSvgImagesAreUnavailable(t *testing.T) {
 	if _, ok := a.Image("data:application/octet-stream;base64,"+base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\n<g><g>")), ""); !ok {
 		t.Fatal("binary payload")
 	}
+	// usvg inflates gzip data, so an SVGZ payload is measured decompressed, at the top level and nested.
+	gz := func(s string) []byte {
+		var out bytes.Buffer
+		w := gzip.NewWriter(&out)
+		w.Write([]byte(s))
+		w.Close()
+		return out.Bytes()
+	}
+	for _, c := range []struct {
+		svg string
+		ok  bool
+	}{{deep(100), true}, {deep(6000), false}} {
+		if _, ok := a.Image("data:image/svg+xml;base64,"+base64.StdEncoding.EncodeToString(gz(c.svg)), ""); ok != c.ok {
+			t.Error("svgz image", ok)
+		}
+		// The refusal comes before usvg parses anything, so it needs no options.
+		if !c.ok {
+			if _, ok := ImageHrefResolver().ResolveData("image/svg+xml", gz(c.svg), nil); ok {
+				t.Error("nested deep svgz is resolved")
+			}
+		}
+	}
+	if _, ok := ImageHrefResolver().ResolveData("image/svg+xml", []byte{0x1f, 0x8b, 0}, nil); ok {
+		t.Error("broken gzip is resolved")
+	}
 }
 
 // Export area: box + outer stroke + drop shadow (offset ± 3σ, σ = blur/2), not inner shadows.

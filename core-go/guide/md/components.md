@@ -10,7 +10,8 @@
 - An override that contains `type` replaces that child completely.
 - Hide a child with `{enabled: false}` — instance children cannot be deleted.
 - After creation, address instance children as `instanceId/childId`:
-  `Update(btn + "/" + labelId, {content: "Save"})`.
+  `Update(instanceId + "/" + labelId, {content: "Save"})`, with the id
+  Insert or Copy returned for the instance (not the component's).
 - `Copy(componentId, parent, {...})` also creates an instance.
 - Edits to the component propagate to every instance unless overridden.
 - Frames with `slot: [componentIds]` mark places meant to be filled with
@@ -18,8 +19,9 @@
 
 ```js
 btn = Insert(document, {type: "frame", name: "Button", reusable: true, padding: [10, 16], gap: 8,
-  cornerRadius: 8, fill: "$primary", alignItems: "center", x: 0, y: -200})
+  cornerRadius: 8, fill: "#2563EB", alignItems: "center", x: 0, y: -200})
 btnLabel = Insert(btn, {type: "text", name: "Label", content: "Button", fontFamily: "Manrope", fontSize: 14, fontWeight: "600", fill: "#FFFFFF"})
+// screenId: the screen frame the buttons go on.
 row = Insert(screenId, {type: "frame", name: "Actions", gap: 12})
 for (const t of ["Save", "Share"]) Insert(row, {type: "ref", ref: btn, name: t, descendants: {[btnLabel]: {content: t}}})
 ```

@@ -31,6 +31,13 @@ runs:
       working-directory: core-go
       env: { CGO_ENABLED: "1" }
       run: go generate ./shader/gpu && bash build.sh
+    # What the Go parity tests need, as ci.yml sets it, exported to every later step (and so to Claude's commands):
+    # the Rust oracle's CLI, and a font with a wght axis (in CI the variable-font case fails without one).
+    - shell: bash
+      run: |
+        curl -fsSL -o "$RUNNER_TEMP/MavenPro.ttf" 'https://raw.githubusercontent.com/google/fonts/cc39c4c2c304bc368c9b7c311ea2bcc6013299fe/ofl/mavenpro/MavenPro%5Bwght%5D.ttf'
+        echo "NALARUPA_VARIABLE_FONT=$RUNNER_TEMP/MavenPro.ttf" >> "$GITHUB_ENV"
+        echo "NALARUPA_CLI=$GITHUB_WORKSPACE/core/target/release/nalarupa-cli" >> "$GITHUB_ENV"
     - shell: bash
       working-directory: app
       run: bun install --frozen-lockfile

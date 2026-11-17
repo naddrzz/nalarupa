@@ -567,6 +567,20 @@ func TestIconWithoutItsOwnFillIsDrawnInTheFillColour(t *testing.T) {
 	has(t, h, `color:#cc0000" fill="currentColor"`)
 }
 
+// An icon's SVG is inlined without scripts, foreign objects, event handlers or `javascript:` links; a clean one
+// is inlined byte for byte.
+func TestIconSvgIsInlinedWithoutActiveContent(t *testing.T) {
+	p := newPage(t, iconDir(t, "lucide_0.563-star.svg", `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" onload="x()" viewBox="0 0 24 24"><script>alert(1)</script><foreignObject><div>hi</div></foreignObject><a xlink:href=" JavaScript:x()"><path ONCLICK="x()" d="M0 0h1"/></a><a href="#k"><circle r="1"/></a></svg>`))
+	h := p.fragment(`{"type": "icon", "icon": "star", "library": "lucide", "x": 0, "y": 0, "width": 24, "height": 24, "fill": "#ff0000"}`)
+	hasNot(t, h, "script", "alert", "foreignObject", "<div>", "onload", "ONCLICK", "JavaScript")
+	has(t, h, `<a><path d="M0 0h1"></path></a>`, `<a href="#k"><circle r="1"></circle></a>`)
+	icon := func(markup string) string {
+		return newPage(t, iconDir(t, "lucide_0.563-star.svg", markup)).fragment(`{"type": "icon", "icon": "star", "library": "lucide", "x": 0, "y": 0, "width": 24, "height": 24, "fill": "#ff0000"}`)
+	}
+	has(t, icon(`<svg viewBox="0 0 24 24"><path d="M0 0h1"/></svg>`), `<path d="M0 0h1"/></svg>`)
+	hasNot(t, icon(`<svg viewBox="0 0 24 24"><path onclick="x()"></svg>`), "<svg", "onclick")
+}
+
 // Mesh gradients, shaders and image fills on text reach the HTML as backgrounds.
 func TestMeshShaderAndTextImageFillsAreExported(t *testing.T) {
 	mesh := `"columns": 2, "rows": 2, "colors": ["#ff0000", "#00ff00", "#0000ff", "#ffff00"], "points": [[0, 0], [1, 0], [0, 1], [1, 1]]`
@@ -658,6 +672,13 @@ func TestVerticalTextAlignmentIsExported(t *testing.T) {
 	for _, c := range [][2]string{{"fixed-width-height", "top"}, {"fixed-width", "middle"}, {"auto", "bottom"}} {
 		hasNot(t, node(c[0], c[1]), "justify-content")
 	}
+}
+
+// textAlign reaches the style attribute only as one of its four values, so a crafted one cannot add attributes.
+func TestTextAlignIsOneOfItsValues(t *testing.T) {
+	p := newPage(t, "")
+	has(t, p.fragment(`{"type": "text", "content": "a", "fontSize": 16, "textAlign": "center"}`), "text-align:center;")
+	hasNot(t, p.fragment(`{"type": "text", "content": "a", "fontSize": 16, "textAlign": "left\" onclick=\"x"}`), "text-align", "onclick")
 }
 
 // Newlines in text become `<br>`: Esc drops control characters, so each line is escaped on its own.

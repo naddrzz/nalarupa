@@ -29,7 +29,8 @@ func (h *writer) textCSS(n *resolve.RNode, css *strings.Builder) {
 	if st.LetterSpacing != 0 {
 		css.WriteString("letter-spacing:" + ff(st.LetterSpacing) + "px;")
 	}
-	if a, ok := n.S("textAlign"); ok {
+	// Only the schema's values: anything else would be written raw into the style attribute.
+	if a, _ := n.S("textAlign"); sIs(n, "textAlign", "left", "center", "right", "justify") {
 		css.WriteString("text-align:" + a + ";")
 	}
 	// Like the canvas, fixed-width text keeps its newlines and runs of spaces and breaks a word wider than the box,

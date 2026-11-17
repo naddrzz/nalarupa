@@ -172,7 +172,8 @@ func LocalAABB(n *resolve.RNode) [4]float64 {
 	if n.B("flipY") {
 		sy = -1
 	}
-	a, b, c, d := libm.Cos(r)*sx, libm.Sin(r)*sx, -libm.Sin(r)*sy, libm.Cos(r)*sy
+	sin, cos := libm.SinCos(r)
+	a, b, c, d := cos*sx, sin*sx, -sin*sy, cos*sy
 	o := [4]float64{math.MaxFloat64, math.MaxFloat64, -math.MaxFloat64, -math.MaxFloat64}
 	for _, p := range [][2]float64{{n.BX, n.BY}, {n.BX + n.W, n.BY}, {n.BX, n.BY + n.H}, {n.BX + n.W, n.BY + n.H}} {
 		x, y := float64(a*p[0])+float64(c*p[1]), float64(b*p[0])+float64(d*p[1])

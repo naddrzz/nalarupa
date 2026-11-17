@@ -79,6 +79,10 @@ func PathComponents(p string) []string {
 	if vol != "" {
 		if len(vol) == 2 && vol[1] == ':' {
 			vol = strings.ToUpper(vol)
+		} else if !strings.HasPrefix(vol, `\\?\`) {
+			// A UNC or device prefix compares by its parts, whichever separators it is written with; only a
+			// verbatim one (`\\?\`) is taken as written.
+			vol = strings.ReplaceAll(vol, "/", `\`)
 		}
 		out = append(out, vol)
 	}

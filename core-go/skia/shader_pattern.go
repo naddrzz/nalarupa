@@ -48,6 +48,10 @@ func NewPattern(pixmap PixmapRef, spreadMode SpreadMode, quality FilterQuality, 
 func (s *Pattern) IsOpaque() bool { return false }
 
 func (s *Pattern) pushStages(cs ColorSpace, p *rasterPipelineBuilder) bool {
+	// A zero PixmapRef (Rust's IntSize cannot be empty) has nothing to sample.
+	if s.pixmap.Width() == 0 || s.pixmap.Height() == 0 {
+		return false
+	}
 	ts, ok := s.transform.Invert()
 	if !ok {
 		return false

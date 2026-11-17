@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/naddrzz/nalarupa/core-go/jsonv"
+	"github.com/naddrzz/nalarupa/core-go/libm"
 	"github.com/naddrzz/nalarupa/core-go/resolve"
 	"github.com/naddrzz/nalarupa/core-go/resvg"
 	"github.com/naddrzz/nalarupa/core-go/skia"
@@ -378,15 +380,6 @@ func sample(stops []stop, t float64) [4]float64 {
 	return [4]float64{}
 }
 
-// totalLess is Rust's f64::total_cmp as a less-than.
-func totalLess(a, b float64) bool {
-	key := func(v float64) int64 {
-		k := int64(math.Float64bits(v))
-		return k ^ int64(uint64(k>>63)>>1)
-	}
-	return key(a) < key(b)
-}
-
 // paints are the paints of a `fill`/`stroke` value. Gradients and images span the node box b.
 func (s *Svg) paints(v jsonv.Value, b Rect) []paint {
 	var out []paint
@@ -488,7 +481,7 @@ func (s *Svg) gradient(o *jsonv.Object, b Rect) (string, bool) {
 	if len(stops) == 0 {
 		return "", false
 	}
-	sort.SliceStable(stops, func(i, j int) bool { return totalLess(stops[i].pos, stops[j].pos) })
+	slices.SortStableFunc(stops, func(a, b stop) int { return libm.TotalCmp(a.pos, b.pos) })
 	pt := func(k, a string, d float64) float64 { return numOr(jsonv.Get(jsonv.Get(o, k), a), d) }
 	cx, cy := pt("center", "x", 0.5), pt("center", "y", 0.5)
 	half := func(v float64) float64 {

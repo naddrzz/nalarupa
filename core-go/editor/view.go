@@ -333,7 +333,8 @@ func (v *view) placed(id, parent string) (ox, oy float64, t *turn, ok bool) {
 		sy = -1
 	}
 	r := -toRadians(f.Rotation)
-	own := [4]float64{libm.Cos(r) * sx, libm.Sin(r) * sx, -libm.Sin(r) * sy, libm.Cos(r) * sy}
+	sin, cos := libm.SinCos(r)
+	own := [4]float64{cos * sx, sin * sx, -sin * sy, cos * sy}
 	same := true
 	for i := range 4 {
 		if !(math.Abs(n[i]-own[i]) < 1e-9) {

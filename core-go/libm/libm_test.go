@@ -26,3 +26,13 @@ func TestRotationAngles(t *testing.T) {
 		t.Error("special cases")
 	}
 }
+
+// SinCos gives exactly Sin and Cos, special cases included.
+func TestSinCosIsSinAndCos(t *testing.T) {
+	same := func(a, b float64) bool { return math.Float64bits(a) == math.Float64bits(b) || a != a && b != b }
+	for _, x := range []float64{0, math.Copysign(0, -1), 0.3, -2.5, 1e6, 1e300, math.Inf(1), math.NaN()} {
+		if s, c := SinCos(x); !same(s, Sin(x)) || !same(c, Cos(x)) {
+			t.Errorf("SinCos(%v) = %v, %v; want %v, %v", x, s, c, Sin(x), Cos(x))
+		}
+	}
+}
