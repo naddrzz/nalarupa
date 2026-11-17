@@ -52,22 +52,13 @@ func respond(req []byte) (out string) {
 	return strings.ReplaceAll(string(jsonv.Marshal(env)), "\x00", "")
 }
 
-// nr_call runs the JSON command in the len bytes at ptr; free the answer with nr_free.
-//
-//export nr_call
-func nr_call(ptr unsafe.Pointer, n uint32) unsafe.Pointer {
+// callCore is `nr_call`'s work: the answer to the JSON command in the n bytes at ptr, as a C string.
+func callCore(ptr unsafe.Pointer, n uint32) unsafe.Pointer {
 	var req []byte
 	if ptr != nil {
 		req = bytes.Clone(unsafe.Slice((*byte)(ptr), n))
 	}
 	return unsafe.Pointer(C.CString(respond(req)))
-}
-
-// nr_free frees an answer of nr_call.
-//
-//export nr_free
-func nr_free(p unsafe.Pointer) {
-	C.free(p)
 }
 
 // pixels is the render buffer, in C memory so the caller may keep its pointer; it only grows. Guarded by the
@@ -77,12 +68,11 @@ var pixels struct {
 	size int
 }
 
-// nr_render paints the viewport (camera in document units) as w·h·4 RGBA bytes on bg (0xRRGGBB), only the
-// top-level node solo when its UTF-8 bytes are given (presentation mode). flags bit 0 is sharp: never answer a
-// zoom change with the scaled cached view. The pixels stay valid until the next call; a panic gives null.
-//
-//export nr_render
-func nr_render(w, h uint32, camX, camY, zoom float64, bg uint32, soloPtr unsafe.Pointer, soloLen uint32, flags uint32) (out unsafe.Pointer) {
+// renderCore is `nr_render`'s work: it paints the viewport (camera in document units) as w·h·4 RGBA bytes on bg
+// (0xRRGGBB), only the top-level node solo when its UTF-8 bytes are given (presentation mode). flags bit 0 is
+// sharp: never answer a zoom change with the scaled cached view. The pixels stay valid until the next call; a
+// panic gives null.
+func renderCore(w, h uint32, camX, camY, zoom float64, bg uint32, soloPtr unsafe.Pointer, soloLen uint32, flags uint32) (out unsafe.Pointer) {
 	defer func() {
 		if recover() != nil {
 			out = nil
