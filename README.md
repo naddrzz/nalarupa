@@ -153,17 +153,22 @@ in `core-go/` and run `cd app && bun run build`, then package for your platform:
   mkdir -p out/Nalarupa.app/Contents/MacOS out/Nalarupa.app/Contents/Resources
   cp app/dist/* out/Nalarupa.app/Contents/MacOS/
   sed "s/@VERSION@/$VERSION/g" packaging/macos/Info.plist > out/Nalarupa.app/Contents/Info.plist
-  set=$(mktemp -d)/Nalarupa.iconset && mkdir -p "$set"
-  for s in 16 32 128 256 512; do
-    cp "app/assets/brand/icon-$s.png" "$set/icon_${s}x${s}.png"
-    cp "app/assets/brand/icon-$((s * 2)).png" "$set/icon_${s}x${s}@2x.png"
-  done
-  iconutil -c icns "$set" -o out/Nalarupa.app/Contents/Resources/Nalarupa.icns
-  rm -rf "$(dirname "$set")"
+  icon_tmp=$(mktemp -d) && {
+    set="$icon_tmp/Nalarupa.iconset"
+    mkdir -p "$set"
+    for s in 16 32 128 256 512; do
+      cp "app/assets/brand/icon-$s.png" "$set/icon_${s}x${s}.png"
+      cp "app/assets/brand/icon-$((s * 2)).png" "$set/icon_${s}x${s}@2x.png"
+    done
+    iconutil -c icns "$set" -o out/Nalarupa.app/Contents/Resources/Nalarupa.icns
+    rm -rf -- "$icon_tmp"
+  }
   codesign --force --deep --sign - out/Nalarupa.app
-  stage=$(mktemp -d) && cp -R out/Nalarupa.app "$stage/" && ln -s /Applications "$stage/Applications"
-  hdiutil create -volname "Nalarupa $VERSION" -srcfolder "$stage" -format UDZO -ov "out/Nalarupa-$VERSION-macos-arm64.dmg"
-  rm -rf "$stage"
+  stage=$(mktemp -d) && {
+    cp -R out/Nalarupa.app "$stage/" && ln -s /Applications "$stage/Applications"
+    hdiutil create -volname "Nalarupa $VERSION" -srcfolder "$stage" -format UDZO -ov "out/Nalarupa-$VERSION-macos-arm64.dmg"
+    rm -rf -- "$stage"
+  }
   ```
 - **Linux (x64 tarball):**
   ```bash
