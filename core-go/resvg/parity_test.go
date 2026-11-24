@@ -9,6 +9,7 @@
 package resvg_test
 
 import (
+	"bytes"
 	"compress/gzip"
 	"encoding/json"
 	"fmt"
@@ -281,6 +282,10 @@ func TestTextRender(t *testing.T) {
 				}
 				if got.Width == 0 || got.Height == 0 || len(got.data) != int(got.Width*got.Height*4) {
 					t.Fatalf("bad pixmap %dx%d (%d bytes)", got.Width, got.Height, len(got.data))
+				}
+				again := goRender(t, doc, scale, fonts)
+				if again.Panic || again.Error != "" || again.Width != got.Width || again.Height != got.Height || !bytes.Equal(got.data, again.data) {
+					t.Fatalf("repeat render differed (panic=%v err=%q size=%dx%d)", again.Panic, again.Error, again.Width, again.Height)
 				}
 			})
 		}

@@ -46,9 +46,12 @@ codesign --verify --deep --strict "$APP"
 VERSION="<X.Y.Z>"
 DMG="out/Nalarupa-$VERSION-macos-arm64.dmg"
 stage=$(mktemp -d)
+trap 'rm -rf "$stage"' EXIT
 cp -R "$APP" "$stage/"
 ln -s /Applications "$stage/Applications"
 hdiutil create -volname "Nalarupa $VERSION" -srcfolder "$stage" -format UDZO -ov "$DMG"
+rm -rf "$stage"
+trap - EXIT
 
 codesign --force --timestamp --sign "$SIGN_ID" "$DMG"
 xcrun notarytool submit "$DMG" --keychain-profile "nalarupa-notary" --wait

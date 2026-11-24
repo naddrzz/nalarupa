@@ -135,8 +135,9 @@ cd app && bun install && bun run dev
 cd app && bun run build
 ```
 
-The output goes to `app/dist/`: `nalarupa.exe` (or `nalarupa`), `nalarupa_core.dll` (`.so`/`.dylib`), the GPUI
-addon, `THIRD_PARTY_NOTICES.md`, and (on Windows) `nalarupa.ico`.
+The output goes to `app/dist/`: `nalarupa.exe` (or `nalarupa`), `nalarupa_core.dll` (`libnalarupa_core.so` on
+Linux, `libnalarupa_core.dylib` on macOS), the GPUI addon, `THIRD_PARTY_NOTICES.md`, and (on Windows)
+`nalarupa.ico`.
 
 To build local release packages, first stamp the version (`sh packaging/set-version.sh <X.Y.Z>`), build the core
 in `core-go/` and run `cd app && bun run build`, then package for your platform:
@@ -158,9 +159,11 @@ in `core-go/` and run `cd app && bun run build`, then package for your platform:
     cp "app/assets/brand/icon-$((s * 2)).png" "$set/icon_${s}x${s}@2x.png"
   done
   iconutil -c icns "$set" -o out/Nalarupa.app/Contents/Resources/Nalarupa.icns
+  rm -rf "$(dirname "$set")"
   codesign --force --deep --sign - out/Nalarupa.app
   stage=$(mktemp -d) && cp -R out/Nalarupa.app "$stage/" && ln -s /Applications "$stage/Applications"
   hdiutil create -volname "Nalarupa $VERSION" -srcfolder "$stage" -format UDZO -ov "out/Nalarupa-$VERSION-macos-arm64.dmg"
+  rm -rf "$stage"
   ```
 - **Linux (x64 tarball):**
   ```bash
