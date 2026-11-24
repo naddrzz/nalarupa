@@ -26,7 +26,7 @@ import (
 // DefaultMCPPort is the first port the server tries; it takes the first free one of the 20 from here.
 const DefaultMCPPort = 47700
 
-// version is the core's version (Rust's CARGO_PKG_VERSION): build.sh sets it from app/package.json, which
+// version is the core's version (Rust's CARGO_PKG_VERSION): build.sh sets it from app/mygo.json, which
 // packaging/set-version.sh stamps for a release.
 var version = "0.1.0"
 

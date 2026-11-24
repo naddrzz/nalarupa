@@ -1,7 +1,6 @@
 #!/bin/bash
 # wl-run CMD...: run CMD inside a private headless Wayland desktop (sway, CPU rendering, 1920x1080).
-# GPUI's Linux build has no X11 backend (so no Xvfb) and needs a wl_seat (weston headless has none).
-# Needs: sway, grim (screenshots), mesa-vulkan-drivers (lavapipe). Example: scripts/wl-run.sh bun run e2e
+# Needs: sway, grim (screenshots), mesa-vulkan-drivers (lavapipe). Example: bash scripts/wl-run.sh go test -v -run TestRealE2E .
 export XDG_RUNTIME_DIR=$(mktemp -d /tmp/wl.XXXXXX)
 unset DISPLAY WAYLAND_DISPLAY
 cfg="$XDG_RUNTIME_DIR/sway.conf"

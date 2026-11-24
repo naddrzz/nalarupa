@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -219,8 +220,12 @@ func TestReplayParity(t *testing.T) {
 				if i >= len(got.Lines) || i >= len(want.Lines) {
 					t.Fatalf("%d lines, want %d", len(got.Lines), len(want.Lines))
 				}
-				if got.Lines[i] != want.Lines[i] {
-					t.Errorf("line %d differs %s", i, firstDiff(got.Lines[i], want.Lines[i]))
+				wantLine := want.Lines[i]
+				if runtime.GOOS != "windows" {
+					wantLine = strings.ReplaceAll(wantLine, `\\`, "/")
+				}
+				if got.Lines[i] != wantLine {
+					t.Errorf("line %d differs %s", i, firstDiff(got.Lines[i], wantLine))
 				}
 			}
 			steps := make([]int, 0, len(want.frames))

@@ -25,14 +25,14 @@ SIGN_ID=$(security find-identity -v -p codesigning | awk '/Developer ID Applicat
 
 ## 1. Sign the `.app` bundle
 
-Build `out/Nalarupa.app` as documented in `README.md` (with `libnalarupa_core.dylib`, the GPUIX `.node` addon,
-and `nalarupa` inside `out/Nalarupa.app/Contents/MacOS/`), then sign inner libraries first, followed by the
-executable and the bundle itself with the hardened runtime and `packaging/macos/entitlements.plist` (the
-exceptions a Bun-compiled executable needs):
+Build `out/Nalarupa.app` as documented in `README.md` (with `nalarupa` inside `out/Nalarupa.app/Contents/MacOS/`), then
+sign any inner libraries (if present) followed by the executable and the bundle itself with the hardened runtime and
+`packaging/macos/entitlements.plist`:
 
 ```bash
 APP="out/Nalarupa.app"
-for f in "$APP"/Contents/MacOS/*.dylib "$APP"/Contents/MacOS/*.node; do
+for f in "$APP"/Contents/MacOS/*.dylib; do
+  [ -f "$f" ] || continue
   codesign --force --timestamp --options runtime --sign "$SIGN_ID" "$f"
 done
 codesign --force --timestamp --options runtime --entitlements packaging/macos/entitlements.plist --sign "$SIGN_ID" "$APP/Contents/MacOS/nalarupa"

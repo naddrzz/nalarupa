@@ -1,0 +1,13 @@
+{
+  "name": "Nalarupa",
+  "slug": "nalarupa",
+  "identifier": "io.github.naddrzz.nalarupa",
+  "version": "0.1.0",
+  "license": "MIT",
+  "copyright": "Copyright (c) 2026 naddrzz (MIT License)",
+  "icon": "assets/brand/icon-1024.png",
+  "out": "dist",
+  "linux": {
+    "webview": false
+  }
+}

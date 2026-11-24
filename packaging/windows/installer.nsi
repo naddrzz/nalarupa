@@ -55,7 +55,7 @@ Section "Install"
   ; Per-machine install: shortcuts go to the all-users Start menu and desktop.
   SetShellVarContext all
   SetOutPath "$INSTDIR"
-  ; The exe loads the core and the GPUI addon from its own folder (app/main.ts, app/src/core.ts).
+  ; Standalone Go + MyGo executable, nalarupa.ico, and THIRD_PARTY_NOTICES.md from app/dist.
   File "${DIST}\*.*"
   WriteUninstaller "$INSTDIR\uninstall.exe"
 
