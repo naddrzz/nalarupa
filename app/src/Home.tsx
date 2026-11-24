@@ -59,7 +59,7 @@ export function Home({ recent, dirty, busy, title, save, back, onOpened, toast }
             <img src={LOGO} style={{ width: 40, height: 40, flexShrink: 0 }} />
             <text style={{ fontSize: 30, fontWeight: '700', color: C.text, fontFamily: FONT }}>Nalarupa</text>
           </div>
-          <T size={14} color={C.muted}>Design on an infinite canvas with an AI agent. Rust core, GPU-native UI.</T>
+          <T size={14} color={C.muted}>Design on an infinite canvas with an AI agent. Go core, GPU-native UI.</T>
         </div>
         {pending ? (
           <div

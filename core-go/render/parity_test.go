@@ -1,29 +1,17 @@
-// Canvas parity with the Rust core. Each scenario in testdata/canvas/*.json names a document and a list of
-// steps, replayed here and by `nalarupa-cli canvas <doc> <scenario> <out>` (see canvas in
-// core/src/bin/cli.rs): renders, document edits, syncs (the engine's shift_siblings, sync, settle_covered
-// and refresh_slides), slides, clock ticks, hit tests, empty-space searches and Flat and live dumps. Both
-// pin the slide clock and the live-zoom cost, so every step is deterministic. Each step's log entry must
-// match (numbers to 1e-9; the dirty list as a set, since Rust lists deleted layers in hash order), and
-// each render's RGB bytes must match within the scenario's tolerance (none unless stated, with its why).
-//
-// Without NALARUPA_CLI the comparison is with the committed goldens (testdata/canvas/golden: log.json per
-// scenario plus gzipped frames), painted with the band count recorded there; with it, with the CLI's live
-// output. NALARUPA_UPDATE_GOLDEN=1 (with NALARUPA_CLI) rewrites them. Scenarios marked "live" hold text and
-// are compared live only.
+// Canvas golden tests: each scenario in testdata/canvas/*.json names a document and a list of
+// steps, replayed here and compared against the committed goldens (testdata/canvas/golden: log.json
+// per scenario plus gzipped frames), painted with the band count recorded there.
 package render
 
 import (
-	"bytes"
 	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
 	"math"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -462,17 +450,6 @@ func dataDir(t *testing.T) string {
 	return data
 }
 
-func gz(t *testing.T, path string, b []byte) {
-	t.Helper()
-	var buf bytes.Buffer
-	zw, _ := gzip.NewWriterLevel(&buf, gzip.BestCompression)
-	zw.Write(b)
-	zw.Close()
-	if err := os.WriteFile(path, buf.Bytes(), 0o666); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func ungz(t *testing.T, path string) []byte {
 	t.Helper()
 	f, err := os.Open(path)
@@ -492,92 +469,44 @@ func ungz(t *testing.T, path string) []byte {
 }
 
 func TestCanvasParity(t *testing.T) {
-	cli := os.Getenv("NALARUPA_CLI")
-	update := os.Getenv("NALARUPA_UPDATE_GOLDEN") != ""
-	if update && cli == "" {
-		t.Fatal("NALARUPA_UPDATE_GOLDEN needs NALARUPA_CLI")
-	}
-	if cli != "" {
-		// A file in the module written during the run keeps the test cache from replaying a live pass.
-		if err := os.WriteFile(".parity-live", nil, 0o666); err != nil {
-			t.Fatal(err)
-		}
-	}
 	files, _ := filepath.Glob(filepath.Join(canvasDir, "*.json"))
 	if len(files) == 0 {
 		t.Fatal("no scenarios")
 	}
 	for _, file := range files {
 		name := strings.TrimSuffix(filepath.Base(file), ".json")
+		b, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var sc scenario
+		if err := json.Unmarshal(b, &sc); err != nil {
+			t.Fatal(err)
+		}
+		if sc.Live {
+			continue
+		}
 		t.Run(name, func(t *testing.T) {
-			b, err := os.ReadFile(file)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var sc scenario
-			if err := json.Unmarshal(b, &sc); err != nil {
-				t.Fatal(err)
-			}
-			if sc.Live && cli == "" {
-				t.Skip("holds text: compared live only")
-			}
 			data := dataDir(t)
 			var want golden
 			wantFrames := map[int][]byte{}
-			if cli != "" {
-				out := t.TempDir()
-				cmd := exec.Command(cli, "canvas", filepath.Join(testdata, filepath.FromSlash(sc.Doc)), file, out)
-				cmd.Env = append(os.Environ(), "NALARUPA_DATA="+data)
-				if msg, err := cmd.CombinedOutput(); err != nil {
-					t.Fatalf("%s canvas: %v\n%s", cli, err, msg)
-				}
-				lb, err := os.ReadFile(filepath.Join(out, "log.json"))
-				if err != nil {
-					t.Fatal(err)
-				}
-				if err := json.Unmarshal(lb, &want.Log); err != nil {
-					t.Fatal(err)
-				}
-				want.Threads = min(max(runtime.NumCPU(), 1), 16)
-				for i, e := range want.Log {
-					if f, ok := e.(map[string]any)["file"].(string); ok {
-						if wantFrames[i], err = os.ReadFile(filepath.Join(out, f)); err != nil {
-							t.Fatal(err)
-						}
-					}
-				}
-				if update && !sc.Live {
-					os.MkdirAll(goldenDir, 0o777)
-					if err := os.WriteFile(filepath.Join(goldenDir, name+".json"), []byte(mustJSON(want)), 0o666); err != nil {
-						t.Fatal(err)
-					}
-					for i, f := range wantFrames {
-						gz(t, filepath.Join(goldenDir, fmt.Sprintf("%s.%d.rgb.gz", name, i)), f)
-					}
-				}
-			} else {
-				gb, err := os.ReadFile(filepath.Join(goldenDir, name+".json"))
-				if err != nil {
-					t.Fatal(err)
-				}
-				if err := json.Unmarshal(gb, &want); err != nil {
-					t.Fatal(err)
-				}
-				for i, e := range want.Log {
-					if _, ok := e.(map[string]any)["file"].(string); ok {
-						wantFrames[i] = ungz(t, filepath.Join(goldenDir, fmt.Sprintf("%s.%d.rgb.gz", name, i)))
-					}
+			gb, err := os.ReadFile(filepath.Join(goldenDir, name+".json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(gb, &want); err != nil {
+				t.Fatal(err)
+			}
+			for i, e := range want.Log {
+				if _, ok := e.(map[string]any)["file"].(string); ok {
+					wantFrames[i] = ungz(t, filepath.Join(goldenDir, fmt.Sprintf("%s.%d.rgb.gz", name, i)))
 				}
 			}
-			threads := 0
-			if cli == "" {
-				threads = want.Threads
-			}
-			got, frames, repainted := runScenario(t, sc, data, threads)
+			got, frames, repainted := runScenario(t, sc, data, want.Threads)
 			if len(got) != len(want.Log) {
 				t.Fatalf("%d log entries, want %d", len(got), len(want.Log))
 			}
-			// Inserted nodes take fresh random ids: read Go's as Rust's from then on.
+			// Inserted nodes take fresh random ids: read Go's as golden's from then on.
 			ids := map[string]string{}
 			for i := range want.Log {
 				op := str(want.Log[i].(map[string]any), "op")
@@ -595,11 +524,7 @@ func TestCanvasParity(t *testing.T) {
 				if wf, ok := wantFrames[i]; ok {
 					w := int(want.Log[i].(map[string]any)["width"].(float64))
 					if msg := compareRGB(frames[i], wf, w, tolFor(sc, repainted[i])); msg != "" {
-						if sc.CRT != nil && cli != "" && runtime.GOOS == "windows" && compareRGB(frames[i], wf, w, sc.CRT) == "" {
-							t.Logf("step %d render: %s (within the Windows CRT allowance)", i, msg)
-						} else {
-							t.Errorf("step %d render: %s", i, msg)
-						}
+						t.Errorf("step %d render: %s", i, msg)
 					}
 				}
 			}

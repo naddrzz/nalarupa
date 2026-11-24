@@ -1,34 +1,9 @@
 package guide
 
 import (
-	"bytes"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
-
-// The topics are copies of core/guide/*.md: the Rust core embeds those, so both must stay byte for byte equal.
-func TestCopiesMatchTheRustGuide(t *testing.T) {
-	rust, err := filepath.Glob(filepath.Join("..", "..", "core", "guide", "*.md"))
-	if err != nil || len(rust) == 0 {
-		t.Skip("no core/guide next to core-go")
-	}
-	own, _ := files.ReadDir("md")
-	if len(own) != len(rust) {
-		t.Fatalf("%d topics, core/guide has %d", len(own), len(rust))
-	}
-	for _, f := range rust {
-		want, err := os.ReadFile(f)
-		if err != nil {
-			t.Fatal(err)
-		}
-		got, err := files.ReadFile("md/" + filepath.Base(f))
-		if err != nil || !bytes.Equal(got, want) {
-			t.Errorf("md/%s differs from %s: copy it again", filepath.Base(f), f)
-		}
-	}
-}
 
 func fontsIn(text string) []string {
 	var out []string

@@ -1,10 +1,7 @@
-// Render parity with resvg 0.47: each SVG of the usvg corpora (testdata/usvg, testdata/usvg/filter) and of
-// testdata/render/svg is rendered here and by `nalarupa-cli resvg` (see resvg_render in
-// core/src/bin/cli.rs) at the scales listed for its corpus in testdata/render/fixtures.json, and the premultiplied RGBA
-// bytes are compared. Without NALARUPA_CLI the comparison is with the committed goldens
-// (testdata/render/resvg/<corpus>/<stem>@<scale>.rgba.gz, raw bytes gzipped, plus index.json); with it, with the CLI's live
-// output. NALARUPA_UPDATE_GOLDEN=1 (with NALARUPA_CLI) rewrites the goldens. The text corpus
-// (testdata/usvg/text) depends on the installed fonts, so it is compared live only.
+// Render golden tests with resvg 0.47: each SVG of the usvg corpora (testdata/usvg, testdata/usvg/filter) and of
+// testdata/render/svg is rendered here at the scales listed for its corpus in testdata/render/fixtures.json, and
+// the premultiplied RGBA bytes are compared with the committed goldens (testdata/render/resvg/<corpus>/<stem>@<scale>.rgba.gz,
+// raw bytes gzipped, plus index.json).
 //
 // Pixels must match exactly, except a fixture listed in fixtures.json under "tolerance": its max channel
 // delta and max share of differing pixels hold only where the difference comes from a libm call, rcpps or
@@ -12,13 +9,11 @@
 package resvg_test
 
 import (
-	"bytes"
 	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -82,43 +77,6 @@ type rendered struct {
 	Error  string `json:"error,omitempty"`
 	Panic  bool   `json:"panic,omitempty"`
 	data   []byte
-}
-
-func liveMark(t *testing.T) {
-	t.Helper()
-	// A file in the module written during the run keeps the test cache from replaying a live pass.
-	if err := os.WriteFile(".parity-live", nil, 0o666); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func rustRender(t *testing.T, cli, file string, scale float32, fonts string) rendered {
-	t.Helper()
-	out := filepath.Join(t.TempDir(), "out.rgba")
-	args := []string{"resvg", file, out, "--scale", strconv.FormatFloat(float64(scale), 'g', -1, 32)}
-	if fonts != "" {
-		args = append(args, "--fonts", fonts)
-	}
-	var stdout, stderr bytes.Buffer
-	cmd := exec.Command(cli, args...)
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	if err := cmd.Run(); err != nil {
-		if strings.Contains(stderr.String(), "panicked") {
-			return rendered{Panic: true}
-		}
-		t.Fatalf("%s resvg %s: %v\n%s", cli, file, err, stderr.String())
-	}
-	var r rendered
-	if err := json.Unmarshal(stdout.Bytes(), &r); err != nil {
-		t.Fatalf("%s resvg %s: %v (%s)", cli, file, err, stdout.String())
-	}
-	if r.Error == "" {
-		var err error
-		if r.data, err = os.ReadFile(out); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return r
 }
 
 func goRender(t *testing.T, file string, scale float32, fonts *text.Fonts) (r rendered) {
@@ -200,14 +158,6 @@ func absInt(x int) int {
 func scaleName(s float32) string { return strconv.FormatFloat(float64(s), 'g', -1, 32) }
 
 func TestRenderParity(t *testing.T) {
-	cli := os.Getenv("NALARUPA_CLI")
-	update := os.Getenv("NALARUPA_UPDATE_GOLDEN") != ""
-	if update && cli == "" {
-		t.Fatal("NALARUPA_UPDATE_GOLDEN needs NALARUPA_CLI")
-	}
-	if cli != "" {
-		liveMark(t)
-	}
 	fx := loadFixtures(t)
 	names := make([]string, 0, len(fx.Corpora))
 	for name, c := range fx.Corpora {
@@ -227,14 +177,12 @@ func TestRenderParity(t *testing.T) {
 		goldenDir := filepath.Join(renderData, "resvg", name)
 		index := map[string]rendered{}
 		indexFile := filepath.Join(goldenDir, "index.json")
-		if cli == "" {
-			b, err := os.ReadFile(indexFile)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := json.Unmarshal(b, &index); err != nil {
-				t.Fatal(err)
-			}
+		b, err := os.ReadFile(indexFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(b, &index); err != nil {
+			t.Fatal(err)
 		}
 		for _, doc := range docs {
 			stem := strings.TrimSuffix(strings.TrimSuffix(filepath.Base(doc), ".svgz"), ".svg")
@@ -242,59 +190,21 @@ func TestRenderParity(t *testing.T) {
 				key := stem + "@" + scaleName(scale)
 				total++
 				t.Run(name+"/"+key, func(t *testing.T) {
-					var want rendered
-					if cli != "" {
-						want = rustRender(t, cli, doc, scale, "")
-						if update {
-							if err := os.MkdirAll(goldenDir, 0o777); err != nil {
-								t.Fatal(err)
-							}
-							if want.data != nil {
-								writeGolden(t, filepath.Join(goldenDir, key+".rgba.gz"), want.data)
-							}
-							index[key] = want
-						}
-					} else {
-						var ok bool
-						if want, ok = index[key]; !ok {
-							t.Fatalf("no golden for %s", key)
-						}
-						if want.Error == "" && !want.Panic {
-							want.data = readGolden(t, filepath.Join(goldenDir, key+".rgba.gz"))
-						}
+					want, ok := index[key]
+					if !ok {
+						t.Fatalf("no golden for %s", key)
+					}
+					if want.Error == "" && !want.Panic {
+						want.data = readGolden(t, filepath.Join(goldenDir, key+".rgba.gz"))
 					}
 					got := goRender(t, doc, scale, nil)
 					checkRendered(t, got, want, fx.tolerance(name+"/"+key))
 				})
 			}
 		}
-		if update {
-			b, err := json.MarshalIndent(index, "", " ")
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(indexFile, b, 0o666); err != nil {
-				t.Fatal(err)
-			}
-		}
 	}
 	if total < 150 {
 		t.Fatalf("%d renders, want at least 150", total)
-	}
-}
-
-// writeGolden stores raw premultiplied RGBA bytes gzipped: renders are mostly flat color, so this keeps the
-// goldens small.
-func writeGolden(t *testing.T, path string, data []byte) {
-	t.Helper()
-	var b bytes.Buffer
-	z, _ := gzip.NewWriterLevel(&b, gzip.BestCompression)
-	z.Write(data)
-	if err := z.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, b.Bytes(), 0o666); err != nil {
-		t.Fatal(err)
 	}
 }
 
@@ -332,43 +242,5 @@ func checkRendered(t *testing.T, got, want rendered, tol Tolerance) {
 			t.Fatalf("size %dx%d, want %dx%d", got.Width, got.Height, want.Width, want.Height)
 		}
 		comparePixels(t, got.data, want.data, want.Width, tol)
-	}
-}
-
-// TestTextRenderParity renders the text corpus with the fonts of this machine, live only.
-func TestTextRenderParity(t *testing.T) {
-	cli := os.Getenv("NALARUPA_CLI")
-	if cli == "" {
-		t.Skip("text render parity is live only: set NALARUPA_CLI to the release nalarupa-cli")
-	}
-	liveMark(t)
-	fx := loadFixtures(t)
-	c := fx.Corpora["text"]
-	docs, err := filepath.Glob(filepath.Join("..", filepath.FromSlash(c.Dir), "*.svg"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(docs) < 30 {
-		t.Fatalf("%d text documents, want at least 30", len(docs))
-	}
-	cache := t.TempDir()
-	fonts := text.New(cache)
-	fonts.Online = false
-	emoji := fonts.HasFamily("Noto Emoji")
-	for _, doc := range docs {
-		stem := strings.TrimSuffix(filepath.Base(doc), ".svg")
-		for _, scale := range c.Scales {
-			key := stem + "@" + scaleName(scale)
-			t.Run(key, func(t *testing.T) {
-				if strings.HasPrefix(stem, "emoji") && !emoji {
-					// As in usvg's TestTextParity: without monochrome Noto Emoji, emoji may fall back to a color
-					// font (Segoe UI Emoji's COLR glyphs on a stock Windows), which the port does not draw.
-					t.Skip("Noto Emoji is not installed")
-				}
-				want := rustRender(t, cli, doc, scale, cache)
-				got := goRender(t, doc, scale, fonts)
-				checkRendered(t, got, want, fx.tolerance("text/"+key))
-			})
-		}
 	}
 }

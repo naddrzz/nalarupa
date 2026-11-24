@@ -1,9 +1,6 @@
-// Tree parity with usvg 0.47: each document in testdata/usvg (and testdata/usvg/filter, whose documents
-// are filter-centric) is parsed here and by `nalarupa-cli usvg-tree`
-// (see its doc in core/src/bin/cli.rs) with the options render.rs uses, and the trees are compared as JSON
-// with every f32 as its bit pattern. Without NALARUPA_CLI the comparison is with the committed goldens
-// (<stem>.golden.json); with it, with the CLI's live output. NALARUPA_UPDATE_GOLDEN=1 (with NALARUPA_CLI)
-// rewrites the goldens.
+// Tree golden tests with usvg 0.47: each document in testdata/usvg (and testdata/usvg/filter, whose documents
+// are filter-centric) is parsed here with the options render uses, and the trees are compared as JSON with
+// every f32 as its bit pattern against the committed goldens (<stem>.golden.json).
 package usvg_test
 
 import (
@@ -13,10 +10,8 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -33,18 +28,6 @@ func TestFilterParity(t *testing.T) { parity(t, filepath.Join(corpus, "filter"),
 
 // parity compares the trees of the documents in dir (at least minDocs), with dir as the resources dir.
 func parity(t *testing.T, dir string, minDocs int) {
-	cli := os.Getenv("NALARUPA_CLI")
-	update := os.Getenv("NALARUPA_UPDATE_GOLDEN") != ""
-	if update && cli == "" {
-		t.Fatal("NALARUPA_UPDATE_GOLDEN needs NALARUPA_CLI")
-	}
-	if cli != "" {
-		// The test cache never rechecks files outside this module, so a rebuilt CLI would get a cached pass.
-		// A file in the module written during the run is too new to cache: live runs always rerun.
-		if err := os.WriteFile(".parity-live", nil, 0o666); err != nil {
-			t.Fatal(err)
-		}
-	}
 	var docs []string
 	for _, ext := range []string{"*.svg", "*.svgz"} {
 		m, err := filepath.Glob(filepath.Join(dir, ext))
@@ -60,23 +43,9 @@ func parity(t *testing.T, dir string, minDocs int) {
 		stem := strings.TrimSuffix(strings.TrimSuffix(filepath.Base(doc), ".svgz"), ".svg")
 		t.Run(stem, func(t *testing.T) {
 			golden := filepath.Join(dir, stem+".golden.json")
-			var want []byte
-			if cli != "" {
-				out, err := exec.Command(cli, "usvg-tree", doc, "--resources", dir).Output()
-				if err != nil {
-					t.Fatalf("%s usvg-tree: %v", cli, err)
-				}
-				want = out
-				if update {
-					if err := os.WriteFile(golden, out, 0o666); err != nil {
-						t.Fatal(err)
-					}
-				}
-			} else {
-				var err error
-				if want, err = os.ReadFile(golden); err != nil {
-					t.Fatal(err)
-				}
+			want, err := os.ReadFile(golden)
+			if err != nil {
+				t.Fatal(err)
 			}
 			data, err := os.ReadFile(doc)
 			if err != nil {
@@ -92,92 +61,10 @@ func parity(t *testing.T, dir string, minDocs int) {
 				got = dumpTree(tree)
 			}
 			if path, g, w := diff(t, roundTrip(t, got), roundTrip(t, want)); path != "" {
-				if ex, ok := glibcLibm[stem]; ok && cli != "" && runtime.GOOS == "linux" {
-					if all := diffs(roundTrip(t, got), roundTrip(t, want), ""); onlyExpected(all, ex.leaves) {
-						t.Logf("%d differences, each one the expected glibc rounding (%s)", len(all), ex.why)
-						return
-					}
-				}
 				t.Errorf("first difference at %s: got %s, want %s", path, g, w)
 			}
 		})
 	}
-}
-
-// glibcLibm lists the documents whose tree depends on an f32 libm function that glibc rounds off by over half
-// an ulp where Go's is correctly rounded, as the Windows CRT's (and so the goldens') are here. Live on Linux, such a
-// document may differ from the CLI only at the listed leaves, each by the listed pair: Go's value, glibc's.
-var glibcLibm = map[string]struct {
-	why    string
-	leaves map[string][2]string
-}{
-	"markers-orient": {
-		why: "glibc's atan2f(20, 50) is 0x3EC2D1BC, correctly rounded 0x3EC2D1BB; the marker's rotation follows it",
-		// The sine of the rotation, 0x3EBE26EB (with glibc 0x3EBE26EC), and its negation, in the transforms of both markers.
-		leaves: map[string][2]string{
-			".root.children[0].children[5].children[0].transform[1]":                {"1052649195", "1052649196"},
-			".root.children[0].children[5].children[0].transform[2]":                {"3200132843", "3200132844"},
-			".root.children[0].children[5].children[0].absTransform[1]":             {"1052649195", "1052649196"},
-			".root.children[0].children[5].children[0].absTransform[2]":             {"3200132843", "3200132844"},
-			".root.children[0].children[5].children[0].children[0].absTransform[1]": {"1052649195", "1052649196"},
-			".root.children[0].children[5].children[0].children[0].absTransform[2]": {"3200132843", "3200132844"},
-			".root.children[0].children[5].children[1].transform[1]":                {"1052649195", "1052649196"},
-			".root.children[0].children[5].children[1].transform[2]":                {"3200132843", "3200132844"},
-			".root.children[0].children[5].children[1].absTransform[1]":             {"1052649195", "1052649196"},
-			".root.children[0].children[5].children[1].absTransform[2]":             {"3200132843", "3200132844"},
-			".root.children[0].children[5].children[1].children[0].absTransform[1]": {"1052649195", "1052649196"},
-			".root.children[0].children[5].children[1].children[0].absTransform[2]": {"3200132843", "3200132844"},
-		},
-	},
-}
-
-// leafDiff is one differing leaf: its path, Go's value and the CLI's (as JSON).
-type leafDiff struct{ path, got, want string }
-
-// diffs lists every differing leaf of got and want (a structural difference is one leaf at its path).
-func diffs(got, want any, path string) []leafDiff {
-	show := func(v any) string { b, _ := json.Marshal(v); return string(b) }
-	switch w := want.(type) {
-	case map[string]any:
-		g, ok := got.(map[string]any)
-		if !ok || len(g) != len(w) {
-			return []leafDiff{{path, show(got), show(want)}}
-		}
-		var out []leafDiff
-		for k, wv := range w {
-			gv, ok := g[k]
-			if !ok {
-				out = append(out, leafDiff{path + "." + k, "missing", show(wv)})
-				continue
-			}
-			out = append(out, diffs(gv, wv, path+"."+k)...)
-		}
-		return out
-	case []any:
-		g, ok := got.([]any)
-		if !ok || len(g) != len(w) {
-			return []leafDiff{{path, show(got), show(want)}}
-		}
-		var out []leafDiff
-		for i := range w {
-			out = append(out, diffs(g[i], w[i], fmt.Sprintf("%s[%d]", path, i))...)
-		}
-		return out
-	}
-	if !reflect.DeepEqual(got, want) {
-		return []leafDiff{{path, show(got), show(want)}}
-	}
-	return nil
-}
-
-// onlyExpected reports whether every difference is a listed leaf with exactly its listed pair of values.
-func onlyExpected(all []leafDiff, leaves map[string][2]string) bool {
-	for _, d := range all {
-		if pair, ok := leaves[d.path]; !ok || pair != [2]string{d.got, d.want} {
-			return false
-		}
-	}
-	return len(all) > 0
 }
 
 // roundTrip decodes v (or JSON bytes) into generic JSON values with exact numbers.
@@ -372,8 +259,6 @@ func dumpNode(n usvg.Node) map[string]any {
 			v["format"], v["tree"] = "svg", dumpTree(k.Tree)
 		}
 		return v
-	case *usvg.Text:
-		return dumpText(n)
 	}
 	panic(fmt.Sprintf("unknown node %T", n))
 }
@@ -534,6 +419,14 @@ func dumpInput(in usvg.FilterInput) any {
 }
 
 func dumpRGB(c usvg.Color) any { return []any{c.Red, c.Green, c.Blue} }
+
+func dumpFloats(v []float32) []any {
+	out := make([]any, len(v))
+	for i, x := range v {
+		out[i] = dumpF(x)
+	}
+	return out
+}
 
 func dumpTransfer(f usvg.TransferFunction) map[string]any {
 	switch f := f.(type) {

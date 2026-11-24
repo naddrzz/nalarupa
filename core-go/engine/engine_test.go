@@ -838,23 +838,6 @@ func TestFinishedGenerationReachesTheHistory(t *testing.T) {
 
 // ── the engine's own tests ────────────────────────────────────────────────
 
-func TestTemplatesMatchTheRustCore(t *testing.T) {
-	rust, _ := filepath.Glob(filepath.Join("..", "..", "core", "templates", "*.json"))
-	if len(rust) == 0 {
-		t.Skip("no core/templates next to core-go")
-	}
-	own, _ := templates.ReadDir("templates")
-	if len(own) != len(rust) {
-		t.Fatalf("%d templates, core/templates has %d", len(own), len(rust))
-	}
-	for _, f := range rust {
-		want, _ := os.ReadFile(f)
-		if got, err := templates.ReadFile("templates/" + filepath.Base(f)); err != nil || !bytes.Equal(got, want) {
-			t.Errorf("templates/%s differs from %s: copy it again", filepath.Base(f), f)
-		}
-	}
-}
-
 // The edge cases of what an edit does to the history: an edit that fails leaves the document and history as they
 // were; a batch is one step or nothing.
 func TestFailedEditsAndBatches(t *testing.T) {

@@ -1036,7 +1036,7 @@ try {
   if (process.platform === 'win32') {
     // Figma copy → editable layers (the fig-kiwi clipboard: auto layout, text, an instance with an override).
     const { writeClipboard } = await import('../src/clipboard')
-    writeClipboard({ html: await Bun.file(join(import.meta.dir, '..', '..', 'core', 'tests', 'figma-clipboard.html')).text(), text: '' })
+    writeClipboard({ html: await Bun.file(join(import.meta.dir, '..', '..', 'core-go', 'testdata', 'figma', 'card.html')).text(), text: '' })
     await canvas.press('escape')
     await canvas.press('ctrl-v')
     await sleep(700)

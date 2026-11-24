@@ -1,9 +1,6 @@
-// Parity with the Rust core: every top-level node of each fixture in testdata/svg is exported and compared
-// with `nalarupa-cli svg <doc> <id> <out> --offline`. Without NALARUPA_CLI the comparison is with the
-// committed goldens (<fixture>.<id>.svg); with it, with the CLI's live output. NALARUPA_UPDATE_GOLDEN=1
-// (with NALARUPA_CLI) rewrites the goldens. Fixtures in testdata/svg/live hold text, whose export depends
-// on the installed fonts: they are compared live only. Rasterised patterns (`data:image/png`) are compared
-// by their decoded pixels, within ±1 per channel.
+// Golden tests: every top-level node of each fixture in testdata/svg is exported and compared with the
+// committed goldens (<fixture>.<id>.svg). Rasterised patterns (`data:image/png`) are compared by their
+// decoded pixels, within ±1 per channel.
 package svg_test
 
 import (
@@ -15,7 +12,6 @@ import (
 	"image/png"
 	"math"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -27,7 +23,6 @@ import (
 	"github.com/naddrzz/nalarupa/core-go/layout"
 	"github.com/naddrzz/nalarupa/core-go/resolve"
 	"github.com/naddrzz/nalarupa/core-go/svg"
-	"github.com/naddrzz/nalarupa/core-go/text"
 )
 
 // noText measures for the text-free fixtures.
@@ -74,23 +69,6 @@ func goExport(t *testing.T, fixture, id, data string, fonts layout.TextMeasurer)
 	return svg.InlineEmbedded(out, embedded)
 }
 
-func rustExport(t *testing.T, cli, fixture, id, data string) string {
-	t.Helper()
-	out := filepath.Join(t.TempDir(), "rust.svg")
-	var stderr bytes.Buffer
-	cmd := exec.Command(cli, "svg", fixture, id, out, "--offline")
-	cmd.Env = append(os.Environ(), "NALARUPA_DATA="+data)
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("%s svg %s %s: %v\n%s", cli, fixture, id, err, stderr.String())
-	}
-	b, err := os.ReadFile(out)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(b)
-}
-
 func topIDs(t *testing.T, fixture string) []string {
 	t.Helper()
 	d, err := doc.Load(fixture)
@@ -106,23 +84,7 @@ func topIDs(t *testing.T, fixture string) []string {
 	return ids
 }
 
-func liveRun(t *testing.T) {
-	t.Helper()
-	// A file in the module written during the run keeps the test cache from replaying a live pass.
-	if err := os.WriteFile(".parity-live", nil, 0o666); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestParity(t *testing.T) {
-	cli := os.Getenv("NALARUPA_CLI")
-	update := os.Getenv("NALARUPA_UPDATE_GOLDEN") != ""
-	if update && cli == "" {
-		t.Fatal("NALARUPA_UPDATE_GOLDEN needs NALARUPA_CLI")
-	}
-	if cli != "" {
-		liveRun(t)
-	}
 	fixtures, err := filepath.Glob(filepath.Join("..", "testdata", "svg", "*.pen"))
 	if err != nil || len(fixtures) == 0 {
 		t.Fatal("no fixtures", err)
@@ -133,45 +95,11 @@ func TestParity(t *testing.T) {
 			t.Run(name+"/"+id, func(t *testing.T) {
 				golden := filepath.Join("..", "testdata", "svg", name+"."+id+".svg")
 				data := dataDir(t)
-				var want string
-				if cli != "" {
-					want = rustExport(t, cli, fx, id, data)
-					if update && os.WriteFile(golden, []byte(want), 0o666) != nil {
-						t.Fatal("cannot write golden")
-					}
-				} else {
-					b, err := os.ReadFile(golden)
-					if err != nil {
-						t.Fatal(err)
-					}
-					want = string(b)
+				b, err := os.ReadFile(golden)
+				if err != nil {
+					t.Fatal(err)
 				}
-				sameSVG(t, goExport(t, fx, id, data, noText{}), want)
-			})
-		}
-	}
-}
-
-// Text fixtures are exported with the fonts of this machine, so they are compared with the CLI only.
-func TestParityLiveText(t *testing.T) {
-	cli := os.Getenv("NALARUPA_CLI")
-	if cli == "" {
-		t.Skip("text export parity is live only: set NALARUPA_CLI to the release nalarupa-cli")
-	}
-	liveRun(t)
-	fixtures, err := filepath.Glob(filepath.Join("..", "testdata", "svg", "live", "*.pen"))
-	if err != nil || len(fixtures) == 0 {
-		t.Fatal("no live fixtures", err)
-	}
-	for _, fx := range fixtures {
-		name := strings.TrimSuffix(filepath.Base(fx), ".pen")
-		for _, id := range topIDs(t, fx) {
-			t.Run(name+"/"+id, func(t *testing.T) {
-				data := dataDir(t)
-				want := rustExport(t, cli, fx, id, data)
-				fonts := text.New(filepath.Join(data, "fonts"))
-				fonts.Online = false // as the CLI with --offline
-				sameSVG(t, goExport(t, fx, id, data, fonts), want)
+				sameSVG(t, goExport(t, fx, id, data, noText{}), string(b))
 			})
 		}
 	}

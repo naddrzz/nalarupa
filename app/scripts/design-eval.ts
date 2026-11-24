@@ -439,7 +439,7 @@ const load = (dir: string): Run => JSON.parse(readFileSync(join(dir, 'metrics.js
 /** Every face the guide names (its pairings and its examples) loads from the web. */
 const fonts = async () => {
   const { call } = await import('../src/core')
-  const guide = join(import.meta.dir, '../../core/guide')
+  const guide = join(import.meta.dir, '../../core-go/guide/md')
   const names = new Set<string>()
   for (const f of readdirSync(guide)) {
     const md = readFileSync(join(guide, f), 'utf8')

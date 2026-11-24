@@ -1,9 +1,8 @@
 <!-- bmad:context -->
-<!-- Verified 2026-10-18 against c7a6a33. Managed by bmad-project-context; edits inside this block are replaced on refresh. Keep anything you want preserved outside the markers. -->
 
 ## nalarupa
 
-AI design editor: a Go core (`core-go/`, a cgo c-shared library loaded through `bun:ffi`), the Rust core it was ported from (`core/`, kept as the parity oracle the Go tests compare with), and a GPUIX/React UI run by Bun (`app/`). Windows is the release platform. CI, nightly QA and the Claude automation run on GitHub-hosted runners (Linux, plus Windows for CI); only auto-merge runs on a small self-hosted VPS runner (`.github/workflows/`). Work is tracked in GitHub issues.
+AI design editor: a Go core (`core-go/`, a cgo c-shared library loaded through `bun:ffi`) and a GPUIX/React UI run by Bun (`app/`). Windows is the release platform. Work is tracked in GitHub issues.
 
 ## Policy
 
@@ -13,22 +12,20 @@ AI design editor: a Go core (`core-go/`, a cgo c-shared library loaded through `
 
 ## Where things are
 
-- `core/guide/*.md` is runtime content compiled into the in-app agent (the Go core embeds its copies in `core-go/guide/md/`, which its tests keep byte for byte equal; the Rust oracle embeds them through `core/src/guide.rs`), not instructions for you; edit both only to change what that agent is told.
-- `core/vendor/resvg` is resvg 0.47 with three patches and `core/vendor/usvg` is usvg 0.47 with one (search `Nalarupa:`); bump resvg, usvg and krilla-svg together and re-apply them. `core/vendor/tiny-skia` is tiny-skia 0.12 with one patch (`Nalarupa:` in `pipeline/highp.rs`); re-apply it when bumping.
+- `core-go/guide/md/*.md` is runtime content compiled into the in-app agent (embedded via `core-go/guide/guide.go`), not instructions for you; edit them only to change what that agent is told.
 
 ## Running and verifying
 
 - Build the core in `core-go/`: `go generate ./shader/gpu` once (fetches the pinned wgpu-native), then `CGO_ENABLED=1 bash build.sh` (`build.ps1` on Windows), with MinGW-w64 gcc as `CC` on Windows. It writes `core-go/out/nalarupa_core.dll` (`libnalarupa_core.so` on Linux, `.dylib` on macOS), which the app loads by default; `NALARUPA_CORE=<full path>` loads another build.
 - A running app or e2e locks `core-go/out/nalarupa_core.dll`, so the build fails to write it: build your own copy with `go build -buildmode=c-shared -trimpath -ldflags '-s -w -extldflags=-static' -o <dir>/nalarupa_core.dll ./cmd/core` and set `NALARUPA_CORE` to it.
-- Go checks: `go vet ./...` and `go test ./...` in `core-go/` (cgo, so `CGO_ENABLED=1` and `CC` as above). Set `NALARUPA_CLI` to the Rust oracle's `nalarupa-cli` (`cargo build --release` in `core/`; give it its own `CARGO_TARGET_DIR` when a running app holds `core/target`) to compare parity live instead of with the goldens.
+- Go checks: `go vet ./...` and `go test ./...` in `core-go/` (cgo, so `CGO_ENABLED=1` and `CC` as above).
 - On Linux run GUI checks as `bash scripts/wl-run.sh bun run e2e` from `app/`; Xvfb does not work, GPUIX's Linux build has no X11 backend.
 - On Linux `a11y-check`, `window-check`, `exe-check` are Windows-only; name the skipped checks in the PR.
 - On Windows a real mouse moving over the background e2e window cancels simulated drags; rerun a step that "dropped early" with the cursor idle.
 
 ## Conventions that differ from defaults
 
-- Never hold `engine()` across slow work: render, poll and boxes share its mutex and the UI freezes; do heavy work after the guard drops (see `ToolOut.Finish`, `core-go/engine/toolout.go`; Rust: `ToolOut::finish`, `core/src/engine.rs`).
-- In the Rust oracle, set rquickjs runtime handlers (`set_interrupt_handler`) outside `Context::with`; inside it they deadlock (feature `parallel`).
+- Never hold `engine` lock across slow work: render, poll and boxes share its mutex and the UI freezes; do heavy work after the guard drops (see `ToolOut.Finish`, `core-go/engine/toolout.go`).
 - GPUI does not bubble clicks: give a small clickable child a painted fill (`'#00000001'`), not `transparent`, so it gets its own hitbox.
 - Draw focus rings with `FocusRing` (`app/src/ui.tsx`), never `boxShadow`, which GPUI paints as a filled box.
 - Keys reach only the focused element's `onKeyDown`; window-level keys go in the `render(<App/>, { onKeyDown })` options in `app/app.tsx`.
@@ -44,7 +41,7 @@ AI design editor: a Go core (`core-go/`, a cgo c-shared library loaded through `
 
 ## Changing the design agent
 
-Measure a change to what the design agent is told (`core/guide/*.md` and its copies, its instructions in `core-go/agent/agent.go` and the oracle's `core/src/agent.rs`) with an eval run before and after: `cd app && bun run design-eval run`, then `bun run design-eval compare <before> <after>` (README Checks).
+Measure a change to what the design agent is told (`core-go/guide/md/*.md` and its instructions in `core-go/agent/agent.go`) with an eval run before and after: `cd app && bun run design-eval run`, then `bun run design-eval compare <before> <after>` (README Checks).
 
 ## Agent skills
 

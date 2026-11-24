@@ -1,6 +1,5 @@
 // Package guide is the agent-facing documentation (`read_guide`) and the worked examples of design directions
-// (`get_style`), as core/src/guide.rs. The topics in md/ are copies of core/guide/*.md, which stay the source
-// (TestCopiesMatchTheRustGuide keeps them byte for byte equal).
+// (`get_style`). The topics live in md/*.md and are embedded at build time.
 package guide
 
 import (

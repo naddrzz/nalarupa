@@ -1,12 +1,7 @@
-// Export parity with the Rust core. Every top-level node of the 4a svg fixtures and the blank and mobile
-// templates is exported as PNG at scales 1 and 2 here and by `nalarupa-cli render <doc> <dir> <scale> --offline`, and
-// the decoded pixels are compared exactly. A few nodes are also exported in every format (png, jpeg at
-// quality 1, 80 and 100, webp) and at the clamped scales 0.01 and 20 (see formatCases) by `nalarupa-cli image`: sizes must
-// match, PNG and WebP must decode to the same pixels, and JPEG (Go's image/jpeg encoder, not jpeg-encoder)
-// within the tolerance stated in testdata/render/fixtures.json. Without NALARUPA_CLI the comparison is with
-// the committed Rust files (testdata/render/export); with it, with the CLI's live output.
-// NALARUPA_UPDATE_GOLDEN=1 (with NALARUPA_CLI) rewrites them. testdata/svg/live/text.pen holds text and is
-// compared live only.
+// Export golden tests: every top-level node of the svg fixtures and the blank and mobile
+// templates is exported as PNG at scales 1 and 2, and the decoded pixels are compared against
+// the committed goldens (testdata/render/export). Format cases (png, jpeg at quality 1, 80 and 100,
+// webp) and clamped scales 0.01 and 20 are compared against the committed files too.
 package export_test
 
 import (
@@ -18,7 +13,6 @@ import (
 	"image/jpeg"
 	"image/png"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -38,7 +32,6 @@ var (
 	testdata   = filepath.Join("..", "testdata")
 	goldenDir  = filepath.Join(testdata, "render", "export")
 	nodeDocs   = []string{"svg/effects.pen", "svg/gradients.pen", "svg/images.pen", "svg/shapes.pen", "blank.pen", "mobile.pen"}
-	liveOnly   = "text" // svg/live/text.pen: its text depends on the installed fonts
 	formatRuns = []struct{ doc, id string }{{"svg/effects.pen", "shadows"}, {"svg/images.pen", "imgs"}, {"svg/shapes.pen", "fills"}}
 )
 
@@ -134,24 +127,6 @@ func topIDs(t *testing.T, path string) []string {
 	return ids
 }
 
-func liveMark(t *testing.T) {
-	t.Helper()
-	// A file in the module written during the run keeps the test cache from replaying a live pass.
-	if err := os.WriteFile(".parity-live", nil, 0o666); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func run(t *testing.T, cli, data string, args ...string) (string, error) {
-	t.Helper()
-	var stderr bytes.Buffer
-	cmd := exec.Command(cli, args...)
-	cmd.Env = append(os.Environ(), "NALARUPA_DATA="+data)
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-	return strings.TrimSpace(stderr.String()), err
-}
-
 func stem(doc string) string { return strings.TrimSuffix(filepath.Base(doc), ".pen") }
 
 func scaleName(s float64) string { return strconv.FormatFloat(s, 'g', -1, 64) }
@@ -234,40 +209,14 @@ func abs(x int) int {
 	return x
 }
 
-// golden returns the Rust file at name: written by produce when live (and saved when updating, unless the
-// fixture is live only), read from testdata otherwise.
-func golden(t *testing.T, live bool, name string, produce func() []byte) []byte {
+// golden reads the golden file at name from testdata.
+func golden(t *testing.T, name string) []byte {
 	t.Helper()
-	path := filepath.Join(goldenDir, name)
-	if live {
-		b := produce()
-		if os.Getenv("NALARUPA_UPDATE_GOLDEN") != "" && !strings.HasPrefix(name, liveOnly+".") {
-			if err := os.MkdirAll(goldenDir, 0o777); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(path, b, 0o666); err != nil {
-				t.Fatal(err)
-			}
-		}
-		return b
-	}
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(filepath.Join(goldenDir, name))
 	if err != nil {
 		t.Fatal(err)
 	}
 	return b
-}
-
-func setup(t *testing.T) (string, bool) {
-	t.Helper()
-	cli := os.Getenv("NALARUPA_CLI")
-	if os.Getenv("NALARUPA_UPDATE_GOLDEN") != "" && cli == "" {
-		t.Fatal("NALARUPA_UPDATE_GOLDEN needs NALARUPA_CLI")
-	}
-	if cli != "" {
-		liveMark(t)
-	}
-	return cli, cli != ""
 }
 
 func fonts(t *testing.T) *text.Fonts {
@@ -278,34 +227,17 @@ func fonts(t *testing.T) *text.Fonts {
 }
 
 func TestNodePNGParity(t *testing.T) {
-	cli, live := setup(t)
 	tol := tolerances(t)
 	f := fonts(t)
-	docs := append([]string{}, nodeDocs...)
-	if live {
-		docs = append(docs, "svg/live/"+liveOnly+".pen")
-	}
-	for _, d := range docs {
+	for _, d := range nodeDocs {
 		path := filepath.Join(testdata, filepath.FromSlash(d))
 		for _, scale := range []float64{1, 2} {
 			data := dataDir(t)
-			out := t.TempDir()
-			if live {
-				if msg, err := run(t, cli, data, "render", path, out, scaleName(scale), "--offline"); err != nil {
-					t.Fatalf("%s render %s: %v\n%s", cli, d, err, msg)
-				}
-			}
 			ctx := openCtx(t, path, data, f)
 			for _, id := range topIDs(t, path) {
 				key := stem(d) + "." + id + "@" + scaleName(scale)
 				t.Run(key, func(t *testing.T) {
-					want := golden(t, live, key+".png", func() []byte {
-						b, err := os.ReadFile(filepath.Join(out, id+".png"))
-						if err != nil {
-							t.Fatal(err)
-						}
-						return b
-					})
+					want := golden(t, key+".png")
 					got, err := ctx.NodePNG(id, scale)
 					if err != nil {
 						t.Fatal(err)
@@ -318,7 +250,6 @@ func TestNodePNGParity(t *testing.T) {
 }
 
 func TestFormatParity(t *testing.T) {
-	cli, live := setup(t)
 	tol := tolerances(t)
 	f := fonts(t)
 	for i, r := range formatRuns {
@@ -329,18 +260,7 @@ func TestFormatParity(t *testing.T) {
 			ext := map[string]string{"png": "png", "jpeg": "jpg", "webp": "webp"}[fc.format]
 			key := fmt.Sprintf("%s.%s.q%d@%s", stem(r.doc), r.id, fc.quality, scaleName(fc.scale))
 			t.Run(key+"."+ext, func(t *testing.T) {
-				want := golden(t, live, key+"."+ext, func() []byte {
-					out := filepath.Join(t.TempDir(), "out."+ext)
-					q := strconv.Itoa(int(fc.quality))
-					if msg, err := run(t, cli, data, "image", path, r.id, fc.format, scaleName(fc.scale), q, out, "--offline"); err != nil {
-						t.Fatalf("%s image: %v\n%s", cli, err, msg)
-					}
-					b, err := os.ReadFile(out)
-					if err != nil {
-						t.Fatal(err)
-					}
-					return b
-				})
+				want := golden(t, key+"."+ext)
 				got, err := ctx.NodeImage(r.id, fc.format, fc.scale, fc.quality)
 				if err != nil {
 					t.Fatal(err)
@@ -353,40 +273,24 @@ func TestFormatParity(t *testing.T) {
 
 // TestErrorParity checks the error strings of nodes that cannot be exported.
 func TestErrorParity(t *testing.T) {
-	cli, live := setup(t)
 	f := fonts(t)
 	cases := []struct{ doc, id string }{{"svg/shapes.pen", "nope"}, {"svg/shapes.pen", "basic/nope"}, {"disabled.pen", "hidden"}, {"disabled.pen", "r2"}}
 	wants := map[string]string{}
 	goldenFile := filepath.Join(goldenDir, "errors.json")
-	if !live {
-		b, err := os.ReadFile(goldenFile)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := json.Unmarshal(b, &wants); err != nil {
-			t.Fatal(err)
-		}
+	b, err := os.ReadFile(goldenFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(b, &wants); err != nil {
+		t.Fatal(err)
 	}
 	for _, c := range cases {
 		path := filepath.Join(testdata, filepath.FromSlash(c.doc))
 		data := dataDir(t)
 		key := stem(c.doc) + "." + c.id
-		if live {
-			msg, err := run(t, cli, data, "image", path, c.id, "png", "1", "0", filepath.Join(t.TempDir(), "x.png"), "--offline")
-			if err == nil {
-				t.Fatalf("%s: Rust exported it", key)
-			}
-			wants[key] = strings.TrimPrefix(msg, "error: ")
-		}
 		_, err := openCtx(t, path, data, f).NodePNG(c.id, 1)
 		if err == nil || err.Error() != wants[key] {
 			t.Errorf("%s: got error %v, want %q", key, err, wants[key])
-		}
-	}
-	if live && os.Getenv("NALARUPA_UPDATE_GOLDEN") != "" {
-		b, _ := json.MarshalIndent(wants, "", " ")
-		if err := os.WriteFile(goldenFile, b, 0o666); err != nil {
-			t.Fatal(err)
 		}
 	}
 }

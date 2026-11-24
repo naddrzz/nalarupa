@@ -1,4 +1,4 @@
-// Writes core/tests/figma-clipboard.html, a Figma clipboard (`text/html`) for the paste tests:
+// Writes core-go/testdata/figma/card.html, a Figma clipboard (`text/html`) for the paste tests:
 // `bun scripts/figma-fixture.ts`. Like Figma's, it is a "fig-kiwi" archive (a kiwi schema, raw
 // deflate, and a kiwi message, zstd) base64'd in a data-buffer span. The schema is a subset of
 // Figma's, with its type and field names; the message is a card frame with auto layout, text, a
@@ -202,6 +202,6 @@ const chunks = [Bun.deflateSync(schema()), Bun.zstdCompressSync(new Uint8Array(m
 const archive = Buffer.concat([Buffer.from('fig-kiwi'), Buffer.from(u32(15)), ...chunks.flatMap((c) => [Buffer.from(u32(c.length)), Buffer.from(c)])])
 const meta = Buffer.from(JSON.stringify({ fileKey: 'nalarupaFixture', pasteID: 1, dataType: 'scene' })).toString('base64')
 const html = `<meta charset="utf-8"><div><span data-metadata="<!--(figmeta)${meta}(/figmeta)-->"></span><span data-buffer="<!--(figma)${archive.toString('base64')}(/figma)-->"></span></div><span style="white-space:pre-wrap;">Card</span>`
-const file = join(import.meta.dir, '..', '..', 'core', 'tests', 'figma-clipboard.html')
+const file = join(import.meta.dir, '..', '..', 'core-go', 'testdata', 'figma', 'card.html')
 await Bun.write(file, html)
 console.log(`wrote ${file} (${html.length} bytes)`)

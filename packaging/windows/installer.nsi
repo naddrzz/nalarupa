@@ -1,4 +1,4 @@
-; Nalarupa installer. Built by .github/workflows/release.yml:
+; Nalarupa installer:
 ;   makensis /DVERSION=0.1.0 /DDIST=<app/dist> /DOUT=<setup.exe> packaging/windows/installer.nsi
 ; Installs per machine into Program Files, with Start menu and desktop shortcuts and an uninstaller.
 Unicode true

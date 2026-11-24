@@ -75,9 +75,9 @@ The logo combines a wayang *gunungan* that doubles as a pen nib (the pen tool), 
 - Export nodes to **PNG, JPEG, WebP, SVG, HTML+CSS**, and decks to **PDF**.
 - Built-in **MCP server** (`http://127.0.0.1:47700/mcp`) for external agents: Claude Code, Cursor, Codex.
   The *Connect* button writes their config only when you click it.
-- Headless `nalarupa-cli` for rendering and exporting without the UI (`render`, `svg`, `html`, `exec`, `mcp`; build it
-  with `bash build.sh cli` in `core-go/`, after `go generate ./shader/gpu` and with MinGW gcc as `CC` on Windows, see
-  Development).
+- Headless `nalarupa-cli` for rendering and exporting without the UI (`render`, `svg`, `html`, `exec`, `bench`, `icon`,
+  `mcp`; build it with `bash build.sh cli` in `core-go/`, after `go generate ./shader/gpu` and with MinGW gcc as `CC`
+  on Windows, see Development).
 - `.nala` document format (readable JSON); `.pen` documents open too.
 
 ### Accessibility
@@ -122,8 +122,6 @@ cd core-go && go generate ./shader/gpu && CGO_ENABLED=1 bash build.sh
 
 `go generate` fetches the pinned wgpu-native release once; `build.sh` (or `build.ps1` on Windows) builds the core into
 `core-go/out/`, where the app finds it. `NALARUPA_CORE=<full path of the library>` points the app at another build.
-`core/` holds the Rust core the Go one was ported from: it stays as the parity oracle (the Go parity tests compare
-with its `nalarupa-cli`, see Checks) and needs [Rust](https://rustup.rs) stable.
 
 ```bash
 cd app && bun install && bun run dev
@@ -138,11 +136,8 @@ cd app && bun run build
 ```
 
 The output goes to `app/dist/`: `nalarupa.exe` with the Nalarupa icon, `nalarupa_core.dll`, the GPUI addon,
-and `nalarupa.ico`. Releases are automatic: pushing to `main` runs `.github/workflows/release.yml`,
-which takes the latest `v*` tag, bumps its minor number, builds and packages all three platforms (`packaging/`),
-then tags the commit and attaches the files to a draft GitHub Release to review and publish. Run the workflow
-by hand to pick a patch, minor or major bump, and whether to tag the commit and create the draft release;
-pushing a canonical `v<major>.<minor>.<patch>` tag (for example `v1.4.0`) releases that version.
+and `nalarupa.ico`. Use `packaging/` (`packaging/set-version.sh`, `packaging/windows/installer.nsi`,
+`packaging/macos/`, `packaging/linux/`) to build platform installers and archives.
 
 ### Architecture
 
@@ -165,17 +160,14 @@ app/  (Bun + @gpuix/react)                core-go/  (Go + cgo, nalarupa_core.dll
                                            └───────────────────────────────────────────────┘
 ```
 
-The agent guides live in `core/guide/*.md` (document schema, the `execute` API, components, slides, design,
-code); `core-go/guide/md/` holds the copies the Go core embeds, kept byte for byte equal by its tests.
+The agent guides live in `core-go/guide/md/*.md` (document schema, the `execute` API, components, slides, design,
+code), embedded into the Go core at build time.
 
 ### Checks
 
 ```bash
-cd core-go && go vet ./... && NALARUPA_CLI="$PWD/../core/target/release/nalarupa-cli" go test ./...
+cd core-go && go vet ./... && go test ./...
 ```
-
-With `NALARUPA_CLI` set to the Rust oracle (`cd core && cargo build --release && cargo test --release`) the parity
-tests compare with its live output; without it, with the committed goldens.
 
 ```bash
 cd app && bun run typecheck && bun run smoke && bun run e2e
@@ -252,20 +244,20 @@ cd app && bun run a11y-check && bun run motion-check && bun run window-check
   not in CI: once before a change to the agent's instructions and once after.
 - On a Linux server without a display, prefix each windowed check (`e2e`, `editor-e2e`, `file-e2e`) with
   `bash scripts/wl-run.sh` from `app/`, e.g. `cd app && bash scripts/wl-run.sh bun run file-e2e`, to run the window under a headless
-  Wayland compositor (needs `sway`, `grim`, `mesa-vulkan-drivers`). CI does this on GitHub-hosted Ubuntu, and also runs the Windows-only checks on a Windows runner.
+  Wayland compositor (needs `sway`, `grim`, `mesa-vulkan-drivers`).
 - `bun run shots` regenerates the README screenshots in `docs/screenshots/`.
 
-Canvas performance (the bench and the icon tool below are still Rust-only, run against the oracle core):
+Canvas performance (`bash build.sh cli` in `core-go/` first):
 
 ```bash
-cd core && cargo run --release --example bench -- file.nala 1600 1000
+./core-go/out/nalarupa-cli bench file.nala 1600 1000
 ```
 
 The logo lives in `app/assets/brand/` (`nalarupa.svg`, plus `nalarupa-small.svg` for 16–48 px). Regenerate
 the PNGs and `nalarupa.ico` with:
 
 ```bash
-cd core && cargo run --release --example icon -- ../app/assets/brand/nalarupa.svg ../app/assets/brand/nalarupa-small.svg ../app/assets/brand
+./core-go/out/nalarupa-cli icon app/assets/brand/nalarupa.svg app/assets/brand/nalarupa-small.svg app/assets/brand
 ```
 
 ## Connecting external agents
@@ -283,11 +275,12 @@ claude mcp add --transport http --scope user nalarupa http://127.0.0.1:47700/mcp
 - `execute` is limited to 30 s, 64 MB of memory and a 512 KB stack.
 - The system clipboard is Windows-only; on macOS/Linux copy/paste works only inside the app.
 - AI/stock image generation inserts placeholder photos; there is no image generation backend yet.
-- PDF export uses krilla 0.8: 1 px = 1 pt, and filters (blur, shadows) are embedded as bitmaps.
+- PDF export (`core-go/pdf`): 1 px = 1 pt, and filters (blur, shadows) are embedded as bitmaps.
 - WebP is always lossless; JPEG has no alpha (transparent areas become white).
 - The Claude API key is stored as-is in `%LOCALAPPDATA%\Nalarupa\settings.json`.
 
 ## License
 
-[MIT](LICENSE). `core/vendor/resvg` is resvg 0.47.0 (Apache-2.0 OR MIT) with two *layer clamp* fixes; UI
-icons are from [Lucide](https://lucide.dev) (ISC, `app/assets/icons/LICENSE`).
+[MIT](LICENSE). `core-go/resvg`, `core-go/usvg` and `core-go/skia` are Go ports of resvg 0.47.0, usvg 0.47.0 and
+tiny-skia 0.12 (Apache-2.0 OR MIT / BSD-3-Clause); UI icons are from [Lucide](https://lucide.dev) (ISC,
+`app/assets/icons/LICENSE`).

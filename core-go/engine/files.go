@@ -18,7 +18,7 @@ import (
 	"github.com/naddrzz/nalarupa/core-go/svg"
 )
 
-// templates are copies of core/templates/*.json (TestTemplatesMatchTheRustCore keeps them equal).
+// templates holds the built-in document templates.
 //
 //go:embed templates/*.json
 var templates embed.FS
