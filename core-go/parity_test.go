@@ -1,9 +1,5 @@
-// Parity with the Rust core: every fixture in testdata is opened (migrate, repair ids), saved and laid
-// out, and the result compared with what the Rust CLI produces (`nalarupa-cli layout <doc> <saved>`).
-// Without NALARUPA_CLI the comparison is with the committed goldens (*.layout.json, *.saved.json); with it,
-// with the CLI's live output, so drift shows whenever Rust changes. NALARUPA_UPDATE_GOLDEN=1 (with
-// NALARUPA_CLI) rewrites the goldens from the CLI. The fixtures in testdata/live hold text, whose layout
-// depends on the installed fonts: they are compared live only, laid out with the real text.Fonts.
+// Golden tests: every fixture in testdata is opened (migrate, repair ids), saved and laid out,
+// and compared with the committed goldens (*.layout.json, *.saved.json).
 package core_test
 
 import (
@@ -12,7 +8,6 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -104,18 +99,6 @@ func deref(s *string) any {
 }
 
 func TestParity(t *testing.T) {
-	cli := os.Getenv("NALARUPA_CLI")
-	update := os.Getenv("NALARUPA_UPDATE_GOLDEN") != ""
-	if update && cli == "" {
-		t.Fatal("NALARUPA_UPDATE_GOLDEN needs NALARUPA_CLI")
-	}
-	if cli != "" {
-		// The test cache never rechecks files outside this module, so a rebuilt CLI would get a cached pass.
-		// A file in the module written during the run is too new to cache: live runs always rerun.
-		if err := os.WriteFile(".parity-live", nil, 0o666); err != nil {
-			t.Fatal(err)
-		}
-	}
 	fixtures, err := filepath.Glob(filepath.Join("testdata", "*.pen"))
 	if err != nil || len(fixtures) == 0 {
 		t.Fatal("no fixtures", err)
@@ -125,21 +108,13 @@ func TestParity(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			goldenLayout := filepath.Join("testdata", name+".layout.json")
 			goldenSaved := filepath.Join("testdata", name+".saved.json")
-			var wantLayout, wantSaved []byte
-			if cli != "" {
-				wantLayout, wantSaved = rustLayout(t, cli, f)
-				if update {
-					if os.WriteFile(goldenLayout, wantLayout, 0o666) != nil || os.WriteFile(goldenSaved, wantSaved, 0o666) != nil {
-						t.Fatal("cannot write goldens")
-					}
-				}
-			} else {
-				if wantLayout, err = os.ReadFile(goldenLayout); err == nil {
-					wantSaved, err = os.ReadFile(goldenSaved)
-				}
-				if err != nil {
-					t.Fatal(err)
-				}
+			wantLayout, err := os.ReadFile(goldenLayout)
+			var wantSaved []byte
+			if err == nil {
+				wantSaved, err = os.ReadFile(goldenSaved)
+			}
+			if err != nil {
+				t.Fatal(err)
 			}
 			saved := filepath.Join(t.TempDir(), "go.pen")
 			got := open(t, f, saved, noText{})
@@ -148,7 +123,7 @@ func TestParity(t *testing.T) {
 				t.Fatal(err)
 			}
 			if !bytes.Equal(gotSaved, wantSaved) {
-				t.Errorf("saved document differs from Rust:\n%s", firstDiff(gotSaved, wantSaved))
+				t.Errorf("saved document differs from golden:\n%s", firstDiff(gotSaved, wantSaved))
 			}
 			var want []box
 			if err := json.Unmarshal(wantLayout, &want); err != nil {
@@ -159,57 +134,68 @@ func TestParity(t *testing.T) {
 	}
 }
 
-// rustLayout runs `nalarupa-cli layout` on a fixture: the laid-out trees and the saved document.
-func rustLayout(t *testing.T, cli, fixture string) (layout, saved []byte) {
-	t.Helper()
-	rustSaved := filepath.Join(t.TempDir(), "rust.pen")
-	var stderr bytes.Buffer
-	cmd := exec.Command(cli, "layout", fixture, rustSaved)
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("%s layout %s: %v\n%s", cli, fixture, err, stderr.String())
-	}
-	if saved, err = os.ReadFile(rustSaved); err != nil {
-		t.Fatal(err)
-	}
-	return out, saved
-}
-
-// Text fixtures are laid out with the fonts of this machine, so they are compared with the CLI only. Both
-// sides use the CLI's font cache folder (`nalarupa-cli-fonts` in the temp folder).
-func TestParityLiveText(t *testing.T) {
-	cli := os.Getenv("NALARUPA_CLI")
-	if cli == "" {
-		t.Skip("text layout parity is live only: set NALARUPA_CLI to the release nalarupa-cli")
-	}
-	if err := os.WriteFile(".parity-live", nil, 0o666); err != nil {
-		t.Fatal(err)
-	}
+func TestLiveTextLayout(t *testing.T) {
 	fixtures, err := filepath.Glob(filepath.Join("testdata", "live", "*.pen"))
 	if err != nil || len(fixtures) == 0 {
 		t.Fatal("no live fixtures", err)
 	}
-	fonts := text.New(filepath.Join(os.TempDir(), "nalarupa-cli-fonts"))
-	fonts.Online = false // as the CLI
+	fonts := text.New(t.TempDir())
+	fonts.Online = false
 	for _, f := range fixtures {
 		name := strings.TrimSuffix(filepath.Base(f), ".pen")
 		t.Run(name, func(t *testing.T) {
-			wantLayout, wantSaved := rustLayout(t, cli, f)
-			saved := filepath.Join(t.TempDir(), "go.pen")
-			got := open(t, f, saved, fonts)
-			gotSaved, err := os.ReadFile(saved)
-			if err != nil {
-				t.Fatal(err)
+			saved1 := filepath.Join(t.TempDir(), "first.pen")
+			saved2 := filepath.Join(t.TempDir(), "second.pen")
+			got1 := open(t, f, saved1, fonts)
+			got2 := open(t, f, saved2, fonts)
+			if len(got1) == 0 {
+				t.Fatal("no laid-out nodes")
 			}
-			if !bytes.Equal(gotSaved, wantSaved) {
-				t.Errorf("saved document differs from Rust:\n%s", firstDiff(gotSaved, wantSaved))
+			sameBoxes(t, got1, got2, name)
+			b1, err1 := os.ReadFile(saved1)
+			b2, err2 := os.ReadFile(saved2)
+			if err1 != nil || err2 != nil {
+				t.Fatal(err1, err2)
 			}
-			var want []box
-			if err := json.Unmarshal(wantLayout, &want); err != nil {
-				t.Fatal(err)
+			if !bytes.Equal(b1, b2) {
+				t.Errorf("repeat save differs:\n%s", firstDiff(b1, b2))
 			}
-			sameBoxes(t, got, want, name)
+			byID := map[string]box{}
+			var walk func([]box)
+			walk = func(nodes []box) {
+				for _, n := range nodes {
+					if n.Problem != nil {
+						t.Errorf("%s: unexpected problem %q", n.ID, *n.Problem)
+					}
+					if math.IsNaN(n.W) || math.IsInf(n.W, 0) || math.IsNaN(n.H) || math.IsInf(n.H, 0) || n.W < 0 || n.H < 0 {
+						t.Errorf("%s: invalid size (%v, %v)", n.ID, n.W, n.H)
+					}
+					if n.Type == "text" {
+						if n.ID == "zero" {
+							// fixed-width with no width (0) wraps one word per line.
+							if n.W != 0 || n.H <= 40 {
+								t.Errorf("text zero box = (%v, %v), want width 0 and wrapped height > 40", n.W, n.H)
+							}
+						} else if n.W <= 0 || n.H <= 0 {
+							t.Errorf("text %s has empty bounds (%v, %v)", n.ID, n.W, n.H)
+						}
+					}
+					byID[n.ID] = n
+					walk(n.Children)
+				}
+			}
+			walk(got1)
+			if body, ok := byID["body"]; ok {
+				// Fixed-width paragraph (width 280 inside 320px card with 20px horizontal padding) must wrap past one line.
+				if body.W != 280 || body.H <= 28 {
+					t.Errorf("body box = (%v, %v), want width 280 and wrapped height > 28", body.W, body.H)
+				}
+			}
+			if fixed, ok := byID["fixed"]; ok {
+				if fixed.W != 80 || fixed.H != 30 {
+					t.Errorf("fixed box = (%v, %v), want (80, 30)", fixed.W, fixed.H)
+				}
+			}
 		})
 	}
 }
@@ -225,15 +211,12 @@ func firstDiff(a, b []byte) string {
 			y = bl[i]
 		}
 		if x != y {
-			return fmt.Sprintf("line %d\n  go:   %s\n  rust: %s", i+1, x, y)
+			return fmt.Sprintf("line %d\n  got:  %s\n  want: %s", i+1, x, y)
 		}
 	}
 	return "(same lines)"
 }
 
-// Source of truth: the Rust test `doc::tests::ids_match_the_go_golden` checks testdata/ids.json against Rust.
-// The same reseed seed gives the same ids as Rust (testdata/ids.json comes from `doc::reseed` and
-// `Doc::gen_id` in the Rust core).
 func TestParityIDs(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("testdata", "ids.json"))
 	if err != nil {

@@ -1,16 +1,8 @@
-// Parity with the Rust core's shader oracles (`nalarupa-cli shader-transpile`, `shader-sdf`,
-// `shader-backdrop`) over the fixtures in testdata/shader. Without NALARUPA_CLI the comparison is with the
-// committed goldens; with it, with the CLI's live output. NALARUPA_UPDATE_GOLDEN=1 (with NALARUPA_CLI)
-// rewrites the goldens.
-//
-// Transpile text, errors, the block layout and the packed block are compared exactly; naga's own errors
-// (`compileError`, slice 6b) only skip the layout. SDF texels are compared within 1 ulp (f32 and f16): the
-// distances go through libm (hypot, atan2, sin, cos) and the blur kernel through expf, which differ from Go's
-// math in the last bit. SDF goldens hold a grid of sampled texels, as the full textures run to megabytes.
+// Golden tests over the shader fixtures in testdata/shader: transpile text, errors, block layout, packed
+// uniform blocks, SDF texels within 1 ulp (f32 and f16), and backdrop SVG emission.
 package shader
 
 import (
-	"bytes"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
@@ -18,7 +10,6 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -34,52 +25,11 @@ import (
 
 var fixtures = filepath.Join("..", "testdata", "shader")
 
-type oracle struct {
-	cli    string
-	update bool
-}
-
-func newOracle(t *testing.T) oracle {
+func readGolden(t *testing.T, name string) []byte {
 	t.Helper()
-	o := oracle{os.Getenv("NALARUPA_CLI"), os.Getenv("NALARUPA_UPDATE_GOLDEN") != ""}
-	if o.update && o.cli == "" {
-		t.Fatal("NALARUPA_UPDATE_GOLDEN needs NALARUPA_CLI")
-	}
-	if o.cli != "" {
-		// A file in the module written during the run keeps the test cache from replaying a live pass.
-		if err := os.WriteFile(".parity-live", nil, 0o666); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return o
-}
-
-func (o oracle) run(t *testing.T, env []string, args ...string) []byte {
-	t.Helper()
-	var stdout, stderr bytes.Buffer
-	cmd := exec.Command(o.cli, args...)
-	cmd.Env = append(os.Environ(), env...)
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("%s %v: %v\n%s", o.cli, args, err, stderr.String())
-	}
-	return stdout.Bytes()
-}
-
-// golden returns want when live (writing it to the golden file when updating), else the golden file.
-func (o oracle) golden(t *testing.T, name string, want func() []byte) []byte {
-	t.Helper()
-	path := filepath.Join(fixtures, name)
-	if o.cli == "" {
-		b, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return b
-	}
-	b := want()
-	if o.update && os.WriteFile(path, b, 0o666) != nil {
-		t.Fatal("cannot write golden", path)
+	b, err := os.ReadFile(filepath.Join(fixtures, name))
+	if err != nil {
+		t.Fatal(err)
 	}
 	return b
 }
@@ -200,23 +150,7 @@ func checkTranspile(t *testing.T, src string, n node, want []byte) {
 	}
 }
 
-// args are the CLI arguments after the source file for node n (its uniforms written to dir).
-func (n node) args(t *testing.T, dir string) []string {
-	t.Helper()
-	path := filepath.Join(dir, "uniforms.json")
-	u := n.Uniforms
-	if len(u) == 0 {
-		u = json.RawMessage("{}")
-	}
-	if err := os.WriteFile(path, u, 0o666); err != nil {
-		t.Fatal(err)
-	}
-	f := func(v float64) string { return strconv.FormatFloat(v, 'g', -1, 64) }
-	return []string{path, f(n.W), f(n.H), f(n.Scale)}
-}
-
 func TestParityTranspile(t *testing.T) {
-	o := newOracle(t)
 	frags, err := filepath.Glob(filepath.Join(fixtures, "*.frag"))
 	if err != nil || len(frags) == 0 {
 		t.Fatal("no fixtures", err)
@@ -234,16 +168,13 @@ func TestParityTranspile(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			want := o.golden(t, name+".golden.json", func() []byte {
-				return o.run(t, nil, append([]string{"shader-transpile", frag}, n.args(t, t.TempDir())...)...)
-			})
+			want := readGolden(t, name+".golden.json")
 			checkTranspile(t, string(src), n, want)
 		})
 	}
 }
 
 func TestParityTranspileErrors(t *testing.T) {
-	o := newOracle(t)
 	b, err := os.ReadFile(filepath.Join(fixtures, "errors.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -253,19 +184,7 @@ func TestParityTranspileErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	n := node{W: 100, H: 100, Scale: 2}
-	wants := o.golden(t, "errors.golden.json", func() []byte {
-		dir := t.TempDir()
-		var out []json.RawMessage
-		for i, src := range srcs {
-			path := filepath.Join(dir, fmt.Sprintf("%d.frag", i))
-			if err := os.WriteFile(path, []byte(src), 0o666); err != nil {
-				t.Fatal(err)
-			}
-			out = append(out, bytes.TrimSpace(o.run(t, nil, append([]string{"shader-transpile", path}, n.args(t, dir)...)...)))
-		}
-		b, _ := json.MarshalIndent(out, "", " ")
-		return append(b, '\n')
-	})
+	wants := readGolden(t, "errors.golden.json")
 	var want []json.RawMessage
 	if err := json.Unmarshal(wants, &want); err != nil || len(want) != len(srcs) {
 		t.Fatal("errors.golden.json does not match errors.json", err)
@@ -402,7 +321,6 @@ func u16Bytes(v []uint16) []byte {
 }
 
 func TestParitySDF(t *testing.T) {
-	o := newOracle(t)
 	b, err := os.ReadFile(filepath.Join(fixtures, "sdf.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -412,62 +330,24 @@ func TestParitySDF(t *testing.T) {
 		t.Fatal(err)
 	}
 	var goldens []sdfGolden
-	if o.cli == "" {
-		g, err := os.ReadFile(filepath.Join(fixtures, "sdf.golden.json"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := json.Unmarshal(g, &goldens); err != nil || len(goldens) != len(cases) {
-			t.Fatal("sdf.golden.json does not match sdf.json", err)
-		}
-	} else {
-		goldens = make([]sdfGolden, len(cases))
+	g := readGolden(t, "sdf.golden.json")
+	if err := json.Unmarshal(g, &goldens); err != nil || len(goldens) != len(cases) {
+		t.Fatal("sdf.golden.json does not match sdf.json", err)
 	}
 	for i, c := range cases {
 		t.Run(c.Name, func(t *testing.T) {
 			sw, sh, px := sdfTexels(c.outline(t), c.W, c.H, c.DPI)
 			got32, got16 := f32Bytes(px), u16Bytes(halfRows(sw, sh, px))
 			idx := samples(sw, sh)
-			if o.cli == "" {
-				g := goldens[i]
-				if g.Width != sw || g.Height != sh {
-					t.Fatalf("size %dx%d, want %dx%d", sw, sh, g.Width, g.Height)
-				}
-				w32, _ := base64.StdEncoding.DecodeString(g.F32)
-				w16, _ := base64.StdEncoding.DecodeString(g.F16)
-				compareTexels(t, "f32 samples", sampleBytes(got32, 16, idx), w32, 4)
-				compareTexels(t, "f16 samples", sampleBytes(got16, 8, idx), w16, 2)
-				return
+			g := goldens[i]
+			if g.Width != sw || g.Height != sh {
+				t.Fatalf("size %dx%d, want %dx%d", sw, sh, g.Width, g.Height)
 			}
-			dir := t.TempDir()
-			outline := filepath.Join(dir, "outline.json")
-			if err := os.WriteFile(outline, c.Outline, 0o666); err != nil {
-				t.Fatal(err)
-			}
-			f := func(v float64) string { return strconv.FormatFloat(v, 'g', -1, 64) }
-			out := filepath.Join(dir, "sdf")
-			var size struct{ Width, Height int }
-			if err := json.Unmarshal(o.run(t, nil, "shader-sdf", outline, f(c.W), f(c.H), f(c.DPI), out), &size); err != nil {
-				t.Fatal(err)
-			}
-			if size.Width != sw || size.Height != sh {
-				t.Fatalf("size %dx%d, want %dx%d", sw, sh, size.Width, size.Height)
-			}
-			w32, err1 := os.ReadFile(out + ".f32")
-			w16, err2 := os.ReadFile(out + ".f16")
-			if err1 != nil || err2 != nil {
-				t.Fatal(err1, err2)
-			}
-			compareTexels(t, "f32", got32, w32, 4)
-			compareTexels(t, "f16", got16, w16, 2)
-			goldens[i] = sdfGolden{c.Name, sw, sh, base64.StdEncoding.EncodeToString(sampleBytes(w32, 16, idx)), base64.StdEncoding.EncodeToString(sampleBytes(w16, 8, idx))}
+			w32, _ := base64.StdEncoding.DecodeString(g.F32)
+			w16, _ := base64.StdEncoding.DecodeString(g.F16)
+			compareTexels(t, "f32 samples", sampleBytes(got32, 16, idx), w32, 4)
+			compareTexels(t, "f16 samples", sampleBytes(got16, 8, idx), w16, 2)
 		})
-	}
-	if o.update && !t.Failed() {
-		b, _ := json.MarshalIndent(goldens, "", " ")
-		if os.WriteFile(filepath.Join(fixtures, "sdf.golden.json"), append(b, '\n'), 0o666) != nil {
-			t.Fatal("cannot write sdf.golden.json")
-		}
 	}
 }
 
@@ -524,7 +404,6 @@ func goBackdrops(t *testing.T, fixture, id, data string) []string {
 }
 
 func TestParityBackdrop(t *testing.T) {
-	o := newOracle(t)
 	fixture := filepath.Join(fixtures, "backdrop.pen")
 	d, err := doc.Load(fixture)
 	if err != nil {
@@ -534,9 +413,7 @@ func TestParityBackdrop(t *testing.T) {
 		id, _ := jsonv.Str(jsonv.Get(n, "id"))
 		t.Run(id, func(t *testing.T) {
 			data := t.TempDir()
-			b := o.golden(t, "backdrop."+id+".json", func() []byte {
-				return o.run(t, []string{"NALARUPA_DATA=" + data}, "shader-backdrop", fixture, id, "--offline")
-			})
+			b := readGolden(t, "backdrop."+id+".json")
 			var want []string
 			if err := json.Unmarshal(b, &want); err != nil {
 				t.Fatal(err)
@@ -561,5 +438,5 @@ func firstDiff(a, b string) string {
 	}
 	from := max(i-120, 0)
 	cut := func(s string) string { return s[from:min(i+120, len(s))] }
-	return fmt.Sprintf("at byte %d\n  go:   …%s…\n  rust: …%s…", i, cut(a), cut(b))
+	return fmt.Sprintf("at byte %d\n  got:  …%s…\n  want: …%s…", i, cut(a), cut(b))
 }

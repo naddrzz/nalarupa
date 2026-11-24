@@ -205,7 +205,7 @@ assert(node(t[0]).node.content === 'hello' && node(t[0]).parent === 'document', 
 const s = call('paste', { html: '', text: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10"></svg>', targets: [], view }).ids
 assert(box(s[0]).w === 20 && box(s[0]).h === 10, 'svg pastes at its size')
 // A Figma copy (fig-kiwi archive) arrives as layers at its Figma position, its instance expanded.
-const fig = await Bun.file(new URL('../../core/tests/figma-clipboard.html', import.meta.url)).text()
+const fig = await Bun.file(new URL('../../core-go/testdata/figma/card.html', import.meta.url)).text()
 const card = call('paste', { html: fig, text: '', targets: [], view }).ids
 const figKids = node(card[0]).node.children
 assert(card.length === 1 && box(card[0]).x === 40 && figKids.map((k: any) => k.name).join() === 'Title,Body,Row', 'Figma paste')

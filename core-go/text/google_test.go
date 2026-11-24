@@ -457,12 +457,11 @@ func TestDownloadRepeat(t *testing.T) {
 }
 
 // Opt-in: downloads a variable and a static-only family from the real Google Fonts into a temporary cache,
-// then measures with them here and in `nalarupa-cli measure` on that cache.
+// then measures with them on that cache.
 func TestNetworkDownloadParity(t *testing.T) {
 	if os.Getenv("NALARUPA_NETWORK") != "1" {
-		t.Skip("reaches Google Fonts: set NALARUPA_NETWORK=1 and NALARUPA_CLI")
+		t.Skip("reaches Google Fonts: set NALARUPA_NETWORK=1")
 	}
-	cli := liveCLI(t)
 	cache := t.TempDir()
 	f := New(cache)
 	f.dl = newDownloader() // reads the metadata into this cache
@@ -484,20 +483,23 @@ func TestNetworkDownloadParity(t *testing.T) {
 		}
 	}
 	if !exists(varFile(cache, "DM Sans", false)) || !exists(staticFile(cache, "Abril Fatface", 400, false)) {
-		t.Fatal("the files are not where Rust looks")
+		t.Fatal("the downloaded font files are not in the expected cache paths")
 	}
-	var cases []measureCase
+	for _, st := range styles {
+		if !f.HasFamily(st.Family) {
+			t.Fatalf("%s was not loaded into the font database", st.Family)
+		}
+	}
 	for _, st := range append(styles, layout.TextStyle{Family: "DM Sans", Size: 18, Weight: 800}) {
-		c := measureCase{Text: "Downloaded AVA fonts wrap here", MaxW: new(float64)}
-		*c.MaxW = 120
-		c.Style.Family, c.Style.Size, c.Style.Weight = st.Family, st.Size, st.Weight
-		cases = append(cases, c)
+		if w := f.Width("Downloaded AVA fonts wrap here", st); w <= 0 {
+			t.Fatalf("%v measured %v", st, w)
+		}
 	}
-	got := measureGo(f, cases)
-	if got[0].Width == got[2].Width {
+	w500 := f.Width("Downloaded AVA fonts wrap here", layout.TextStyle{Family: "DM Sans", Size: 18, Weight: 500})
+	w800 := f.Width("Downloaded AVA fonts wrap here", layout.TextStyle{Family: "DM Sans", Size: 18, Weight: 800})
+	if w500 == w800 {
 		t.Fatal("DM Sans measures the same at 500 and 800: not the variable font")
 	}
-	sameMeasures(t, cases, got, measureRust(t, cli, cases, cache))
 }
 
 // Metadata already in the cache (anti-XSSI prefix included) is read from disk: no metadata request, and

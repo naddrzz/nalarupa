@@ -1,4 +1,3 @@
-core/target/
 app/node_modules/
 app/dist/
 app/screenshots/
@@ -6,7 +5,6 @@ app/screenshots/
 docs/screenshots/live/
 *.log
 app/.qa/
-core-go/**/.parity-live
 
 # The pinned wgpu-native release, fetched by `go generate ./shader/gpu`.
 core-go/shader/gpu/wgpu-native/

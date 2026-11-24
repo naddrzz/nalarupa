@@ -1,8 +1,6 @@
-// Path geometry parity with tiny-skia-path 0.12: each case of testdata/skia/path-cases.json is built,
-// transformed, dashed and stroked here and by `nalarupa-cli skia-path` (see its doc in core/src/bin/cli.rs),
-// with every f32 compared by its bit pattern. Without NALARUPA_CLI the comparison is with the committed
-// golden (path-cases.golden.json); with it, with the CLI's live output. NALARUPA_UPDATE_GOLDEN=1 (with
-// NALARUPA_CLI) rewrites the golden. A case's "ulps" allows that many ulps per value, only for cases that
+// Path geometry golden tests with tiny-skia-path 0.12: each case of testdata/skia/path-cases.json is built,
+// transformed, dashed and stroked here, with every f32 compared by its bit pattern against the committed
+// golden (path-cases.golden.json). A case's "ulps" allows that many ulps per value, only for cases that
 // go through sin, cos or acos, where Go's functions may round differently from the C library's.
 package skia
 
@@ -12,7 +10,6 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -430,35 +427,9 @@ func TestParityPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cli := os.Getenv("NALARUPA_CLI")
-	update := os.Getenv("NALARUPA_UPDATE_GOLDEN") != ""
-	var want []byte
-	switch {
-	case cli != "":
-		// The test cache never rechecks the CLI: a file in the module written during the run keeps it uncached.
-		if err := os.WriteFile(".parity-live", nil, 0o666); err != nil {
-			t.Fatal(err)
-		}
-		if !filepath.IsAbs(cli) {
-			cli = filepath.Join("..", cli) // relative to the core-go module root
-		}
-		var stderr bytes.Buffer
-		cmd := exec.Command(cli, "skia-path", casesFile)
-		cmd.Stderr = &stderr
-		if want, err = cmd.Output(); err != nil {
-			t.Fatalf("%s skia-path: %v\n%s", cli, err, stderr.String())
-		}
-		if update {
-			if err := os.WriteFile(goldenFile, want, 0o666); err != nil {
-				t.Fatal(err)
-			}
-		}
-	case update:
-		t.Fatal("NALARUPA_UPDATE_GOLDEN needs NALARUPA_CLI")
-	default:
-		if want, err = os.ReadFile(goldenFile); err != nil {
-			t.Fatal(err)
-		}
+	want, err := os.ReadFile(goldenFile)
+	if err != nil {
+		t.Fatal(err)
 	}
 	wantAll, err := decode(want)
 	if err != nil {

@@ -28,7 +28,7 @@ fi
 
 if [ "$1" = "--uninstall" ]; then
   if [ -d "$lib" ]; then
-    rm -f "$lib/nalarupa" "$lib/libnalarupa_core.so" "$lib"/gpuix-native.*.node
+    rm -f "$lib/nalarupa" "$lib/libnalarupa_core.so" "$lib"/gpuix-native.*.node "$lib/THIRD_PARTY_NOTICES.md"
     rmdir "$lib" 2>/dev/null || true
   fi
   remove_ours "$bin/nalarupa"
@@ -53,6 +53,7 @@ fi
 mkdir -p "$lib" "$bin" "$apps" "$icons"
 # The binary loads the core and the GPUI addon from its own folder.
 cp "$here/nalarupa" "$here/libnalarupa_core.so" "$here"/gpuix-native.*.node "$lib/"
+[ -f "$here/THIRD_PARTY_NOTICES.md" ] && cp "$here/THIRD_PARTY_NOTICES.md" "$lib/"
 ln -sfn "$lib/nalarupa" "$bin/nalarupa"
 cp "$here/nalarupa.png" "$icons/nalarupa.png"
 # Desktop Entry spec: quote the path and escape ", `, $ and \ inside the quotes (a home with spaces must still launch).

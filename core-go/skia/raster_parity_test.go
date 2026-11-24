@@ -1,20 +1,16 @@
-// Raster parity with tiny-skia 0.12: each scene of testdata/skia/raster-scenes.json (format: the doc of
-// skia_raster in core/src/bin/cli.rs) is painted here and by `nalarupa-cli skia-raster`, and the
-// premultiplied RGBA (or mask) bytes are compared exactly. Without NALARUPA_CLI the comparison is with the
-// committed goldens (testdata/skia/raster/); with it, with the CLI's live output. NALARUPA_UPDATE_GOLDEN=1
-// (with NALARUPA_CLI) rewrites the goldens. A scene's "tolerance" allows that much difference per channel,
-// only where a libm call or the CPU's approximate reciprocal is involved (its "why" says which).
+// Raster golden tests with tiny-skia 0.12: each scene of testdata/skia/raster-scenes.json is painted here,
+// and the premultiplied RGBA (or mask) bytes are compared against the committed goldens (testdata/skia/raster/).
+// A scene's "tolerance" allows that much difference per channel, only where a libm call or the CPU's
+// approximate reciprocal is involved (its "why" says which).
 //
-// A scene that uses an earlier one (a pattern, a mask, draw_pixmap) gets Rust's bytes of that scene, so a
+// A scene that uses an earlier one (a pattern, a mask, draw_pixmap) gets the golden's bytes of that scene, so a
 // mismatch does not cascade into the scenes built on it.
 package skia
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 )
@@ -574,34 +570,7 @@ func TestRasterParity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cli := os.Getenv("NALARUPA_CLI")
-	update := os.Getenv("NALARUPA_UPDATE_GOLDEN") != ""
 	dir := rasterGoldenDir
-	switch {
-	case cli != "":
-		// The test cache never rechecks the CLI: a file in the module written during the run keeps it uncached.
-		if err := os.WriteFile(".parity-live", nil, 0o666); err != nil {
-			t.Fatal(err)
-		}
-		if !filepath.IsAbs(cli) {
-			cli = filepath.Join("..", cli) // relative to the core-go module root
-		}
-		if update {
-			if err := os.RemoveAll(dir); err != nil {
-				t.Fatal(err)
-			}
-		} else {
-			dir = t.TempDir()
-		}
-		var stderr bytes.Buffer
-		cmd := exec.Command(cli, "skia-raster", rasterScenesFile, dir)
-		cmd.Stderr = &stderr
-		if err := cmd.Run(); err != nil {
-			t.Fatalf("%s skia-raster: %v\n%s", cli, err, stderr.String())
-		}
-	case update:
-		t.Fatal("NALARUPA_UPDATE_GOLDEN needs NALARUPA_CLI")
-	}
 	data, err = os.ReadFile(filepath.Join(dir, "index.json"))
 	if err != nil {
 		t.Fatal(err)

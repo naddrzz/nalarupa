@@ -1,7 +1,6 @@
-// The stream.rs tests, tables of statement boundaries and partial JSON, and parity with Rust's `complete_prefix`
-// and `partial_string` over a generated corpus: every char-boundary prefix of a set of samples, plus seeded random
-// token soups. Without NALARUPA_CLI the corpus is compared with the committed results (testdata/stream/golden.json);
-// with it, with `nalarupa-cli stream-prefix`. NALARUPA_UPDATE_GOLDEN=1 (with NALARUPA_CLI) rewrites them.
+// Tests for statement boundaries and partial JSON extraction (`CompletePrefix` and `PartialString`)
+// over a generated corpus (every char-boundary prefix of a set of samples, plus seeded random token
+// soups), compared against the committed golden results in testdata/stream/golden.json.
 package script_test
 
 import (
@@ -191,11 +190,6 @@ func goStream(c streamCase) streamResult {
 }
 
 func TestStreamParity(t *testing.T) {
-	bin := os.Getenv("NALARUPA_CLI")
-	update := os.Getenv("NALARUPA_UPDATE_GOLDEN") != ""
-	if update && bin == "" {
-		t.Fatal("NALARUPA_UPDATE_GOLDEN needs NALARUPA_CLI")
-	}
 	cases := streamCorpus()
 	for _, c := range cases {
 		for _, s := range []*string{c.Src, c.JSON} {
@@ -205,52 +199,23 @@ func TestStreamParity(t *testing.T) {
 		}
 	}
 	golden := filepath.Join("..", "testdata", "stream", "golden.json")
-	var want []streamResult
-	if bin != "" {
-		if err := os.WriteFile(".parity-live", nil, 0o666); err != nil {
-			t.Fatal(err)
-		}
-		in := filepath.Join(t.TempDir(), "cases.json")
-		b, err := json.Marshal(cases)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(in, b, 0o666); err != nil {
-			t.Fatal(err)
-		}
-		out := cli(t, bin, "stream-prefix", in)
-		if err := json.Unmarshal(out, &want); err != nil {
-			t.Fatal(err)
-		}
-		if update {
-			b, err := json.MarshalIndent(struct {
-				Cases   []streamCase   `json:"cases"`
-				Results []streamResult `json:"results"`
-			}{cases, want}, "", " ")
-			if err != nil {
-				t.Fatal(err)
-			}
-			writeGolden(t, golden, b)
-		}
-	} else {
-		b, err := os.ReadFile(golden)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var g struct {
-			Cases   []streamCase   `json:"cases"`
-			Results []streamResult `json:"results"`
-		}
-		if err := json.Unmarshal(b, &g); err != nil {
-			t.Fatal(err)
-		}
-		gc, _ := json.Marshal(g.Cases)
-		cc, _ := json.Marshal(cases)
-		if string(gc) != string(cc) {
-			t.Fatal("the golden corpus is not the generated one: rewrite it with NALARUPA_UPDATE_GOLDEN")
-		}
-		want = g.Results
+	b, err := os.ReadFile(golden)
+	if err != nil {
+		t.Fatal(err)
 	}
+	var g struct {
+		Cases   []streamCase   `json:"cases"`
+		Results []streamResult `json:"results"`
+	}
+	if err := json.Unmarshal(b, &g); err != nil {
+		t.Fatal(err)
+	}
+	gc, _ := json.Marshal(g.Cases)
+	cc, _ := json.Marshal(cases)
+	if string(gc) != string(cc) {
+		t.Fatal("the golden corpus does not match the generated cases")
+	}
+	want := g.Results
 	if len(want) != len(cases) {
 		t.Fatalf("%d results, want %d", len(want), len(cases))
 	}

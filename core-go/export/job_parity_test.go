@@ -1,14 +1,7 @@
-// Export job parity with the Rust core. Each request of testdata/exportjob/fixtures.json is planned and run
+// Export job golden tests: each request of testdata/exportjob/fixtures.json is planned and run
 // here (export.Plan, Settle without waiting, Replan when stale, Run; with CheckScriptExport and
-// ClaimScriptFiles for "script" requests) and by `nalarupa-cli export <doc> <format> <out> <id>... --opts <json>
-// [--script] --offline`, each on its own copy of the fixture folder. Both must write the same files (paths
-// relative to the copy) or fail with the same error (the copy's path written as <W>). Contents are compared by
-// format: SVG and HTML byte for byte, PNG and WebP by decoded pixels exactly, JPEG by decoded pixels within the
-// tolerance in fixtures.json (Go's image/jpeg is not jpeg-encoder, see 4d), and PDF by page count, page sizes
-// and image count (the files themselves are checked by the 4f PDF parity). Without NALARUPA_CLI the
-// comparison is with the committed Rust results (testdata/exportjob/golden); with it, with the CLI's live
-// output. NALARUPA_UPDATE_GOLDEN=1 (with NALARUPA_CLI) rewrites them. The "live" requests draw text and are
-// compared live only.
+// ClaimScriptFiles for "script" requests) and compared against the committed golden results
+// (testdata/exportjob/golden).
 package export_test
 
 import (
@@ -16,7 +9,6 @@ import (
 	"encoding/json"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -142,38 +134,7 @@ func relName(name string) string {
 	return filepath.FromSlash(strings.TrimLeft(strings.TrimPrefix(name, "<W>"), `/\`))
 }
 
-// rustJob runs the request through the CLI in a fresh copy and returns its result and folder.
-func rustJob(t *testing.T, cli string, c jobCase) (jobResult, string) {
-	t.Helper()
-	w, docPath, data := workCopy(t, c)
-	args := []string{"export", docPath, c.Format, c.outIn(w)}
-	args = append(args, c.IDs...)
-	args = append(args, "--opts", c.opts(), "--offline")
-	if c.Script {
-		args = append(args, "--script")
-	}
-	var stdout, stderr bytes.Buffer
-	cmd := exec.Command(cli, args...)
-	cmd.Env = append(os.Environ(), "NALARUPA_DATA="+data)
-	cmd.Dir = w
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	if err := cmd.Run(); err != nil {
-		msg := strings.TrimSpace(stderr.String())
-		if !strings.HasPrefix(msg, "error: ") {
-			t.Fatalf("%s export %s: %v\n%s", cli, c.Name, err, msg)
-		}
-		return result(w, nil, strings.TrimPrefix(msg, "error: ")), w
-	}
-	var files []string
-	for _, l := range strings.Split(strings.TrimSpace(stdout.String()), "\n") {
-		if l = strings.TrimSpace(l); l != "" {
-			files = append(files, l)
-		}
-	}
-	return result(w, files, ""), w
-}
-
-// agentPolicy is agent.rs `path_allowed` for "Write": inside base and never the open document.
+// agentPolicy is agent `path_allowed` for "Write": inside base and never the open document.
 func agentPolicy(file, base, docPath string) bool {
 	f := resolved(file)
 	if docPath != "" && resolved(docPath) == f {
@@ -306,9 +267,7 @@ func loadJobFixtures(t *testing.T) *jobFixtures {
 }
 
 func TestExportJobParity(t *testing.T) {
-	cli, live := setup(t)
 	fx := loadJobFixtures(t)
-	update := live && os.Getenv("NALARUPA_UPDATE_GOLDEN") != ""
 	// Absolute: a relative-path request runs in its folder copy.
 	goldenRoot, err := filepath.Abs(filepath.Join(jobDir, "golden"))
 	if err != nil {
@@ -316,49 +275,27 @@ func TestExportJobParity(t *testing.T) {
 	}
 	resultsFile := filepath.Join(goldenRoot, "results.json")
 	wants := map[string]jobResult{}
-	if !live {
-		b, err := os.ReadFile(resultsFile)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := json.Unmarshal(b, &wants); err != nil {
-			t.Fatal(err)
-		}
+	b, err := os.ReadFile(resultsFile)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if update {
-		if err := os.RemoveAll(goldenRoot); err != nil {
-			t.Fatal(err)
-		}
+	if err := json.Unmarshal(b, &wants); err != nil {
+		t.Fatal(err)
 	}
 	f := fonts(t)
-	cases := fx.Cases
-	if live {
-		cases = append(append([]jobCase{}, cases...), fx.Live...)
-	}
-	for i, c := range cases {
-		golden := i < len(fx.Cases)
+	for _, c := range fx.Cases {
 		t.Run(c.Name, func(t *testing.T) {
-			var want jobResult
-			var rustDir string
-			if live {
-				want, rustDir = rustJob(t, cli, c)
-				if golden {
-					wants[c.Name] = want
-				}
-			} else {
-				var ok bool
-				if want, ok = wants[c.Name]; !ok {
-					t.Fatal("no golden result: run with NALARUPA_CLI and NALARUPA_UPDATE_GOLDEN=1")
-				}
-				if runtime.GOOS != "windows" {
-					// The goldens are written on Windows; Rust writes `/` here.
-					want.Error = filepath.ToSlash(want.Error)
-					for i, f := range want.Files {
-						want.Files[i] = filepath.ToSlash(f)
-					}
-				}
-				rustDir = filepath.Join(goldenRoot, c.Name)
+			want, ok := wants[c.Name]
+			if !ok {
+				t.Fatalf("no golden result for %s", c.Name)
 			}
+			if runtime.GOOS != "windows" {
+				want.Error = filepath.ToSlash(want.Error)
+				for i, f := range want.Files {
+					want.Files[i] = filepath.ToSlash(f)
+				}
+			}
+			goldenDir := filepath.Join(goldenRoot, c.Name)
 			got, goDir := goJob(t, c, f)
 			if got.Error != want.Error || !slices.Equal(got.Files, want.Files) {
 				t.Fatalf("got %+v\nwant %+v", got, want)
@@ -370,19 +307,9 @@ func TestExportJobParity(t *testing.T) {
 				}
 				seen[name] = true
 				rel := relName(name)
-				wantFile := onDisk(name, rustDir)
-				if !live {
-					wantFile = filepath.Join(rustDir, rel)
-				}
-				w, err := os.ReadFile(wantFile)
+				w, err := os.ReadFile(filepath.Join(goldenDir, rel))
 				if err != nil {
 					t.Fatal(err)
-				}
-				if update && golden {
-					dst := filepath.Join(goldenRoot, c.Name, rel)
-					if os.MkdirAll(filepath.Dir(dst), 0o777) != nil || os.WriteFile(dst, w, 0o666) != nil {
-						t.Fatal("cannot write golden", dst)
-					}
 				}
 				g, err := os.ReadFile(onDisk(name, goDir))
 				if err != nil {
@@ -392,28 +319,68 @@ func TestExportJobParity(t *testing.T) {
 			}
 		})
 	}
-	if update {
-		var b bytes.Buffer
-		enc := json.NewEncoder(&b)
-		enc.SetEscapeHTML(false)
-		enc.SetIndent("", " ")
-		if err := enc.Encode(wants); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.MkdirAll(goldenRoot, 0o777); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(resultsFile, b.Bytes(), 0o666); err != nil {
-			t.Fatal(err)
-		}
-	}
 	// Every golden request is still in the fixtures (a renamed one leaves no stale goldens behind).
-	if !live {
-		_ = filepath.WalkDir(goldenRoot, func(p string, d fs.DirEntry, err error) error {
-			if err == nil && d.IsDir() && p != goldenRoot && filepath.Dir(p) == goldenRoot && !slices.ContainsFunc(fx.Cases, func(c jobCase) bool { return c.Name == d.Name() }) {
-				t.Errorf("golden folder %s has no request", d.Name())
+	_ = filepath.WalkDir(goldenRoot, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && d.IsDir() && p != goldenRoot && filepath.Dir(p) == goldenRoot && !slices.ContainsFunc(fx.Cases, func(c jobCase) bool { return c.Name == d.Name() }) {
+			t.Errorf("golden folder %s has no request", d.Name())
+		}
+		return nil
+	})
+}
+
+func TestExportJobLive(t *testing.T) {
+	fx := loadJobFixtures(t)
+	if len(fx.Live) == 0 {
+		t.Fatal("no live export cases")
+	}
+	f := fonts(t)
+	for _, c := range fx.Live {
+		t.Run(c.Name, func(t *testing.T) {
+			got, goDir := goJob(t, c, f)
+			if got.Error != "" {
+				t.Fatalf("unexpected error: %s", got.Error)
 			}
-			return nil
+			if len(got.Files) == 0 {
+				t.Fatal("no files exported")
+			}
+			for _, name := range got.Files {
+				b, err := os.ReadFile(onDisk(name, goDir))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(b) == 0 {
+					t.Fatalf("%s is empty", name)
+				}
+				switch ext := strings.TrimPrefix(filepath.Ext(name), "."); ext {
+				case "png", "webp", "jpeg", "jpg":
+					fmtName := ext
+					if fmtName == "jpg" {
+						fmtName = "jpeg"
+					}
+					img, err := decode(t, b, fmtName)
+					if err != nil {
+						t.Fatalf("%s does not decode: %v", name, err)
+					}
+					if img.Bounds().Dx() <= 0 || img.Bounds().Dy() <= 0 {
+						t.Fatalf("%s has empty bounds %v", name, img.Bounds())
+					}
+				case "pdf":
+					summary := pdfSummary(t, b)
+					if !strings.HasPrefix(summary, "3 pages ") {
+						t.Errorf("%s: got %s, want 3 pages", name, summary)
+					}
+				case "svg":
+					s := string(b)
+					if !strings.Contains(s, "<svg") || !strings.Contains(s, "<text") || !strings.Contains(s, "</svg>") {
+						t.Errorf("%s: missing expected SVG text markup", name)
+					}
+				case "html":
+					s := string(b)
+					if !strings.Contains(s, "<html") || !strings.Contains(s, "</html>") {
+						t.Errorf("%s: missing expected HTML document", name)
+					}
+				}
+			}
 		})
 	}
 }

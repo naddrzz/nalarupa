@@ -539,7 +539,7 @@ func TestWriteFixtures(t *testing.T) {
 	if os.Getenv("NALARUPA_FIGMA_FIXTURES") == "" {
 		t.Skip("set NALARUPA_FIGMA_FIXTURES=1 to rewrite testdata/figma")
 	}
-	card, err := os.ReadFile(filepath.Join("..", "..", "core", "tests", "figma-clipboard.html"))
+	card, err := os.ReadFile(filepath.Join(fixtureDir, "card.html"))
 	if err != nil {
 		t.Fatal(err)
 	}

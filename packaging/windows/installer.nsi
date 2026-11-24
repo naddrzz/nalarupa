@@ -1,4 +1,4 @@
-; Nalarupa installer. Built by .github/workflows/release.yml:
+; Nalarupa installer:
 ;   makensis /DVERSION=0.1.0 /DDIST=<app/dist> /DOUT=<setup.exe> packaging/windows/installer.nsi
 ; Installs per machine into Program Files, with Start menu and desktop shortcuts and an uninstaller.
 Unicode true
@@ -82,6 +82,7 @@ Section "Uninstall"
   Delete /REBOOTOK "$INSTDIR\nalarupa_core.dll"
   Delete /REBOOTOK "$INSTDIR\gpuix-native.win32-x64-msvc.node"
   Delete /REBOOTOK "$INSTDIR\nalarupa.ico"
+  Delete /REBOOTOK "$INSTDIR\THIRD_PARTY_NOTICES.md"
   Delete /REBOOTOK "$INSTDIR\uninstall.exe"
   RMDir /REBOOTOK "$INSTDIR"
   Delete "$SMPROGRAMS\${NAME}.lnk"

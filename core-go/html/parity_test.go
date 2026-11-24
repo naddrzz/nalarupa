@@ -1,10 +1,6 @@
-// Parity with the Rust core: every top-level node of each fixture in testdata/html is exported and compared
-// with `nalarupa-cli html <doc> <id> <out> --offline` (default options). Without NALARUPA_CLI the comparison is
-// with the committed goldens (<fixture>.<id>.html); with it, with the CLI's live output.
-// NALARUPA_UPDATE_GOLDEN=1 (with NALARUPA_CLI) rewrites the goldens. Fixtures in testdata/html/live hold text,
-// whose layout depends on the installed fonts, or shaders, whose pixels depend on the GPU adapter: they are
-// compared live only. PNG data URIs (mesh gradients, shaders) are compared by decoded pixels: ±1 per channel
-// for mesh gradients (4a), ±3 for shaders (6b).
+// Golden tests: every top-level node of each fixture in testdata/html is exported and compared with the
+// committed goldens (<fixture>.<id>.html). PNG data URIs (mesh gradients, shaders) are compared by decoded
+// pixels within ±1 per channel.
 package html_test
 
 import (
@@ -16,7 +12,6 @@ import (
 	"image/png"
 	"math"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -29,7 +24,6 @@ import (
 	"github.com/naddrzz/nalarupa/core-go/jsonv"
 	"github.com/naddrzz/nalarupa/core-go/resolve"
 	"github.com/naddrzz/nalarupa/core-go/svg"
-	"github.com/naddrzz/nalarupa/core-go/text"
 )
 
 var fixtureDir = filepath.Join("..", "testdata", "html")
@@ -52,8 +46,8 @@ func dataDir(t *testing.T) string {
 	return data
 }
 
-// goExport exports id; fonts is nil for the text-free fixtures.
-func goExport(t *testing.T, fixture, id, data string, fonts *text.Fonts) string {
+// goExport exports id for the text-free fixtures.
+func goExport(t *testing.T, fixture, id, data string) string {
 	t.Helper()
 	d, err := doc.Load(fixture)
 	if err != nil {
@@ -63,28 +57,11 @@ func goExport(t *testing.T, fixture, id, data string, fonts *text.Fonts) string 
 	d.EnsureIDs()
 	assets := svg.NewAssets(filepath.Join(data, "cache"))
 	assets.Online = false
-	out, err := html.Document(&export.Ctx{Doc: d, Fonts: fonts, Assets: assets}, []string{id}, jsonv.NewObject())
+	out, err := html.Document(&export.Ctx{Doc: d, Assets: assets}, []string{id}, jsonv.NewObject())
 	if err != nil {
 		t.Fatal(err)
 	}
 	return out
-}
-
-func rustExport(t *testing.T, cli, fixture, id, data string) string {
-	t.Helper()
-	out := filepath.Join(t.TempDir(), "rust.html")
-	var stderr bytes.Buffer
-	cmd := exec.Command(cli, "html", fixture, id, out, "--offline")
-	cmd.Env = append(os.Environ(), "NALARUPA_DATA="+data)
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("%s html %s %s: %v\n%s", cli, fixture, id, err, stderr.String())
-	}
-	b, err := os.ReadFile(out)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(b)
 }
 
 func topIDs(t *testing.T, fixture string) []string {
@@ -102,23 +79,7 @@ func topIDs(t *testing.T, fixture string) []string {
 	return ids
 }
 
-func liveRun(t *testing.T) {
-	t.Helper()
-	// A file in the module written during the run keeps the test cache from replaying a live pass.
-	if err := os.WriteFile(".parity-live", nil, 0o666); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestParity(t *testing.T) {
-	cli := os.Getenv("NALARUPA_CLI")
-	update := os.Getenv("NALARUPA_UPDATE_GOLDEN") != ""
-	if update && cli == "" {
-		t.Fatal("NALARUPA_UPDATE_GOLDEN needs NALARUPA_CLI")
-	}
-	if cli != "" {
-		liveRun(t)
-	}
 	fixtures, err := filepath.Glob(filepath.Join(fixtureDir, "*.pen"))
 	if err != nil || len(fixtures) == 0 {
 		t.Fatal("no fixtures", err)
@@ -129,51 +90,11 @@ func TestParity(t *testing.T) {
 			t.Run(name+"/"+id, func(t *testing.T) {
 				golden := filepath.Join(fixtureDir, name+"."+id+".html")
 				data := dataDir(t)
-				var want string
-				if cli != "" {
-					want = rustExport(t, cli, fx, id, data)
-					if update && os.WriteFile(golden, []byte(want), 0o666) != nil {
-						t.Fatal("cannot write golden")
-					}
-				} else {
-					b, err := os.ReadFile(golden)
-					if err != nil {
-						t.Fatal(err)
-					}
-					want = string(b)
+				b, err := os.ReadFile(golden)
+				if err != nil {
+					t.Fatal(err)
 				}
-				// Only the polygon of vectors derives numbers from trigonometry.
-				sameHTML(t, goExport(t, fx, id, data, nil), want, 1, name == "vectors")
-			})
-		}
-	}
-}
-
-// Text and shader fixtures are compared with the CLI only: text with the fonts of this machine, shaders on its
-// GPU adapter.
-func TestParityLive(t *testing.T) {
-	cli := os.Getenv("NALARUPA_CLI")
-	if cli == "" {
-		t.Skip("text and shader export parity is live only: set NALARUPA_CLI to the release nalarupa-cli")
-	}
-	liveRun(t)
-	fixtures, err := filepath.Glob(filepath.Join(fixtureDir, "live", "*.pen"))
-	if err != nil || len(fixtures) == 0 {
-		t.Fatal("no live fixtures", err)
-	}
-	for _, fx := range fixtures {
-		name := strings.TrimSuffix(filepath.Base(fx), ".pen")
-		for _, id := range topIDs(t, fx) {
-			t.Run(name+"/"+id, func(t *testing.T) {
-				data := dataDir(t)
-				want := rustExport(t, cli, fx, id, data)
-				fonts := text.New(filepath.Join(data, "fonts"))
-				fonts.Online = false // as the CLI with --offline
-				got := goExport(t, fx, id, data, fonts)
-				if strings.Contains(want, "data:image/png") != strings.Contains(got, "data:image/png") {
-					t.Fatalf("one side ran the shader and the other did not:\n%s", firstDiff(got, want))
-				}
-				sameHTML(t, got, want, 3, false)
+				sameHTML(t, goExport(t, fx, id, data), string(b), 1, name == "vectors")
 			})
 		}
 	}

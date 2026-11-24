@@ -1,17 +1,7 @@
-// Engine parity with the Rust core. Each sequence in testdata/replay/*.jsonl is replayed here (Replayer) and by
-// `nalarupa-cli replay <script> --seed 42 --data data --out <dir>` (see replay in core/src/bin/cli.rs), each in a
-// fresh work folder holding a copy of testdata/replay/files. Every response line must be equal as text (the same
-// JSON with the same key order and number formatting), and so must the final document line, every render's RGB
-// bytes and every file the run leaves in the work folder (saved documents, copied images, settings.json). The
-// screenshots of a `tool` step with `png: true` are compared by their decoded pixels (the PNG encoders differ).
-//
-// Without NALARUPA_CLI the comparison is with the committed goldens (testdata/replay/golden: <name>.json with the
-// lines and files, painted with the band count recorded there, plus gzipped frames and the screenshots as
-// <name>.<step>.<k>.png); with it, with the CLI's live
-// output. NALARUPA_UPDATE_GOLDEN=1 (with NALARUPA_CLI) rewrites them. A sequence whose first line is `# live` holds
-// platform- or font-dependent output and is compared live only. A `# frames within <n>: <why>` line lets its frames
-// differ by n (at most 2) per channel, and a `# repaint pixels <n>: <why>` line, live only, lets n pixels of a frame
-// differ by up to repaintDelta (see there).
+// Engine golden tests: each sequence in testdata/replay/*.jsonl is replayed here (Replayer) in a fresh
+// work folder holding a copy of testdata/replay/files, and every response line, the final document line,
+// every render's RGB bytes and every file the run leaves in the work folder are compared against the
+// committed goldens (testdata/replay/golden).
 //
 // The editor package's commands join the dispatcher here, so the editor sequences (editor-*.jsonl) replay too.
 package engine_test
@@ -30,10 +20,8 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -151,76 +139,12 @@ func goReplay(t *testing.T, script string, threads int) replayRun {
 	return run
 }
 
-// rustReplay runs the script with the CLI in a fresh work folder.
-func rustReplay(t *testing.T, cli, script string) replayRun {
-	t.Helper()
-	abs, err := filepath.Abs(script)
-	if err != nil {
-		t.Fatal(err)
-	}
-	dir := workDir(t)
-	before := fixtures(t, dir)
-	out := t.TempDir()
-	cmd := exec.Command(cli, "replay", abs, "--seed", fmt.Sprint(replaySeed), "--data", "data", "--out", out)
-	cmd.Dir = dir
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("%s replay: %v\n%s", cli, err, stderr.String())
-	}
-	run := replayRun{Threads: min(max(runtime.NumCPU(), 1), 16), frames: map[int][]byte{}, shots: map[string][]byte{}}
-	for _, l := range strings.Split(strings.TrimRight(stdout.String(), "\r\n"), "\n") {
-		run.Lines = append(run.Lines, strings.TrimRight(l, "\r"))
-	}
-	for _, l := range run.Lines {
-		var v struct {
-			Data struct {
-				File string `json:"file"`
-			} `json:"data"`
-		}
-		if json.Unmarshal([]byte(l), &v) == nil && v.Data.File != "" && strings.HasSuffix(v.Data.File, ".rgb") {
-			b, err := os.ReadFile(filepath.Join(out, v.Data.File))
-			if err != nil {
-				t.Fatal(err)
-			}
-			run.frames[stepOf(t, v.Data.File)] = b
-		}
-		var shots struct {
-			Data struct {
-				Images []string `json:"images"`
-			} `json:"data"`
-		}
-		if json.Unmarshal([]byte(l), &shots) == nil {
-			for _, f := range shots.Data.Images {
-				b, err := os.ReadFile(filepath.Join(out, f))
-				if err != nil {
-					t.Fatal(err)
-				}
-				run.shots[f] = b
-			}
-		}
-	}
-	run.Files = written(t, dir, before)
-	return run
-}
-
 func stepOf(t *testing.T, file string) int {
 	var i int
 	if _, err := fmt.Sscanf(file, "%d.rgb", &i); err != nil {
 		t.Fatal(err)
 	}
 	return i
-}
-
-func gzipFile(t *testing.T, path string, b []byte) {
-	t.Helper()
-	var buf bytes.Buffer
-	zw, _ := gzip.NewWriterLevel(&buf, gzip.BestCompression)
-	zw.Write(b)
-	zw.Close()
-	if err := os.WriteFile(path, buf.Bytes(), 0o666); err != nil {
-		t.Fatal(err)
-	}
 }
 
 func gunzipFile(t *testing.T, path string) []byte {
@@ -252,18 +176,6 @@ func firstDiff(got, want string) string {
 }
 
 func TestReplayParity(t *testing.T) {
-	cli := os.Getenv("NALARUPA_CLI")
-	update := os.Getenv("NALARUPA_UPDATE_GOLDEN") != ""
-	if update && cli == "" {
-		t.Fatal("NALARUPA_UPDATE_GOLDEN needs NALARUPA_CLI")
-	}
-	if cli != "" {
-		// A file in the module written during the run keeps the test cache from replaying a live pass.
-		if err := os.WriteFile(".parity-live", nil, 0o666); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// The backend settings_get reports depends on it: blank is no key, on both sides.
 	t.Setenv("ANTHROPIC_API_KEY", "")
 	scripts, _ := filepath.Glob(filepath.Join(replayDir, "*.jsonl"))
 	if len(scripts) == 0 {
@@ -272,59 +184,37 @@ func TestReplayParity(t *testing.T) {
 	goldenDir := filepath.Join(replayDir, "golden")
 	for _, script := range scripts {
 		name := strings.TrimSuffix(filepath.Base(script), ".jsonl")
+		src, err := os.ReadFile(script)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.HasPrefix(src, []byte("# live")) {
+			continue
+		}
 		t.Run(name, func(t *testing.T) {
-			src, err := os.ReadFile(script)
+			var want replayRun
+			b, err := os.ReadFile(filepath.Join(goldenDir, name+".json"))
 			if err != nil {
 				t.Fatal(err)
 			}
-			live := bytes.HasPrefix(src, []byte("# live"))
-			if live && cli == "" {
-				t.Skip("platform- or font-dependent: compared live only")
+			if err := json.Unmarshal(b, &want); err != nil {
+				t.Fatal(err)
 			}
-			var want replayRun
-			if cli != "" {
-				want = rustReplay(t, cli, script)
-				if update && !live {
-					if err := os.WriteFile(filepath.Join(goldenDir, name+".json"), jsonIndent(want), 0o666); err != nil {
-						t.Fatal(err)
-					}
-					for i, f := range want.frames {
-						gzipFile(t, filepath.Join(goldenDir, fmt.Sprintf("%s.%d.rgb.gz", name, i)), f)
-					}
-					for f, b := range want.shots {
-						if err := os.WriteFile(filepath.Join(goldenDir, name+"."+f), b, 0o666); err != nil {
-							t.Fatal(err)
-						}
-					}
-				}
-			} else {
-				b, err := os.ReadFile(filepath.Join(goldenDir, name+".json"))
+			want.frames = map[int][]byte{}
+			frames, _ := filepath.Glob(filepath.Join(goldenDir, name+".*.rgb.gz"))
+			for _, f := range frames {
+				want.frames[stepOf(t, strings.TrimPrefix(filepath.Base(f), name+"."))] = gunzipFile(t, f)
+			}
+			want.shots = map[string][]byte{}
+			shots, _ := filepath.Glob(filepath.Join(goldenDir, name+".*.png"))
+			for _, f := range shots {
+				b, err := os.ReadFile(f)
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := json.Unmarshal(b, &want); err != nil {
-					t.Fatal(err)
-				}
-				want.frames = map[int][]byte{}
-				frames, _ := filepath.Glob(filepath.Join(goldenDir, name+".*.rgb.gz"))
-				for _, f := range frames {
-					want.frames[stepOf(t, strings.TrimPrefix(filepath.Base(f), name+"."))] = gunzipFile(t, f)
-				}
-				want.shots = map[string][]byte{}
-				shots, _ := filepath.Glob(filepath.Join(goldenDir, name+".*.png"))
-				for _, f := range shots {
-					b, err := os.ReadFile(f)
-					if err != nil {
-						t.Fatal(err)
-					}
-					want.shots[strings.TrimPrefix(filepath.Base(f), name+".")] = b
-				}
+				want.shots[strings.TrimPrefix(filepath.Base(f), name+".")] = b
 			}
-			threads := 0
-			if cli == "" {
-				threads = want.Threads
-			}
-			got := goReplay(t, script, threads)
+			got := goReplay(t, script, want.Threads)
 			for i := range max(len(got.Lines), len(want.Lines)) {
 				if i >= len(got.Lines) || i >= len(want.Lines) {
 					t.Fatalf("%d lines, want %d", len(got.Lines), len(want.Lines))
@@ -343,14 +233,6 @@ func TestReplayParity(t *testing.T) {
 				within, _ = strconv.Atoi(string(m[1]))
 				if within > maxFramesWithin {
 					t.Fatalf("# frames within %d: at most %d is allowed", within, maxFramesWithin)
-				}
-			}
-			// Live only: the goldens are painted with their recorded band count, which Go replays.
-			repaintPixels := 0
-			if m := framesRepaint.FindSubmatch(src); m != nil && cli != "" {
-				repaintPixels, _ = strconv.Atoi(string(m[1]))
-				if repaintPixels > maxRepaintPixels {
-					t.Fatalf("# repaint pixels %d: at most %d is allowed", repaintPixels, maxRepaintPixels)
 				}
 			}
 			for _, i := range steps {
@@ -375,13 +257,8 @@ func TestReplayParity(t *testing.T) {
 					if diff == 0 && len(g) == len(w) {
 						continue
 					}
-					msg := fmt.Sprintf("frame of step %d: %d bytes, want %d; %d channels of %d pixels differ by over %d, max delta %d",
+					t.Errorf("frame of step %d: %d bytes, want %d; %d channels of %d pixels differ by over %d, max delta %d",
 						i, len(g), len(w), diff, pixels, within, maxDelta)
-					if len(g) == len(w) && maxDelta <= repaintDelta && pixels <= repaintPixels {
-						t.Logf("%s (within the repaint allowance)", msg)
-						continue
-					}
-					t.Error(msg)
 				}
 			}
 			for _, f := range sortedKeys(names(want.shots), names(got.shots)) {
@@ -393,9 +270,9 @@ func TestReplayParity(t *testing.T) {
 				g, w := got.Files[rel], want.Files[rel]
 				switch {
 				case g == "":
-					t.Errorf("%s: written by Rust only", rel)
+					t.Errorf("%s: missing from output", rel)
 				case w == "":
-					t.Errorf("%s: written by Go only", rel)
+					t.Errorf("%s: unexpected file in output", rel)
 				case g != w:
 					gb, _ := base64.StdEncoding.DecodeString(g)
 					wb, _ := base64.StdEncoding.DecodeString(w)
@@ -437,24 +314,12 @@ const jpegDelta = 12
 // maxFramesWithin caps a `# frames within` allowance: more would hide real rendering differences.
 const maxFramesWithin = 2
 
-// repaintDelta and maxRepaintPixels bound a `# repaint pixels <n>: <why>` allowance, live only. Go repaints an
-// edit in the bands the full paint of the view used, so it equals a full paint; Rust's resvg path repaints the
-// dirty rectangle alone (phase 10a). Where a band edge of the full paint cuts a curve, the two differ by a cut
-// curve's antialiasing shift, and band edges follow the core count (render.rs `Painter::paint`), so which frames
-// and pixels it hits depends on the machine. A frame may then have n pixels off by up to repaintDelta.
-const (
-	repaintDelta     = 64
-	maxRepaintPixels = 32
-)
-
 var (
 	// framesWithin is a sequence's `# frames within <n>: <why>` line: its frames may differ by n per channel.
 	// n is at most maxFramesWithin.
 	framesWithin = regexp.MustCompile(`(?m)^# frames within (\d+):`)
-	// framesRepaint is a sequence's `# repaint pixels <n>: <why>` line (see repaintDelta).
-	framesRepaint = regexp.MustCompile(`(?m)^# repaint pixels (\d+):`)
-	pdfPage       = regexp.MustCompile(`/Type\s*/Page\b`)
-	pdfMediaBox   = regexp.MustCompile(`/MediaBox\s*\[([^\]]*)\]`)
+	pdfPage      = regexp.MustCompile(`/Type\s*/Page\b`)
+	pdfMediaBox  = regexp.MustCompile(`/MediaBox\s*\[([^\]]*)\]`)
 )
 
 // pdfSummary is a PDF's page count and page sizes: the files are written by different PDF writers (the bytes are
@@ -546,12 +411,4 @@ func absDiff(a, b uint8) int {
 		return int(a - b)
 	}
 	return int(b - a)
-}
-
-func jsonIndent(v any) []byte {
-	b, err := json.MarshalIndent(v, "", " ")
-	if err != nil {
-		panic(err)
-	}
-	return b
 }

@@ -1,12 +1,7 @@
-// Script-node parity with the Rust core. Every document in testdata/script is opened, laid out with its script
-// nodes run (waiting for each, as an export does) and dumped here and by `nalarupa-cli layout <doc> --scripts`:
-// the same ids, types and boxes, and the same status on every node that shows one. The text-free documents
-// are also exported (PNG, scale 1) here and by `nalarupa-cli image`, and the decoded pixels compared exactly.
-// Without NALARUPA_CLI the comparison is with the committed Rust files (testdata/script/golden); with it, with
-// the CLI's live output. NALARUPA_UPDATE_GOLDEN=1 (with NALARUPA_CLI) rewrites them.
-//
-// Statuses are compared exactly, stack columns and an interrupted run's position included, except where the C
-// compiler shows (see differs).
+// Script-node golden tests: every document in testdata/script is opened, laid out with its script
+// nodes run (waiting for each, as an export does) and compared with the committed goldens
+// (testdata/script/golden). The text-free documents are also exported (PNG, scale 1) and the decoded
+// pixels compared exactly.
 package script_test
 
 import (
@@ -17,7 +12,6 @@ import (
 	"image/png"
 	"math"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -185,30 +179,7 @@ func samePixels(t *testing.T, got, want []byte, at string) {
 	}
 }
 
-func cli(t *testing.T, bin string, args ...string) []byte {
-	t.Helper()
-	var stdout, stderr bytes.Buffer
-	cmd := exec.Command(bin, args...)
-	cmd.Env = append(os.Environ(), "NALARUPA_DATA="+t.TempDir())
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("%s %v: %v\n%s", bin, args, err, stderr.String())
-	}
-	return stdout.Bytes()
-}
-
 func TestParity(t *testing.T) {
-	bin := os.Getenv("NALARUPA_CLI")
-	update := os.Getenv("NALARUPA_UPDATE_GOLDEN") != ""
-	if update && bin == "" {
-		t.Fatal("NALARUPA_UPDATE_GOLDEN needs NALARUPA_CLI")
-	}
-	if bin != "" {
-		// A file in the module written during the run keeps the test cache from replaying a live pass.
-		if err := os.WriteFile(".parity-live", nil, 0o666); err != nil {
-			t.Fatal(err)
-		}
-	}
 	docs, err := filepath.Glob(filepath.Join(testdata, "*.pen"))
 	if err != nil || len(docs) == 0 {
 		t.Fatal("no script documents", err)
@@ -219,13 +190,8 @@ func TestParity(t *testing.T) {
 		stem := strings.TrimSuffix(filepath.Base(path), ".pen")
 		t.Run(stem, func(t *testing.T) {
 			golden := filepath.Join(goldenDir, stem+".scripts.json")
-			var want []byte
-			if bin != "" {
-				want = cli(t, bin, "layout", path, "--scripts")
-				if update {
-					writeGolden(t, golden, want)
-				}
-			} else if want, err = os.ReadFile(golden); err != nil {
+			want, err := os.ReadFile(golden)
+			if err != nil {
 				t.Fatal(err)
 			}
 			var wantBoxes []box
@@ -236,17 +202,8 @@ func TestParity(t *testing.T) {
 
 			for _, id := range images[stem] {
 				gold := filepath.Join(goldenDir, stem, id+".png")
-				var wantPNG []byte
-				if bin != "" {
-					out := filepath.Join(t.TempDir(), id+".png")
-					cli(t, bin, "image", path, id, "png", "1", "0", out, "--offline")
-					if wantPNG, err = os.ReadFile(out); err != nil {
-						t.Fatal(err)
-					}
-					if update {
-						writeGolden(t, gold, wantPNG)
-					}
-				} else if wantPNG, err = os.ReadFile(gold); err != nil {
+				wantPNG, err := os.ReadFile(gold)
+				if err != nil {
 					t.Fatal(err)
 				}
 				assets := svg.NewAssets(filepath.Join(t.TempDir(), "cache"))
@@ -259,15 +216,5 @@ func TestParity(t *testing.T) {
 				samePixels(t, got, wantPNG, stem+"/"+id)
 			}
 		})
-	}
-}
-
-func writeGolden(t *testing.T, path string, b []byte) {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o777); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, b, 0o666); err != nil {
-		t.Fatal(err)
 	}
 }

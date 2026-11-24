@@ -1,5 +1,5 @@
 /**
- * Nalarupa — AI design editor. Rust core (core/) rendered through GPUIX (GPUI + React).
+ * Nalarupa — AI design editor. Go core (core-go/) rendered through GPUIX (GPUI + React).
  *   bun run dev     hot-reloading window
  *   bun run build   standalone binary in dist/ (ship nalarupa_core.dll next to it)
  */
