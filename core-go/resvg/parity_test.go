@@ -244,3 +244,48 @@ func checkRendered(t *testing.T, got, want rendered, tol Tolerance) {
 		comparePixels(t, got.data, want.data, want.Width, tol)
 	}
 }
+
+// TestTextRender renders every document in the text corpus (testdata/usvg/text) at all configured scales
+// with the system fonts available on this machine, verifying clean parsing, non-panicking rendering,
+// valid pixmap dimensions, and deterministic output.
+func TestTextRender(t *testing.T) {
+	fx := loadFixtures(t)
+	c := fx.Corpora["text"]
+	docs, err := filepath.Glob(filepath.Join("..", filepath.FromSlash(c.Dir), "*.svg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(docs) < 30 {
+		t.Fatalf("%d text documents, want at least 30", len(docs))
+	}
+	cache := t.TempDir()
+	fonts := text.New(cache)
+	fonts.Online = false
+	emoji := fonts.HasFamily("Noto Emoji")
+	renders := 0
+	for _, doc := range docs {
+		stem := strings.TrimSuffix(filepath.Base(doc), ".svg")
+		for _, scale := range c.Scales {
+			key := stem + "@" + scaleName(scale)
+			renders++
+			t.Run(key, func(t *testing.T) {
+				if strings.HasPrefix(stem, "emoji") && !emoji {
+					t.Skip("Noto Emoji is not installed")
+				}
+				got := goRender(t, doc, scale, fonts)
+				if got.Panic {
+					t.Fatalf("panicked: %s", got.Error)
+				}
+				if got.Error != "" {
+					t.Fatalf("render error: %s", got.Error)
+				}
+				if got.Width == 0 || got.Height == 0 || len(got.data) != int(got.Width*got.Height*4) {
+					t.Fatalf("bad pixmap %dx%d (%d bytes)", got.Width, got.Height, len(got.data))
+				}
+			})
+		}
+	}
+	if renders < 60 {
+		t.Fatalf("%d text renders, want at least 60", renders)
+	}
+}

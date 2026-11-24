@@ -1,9 +1,11 @@
 // Canvas golden tests: each scenario in testdata/canvas/*.json names a document and a list of
 // steps, replayed here and compared against the committed goldens (testdata/canvas/golden: log.json
-// per scenario plus gzipped frames), painted with the band count recorded there.
+// per scenario plus gzipped frames), painted with the band count recorded there. Set
+// NALARUPA_UPDATE_GOLDEN=1 to regenerate the committed goldens from Go's renderer.
 package render
 
 import (
+	"bytes"
 	"compress/gzip"
 	"encoding/json"
 	"fmt"
@@ -12,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -450,6 +453,17 @@ func dataDir(t *testing.T) string {
 	return data
 }
 
+func gz(t *testing.T, path string, b []byte) {
+	t.Helper()
+	var buf bytes.Buffer
+	zw, _ := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+	zw.Write(b)
+	zw.Close()
+	if err := os.WriteFile(path, buf.Bytes(), 0o666); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func ungz(t *testing.T, path string) []byte {
 	t.Helper()
 	f, err := os.Open(path)
@@ -469,6 +483,7 @@ func ungz(t *testing.T, path string) []byte {
 }
 
 func TestCanvasParity(t *testing.T) {
+	update := os.Getenv("NALARUPA_UPDATE_GOLDEN") != ""
 	files, _ := filepath.Glob(filepath.Join(canvasDir, "*.json"))
 	if len(files) == 0 {
 		t.Fatal("no scenarios")
@@ -488,6 +503,25 @@ func TestCanvasParity(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			data := dataDir(t)
+			if update {
+				threads := min(max(runtime.NumCPU(), 1), 16)
+				got, frames, _ := runScenario(t, sc, data, threads)
+				if err := os.MkdirAll(goldenDir, 0o777); err != nil {
+					t.Fatal(err)
+				}
+				if old, _ := filepath.Glob(filepath.Join(goldenDir, name+".*.rgb.gz")); len(old) > 0 {
+					for _, p := range old {
+						_ = os.Remove(p)
+					}
+				}
+				if err := os.WriteFile(filepath.Join(goldenDir, name+".json"), []byte(mustJSON(golden{Threads: threads, Log: got})), 0o666); err != nil {
+					t.Fatal(err)
+				}
+				for i, f := range frames {
+					gz(t, filepath.Join(goldenDir, fmt.Sprintf("%s.%d.rgb.gz", name, i)), f)
+				}
+				return
+			}
 			var want golden
 			wantFrames := map[int][]byte{}
 			gb, err := os.ReadFile(filepath.Join(goldenDir, name+".json"))

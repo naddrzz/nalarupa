@@ -62,6 +62,10 @@ func value(args []string, name string) (string, bool) {
 }
 
 func run(args []string) error {
+	return runWith(args, engine.Global)
+}
+
+func runWith(args []string, getEngine func() *engine.Engine) error {
 	arg := func(i int) (string, error) {
 		if i < len(args) {
 			return args[i], nil
@@ -72,19 +76,24 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	if cmd == "icon" {
-		return buildIcons(args, arg)
-	}
-	e := engine.Global()
-	agent.Attach(e)
 	switch cmd {
+	case "icon":
+		return buildIcons(args, arg)
 	case "render", "svg", "html":
+		e := getEngine()
+		agent.Attach(e)
 		return export1(e, cmd, args, arg)
 	case "exec":
+		e := getEngine()
+		agent.Attach(e)
 		return execute(e, args, arg)
 	case "bench":
+		e := getEngine()
+		agent.Attach(e)
 		return bench(e, args, arg)
 	case "mcp":
+		e := getEngine()
+		agent.Attach(e)
 		port, err := agent.StartMCP(e)
 		if err != nil {
 			return err
@@ -268,6 +277,8 @@ func bench(e *engine.Engine, args []string, arg func(int) (string, error)) error
 			h = uint32(v)
 		}
 	}
+	// Match Renderer.Render's 1..8192 pixel clamp so measurements and PNG encoding use identical dimensions.
+	w, h = min(max(w, 1), 8192), min(max(h, 1), 8192)
 	bg := [3]uint8{245, 245, 245}
 	ms := func(t time.Time) float64 { return float64(time.Since(t).Microseconds()) / 1000.0 }
 

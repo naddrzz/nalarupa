@@ -6,10 +6,12 @@ package svg_test
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/xml"
 	"fmt"
 	"image"
 	"image/color"
 	"image/png"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -23,6 +25,7 @@ import (
 	"github.com/naddrzz/nalarupa/core-go/layout"
 	"github.com/naddrzz/nalarupa/core-go/resolve"
 	"github.com/naddrzz/nalarupa/core-go/svg"
+	"github.com/naddrzz/nalarupa/core-go/text"
 )
 
 // noText measures for the text-free fixtures.
@@ -100,6 +103,43 @@ func TestParity(t *testing.T) {
 					t.Fatal(err)
 				}
 				sameSVG(t, goExport(t, fx, id, data, noText{}), string(b))
+			})
+		}
+	}
+}
+
+func TestLiveTextExport(t *testing.T) {
+	fixtures, err := filepath.Glob(filepath.Join("..", "testdata", "svg", "live", "*.pen"))
+	if err != nil || len(fixtures) == 0 {
+		t.Fatal("no live fixtures", err)
+	}
+	for _, fx := range fixtures {
+		name := strings.TrimSuffix(filepath.Base(fx), ".pen")
+		for _, id := range topIDs(t, fx) {
+			t.Run(name+"/"+id, func(t *testing.T) {
+				data := dataDir(t)
+				fonts := text.New(filepath.Join(data, "fonts"))
+				fonts.Online = false
+				got := goExport(t, fx, id, data, fonts)
+				if !strings.HasPrefix(got, "<svg") || !strings.Contains(got, "<text") || !strings.HasSuffix(strings.TrimSpace(got), "</svg>") {
+					t.Fatalf("unexpected SVG export for %s/%s", name, id)
+				}
+				// Verify well-formed XML.
+				dec := xml.NewDecoder(strings.NewReader(got))
+				for {
+					if _, err := dec.Token(); err == io.EOF {
+						break
+					} else if err != nil {
+						t.Fatalf("invalid XML in SVG export: %v", err)
+					}
+				}
+				if id == "texts" && (!strings.Contains(got, "&amp;") || !strings.Contains(got, "&lt;friends&gt;")) {
+					t.Error("expected XML-escaped text content in texts export")
+				}
+				// Repeat export must be deterministic.
+				if again := goExport(t, fx, id, data, fonts); again != got {
+					t.Error("repeat SVG text export differed")
+				}
 			})
 		}
 	}

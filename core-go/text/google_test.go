@@ -485,6 +485,11 @@ func TestNetworkDownloadParity(t *testing.T) {
 	if !exists(varFile(cache, "DM Sans", false)) || !exists(staticFile(cache, "Abril Fatface", 400, false)) {
 		t.Fatal("the downloaded font files are not in the expected cache paths")
 	}
+	for _, st := range styles {
+		if !f.HasFamily(st.Family) {
+			t.Fatalf("%s was not loaded into the font database", st.Family)
+		}
+	}
 	for _, st := range append(styles, layout.TextStyle{Family: "DM Sans", Size: 18, Weight: 800}) {
 		if w := f.Width("Downloaded AVA fonts wrap here", st); w <= 0 {
 			t.Fatalf("%v measured %v", st, w)

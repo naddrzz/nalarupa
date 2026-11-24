@@ -327,3 +327,60 @@ func TestExportJobParity(t *testing.T) {
 		return nil
 	})
 }
+
+func TestExportJobLive(t *testing.T) {
+	fx := loadJobFixtures(t)
+	if len(fx.Live) == 0 {
+		t.Fatal("no live export cases")
+	}
+	f := fonts(t)
+	for _, c := range fx.Live {
+		t.Run(c.Name, func(t *testing.T) {
+			got, goDir := goJob(t, c, f)
+			if got.Error != "" {
+				t.Fatalf("unexpected error: %s", got.Error)
+			}
+			if len(got.Files) == 0 {
+				t.Fatal("no files exported")
+			}
+			for _, name := range got.Files {
+				b, err := os.ReadFile(onDisk(name, goDir))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(b) == 0 {
+					t.Fatalf("%s is empty", name)
+				}
+				switch ext := strings.TrimPrefix(filepath.Ext(name), "."); ext {
+				case "png", "webp", "jpeg", "jpg":
+					fmtName := ext
+					if fmtName == "jpg" {
+						fmtName = "jpeg"
+					}
+					img, err := decode(t, b, fmtName)
+					if err != nil {
+						t.Fatalf("%s does not decode: %v", name, err)
+					}
+					if img.Bounds().Dx() <= 0 || img.Bounds().Dy() <= 0 {
+						t.Fatalf("%s has empty bounds %v", name, img.Bounds())
+					}
+				case "pdf":
+					summary := pdfSummary(t, b)
+					if !strings.HasPrefix(summary, "3 pages ") {
+						t.Errorf("%s: got %s, want 3 pages", name, summary)
+					}
+				case "svg":
+					s := string(b)
+					if !strings.Contains(s, "<svg") || !strings.Contains(s, "<text") || !strings.Contains(s, "</svg>") {
+						t.Errorf("%s: missing expected SVG text markup", name)
+					}
+				case "html":
+					s := string(b)
+					if !strings.Contains(s, "<html") || !strings.Contains(s, "</html>") {
+						t.Errorf("%s: missing expected HTML document", name)
+					}
+				}
+			}
+		})
+	}
+}

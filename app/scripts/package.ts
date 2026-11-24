@@ -11,7 +11,7 @@ const dist = join(root, 'dist')
 mkdirSync(dist, { recursive: true })
 
 const exe = join(dist, process.platform === 'win32' ? 'nalarupa.exe' : 'nalarupa')
-// Explorer/taskbar icon and the name Task Manager shows (assets/brand: regenerate with core's `icon` example).
+// Explorer/taskbar icon and the name Task Manager shows (assets/brand: regenerate with `nalarupa-cli icon`).
 const ico = join(root, 'assets', 'brand', 'nalarupa.ico')
 const win = process.platform === 'win32' ? [`--windows-icon=${ico}`, '--windows-title=Nalarupa', '--windows-description=Nalarupa'] : []
 const build = Bun.spawnSync(['bun', 'build', '--compile', ...win, 'main.ts', '--outfile', exe], { cwd: root, stdout: 'inherit', stderr: 'inherit' })
@@ -57,5 +57,7 @@ if (!pkg || !addon) throw new Error('GPUIX native addon not installed (bun insta
 copyFileSync(join(gpuix, pkg, addon), join(dist, addon))
 // The window's title-bar/taskbar icon is loaded from this file at runtime (theme.ts decorateWindow).
 if (win.length) copyFileSync(ico, join(dist, 'nalarupa.ico'))
+const notices = join(root, '..', 'THIRD_PARTY_NOTICES.md')
+if (existsSync(notices)) copyFileSync(notices, join(dist, 'THIRD_PARTY_NOTICES.md'))
 
 console.log(`dist ready: ${readdirSync(dist).join(', ')}`)

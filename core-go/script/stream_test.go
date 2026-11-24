@@ -1,7 +1,6 @@
-// The stream.rs tests, tables of statement boundaries and partial JSON, and parity with Rust's `complete_prefix`
-// and `partial_string` over a generated corpus: every char-boundary prefix of a set of samples, plus seeded random
-// token soups. Without NALARUPA_CLI the corpus is compared with the committed results (testdata/stream/golden.json);
-// with it, with `nalarupa-cli stream-prefix`. NALARUPA_UPDATE_GOLDEN=1 (with NALARUPA_CLI) rewrites them.
+// Tests for statement boundaries and partial JSON extraction (`CompletePrefix` and `PartialString`)
+// over a generated corpus (every char-boundary prefix of a set of samples, plus seeded random token
+// soups), compared against the committed golden results in testdata/stream/golden.json.
 package script_test
 
 import (

@@ -135,9 +135,44 @@ cd app && bun install && bun run dev
 cd app && bun run build
 ```
 
-The output goes to `app/dist/`: `nalarupa.exe` with the Nalarupa icon, `nalarupa_core.dll`, the GPUI addon,
-and `nalarupa.ico`. Use `packaging/` (`packaging/set-version.sh`, `packaging/windows/installer.nsi`,
-`packaging/macos/`, `packaging/linux/`) to build platform installers and archives.
+The output goes to `app/dist/`: `nalarupa.exe` (or `nalarupa`), `nalarupa_core.dll` (`.so`/`.dylib`), the GPUI
+addon, `THIRD_PARTY_NOTICES.md`, and (on Windows) `nalarupa.ico`.
+
+To build local release packages, first stamp the version (`sh packaging/set-version.sh <X.Y.Z>`), build the core
+in `core-go/` and run `cd app && bun run build`, then package for your platform:
+
+- **Windows (NSIS installer + portable zip):**
+  ```powershell
+  makensis -V2 "-DVERSION=<X.Y.Z>" "-DDIST=$PWD\app\dist" "-DOUT=$PWD\out\Nalarupa-<X.Y.Z>-windows-x64-setup.exe" packaging\windows\installer.nsi
+  Compress-Archive -Path app\dist\* -DestinationPath "out\Nalarupa-<X.Y.Z>-windows-x64-portable.zip"
+  ```
+- **macOS (Apple Silicon `.app` + `.dmg`, see [docs/release-signing.md](docs/release-signing.md) for signing and notarization):**
+  ```bash
+  VERSION=<X.Y.Z>
+  mkdir -p out/Nalarupa.app/Contents/MacOS out/Nalarupa.app/Contents/Resources
+  cp app/dist/* out/Nalarupa.app/Contents/MacOS/
+  sed "s/@VERSION@/$VERSION/g" packaging/macos/Info.plist > out/Nalarupa.app/Contents/Info.plist
+  set=$(mktemp -d)/Nalarupa.iconset && mkdir -p "$set"
+  for s in 16 32 128 256 512; do
+    cp "app/assets/brand/icon-$s.png" "$set/icon_${s}x${s}.png"
+    cp "app/assets/brand/icon-$((s * 2)).png" "$set/icon_${s}x${s}@2x.png"
+  done
+  iconutil -c icns "$set" -o out/Nalarupa.app/Contents/Resources/Nalarupa.icns
+  codesign --force --deep --sign - out/Nalarupa.app
+  stage=$(mktemp -d) && cp -R out/Nalarupa.app "$stage/" && ln -s /Applications "$stage/Applications"
+  hdiutil create -volname "Nalarupa $VERSION" -srcfolder "$stage" -format UDZO -ov "out/Nalarupa-$VERSION-macos-arm64.dmg"
+  ```
+- **Linux (x64 tarball):**
+  ```bash
+  VERSION=<X.Y.Z>
+  name="Nalarupa-$VERSION-linux-x64"
+  mkdir -p "out/$name"
+  cp app/dist/* "out/$name/"
+  cp app/assets/brand/icon-256.png "out/$name/nalarupa.png"
+  cp packaging/linux/nalarupa.desktop packaging/linux/install.sh "out/$name/"
+  chmod +x "out/$name/install.sh" "out/$name/nalarupa"
+  tar -C out -czf "out/$name.tar.gz" "$name"
+  ```
 
 ### Architecture
 
@@ -281,6 +316,6 @@ claude mcp add --transport http --scope user nalarupa http://127.0.0.1:47700/mcp
 
 ## License
 
-[MIT](LICENSE). `core-go/resvg`, `core-go/usvg` and `core-go/skia` are Go ports of resvg 0.47.0, usvg 0.47.0 and
-tiny-skia 0.12 (Apache-2.0 OR MIT / BSD-3-Clause); UI icons are from [Lucide](https://lucide.dev) (ISC,
-`app/assets/icons/LICENSE`).
+[MIT](LICENSE). Full third-party copyright notices and license texts (including the Go ports of resvg 0.47.0,
+usvg 0.47.0, tiny-skia 0.12, unicode-linebreak, QuickJS-NG, and [Lucide](https://lucide.dev) icons) are preserved
+in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and shipped alongside packaged builds.

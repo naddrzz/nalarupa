@@ -16,6 +16,7 @@ import (
 	"github.com/naddrzz/nalarupa/core-go/doc"
 	"github.com/naddrzz/nalarupa/core-go/layout"
 	"github.com/naddrzz/nalarupa/core-go/resolve"
+	"github.com/naddrzz/nalarupa/core-go/text"
 )
 
 // box is one node of the CLI's laid-out tree.
@@ -129,6 +130,72 @@ func TestParity(t *testing.T) {
 				t.Fatal(err)
 			}
 			sameBoxes(t, got, want, name)
+		})
+	}
+}
+
+func TestLiveTextLayout(t *testing.T) {
+	fixtures, err := filepath.Glob(filepath.Join("testdata", "live", "*.pen"))
+	if err != nil || len(fixtures) == 0 {
+		t.Fatal("no live fixtures", err)
+	}
+	fonts := text.New(t.TempDir())
+	fonts.Online = false
+	for _, f := range fixtures {
+		name := strings.TrimSuffix(filepath.Base(f), ".pen")
+		t.Run(name, func(t *testing.T) {
+			saved1 := filepath.Join(t.TempDir(), "first.pen")
+			saved2 := filepath.Join(t.TempDir(), "second.pen")
+			got1 := open(t, f, saved1, fonts)
+			got2 := open(t, f, saved2, fonts)
+			if len(got1) == 0 {
+				t.Fatal("no laid-out nodes")
+			}
+			sameBoxes(t, got1, got2, name)
+			b1, err1 := os.ReadFile(saved1)
+			b2, err2 := os.ReadFile(saved2)
+			if err1 != nil || err2 != nil {
+				t.Fatal(err1, err2)
+			}
+			if !bytes.Equal(b1, b2) {
+				t.Errorf("repeat save differs:\n%s", firstDiff(b1, b2))
+			}
+			byID := map[string]box{}
+			var walk func([]box)
+			walk = func(nodes []box) {
+				for _, n := range nodes {
+					if n.Problem != nil {
+						t.Errorf("%s: unexpected problem %q", n.ID, *n.Problem)
+					}
+					if math.IsNaN(n.W) || math.IsInf(n.W, 0) || math.IsNaN(n.H) || math.IsInf(n.H, 0) || n.W < 0 || n.H < 0 {
+						t.Errorf("%s: invalid size (%v, %v)", n.ID, n.W, n.H)
+					}
+					if n.Type == "text" {
+						if n.ID == "zero" {
+							// fixed-width with no width (0) wraps one word per line.
+							if n.W != 0 || n.H <= 40 {
+								t.Errorf("text zero box = (%v, %v), want width 0 and wrapped height > 40", n.W, n.H)
+							}
+						} else if n.W <= 0 || n.H <= 0 {
+							t.Errorf("text %s has empty bounds (%v, %v)", n.ID, n.W, n.H)
+						}
+					}
+					byID[n.ID] = n
+					walk(n.Children)
+				}
+			}
+			walk(got1)
+			if body, ok := byID["body"]; ok {
+				// Fixed-width paragraph (width 280 inside 320px card with 20px horizontal padding) must wrap past one line.
+				if body.W != 280 || body.H <= 28 {
+					t.Errorf("body box = (%v, %v), want width 280 and wrapped height > 28", body.W, body.H)
+				}
+			}
+			if fixed, ok := byID["fixed"]; ok {
+				if fixed.W != 80 || fixed.H != 30 {
+					t.Errorf("fixed box = (%v, %v), want (80, 30)", fixed.W, fixed.H)
+				}
+			}
 		})
 	}
 }

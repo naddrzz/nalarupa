@@ -8,16 +8,34 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/naddrzz/nalarupa/core-go/engine"
 )
 
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "nalarupa-cli-test-*")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv("NALARUPA_DATA", dir)
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
+}
+
+func runIsolated(t *testing.T, args []string) error {
+	t.Helper()
+	dir := t.TempDir()
+	return runWith(args, func() *engine.Engine { return engine.New(dir) })
+}
+
 func TestCLICommands(t *testing.T) {
-	t.Setenv("NALARUPA_DATA", t.TempDir())
 	for _, name := range []string{"shapes", "effects"} {
 		path := filepath.Join("..", "..", "testdata", "svg", name+".pen")
 		id := map[string]string{"shapes": "fills", "effects": "shadows"}[name]
 		t.Run(name+"/render", func(t *testing.T) {
 			out := t.TempDir()
-			if err := run([]string{"nalarupa-cli", "render", path, out, "2", "--offline"}); err != nil {
+			if err := runIsolated(t, []string{"nalarupa-cli", "render", path, out, "2", "--offline"}); err != nil {
 				t.Fatal(err)
 			}
 			entries, err := os.ReadDir(out)
@@ -37,7 +55,7 @@ func TestCLICommands(t *testing.T) {
 		for _, cmd := range []string{"svg", "html"} {
 			t.Run(name+"/"+cmd, func(t *testing.T) {
 				out := filepath.Join(t.TempDir(), "out."+cmd)
-				if err := run([]string{"nalarupa-cli", cmd, path, id, out, "--offline"}); err != nil {
+				if err := runIsolated(t, []string{"nalarupa-cli", cmd, path, id, out, "--offline"}); err != nil {
 					t.Fatal(err)
 				}
 				b, err := os.ReadFile(out)
@@ -52,7 +70,7 @@ func TestCLICommands(t *testing.T) {
 func TestCLIIcon(t *testing.T) {
 	brand := filepath.Join("..", "..", "..", "app", "assets", "brand")
 	out := t.TempDir()
-	if err := run([]string{"nalarupa-cli", "icon", filepath.Join(brand, "nalarupa.svg"), filepath.Join(brand, "nalarupa-small.svg"), out}); err != nil {
+	if err := runIsolated(t, []string{"nalarupa-cli", "icon", filepath.Join(brand, "nalarupa.svg"), filepath.Join(brand, "nalarupa-small.svg"), out}); err != nil {
 		t.Fatal(err)
 	}
 	entries, err := os.ReadDir(out)
@@ -69,18 +87,33 @@ func TestCLIIcon(t *testing.T) {
 }
 
 func TestCLIBench(t *testing.T) {
-	t.Setenv("NALARUPA_DATA", t.TempDir())
 	path := filepath.Join("..", "..", "testdata", "svg", "shapes.pen")
-	if err := run([]string{"nalarupa-cli", "bench", path, "400", "300"}); err != nil {
+	if err := runIsolated(t, []string{"nalarupa-cli", "bench", path, "400", "300"}); err != nil {
 		t.Fatal(err)
+	}
+	// Oversized dimensions are clamped to 8192 so PNG output never panics.
+	prefix := filepath.Join(t.TempDir(), "shot")
+	if err := runIsolated(t, []string{"nalarupa-cli", "bench", path, "9000", "16", prefix}); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(prefix + "-fit.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := png.DecodeConfig(bytes.NewReader(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Width != 8192 || cfg.Height != 16 {
+		t.Fatalf("clamped PNG size = %dx%d, want 8192x16", cfg.Width, cfg.Height)
 	}
 }
 
 func TestCLIErrors(t *testing.T) {
-	if err := run([]string{"nalarupa-cli"}); err == nil || !strings.Contains(err.Error(), "missing argument") {
+	if err := runIsolated(t, []string{"nalarupa-cli"}); err == nil || !strings.Contains(err.Error(), "missing argument") {
 		t.Fatalf("got %v", err)
 	}
-	if err := run([]string{"nalarupa-cli", "nope"}); err == nil || err.Error() != "unknown command 'nope'" {
+	if err := runIsolated(t, []string{"nalarupa-cli", "nope"}); err == nil || err.Error() != "unknown command 'nope'" {
 		t.Fatalf("got %v", err)
 	}
 }
