@@ -52,16 +52,19 @@ var homeTemplates = []starterTemplate{
 	},
 }
 
-func (a *NalarupaApp) loadExistingRecents() []string {
+// RefreshHomeRecents loads recent document paths from core settings and filters to existing files on disk.
+func (a *NalarupaApp) RefreshHomeRecents() {
+	out := make([]string, 0, 8)
 	var settings map[string]any
 	if !a.Bridge.TryCall("settings_get", nil, &settings) {
-		return nil
+		a.HomeRecents = out
+		return
 	}
 	raw, ok := settings["recent"].([]any)
 	if !ok {
-		return nil
+		a.HomeRecents = out
+		return
 	}
-	var out []string
 	for _, item := range raw {
 		p, ok := item.(string)
 		if !ok || p == "" {
@@ -74,7 +77,7 @@ func (a *NalarupaApp) loadExistingRecents() []string {
 			}
 		}
 	}
-	return out
+	a.HomeRecents = out
 }
 
 func (a *NalarupaApp) viewHome(c *ui.Context) {
@@ -210,8 +213,11 @@ func (a *NalarupaApp) viewHome(c *ui.Context) {
 					}
 				})
 
-				// Recent files
-				recents := a.loadExistingRecents()
+				// Recent files (cached; refreshed on Init/Open/Save/Home transition)
+				if a.HomeRecents == nil {
+					a.RefreshHomeRecents()
+				}
+				recents := a.HomeRecents
 				ui.Column(c.Key("home-recents")).FillWidth().Gap(8).Children(func() {
 					ui.Text(c, "Recent files").FontSize(12).FontWeight(600).TextColor(C.Muted)
 					if len(recents) == 0 {
@@ -221,7 +227,7 @@ func (a *NalarupaApp) viewHome(c *ui.Context) {
 					for _, p := range recents {
 						pathCopy := p
 						base := filepath.Base(pathCopy)
-						rowKey := "recent-" + base
+						rowKey := "recent-" + pathCopy
 						row := ui.ButtonBase(c.Key(rowKey)).
 							FillWidth().
 							MinHeight(34).

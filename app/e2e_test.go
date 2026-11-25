@@ -543,7 +543,7 @@ func TestRealE2E_FileSaveReopenRecentAndUnsavedGuard(t *testing.T) {
 	d.until("saved file in Recent files", 5*time.Second, func() bool {
 		return d.hasLabelContaining(savedBase)
 	})
-	d.pressKey("recent-" + savedBase)
+	d.pressKey("recent-" + filepath.Join(docsDir, savedBase))
 	d.until("reopened saved file in Editor", 5*time.Second, func() bool {
 		return d.hasLabelContaining("Editor toolbar") && strings.Contains(d.windows()[0].Title, strings.TrimSuffix(savedBase, ".nala"))
 	})

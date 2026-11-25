@@ -172,7 +172,9 @@ func (b *Bridge) Shutdown() {
 	if b == nil || b.eng == nil {
 		return
 	}
-	agent.Shutdown(b.eng)
+	if err := agent.Shutdown(b.eng); err != nil {
+		log.Printf("[core] shutdown: %v", err)
+	}
 }
 
 // CallRaw dispatches cmd + args directly through engine.Dispatch and returns jsonv.Value.
@@ -233,7 +235,8 @@ func (b *Bridge) RenderInto(dst **image.RGBA, w, h int, camX, camY, zoom float64
 	return *dst
 }
 
-// ExecuteJS runs an execute tool JavaScript snippet against the open document, releasing the engine lock before ToolOut.Finish.
+// ExecuteJS runs an execute tool JavaScript snippet against the open document via Engine.CallTool
+// (which releases the engine lock during JS execution and settles outputs in Finish).
 func (b *Bridge) ExecuteJS(input string) (engine.ToolOut, error) {
 	raw, err := json.Marshal(map[string]any{"input": input})
 	if err != nil {
@@ -243,11 +246,7 @@ func (b *Bridge) ExecuteJS(input string) (engine.ToolOut, error) {
 	if err != nil {
 		return engine.ToolOut{}, err
 	}
-	var out engine.ToolOut
-	b.eng.Locked(func() {
-		out = b.eng.Tool("execute", args)
-	})
-	out = out.Finish(b.eng)
+	out := b.eng.CallTool("execute", args).Finish(b.eng)
 	if out.Error {
 		return out, fmt.Errorf("%s", out.Text)
 	}

@@ -262,38 +262,50 @@ func Snap(pts, anchors []Pt, threshold float64, axes [2]bool) (Pt, []SnapGuide) 
 			continue
 		}
 		b := 1 - a
-		minS, maxS := math.Inf(1), math.Inf(-1)
-		minO, maxO := math.Inf(1), math.Inf(-1)
+		// Group hits by distinct anchor coordinate so simultaneous multi-edge alignments each get a guide line.
+		var posOrder []float64
+		byPos := map[float64][][2]Pt{}
 		for _, pair := range hits[a] {
-			sv := pair[0][b] + offset[b]
-			ov := pair[1][b]
-			minS = min(minS, sv)
-			maxS = max(maxS, sv)
-			minO = min(minO, ov)
-			maxO = max(maxO, ov)
+			pos := pair[1][a]
+			if _, seen := byPos[pos]; !seen {
+				posOrder = append(posOrder, pos)
+			}
+			byPos[pos] = append(byPos[pos], pair)
 		}
-		from := min(minS, minO)
-		to := max(maxS, maxO)
-		var marks []float64
-		for _, v := range []float64{minS, maxS, minO, maxO} {
-			dup := false
-			for _, ex := range marks {
-				if ex == v {
-					dup = true
-					break
+		for _, pos := range posOrder {
+			minS, maxS := math.Inf(1), math.Inf(-1)
+			minO, maxO := math.Inf(1), math.Inf(-1)
+			for _, pair := range byPos[pos] {
+				sv := pair[0][b] + offset[b]
+				ov := pair[1][b]
+				minS = min(minS, sv)
+				maxS = max(maxS, sv)
+				minO = min(minO, ov)
+				maxO = max(maxO, ov)
+			}
+			from := min(minS, minO)
+			to := max(maxS, maxO)
+			var marks []float64
+			for _, v := range []float64{minS, maxS, minO, maxO} {
+				dup := false
+				for _, ex := range marks {
+					if ex == v {
+						dup = true
+						break
+					}
+				}
+				if !dup {
+					marks = append(marks, v)
 				}
 			}
-			if !dup {
-				marks = append(marks, v)
-			}
+			guides = append(guides, SnapGuide{
+				Axis:  a,
+				Pos:   pos,
+				From:  from,
+				To:    to,
+				Marks: marks,
+			})
 		}
-		guides = append(guides, SnapGuide{
-			Axis:  a,
-			Pos:   hits[a][0][1][a],
-			From:  from,
-			To:    to,
-			Marks: marks,
-		})
 	}
 	return offset, guides
 }

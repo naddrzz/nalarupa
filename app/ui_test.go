@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -246,6 +247,52 @@ func TestUICanvasDrawingEditingFigmaPasteAndPen(t *testing.T) {
 	tt.Key(0, ui.KeyEscape)
 	if app.Canvas.pen != nil {
 		t.Fatalf("expected Escape sequence to exit Pen edit mode")
+	}
+
+	// 5. Draw inside an offset unrotated frame and verify parent-local coordinates!
+	var parentFrameID string
+	var frameRes struct {
+		ID string `json:"id"`
+	}
+	if err := app.Bridge.Call("insert", map[string]any{
+		"parent": "document",
+		"node": map[string]any{
+			"type":   "frame",
+			"name":   "Offset Frame",
+			"x":      200.0,
+			"y":      150.0,
+			"width":  300.0,
+			"height": 240.0,
+			"fill":   "#FFFFFF",
+		},
+	}, &frameRes); err != nil {
+		t.Fatal(err)
+	}
+	parentFrameID = frameRes.ID
+	app.FitTo([]string{parentFrameID})
+	tt.Frame()
+
+	if err := tt.Click("Rectangle (R)"); err != nil {
+		t.Fatal(err)
+	}
+	fx0, fy0 := app.docToScreen(240, 180)
+	fx1, fy1 := app.docToScreen(320, 240)
+	tt.Press(float32(LeftW+fx0), float32(TopH+fy0))
+	tt.Move(float32(LeftW+fx1), float32(TopH+fy1))
+	tt.Release(float32(LeftW+fx1), float32(TopH+fy1))
+
+	if len(app.State.Selection) != 1 {
+		t.Fatalf("expected drawn child rectangle to be selected, got %v", app.State.Selection)
+	}
+	var childND NodeDetail
+	if err := app.Bridge.Call("node", map[string]any{"id": app.State.Selection[0]}, &childND); err != nil {
+		t.Fatal(err)
+	}
+	if childND.Parent != parentFrameID {
+		t.Fatalf("expected drawn rectangle parent=%s, got %s", parentFrameID, childND.Parent)
+	}
+	if gotX, gotY := asFloat(childND.Node["x"]), asFloat(childND.Node["y"]); math.Abs(gotX-40) > 2 || math.Abs(gotY-30) > 2 {
+		t.Fatalf("expected parent-local (x,y) near (40,30), got (%v,%v)", gotX, gotY)
 	}
 }
 

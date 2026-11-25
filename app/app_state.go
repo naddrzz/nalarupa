@@ -44,6 +44,7 @@ type NalarupaApp struct {
 
 	Toast          *ToastMsg
 	UnsavedPending func()
+	HomeRecents    []string
 
 	Store     *AgentStore
 	Layers    LayersState
@@ -58,7 +59,7 @@ type NalarupaApp struct {
 	nudgeCoalesce     string
 	nudgeLastAt       time.Time
 
-	pollStop chan struct{}
+	pollStop  chan struct{}
 	closeOnce sync.Once
 }
 
@@ -93,6 +94,7 @@ func (a *NalarupaApp) Init() {
 	a.lastReducedMotion = &rm
 	a.Bridge.TryCall("reduce_motion", map[string]any{"on": rm}, nil)
 	a.reloadAgentSettings()
+	a.RefreshHomeRecents()
 }
 
 // AttachWindow binds a live *mygo.Window and starts the background core event poller.
@@ -170,27 +172,27 @@ func (a *NalarupaApp) PollNow(nowMS float64) {
 	}
 }
 
+// applyCoreState updates a.State, syncs window title, and triggers selection reveal/tab updates when selection changed.
+func (a *NalarupaApp) applyCoreState(st CoreState) {
+	prevSel := a.State.Selection
+	a.State = st
+	a.syncWindowTitle()
+	if !slices.Equal(prevSel, st.Selection) {
+		a.onSelectionChanged(st.Selection)
+	}
+}
+
 // RefreshState refreshes a.State synchronously after a local edit command.
 func (a *NalarupaApp) RefreshState() {
 	var st CoreState
 	if err := a.Bridge.Call("state", nil, &st); err == nil {
-		prevSel := a.State.Selection
-		a.State = st
-		a.syncWindowTitle()
-		if !slices.Equal(prevSel, st.Selection) {
-			a.onSelectionChanged(st.Selection)
-		}
+		a.applyCoreState(st)
 	}
 }
 
 // ApplyPollResult applies a PollResult onto NalarupaApp on the main thread.
 func (a *NalarupaApp) ApplyPollResult(res PollResult, nowMS float64) {
-	prevSel := a.State.Selection
-	a.State = res.State
-	a.syncWindowTitle()
-	if !slices.Equal(prevSel, res.State.Selection) {
-		a.onSelectionChanged(res.State.Selection)
-	}
+	a.applyCoreState(res.State)
 	for _, ev := range res.Events {
 		switch ev["type"] {
 		case "toast":
@@ -251,6 +253,7 @@ func (a *NalarupaApp) onDocumentOpened() {
 	a.Store.ClearPresence()
 	a.Screen = "editor"
 	a.RefreshState()
+	a.RefreshHomeRecents()
 	a.FitTo(nil)
 }
 
@@ -306,6 +309,7 @@ func (a *NalarupaApp) OpenDocument(path string, force bool) {
 	var st CoreState
 	if err := a.Bridge.Call("open", map[string]any{"path": path}, &st); err != nil {
 		a.ShowToast(err.Error(), true)
+		a.RefreshHomeRecents()
 		return
 	}
 	a.State = st
@@ -335,8 +339,8 @@ func (a *NalarupaApp) SaveDocument(targetPath string) bool {
 		a.ShowToast("Unable to save the document: "+err.Error(), true)
 		return false
 	}
-	a.State = res.State
-	a.syncWindowTitle()
+	a.applyCoreState(res.State)
+	a.RefreshHomeRecents()
 	a.ShowToast("Saved "+res.Path, false)
 	return true
 }
@@ -502,8 +506,7 @@ func (a *NalarupaApp) SetTool(tool string, returnFocus bool) {
 func (a *NalarupaApp) Undo() {
 	var st CoreState
 	if err := a.Bridge.Call("undo", nil, &st); err == nil {
-		a.State = st
-		a.syncWindowTitle()
+		a.applyCoreState(st)
 		if a.Canvas.pen != nil && a.Canvas.pen.pathID != "" {
 			a.Canvas.reloadPenContours(a)
 		}
@@ -514,8 +517,7 @@ func (a *NalarupaApp) Undo() {
 func (a *NalarupaApp) Redo() {
 	var st CoreState
 	if err := a.Bridge.Call("redo", nil, &st); err == nil {
-		a.State = st
-		a.syncWindowTitle()
+		a.applyCoreState(st)
 		if a.Canvas.pen != nil && a.Canvas.pen.pathID != "" {
 			a.Canvas.reloadPenContours(a)
 		}
@@ -544,8 +546,7 @@ func (a *NalarupaApp) DeleteSelection() {
 		a.ShowToast(err.Error(), true)
 		return
 	}
-	a.State = st
-	a.syncWindowTitle()
+	a.applyCoreState(st)
 	a.CanvasHandle.Focus()
 }
 

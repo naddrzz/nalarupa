@@ -82,18 +82,20 @@ type moveGesture struct {
 }
 
 type resizeItemStart struct {
-	id      string
-	nodeX   float64
-	nodeY   float64
-	w       float64
-	h       float64
-	rot     float64
-	flipX   bool
-	flipY   bool
-	bx      float64
-	by      float64
-	ntype   string
-	parentM *Matrix6
+	id          string
+	nodeX       float64
+	nodeY       float64
+	w           float64
+	h           float64
+	rot         float64
+	flipX       bool
+	flipY       bool
+	bx          float64
+	by          float64
+	ntype       string
+	parentM     *Matrix6
+	parentFullM *Matrix6
+	canvasPos   Pt
 }
 
 type resizeGesture struct {
@@ -1428,7 +1430,12 @@ func (a *NalarupaApp) findDrawParent(docPt Pt) (string, *Matrix6, bool) {
 			if t, _ := nd.Node["type"].(string); t == "frame" {
 				layout, _ := nd.Node["layout"].(string)
 				inFlow := layout == "horizontal" || layout == "vertical"
-				return id, nd.Box.M, inFlow
+				pm := nd.Box.M
+				if pm == nil {
+					m := Matrix6{1, 0, 0, 1, nd.Box.X, nd.Box.Y}
+					pm = &m
+				}
+				return id, pm, inFlow
 			}
 		}
 	}
@@ -1490,10 +1497,17 @@ func (a *NalarupaApp) startResizeGesture(frame Box, handle string, docPt Pt) {
 			continue
 		}
 		var pm *Matrix6
+		var fullM *Matrix6
 		if nd.Parent != "" && nd.Parent != "document" {
 			var pbs []Box
 			if a.Bridge.TryCall("boxes", map[string]any{"ids": []string{nd.Parent}}, &pbs) && len(pbs) > 0 {
 				pm = pbs[0].M
+				if pbs[0].M != nil {
+					fullM = pbs[0].M
+				} else {
+					m := Matrix6{1, 0, 0, 1, pbs[0].X, pbs[0].Y}
+					fullM = &m
+				}
 			}
 		}
 		rot, fx, fy, bx, by := 0.0, false, false, 0.0, 0.0
@@ -1505,19 +1519,23 @@ func (a *NalarupaApp) startResizeGesture(frame Box, handle string, docPt Pt) {
 			by = nd.Local.BY
 		}
 		ntype, _ := nd.Node["type"].(string)
+		nx := asFloat(nd.Node["x"])
+		ny := asFloat(nd.Node["y"])
 		items = append(items, resizeItemStart{
-			id:      id,
-			nodeX:   asFloat(nd.Node["x"]),
-			nodeY:   asFloat(nd.Node["y"]),
-			w:       nd.Box.W,
-			h:       nd.Box.H,
-			rot:     rot,
-			flipX:   fx,
-			flipY:   fy,
-			bx:      bx,
-			by:      by,
-			ntype:   ntype,
-			parentM: pm,
+			id:          id,
+			nodeX:       nx,
+			nodeY:       ny,
+			w:           nd.Box.W,
+			h:           nd.Box.H,
+			rot:         rot,
+			flipX:       fx,
+			flipY:       fy,
+			bx:          bx,
+			by:          by,
+			ntype:       ntype,
+			parentM:     pm,
+			parentFullM: fullM,
+			canvasPos:   ApplyMatrix(fullM, nx, ny),
 		})
 	}
 	if len(items) == 0 {
@@ -1836,9 +1854,12 @@ func (a *NalarupaApp) updateResizeGesture(rsz *resizeGesture, docPt Pt, mods ui.
 		oy = nb.Y + nb.H
 	}
 	for _, it := range rsz.items {
+		targetCanvasX := ox + (it.canvasPos[0]-rsz.frame.X)*sx
+		targetCanvasY := oy + (it.canvasPos[1]-rsz.frame.Y)*sy
+		localPos := UnapplyMatrix(it.parentFullM, targetCanvasX, targetCanvasY, false)
 		props := map[string]any{
-			"x":      math.Round((ox+(it.nodeX-rsz.frame.X)*sx)*100) / 100,
-			"y":      math.Round((oy+(it.nodeY-rsz.frame.Y)*sy)*100) / 100,
+			"x":      math.Round(localPos[0]*100) / 100,
+			"y":      math.Round(localPos[1]*100) / 100,
 			"width":  math.Round(max(1.0, it.w*sx)*100) / 100,
 			"height": math.Round(max(1.0, it.h*sy)*100) / 100,
 		}

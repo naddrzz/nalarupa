@@ -96,8 +96,8 @@ func TestSnapMeasureResizeAndCamera(t *testing.T) {
 	if off[0] != -3 || off[1] != 3 {
 		t.Fatalf("Snap got offset %v, want (-3, 3)", off)
 	}
-	if len(guides) != 2 {
-		t.Fatalf("Snap expected 2 guides, got %d", len(guides))
+	if len(guides) != 3 || guides[0].Pos != 100 || guides[1].Pos != 140 || guides[2].Pos != 260 {
+		t.Fatalf("Snap expected 3 distinct guides at x=100, x=140, y=260, got %+v", guides)
 	}
 
 	// Axis mask disables X snapping
@@ -136,11 +136,12 @@ func TestSnapMeasureResizeAndCamera(t *testing.T) {
 		t.Fatalf("90deg rotated east handle expected CursorResizeNS, got %v", got)
 	}
 
-	// SlideCam fits rotated slide
-	slide := Box{ID: "s1", X: 0, Y: 0, W: 1920, H: 1080}
+	// SlideCam fits 90-degree rotated slide (1920x1080 -> 1080x1920 painted bounds)
+	slide := Box{ID: "s1", X: 0, Y: 0, W: 1920, H: 1080, M: &rot90}
 	cam := SlideCam(slide, 1440, 900)
-	if cam.Zoom <= 0 || cam.Zoom > 1 {
-		t.Fatalf("unexpected SlideCam zoom: %+v", cam)
+	wantZoom := (900.0 - 80.0) / 1920.0
+	if !approxEq(cam.Zoom, wantZoom, 1e-6) {
+		t.Fatalf("unexpected rotated SlideCam zoom: got %v, want %v (cam=%+v)", cam.Zoom, wantZoom, cam)
 	}
 }
 
@@ -263,12 +264,15 @@ func TestPathsIconsThemeAndInspectorValidators(t *testing.T) {
 			t.Fatalf("inline icon %q failed to parse", name)
 		}
 	}
-	nodeTypes := []string{"frame", "group", "rectangle", "ellipse", "polygon", "line", "path", "text", "icon", "image", "script", "note", "prompt", "context", "ref"}
+	nodeTypes := []string{"frame", "group", "rectangle", "ellipse", "polygon", "line", "path", "text", "icon", "image", "script", "browser", "note", "prompt", "context", "ref"}
 	for _, nt := range nodeTypes {
 		k := NodeIconName(nt, false)
 		if IconSVG(k) == nil {
 			t.Fatalf("NodeIconName(%q) -> %q nil SVG", nt, k)
 		}
+	}
+	if NodeIconName("browser", false) != "globe" {
+		t.Fatalf("browser node must use globe icon, got %q", NodeIconName("browser", false))
 	}
 	if NodeIconName("frame", true) != "component" {
 		t.Fatal("reusable frame must use component icon")
@@ -305,8 +309,11 @@ func TestPathsIconsThemeAndInspectorValidators(t *testing.T) {
 		"pad":    map[string]any{"type": "number", "value": 16.0},
 		"weight": map[string]any{"type": "string", "value": "bold"},
 	}
-	if !ValidPaint("#FF6A3D", vars) || !ValidPaint("$brand", vars) || ValidPaint("$missing", vars) || ValidPaint("not-a-color", vars) {
-		t.Fatal("ValidPaint validation mismatch")
+	if !ValidPaint("#FF6A3D", vars) || !ValidPaint("$brand", vars) || !ValidPaint(`["#FF6A3D", "$brand"]`, vars) {
+		t.Fatal("ValidPaint expected valid colors to pass")
+	}
+	if ValidPaint("$missing", vars) || ValidPaint("$pad", vars) || ValidPaint("$weight", vars) || ValidPaint("not-a-color", vars) || ValidPaint(`["#zzz"]`, vars) || ValidPaint(`{"color":"banana"}`, vars) {
+		t.Fatal("ValidPaint expected invalid vars/colors to fail")
 	}
 	if _, ok := SolidSwatchHex("$brand", vars); !ok {
 		t.Fatal("SolidSwatchHex failed to resolve $brand variable")

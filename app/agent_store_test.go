@@ -163,6 +163,7 @@ func TestAgentStoreTodosSettlementAndCrashRestore(t *testing.T) {
 	if len(s.Running) != 0 {
 		t.Fatalf("RestoreChat must clear Running map, got %+v", s.Running)
 	}
+	var foundTool, foundAssistant bool
 	for _, it := range s.Items {
 		if it.Kind == "queued" {
 			t.Fatal("RestoreChat must strip stale queued items")
@@ -170,6 +171,25 @@ func TestAgentStoreTodosSettlementAndCrashRestore(t *testing.T) {
 		if ItemChanging(it) {
 			t.Fatalf("RestoreChat left item in changing state: %+v", it)
 		}
+		switch it.Kind {
+		case "tool":
+			if it.ToolID == "t99" {
+				foundTool = true
+				if it.Running || !it.Error || it.Output != "Tool call cancelled" {
+					t.Fatalf("expected cancelled recovered tool item, got %+v", it)
+				}
+			}
+		case "assistant":
+			if it.Text == "Mid-flight" {
+				foundAssistant = true
+				if it.Streaming {
+					t.Fatalf("expected settled recovered assistant item, got %+v", it)
+				}
+			}
+		}
+	}
+	if !foundTool || !foundAssistant {
+		t.Fatalf("RestoreChat dropped expected items: foundTool=%v foundAssistant=%v items=%+v", foundTool, foundAssistant, s.Items)
 	}
 	if s.Todos[0].Status != "completed" || s.Todos[1].Status != "cancelled" {
 		t.Fatalf("RestoreChat must cancel mid-crash todos: %+v", s.Todos)

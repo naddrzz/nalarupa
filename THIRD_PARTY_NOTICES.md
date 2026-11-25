@@ -385,6 +385,10 @@ SOFTWARE.
 
 ## github.com/egoist/mygo (`app/go.mod`)
 
+MIT License, with bundled shader compiler packages (`internal/shader`, `internal/shaderir`) derived from Ebitengine under the Apache License, Version 2.0 (see full text below).
+
+### Core Module (MIT License)
+
 ```text
 MIT License
 
@@ -408,6 +412,10 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+### Bundled `internal/shader` and `internal/shaderir` (Apache License 2.0)
+
+Copyright 2020 The Ebiten Authors (modified by the MyGo contributors). Licensed under the Apache License, Version 2.0 (see full text below).
 
 ---
 
@@ -441,7 +449,7 @@ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 ## Apache License, Version 2.0
 
-Applies to `resvg`, `usvg`, `unicode-linebreak`, `wgpu-native`, and `purego`.
+Applies to `resvg`, `usvg`, `unicode-linebreak`, `wgpu-native`, `mygo` (`internal/shader`, `internal/shaderir`), and `purego`.
 
 ```text
                                  Apache License

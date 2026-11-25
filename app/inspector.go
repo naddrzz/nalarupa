@@ -108,23 +108,28 @@ func isLengthOrVar(v any, vars map[string]any) bool {
 	return isNonNegLength(v) || isValidVar(v, vars, "number")
 }
 
+func isValidPaintColor(v any, vars map[string]any) bool {
+	s, ok := v.(string)
+	if !ok {
+		return false
+	}
+	st := strings.TrimSpace(s)
+	return reHexPaint.MatchString(st) || isValidVar(st, vars, "color")
+}
+
 // ValidPaint validates a fill/stroke paint input against Nalarupa's renderer contract.
 func ValidPaint(v string, vars map[string]any) bool {
 	t := strings.TrimSpace(v)
-	if t == "" || reHexPaint.MatchString(t) {
+	if t == "" || isValidPaintColor(t, vars) {
 		return true
 	}
 	if strings.HasPrefix(t, "$") {
-		if vars == nil {
-			return false
-		}
-		_, ok := vars[t[1:]]
-		return ok
+		return false
 	}
 	parsed := ParseInspectorJSONOrScalar(t)
 	checkOne := func(f any) bool {
 		if s, ok := f.(string); ok {
-			return strings.HasPrefix(s, "#") || strings.HasPrefix(s, "$")
+			return isValidPaintColor(s, vars)
 		}
 		m, ok := f.(map[string]any)
 		if !ok || m == nil {
@@ -135,10 +140,32 @@ func ValidPaint(v string, vars map[string]any) bool {
 			pt = "color"
 		}
 		if pt == "color" {
-			_, ok := m["color"].(string)
-			return ok
+			return isValidPaintColor(m["color"], vars)
 		}
-		return slices.Contains(knownPaintTypes, pt)
+		if !slices.Contains(knownPaintTypes, pt) {
+			return false
+		}
+		if cols, has := m["colors"]; has {
+			arr, ok := cols.([]any)
+			if !ok || len(arr) == 0 {
+				return false
+			}
+			for _, stop := range arr {
+				switch sv := stop.(type) {
+				case string:
+					if !isValidPaintColor(sv, vars) {
+						return false
+					}
+				case map[string]any:
+					if cVal, hasC := sv["color"]; hasC && !isValidPaintColor(cVal, vars) {
+						return false
+					}
+				default:
+					return false
+				}
+			}
+		}
+		return true
 	}
 	switch x := parsed.(type) {
 	case []any:
@@ -673,6 +700,12 @@ func (a *NalarupaApp) viewInspector(c *ui.Context) {
 					Grow:      true,
 					FocusBack: &a.CanvasHandle,
 					OnSet: func(toDeg float64, coal string) bool {
+						coalKey := coal
+						if coalKey == "" && len(infos) > 1 {
+							coalKey = fmt.Sprintf("rot-%d", a.State.Version)
+						}
+						anyUpdated := false
+						hadErr := false
 						for _, inf := range infos {
 							lp, _ := inf.nd.Node["layoutPosition"].(string)
 							inF := (inf.nd.ParentLayout == "horizontal" || inf.nd.ParentLayout == "vertical") && lp != "absolute"
@@ -694,14 +727,21 @@ func (a *NalarupaApp) viewInspector(c *ui.Context) {
 							if err := a.Bridge.Call("update", map[string]any{
 								"ids":      []string{inf.id},
 								"props":    props,
-								"coalesce": coal,
+								"coalesce": coalKey,
 							}, &st); err != nil {
-								a.ShowToast(BadInspectorValueMsg, true)
-								return false
+								hadErr = true
+								continue
 							}
 							a.State = st
+							anyUpdated = true
 						}
-						a.syncWindowTitle()
+						if anyUpdated {
+							a.syncWindowTitle()
+						}
+						if hadErr {
+							a.ShowToast(BadInspectorValueMsg, true)
+							return false
+						}
 						return true
 					},
 				})

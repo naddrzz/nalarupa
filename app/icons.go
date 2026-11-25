@@ -161,6 +161,8 @@ func NodeIconName(nodeType string, reusable bool) string {
 		return "image"
 	case "script":
 		return "sparkles"
+	case "browser":
+		return "globe"
 	case "note":
 		return "note"
 	case "prompt":

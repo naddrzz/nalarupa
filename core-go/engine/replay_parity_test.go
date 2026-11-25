@@ -222,7 +222,7 @@ func TestReplayParity(t *testing.T) {
 				}
 				wantLine := want.Lines[i]
 				if runtime.GOOS != "windows" {
-					wantLine = strings.ReplaceAll(wantLine, `\\`, "/")
+					wantLine = normalizeReplayPaths(wantLine)
 				}
 				if got.Lines[i] != wantLine {
 					t.Errorf("line %d differs %s", i, firstDiff(got.Lines[i], wantLine))
@@ -416,4 +416,39 @@ func absDiff(a, b uint8) int {
 		return int(a - b)
 	}
 	return int(b - a)
+}
+
+func normalizeReplayPaths(line string) string {
+	v, err := jsonv.Parse([]byte(line))
+	if err != nil {
+		return line
+	}
+	obj := jsonv.Obj(v)
+	if obj == nil {
+		return line
+	}
+	dataObj := jsonv.Obj(jsonv.Get(obj, "data"))
+	if dataObj == nil {
+		return line
+	}
+	txt, ok := jsonv.Str(jsonv.Get(dataObj, "text"))
+	if !ok || (!strings.Contains(txt, "Exported: ") && !strings.Contains(txt, "Export failed: ")) {
+		return line
+	}
+	parts := strings.Split(txt, "\n")
+	changed := false
+	for i, p := range parts {
+		if strings.HasPrefix(p, "Exported: ") || strings.HasPrefix(p, "Export failed: ") {
+			n := strings.ReplaceAll(p, `\`, "/")
+			if n != p {
+				parts[i] = n
+				changed = true
+			}
+		}
+	}
+	if !changed {
+		return line
+	}
+	dataObj.Set("text", strings.Join(parts, "\n"))
+	return string(jsonv.Marshal(obj))
 }

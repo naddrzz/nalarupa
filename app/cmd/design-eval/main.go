@@ -252,7 +252,9 @@ func cmdFonts() error {
 				Available bool `json:"available"`
 				Loading   bool `json:"loading"`
 			}
-			_ = dispatch(eng, "font_state", map[string]any{"family": fam}, &st)
+			if err := dispatch(eng, "font_state", map[string]any{"family": fam}, &st); err != nil {
+				return err
+			}
 			if st.Loading {
 				allReady = false
 			}
@@ -261,6 +263,22 @@ func cmdFonts() error {
 			break
 		}
 		time.Sleep(150 * time.Millisecond)
+	}
+	var unavailable []string
+	for _, fam := range families {
+		var st struct {
+			Available bool `json:"available"`
+			Loading   bool `json:"loading"`
+		}
+		if err := dispatch(eng, "font_state", map[string]any{"family": fam}, &st); err != nil {
+			return err
+		}
+		if st.Loading || !st.Available {
+			unavailable = append(unavailable, fam)
+		}
+	}
+	if len(unavailable) > 0 {
+		return fmt.Errorf("unavailable fonts: %s", strings.Join(unavailable, ", "))
 	}
 	fmt.Printf("fonts checked (%d families)\n", len(families))
 	return nil
@@ -280,7 +298,9 @@ func cmdSummary(args []string) error {
 		return err
 	}
 	md := buildSummaryMarkdown(dir, run)
-	_ = os.WriteFile(filepath.Join(dir, "summary.md"), []byte(md), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "summary.md"), []byte(md), 0o644); err != nil {
+		return err
+	}
 	fmt.Print(md)
 	return nil
 }
@@ -383,13 +403,17 @@ func cmdRun(args []string) error {
 		return fmt.Errorf("MCP server did not start")
 	}
 
-	_ = dispatch(eng, "settings_set", map[string]any{"key": "agent_backend", "value": backend}, nil)
+	if err := dispatch(eng, "settings_set", map[string]any{"key": "agent_backend", "value": backend}, nil); err != nil {
+		return err
+	}
 	if hasModel {
 		key := "agent_model"
 		if backend == "provider" {
 			key = "provider_model"
 		}
-		_ = dispatch(eng, "settings_set", map[string]any{"key": key, "value": model}, nil)
+		if err := dispatch(eng, "settings_set", map[string]any{"key": key, "value": model}, nil); err != nil {
+			return err
+		}
 	}
 
 	shaBytes, _ := exec.Command("git", "rev-parse", "--short", "HEAD").Output()
@@ -412,18 +436,35 @@ func cmdRun(args []string) error {
 
 	for _, b := range selected {
 		bDir := filepath.Join(outDir, b.ID)
-		_ = os.MkdirAll(bDir, 0o755)
-		_ = dispatch(eng, "agent_reset", nil, nil)
-		_ = dispatch(eng, "new", map[string]any{"template": "empty"}, nil)
+		if err := os.MkdirAll(bDir, 0o755); err != nil {
+			return err
+		}
 
 		br := evalBriefResult{
 			ID:                b.ID,
 			Kind:              b.Kind,
 			Brief:             b.Text,
 			OK:                true,
+			Issues:            []string{},
 			InstructionsChars: len(instr),
 		}
 		fmt.Printf("== %s\n", b.ID)
+
+		if err := dispatch(eng, "agent_reset", nil, nil); err != nil {
+			_ = dispatch(eng, "agent_stop", nil, nil)
+			if resetErr := dispatch(eng, "agent_reset", nil, nil); resetErr != nil {
+				br.OK = false
+				br.Error = resetErr.Error()
+				run.Briefs = append(run.Briefs, br)
+				continue
+			}
+		}
+		if err := dispatch(eng, "new", map[string]any{"template": "empty"}, nil); err != nil {
+			br.OK = false
+			br.Error = err.Error()
+			run.Briefs = append(run.Briefs, br)
+			continue
+		}
 
 		if b.Kind == "existing" {
 			if err := callMCPExecute(initRes.MCPPort, fernwayFixture); err != nil {
@@ -460,6 +501,7 @@ func cmdRun(args []string) error {
 
 		var preExec strings.Builder
 		seenExec := false
+		finished := false
 		deadline := time.Now().Add(30 * time.Minute)
 		for time.Now().Before(deadline) {
 			time.Sleep(250 * time.Millisecond)
@@ -469,7 +511,12 @@ func cmdRun(args []string) error {
 				} `json:"state"`
 				Events []map[string]any `json:"events"`
 			}
-			_ = dispatch(eng, "poll", nil, &poll)
+			if err := dispatch(eng, "poll", nil, &poll); err != nil {
+				br.OK = false
+				br.Error = "poll failed: " + err.Error()
+				_ = dispatch(eng, "agent_stop", nil, nil)
+				break
+			}
 			for _, ev := range poll.Events {
 				if ev["type"] != "agent" {
 					continue
@@ -485,8 +532,14 @@ func cmdRun(args []string) error {
 					if strings.HasSuffix(name, "execute") {
 						seenExec = true
 						br.ExecuteCalls++
+						if inp, ok := ev["input"].(map[string]any); ok && inp["editId"] != nil {
+							br.Repairs++
+						}
 						if isErr, _ := ev["error"].(bool); isErr {
 							br.FailedExecutes++
+						}
+						if outTxt, _ := ev["output"].(string); outTxt != "" {
+							br.Issues = append(br.Issues, extractExecuteIssues(outTxt)...)
 						}
 						if imgs, ok := ev["images"].([]any); ok && len(imgs) > 0 {
 							br.Screenshots++
@@ -507,13 +560,26 @@ func cmdRun(args []string) error {
 				}
 			}
 			if !poll.State.AgentRunning {
+				finished = true
 				break
+			}
+		}
+		if !finished {
+			_ = dispatch(eng, "agent_stop", nil, nil)
+			br.OK = false
+			if br.Error == "" {
+				br.Error = "agent timed out"
 			}
 		}
 		br.WallMS = time.Since(start).Milliseconds()
 		br.FirstMessage = strings.TrimSpace(preExec.String())
 
-		_ = dispatch(eng, "save", map[string]any{"path": filepath.Join(bDir, b.ID+".nala")}, nil)
+		if err := dispatch(eng, "save", map[string]any{"path": filepath.Join(bDir, b.ID+".nala")}, nil); err != nil {
+			br.OK = false
+			if br.Error == "" {
+				br.Error = "save failed: " + err.Error()
+			}
+		}
 
 		var afterFrames []struct {
 			ID   string  `json:"id"`
@@ -546,13 +612,42 @@ func cmdRun(args []string) error {
 		run.Briefs = append(run.Briefs, br)
 	}
 
-	metricsBytes, _ := json.MarshalIndent(run, "", "  ")
-	_ = os.WriteFile(filepath.Join(outDir, "metrics.json"), metricsBytes, 0o644)
+	metricsBytes, err := json.MarshalIndent(run, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(outDir, "metrics.json"), metricsBytes, 0o644); err != nil {
+		return err
+	}
 	summaryMD := buildSummaryMarkdown(outDir, run)
-	_ = os.WriteFile(filepath.Join(outDir, "summary.md"), []byte(summaryMD), 0o644)
+	if err := os.WriteFile(filepath.Join(outDir, "summary.md"), []byte(summaryMD), 0o644); err != nil {
+		return err
+	}
 	fmt.Println(summaryMD)
 	fmt.Printf("Saved eval run to %s\n", outDir)
 	return nil
+}
+
+func extractExecuteIssues(output string) []string {
+	var issues []string
+	inIssues := false
+	for _, line := range strings.Split(output, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "## Issues detected") {
+			inIssues = true
+			continue
+		}
+		if inIssues {
+			if strings.HasPrefix(trimmed, "## ") {
+				break
+			}
+			if trimmed == "" {
+				continue
+			}
+			issues = append(issues, strings.TrimPrefix(trimmed, "- "))
+		}
+	}
+	return issues
 }
 
 func callMCPExecute(port int, code string) error {
@@ -562,7 +657,7 @@ func callMCPExecute(port int, code string) error {
 		"method":  "tools/call",
 		"params": map[string]any{
 			"name":      "execute",
-			"arguments": map[string]any{"code": code},
+			"arguments": map[string]any{"input": code},
 		},
 	})
 	resp, err := http.Post(fmt.Sprintf("http://127.0.0.1:%d/mcp", port), "application/json", bytes.NewReader(body))

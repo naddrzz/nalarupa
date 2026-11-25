@@ -33,7 +33,7 @@ func buildTransferData(p ClipboardPayload) transfer.Data {
 	return transfer.New(transfer.NewItem(reps...))
 }
 
-// WriteClipboard writes HTML and plain text via ui.Services (or OS clipboard) and mirrors in-process.
+// WriteClipboard writes HTML and plain text via ui.Services (or OS clipboard) and mirrors in-process for headless unit tests.
 func WriteClipboard(svc ui.Services, p ClipboardPayload) {
 	clipMu.Lock()
 	localClip = p
@@ -50,7 +50,9 @@ func WriteClipboard(svc ui.Services, p ClipboardPayload) {
 	}
 }
 
-// ReadClipboard reads HTML and plain text via ui.Services (or OS clipboard), falling back to the in-process mirror.
+// ReadClipboard reads HTML and plain text via ui.Services (or OS clipboard).
+// When a live window or Tester clipboard is attached (svc != zero), it returns the OS/Tester clipboard
+// directly without falling back to stale in-memory data when the clipboard is empty or non-text.
 func ReadClipboard(svc ui.Services) ClipboardPayload {
 	clipMu.Lock()
 	fallback := localClip
@@ -66,19 +68,13 @@ func ReadClipboard(svc ui.Services) ClipboardPayload {
 		if b, err := d.Read(transfer.Text); err == nil {
 			text = string(b)
 		}
-		if html != "" || text != "" {
-			return ClipboardPayload{HTML: html, Text: text}
-		}
+		return ClipboardPayload{HTML: html, Text: text}
 	}
 	if headless {
 		return fallback
 	}
-	if svc == (ui.Services{}) {
-		html := mygo.Clipboard.ReadHTML()
-		text := mygo.Clipboard.ReadText()
-		if html != "" || text != "" {
-			return ClipboardPayload{HTML: html, Text: text}
-		}
+	return ClipboardPayload{
+		HTML: mygo.Clipboard.ReadHTML(),
+		Text: mygo.Clipboard.ReadText(),
 	}
-	return fallback
 }

@@ -39,11 +39,14 @@ func (ps *PresentState) initForApp(a *NalarupaApp, fromID string) {
 }
 
 func (a *NalarupaApp) topLevelSlides() []Box {
-	var frames []Box
-	a.Bridge.TryCall("frames", nil, &frames)
+	frames := a.ensureFramesFetched()
+	_ = a.ensureLayersFetched()
 	var out []Box
 	for _, f := range frames {
 		if f.Type == "frame" && !f.Placeholder {
+			if row, ok := a.Layers.CachedByID[f.ID]; ok && row.Hidden {
+				continue
+			}
 			out = append(out, f)
 		}
 	}

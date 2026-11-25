@@ -57,6 +57,13 @@ type ChatSummary struct {
 	UpdatedAt int64  `json:"updatedAt"`
 }
 
+type cachedToolImage struct {
+	bmp    *ui.Bitmap
+	failed bool
+}
+
+const maxCachedToolImages = 64
+
 // AgentPanelState holds persistent UI state for the Agent right-hand panel.
 type AgentPanelState struct {
 	Draft         string
@@ -98,13 +105,15 @@ type AgentPanelState struct {
 	TestingProvID  string
 
 	ExpandedCards  map[int]bool
-	ImageCache     map[string]*ui.Bitmap
+	ImageCache     map[string]cachedToolImage
+	ImageOrder     []string
 
 	TranscriptScroll ui.ScrollState
 	SettingsScroll   ui.ScrollState
 	PlanScroll       ui.ScrollState
 	StickToBottom    bool
 	LastItemCount    int
+	LastStreamSig    uint64
 	LastSubmitAt     time.Time
 
 	MDOpts        markdown.Options
@@ -122,9 +131,19 @@ func (a *NalarupaApp) initAgentPanelState() {
 		Effort:        "high",
 		PlanOpen:      true,
 		ExpandedCards: map[int]bool{},
-		ImageCache:    map[string]*ui.Bitmap{},
+		ImageCache:    map[string]cachedToolImage{},
 		StickToBottom: true,
 	}
+}
+
+func (a *NalarupaApp) clearAgentImageCache() {
+	for _, entry := range a.AgentUI.ImageCache {
+		if entry.bmp != nil {
+			entry.bmp.ReleasePixels()
+		}
+	}
+	a.AgentUI.ImageCache = map[string]cachedToolImage{}
+	a.AgentUI.ImageOrder = nil
 }
 
 func (a *NalarupaApp) reloadAgentSettings() {
@@ -316,6 +335,7 @@ func (a *NalarupaApp) viewAgentPanel(c *ui.Context) {
 					} else {
 						a.Store.ResetChat()
 						a.AgentUI.ExpandedCards = map[int]bool{}
+						a.clearAgentImageCache()
 					}
 				}
 
@@ -538,6 +558,8 @@ func (a *NalarupaApp) viewChatHistoryPopover(c *ui.Context) {
 								a.ShowToast("Unable to open this chat. Pick another chat or start a new one.", true)
 								a.refreshChatHistory()
 							} else {
+								a.clearAgentImageCache()
+								a.AgentUI.ExpandedCards = map[int]bool{}
 								a.Store.RestoreChat(loaded.Events)
 								a.AgentUI.CurrentChatID = chat.ID
 								a.AgentUI.HistoryOpen = false
@@ -552,6 +574,8 @@ func (a *NalarupaApp) viewChatHistoryPopover(c *ui.Context) {
 								} else {
 									if a.AgentUI.CurrentChatID == chat.ID {
 										a.Store.ResetChat()
+										a.AgentUI.ExpandedCards = map[int]bool{}
+										a.clearAgentImageCache()
 									}
 									a.AgentUI.ArmedRemoveID = ""
 									a.refreshChatHistory()
@@ -588,6 +612,8 @@ func (a *NalarupaApp) viewChatHistoryPopover(c *ui.Context) {
 							} else {
 								if clearedCurrent {
 									a.Store.ResetChat()
+									a.AgentUI.ExpandedCards = map[int]bool{}
+									a.clearAgentImageCache()
 								}
 								a.AgentUI.ConfirmClear = false
 								a.refreshChatHistory()
@@ -1022,8 +1048,22 @@ func (a *NalarupaApp) viewAgentTranscript(c *ui.Context, reduced bool, nowMS int
 		}
 	})
 
-	if len(a.Store.Items) != a.AgentUI.LastItemCount {
+	streamSig := uint64(len(a.Store.Items))
+	if n := len(a.Store.Items); n > 0 {
+		last := a.Store.Items[n-1]
+		endedFlag := uint64(0)
+		if last.EndedAt != nil {
+			endedFlag = 1
+		}
+		runFlag := uint64(0)
+		if last.Running || last.Streaming {
+			runFlag = 1
+		}
+		streamSig = (streamSig << 40) ^ (uint64(last.ID) << 24) ^ (uint64(len(last.Text)+len(last.Output)+last.Lines+len(last.Images)) << 2) ^ (endedFlag << 1) ^ runFlag
+	}
+	if len(a.Store.Items) != a.AgentUI.LastItemCount || streamSig != a.AgentUI.LastStreamSig {
 		a.AgentUI.LastItemCount = len(a.Store.Items)
+		a.AgentUI.LastStreamSig = streamSig
 		if a.AgentUI.StickToBottom {
 			a.AgentUI.TranscriptScroll.Y = math.MaxFloat32
 		}
@@ -1194,20 +1234,32 @@ func (a *NalarupaApp) viewChatItem(c *ui.Context, it ChatItem, isLatest bool, re
 				// Inline tool screenshots
 				for imgIdx, b64 := range it.Images {
 					cacheKey := fmt.Sprintf("%d:%d", it.ID, imgIdx)
-					bmp, ok := a.AgentUI.ImageCache[cacheKey]
+					entry, ok := a.AgentUI.ImageCache[cacheKey]
 					if !ok {
+						entry = cachedToolImage{failed: true}
 						if raw, err := DecodeBase64Image(b64); err == nil {
 							if decoded, err := ui.DecodeBitmap(raw); err == nil {
-								bmp = decoded
-								a.AgentUI.ImageCache[cacheKey] = bmp
+								entry = cachedToolImage{bmp: decoded}
 							}
 						}
+						for len(a.AgentUI.ImageOrder) >= maxCachedToolImages {
+							evictKey := a.AgentUI.ImageOrder[0]
+							a.AgentUI.ImageOrder = a.AgentUI.ImageOrder[1:]
+							if old, exists := a.AgentUI.ImageCache[evictKey]; exists {
+								if old.bmp != nil {
+									old.bmp.ReleasePixels()
+								}
+								delete(a.AgentUI.ImageCache, evictKey)
+							}
+						}
+						a.AgentUI.ImageCache[cacheKey] = entry
+						a.AgentUI.ImageOrder = append(a.AgentUI.ImageOrder, cacheKey)
 					}
-					if bmp != nil {
+					if entry.bmp != nil {
 						ui.Box(c.Key(fmt.Sprintf("tool-img-%d-%d", it.ID, imgIdx))).
 							Padding(0, 8, 6, 8).
 							Children(func() {
-								ui.Image(c, bmp).Size(252, 158).Radius(5).Fit(ui.Contain)
+								ui.Image(c, entry.bmp).Size(252, 158).Radius(5).Fit(ui.Contain)
 							})
 					}
 				}

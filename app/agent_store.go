@@ -223,12 +223,7 @@ func (s *AgentStore) NeedsFrame(now float64, reduced bool, liveCount int, painte
 		if !s.PillShown(id, chatOpen) {
 			continue
 		}
-		if reduced {
-			if painted-p.At < PillMS && now-p.At >= PillMS {
-				pills = true
-				break
-			}
-		} else if min(now, painted)-p.At < PillMS {
+		if min(now, painted)-p.At < PillMS {
 			pills = true
 			break
 		}
@@ -534,7 +529,7 @@ func (s *AgentStore) ApplyEvents(events []map[string]any, now float64) bool {
 			last := s.lastOf(aid, "thinking", "assistant", "tool")
 			if last != nil && last.Kind == "thinking" && last.EndedAt == nil {
 				last.Text += txt
-			} else {
+			} else if strings.TrimSpace(txt) != "" {
 				s.endStreaming(aid, now)
 				var byPtr *ReplyAuthor
 				if au, ok := s.Authors[aid]; ok {
@@ -780,7 +775,7 @@ func RunVerb(stopped, failed bool) string {
 	}
 }
 
-// ResetChat clears transcript, plan, profiles, running flags, authors, pills, and cursors.
+// ResetChat clears transcript, plan, profiles, running flags, authors, pills, and canvas presence.
 func (s *AgentStore) ResetChat() {
 	s.Items = nil
 	s.Todos = nil
@@ -790,10 +785,7 @@ func (s *AgentStore) ResetChat() {
 	s.ProfileOrder = nil
 	s.Running = map[string]bool{}
 	s.Authors = map[string]ReplyAuthor{}
-	s.Cursors = map[string]*CursorState{}
-	if s.Pens == nil {
-		s.Pens = map[string]*PenCursorState{}
-	}
+	s.ClearPresence()
 }
 
 // ClearPresence resets canvas-coordinate agent cursors, AI Pens, flashes, and pending activity.

@@ -46,6 +46,7 @@ func (a *NalarupaApp) viewToolbar(c *ui.Context) {
 	bar.Children(func() {
 		homeBtn := IconBtn(c, "home", "home", "Home", 28, false)
 		if homeBtn.Clicked() {
+			a.RefreshHomeRecents()
 			a.Screen = "home"
 		}
 

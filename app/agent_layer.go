@@ -422,8 +422,8 @@ func (a *NalarupaApp) buildAgentLayerChildren(c *ui.Context, liveNodes []LiveNod
 			continue
 		}
 		snippet := strings.Join(strings.Fields(p.Text), " ")
-		if len(snippet) > 140 {
-			snippet = snippet[:137] + "…"
+		if runes := []rune(snippet); len(runes) > 140 {
+			snippet = string(runes[:137]) + "…"
 		}
 		if snippet == "" {
 			continue

@@ -18,6 +18,7 @@ const (
 type cachedThumb struct {
 	version uint64
 	bmp     *ui.Bitmap
+	failed  bool
 }
 
 type layerDragState struct {
@@ -48,10 +49,12 @@ type LayersState struct {
 
 	Drag layerDragState
 
-	Thumbs      map[string]cachedThumb
-	CachedVer   uint64
-	CachedAll   []LayerRow
-	CachedByID  map[string]LayerRow
+	Thumbs          map[string]cachedThumb
+	CachedVer       uint64
+	CachedAll       []LayerRow
+	CachedByID      map[string]LayerRow
+	CachedFramesVer uint64
+	CachedFrames    []Box
 }
 
 func (a *NalarupaApp) initLayersState() {
@@ -65,6 +68,11 @@ func (a *NalarupaApp) initLayersState() {
 }
 
 func (a *NalarupaApp) resetLayersForNewDoc() {
+	for _, ct := range a.Layers.Thumbs {
+		if ct.bmp != nil {
+			ct.bmp.ReleasePixels()
+		}
+	}
 	a.Layers.Tab = "layers"
 	a.Layers.Open = map[string]bool{}
 	a.Layers.Revealed = map[string]bool{}
@@ -74,6 +82,8 @@ func (a *NalarupaApp) resetLayersForNewDoc() {
 	a.Layers.Thumbs = map[string]cachedThumb{}
 	a.Layers.CachedVer = 0
 	a.Layers.CachedAll = nil
+	a.Layers.CachedFramesVer = 0
+	a.Layers.CachedFrames = nil
 }
 
 // LayerIndent computes Nalarupa's bounded indentation so 20+ deep layer hierarchies stay legible inside 248px.
@@ -90,8 +100,11 @@ func (a *NalarupaApp) ensureLayersFetched() []LayerRow {
 	if a.Layers.CachedVer == a.State.Version && a.Layers.CachedAll != nil {
 		return a.Layers.CachedAll
 	}
-	var all []LayerRow
+	all := []LayerRow{}
 	a.Bridge.TryCall("layers", nil, &all)
+	if all == nil {
+		all = []LayerRow{}
+	}
 	byID := make(map[string]LayerRow, len(all))
 	for _, l := range all {
 		byID[l.ID] = l
@@ -99,6 +112,20 @@ func (a *NalarupaApp) ensureLayersFetched() []LayerRow {
 	a.Layers.CachedVer = a.State.Version
 	a.Layers.CachedAll = all
 	a.Layers.CachedByID = byID
+	return all
+}
+
+func (a *NalarupaApp) ensureFramesFetched() []Box {
+	if a.Layers.CachedFramesVer == a.State.Version && a.Layers.CachedFrames != nil {
+		return a.Layers.CachedFrames
+	}
+	all := []Box{}
+	a.Bridge.TryCall("frames", nil, &all)
+	if all == nil {
+		all = []Box{}
+	}
+	a.Layers.CachedFramesVer = a.State.Version
+	a.Layers.CachedFrames = all
 	return all
 }
 
@@ -579,9 +606,10 @@ func (a *NalarupaApp) finishLayerDrag() {
 			args["index"] = 0
 		}
 		var st CoreState
-		if err := a.Bridge.Call("reparent", args, &st); err == nil {
-			a.State = st
-			a.syncWindowTitle()
+		if err := a.Bridge.Call("reparent", args, &st); err != nil {
+			a.ShowToast(err.Error(), true)
+		} else {
+			a.applyCoreState(st)
 		}
 		return
 	}
@@ -611,9 +639,10 @@ func (a *NalarupaApp) finishLayerDrag() {
 		"ids":    d.ids,
 		"parent": parentID,
 		"index":  insertIdx,
-	}, &st); err == nil {
-		a.State = st
-		a.syncWindowTitle()
+	}, &st); err != nil {
+		a.ShowToast(err.Error(), true)
+	} else {
+		a.applyCoreState(st)
 	}
 }
 
@@ -724,12 +753,21 @@ func (a *NalarupaApp) handleLayersTreeKey(ev ui.InputEvent, vis []LayerRow) bool
 }
 
 func (a *NalarupaApp) viewSlidesTab(c *ui.Context) {
-	var allFrames []Box
-	a.Bridge.TryCall("frames", nil, &allFrames)
+	allFrames := a.ensureFramesFetched()
 	var slides []Box
+	liveSlideIDs := make(map[string]bool, len(allFrames))
 	for _, f := range allFrames {
 		if f.Type == "frame" {
 			slides = append(slides, f)
+			liveSlideIDs[f.ID] = true
+		}
+	}
+	for id, ct := range a.Layers.Thumbs {
+		if !liveSlideIDs[id] {
+			if ct.bmp != nil {
+				ct.bmp.ReleasePixels()
+			}
+			delete(a.Layers.Thumbs, id)
 		}
 	}
 
@@ -796,18 +834,23 @@ func (a *NalarupaApp) viewSlidesTab(c *ui.Context) {
 				th := max(20, int(math.Round((s.H/max(s.W, 1))*SlideThumbW)))
 				ct, hasThumb := a.Layers.Thumbs[s.ID]
 				if (!hasThumb || ct.version != a.State.Version) && renderedThisFrame < 8 {
+					renderedThisFrame++
+					if hasThumb && ct.bmp != nil {
+						ct.bmp.ReleasePixels()
+					}
+					nextThumb := cachedThumb{version: a.State.Version, failed: true}
 					scale := min(1.0, SlideThumbW/max(s.W, 1.0))
 					var b64 string
 					if a.Bridge.TryCall("png", map[string]any{"id": s.ID, "scale": scale}, &b64) && b64 != "" {
 						if raw, err := DecodeBase64Image(b64); err == nil {
 							if bmp, err := ui.DecodeBitmap(raw); err == nil {
-								ct = cachedThumb{version: a.State.Version, bmp: bmp}
-								a.Layers.Thumbs[s.ID] = ct
-								hasThumb = true
-								renderedThisFrame++
+								nextThumb = cachedThumb{version: a.State.Version, bmp: bmp}
 							}
 						}
 					}
+					ct = nextThumb
+					a.Layers.Thumbs[s.ID] = ct
+					hasThumb = true
 				}
 
 				card := ui.ButtonBase(c.Key(fmt.Sprintf("slide-%d", slideNum))).
