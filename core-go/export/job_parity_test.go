@@ -290,9 +290,9 @@ func TestExportJobParity(t *testing.T) {
 				t.Fatalf("no golden result for %s", c.Name)
 			}
 			if runtime.GOOS != "windows" {
-				want.Error = filepath.ToSlash(want.Error)
+				want.Error = strings.ReplaceAll(want.Error, `\`, "/")
 				for i, f := range want.Files {
-					want.Files[i] = filepath.ToSlash(f)
+					want.Files[i] = strings.ReplaceAll(f, `\`, "/")
 				}
 			}
 			goldenDir := filepath.Join(goldenRoot, c.Name)

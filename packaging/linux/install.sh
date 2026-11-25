@@ -51,8 +51,8 @@ if [ -e "$bin/nalarupa" ] && ! [ -L "$bin/nalarupa" ]; then
 fi
 
 mkdir -p "$lib" "$bin" "$apps" "$icons"
-# The binary loads the core and the GPUI addon from its own folder.
-cp "$here/nalarupa" "$here/libnalarupa_core.so" "$here"/gpuix-native.*.node "$lib/"
+# Single standalone Go + MyGo binary (with core-go linked in-process).
+cp "$here/nalarupa" "$lib/"
 [ -f "$here/THIRD_PARTY_NOTICES.md" ] && cp "$here/THIRD_PARTY_NOTICES.md" "$lib/"
 ln -sfn "$lib/nalarupa" "$bin/nalarupa"
 cp "$here/nalarupa.png" "$icons/nalarupa.png"
