@@ -451,7 +451,7 @@ func cmdRun(args []string) error {
 		fmt.Printf("== %s\n", b.ID)
 
 		if err := dispatch(eng, "agent_reset", nil, nil); err != nil {
-			if stopErr := stopAndWaitAgent(eng, 15*time.Second); stopErr != nil {
+			if stopErr := stopAndWaitAgent(eng, 15*time.Second, nil); stopErr != nil {
 				br.OK = false
 				br.Error = fmt.Sprintf("reset failed (%v); stop wait failed: %v", err, stopErr)
 				run.Briefs = append(run.Briefs, br)
@@ -521,55 +521,16 @@ func cmdRun(args []string) error {
 				br.Error = "poll failed: " + err.Error()
 				break
 			}
-			for _, ev := range poll.Events {
-				if ev["type"] != "agent" {
-					continue
-				}
-				switch ev["kind"] {
-				case "text_delta":
-					if !seenExec {
-						s, _ := ev["text"].(string)
-						preExec.WriteString(s)
-					}
-				case "tool_done":
-					name, _ := ev["name"].(string)
-					if strings.HasSuffix(name, "execute") {
-						seenExec = true
-						br.ExecuteCalls++
-						if inp, ok := ev["input"].(map[string]any); ok && inp["editId"] != nil {
-							br.Repairs++
-						}
-						if isErr, _ := ev["error"].(bool); isErr {
-							br.FailedExecutes++
-						}
-						if outTxt, _ := ev["output"].(string); outTxt != "" {
-							br.Issues = append(br.Issues, extractExecuteIssues(outTxt)...)
-						}
-						if imgs, ok := ev["images"].([]any); ok && len(imgs) > 0 {
-							br.Screenshots++
-						}
-					}
-				case "error":
-					br.OK = false
-					br.Error, _ = ev["text"].(string)
-				case "done":
-					if u, ok := ev["usage"].(map[string]any); ok {
-						if t, ok := u["turns"].(float64); ok {
-							br.Turns += int(t)
-						}
-						if c, ok := u["costUsd"].(float64); ok {
-							br.CostUSD += c
-						}
-					}
-				}
-			}
+			processAgentEvents(poll.Events, &br, &preExec, &seenExec)
 			if !poll.State.AgentRunning {
 				finished = true
 				break
 			}
 		}
 		if !finished {
-			stopErr := stopAndWaitAgent(eng, 15*time.Second)
+			stopErr := stopAndWaitAgent(eng, 15*time.Second, func(events []map[string]any) {
+				processAgentEvents(events, &br, &preExec, &seenExec)
+			})
 			br.OK = false
 			if br.Error == "" {
 				if stopErr != nil {
@@ -636,7 +597,54 @@ func cmdRun(args []string) error {
 	return nil
 }
 
-func stopAndWaitAgent(eng *engine.Engine, timeout time.Duration) error {
+func processAgentEvents(events []map[string]any, br *evalBriefResult, preExec *strings.Builder, seenExec *bool) {
+	for _, ev := range events {
+		if ev["type"] != "agent" {
+			continue
+		}
+		switch ev["kind"] {
+		case "text_delta":
+			if !*seenExec {
+				s, _ := ev["text"].(string)
+				preExec.WriteString(s)
+			}
+		case "tool_done":
+			name, _ := ev["name"].(string)
+			if strings.HasSuffix(name, "execute") {
+				*seenExec = true
+				br.ExecuteCalls++
+				if inp, ok := ev["input"].(map[string]any); ok && inp["editId"] != nil {
+					br.Repairs++
+				}
+				if isErr, _ := ev["error"].(bool); isErr {
+					br.FailedExecutes++
+				}
+				if outTxt, _ := ev["output"].(string); outTxt != "" {
+					br.Issues = append(br.Issues, extractExecuteIssues(outTxt)...)
+				}
+				if imgs, ok := ev["images"].([]any); ok && len(imgs) > 0 {
+					br.Screenshots++
+				}
+			}
+		case "error":
+			br.OK = false
+			if txt, _ := ev["text"].(string); txt != "" && br.Error == "" {
+				br.Error = txt
+			}
+		case "done":
+			if u, ok := ev["usage"].(map[string]any); ok {
+				if t, ok := u["turns"].(float64); ok {
+					br.Turns += int(t)
+				}
+				if c, ok := u["costUsd"].(float64); ok {
+					br.CostUSD += c
+				}
+			}
+		}
+	}
+}
+
+func stopAndWaitAgent(eng *engine.Engine, timeout time.Duration, onEvents func([]map[string]any)) error {
 	if err := dispatch(eng, "agent_stop", nil, nil); err != nil {
 		return err
 	}
@@ -646,9 +654,13 @@ func stopAndWaitAgent(eng *engine.Engine, timeout time.Duration) error {
 			State struct {
 				AgentRunning bool `json:"agentRunning"`
 			} `json:"state"`
+			Events []map[string]any `json:"events"`
 		}
 		if err := dispatch(eng, "poll", nil, &poll); err != nil {
 			return err
+		}
+		if onEvents != nil && len(poll.Events) > 0 {
+			onEvents(poll.Events)
 		}
 		if !poll.State.AgentRunning {
 			return nil

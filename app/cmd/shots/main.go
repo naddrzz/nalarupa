@@ -239,12 +239,13 @@ func runShots(staticOnly bool) error {
 	if err != nil {
 		return err
 	}
-	if firstLayer != "" {
-		if err := client.pressKey(firstLayer); err != nil {
-			return err
-		}
-		_ = client.idle(1500)
+	if firstLayer == "" {
+		return fmt.Errorf("no layer found in Layers panel after live agent run")
 	}
+	if err := client.pressKey(firstLayer); err != nil {
+		return err
+	}
+	_ = client.idle(1500)
 	if err := client.pressKey("tab-design"); err != nil {
 		return err
 	}
