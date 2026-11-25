@@ -383,6 +383,48 @@ SOFTWARE.
 
 ---
 
+## github.com/egoist/mygo (`app/go.mod`)
+
+MIT License, with bundled shader compiler packages (`internal/shader`, `internal/shaderir`) derived from Ebitengine under the Apache License, Version 2.0 (see full text below).
+
+### Core Module (MIT License)
+
+```text
+MIT License
+
+Copyright (c) 2026 MyGo contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+### Bundled `internal/shader` and `internal/shaderir` (Apache License 2.0)
+
+Copyright 2020 The Ebiten Authors (modified by the MyGo contributors). Licensed under the Apache License, Version 2.0 (see full text below).
+
+---
+
+## github.com/ebitengine/purego (`app/go.mod`)
+
+Copyright 2022 The Purego Authors. Licensed under the Apache License, Version 2.0 (see full text below).
+
+---
+
 ## Lucide Icons (`app/assets/icons`)
 
 ```text
@@ -407,7 +449,7 @@ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 ## Apache License, Version 2.0
 
-Applies to `resvg`, `usvg`, `unicode-linebreak`, and `wgpu-native`.
+Applies to `resvg`, `usvg`, `unicode-linebreak`, `wgpu-native`, `mygo` (`internal/shader`, `internal/shaderir`), and `purego`.
 
 ```text
                                  Apache License

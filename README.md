@@ -6,7 +6,7 @@
 
 <p align="center">
   An infinite-canvas design editor with AI agents.<br>
-  <b>Go</b> core, <b>GPU-native</b> UI (GPUIX: React on top of GPUI).
+  <b>100% Go</b>: Go core + GPU-native UI (<a href="https://mygo.run/">MyGo</a>).
 </p>
 
 <p align="center">
@@ -76,7 +76,7 @@ The logo combines a wayang *gunungan* that doubles as a pen nib (the pen tool), 
 - Built-in **MCP server** (`http://127.0.0.1:47700/mcp`) for external agents: Claude Code, Cursor, Codex.
   The *Connect* button writes their config only when you click it.
 - Headless `nalarupa-cli` for rendering and exporting without the UI (`render`, `svg`, `html`, `exec`, `bench`, `icon`,
-  `mcp`; build it with `bash build.sh cli` in `core-go/`, after `go generate ./shader/gpu` and with MinGW gcc as `CC`
+  `mcp`; build it with `bash build.sh` in `core-go/`, after `go generate ./shader/gpu` and with MinGW gcc as `CC`
   on Windows, see Development).
 - `.nala` document format (readable JSON); `.pen` documents open too.
 
@@ -113,34 +113,37 @@ lives in `%LOCALAPPDATA%\Nalarupa` on Windows, `~/Library/Application Support/Na
 
 ## Development
 
-Requirements: [Go](https://go.dev) (the version in `core-go/go.mod`), a C compiler for cgo (MinGW-w64 gcc on Windows,
-set as `CC`) and [Bun](https://bun.sh) ≥ 1.3.
+Requirements: [Go](https://go.dev) (the version in `app/go.mod`) and a C compiler for cgo (MinGW-w64 gcc on Windows,
+set as `CC`; on Linux, GTK3 development headers `libgtk-3-dev` and Vulkan drivers).
 
 ```bash
-cd core-go && go generate ./shader/gpu && CGO_ENABLED=1 bash build.sh
+cd core-go && go generate ./shader/gpu
 ```
 
-`go generate` fetches the pinned wgpu-native release once; `build.sh` (or `build.ps1` on Windows) builds the core into
-`core-go/out/`, where the app finds it. `NALARUPA_CORE=<full path of the library>` points the app at another build.
+`go generate` fetches the pinned `wgpu-native` static archive once. To build the headless CLI into `core-go/out/`:
 
 ```bash
-cd app && bun install && bun run dev
+cd core-go && CGO_ENABLED=1 bash build.sh
 ```
 
-`bun run dev` opens the window with hot reload (`bun --hot app.tsx`); `bun run start` runs it without.
+To run the desktop UI during development (with live rebuilds via [MyGo](https://mygo.run/)):
+
+```bash
+cd app && CGO_ENABLED=1 go tool mygo dev
+```
 
 ### Building the binary
 
 ```bash
-cd app && bun run build
+cd app && bash build.sh
 ```
 
-The output goes to `app/dist/`: `nalarupa.exe` (or `nalarupa`), `nalarupa_core.dll` (`libnalarupa_core.so` on
-Linux, `libnalarupa_core.dylib` on macOS), the GPUI addon, `THIRD_PARTY_NOTICES.md`, and (on Windows)
-`nalarupa.ico`.
+(On Windows, run `powershell -File build.ps1` in `app/`.) The output goes to `app/dist/`: a single standalone
+executable `nalarupa.exe` (or `nalarupa`) with `core-go` linked directly in-process, `THIRD_PARTY_NOTICES.md`, and
+(on Windows) `nalarupa.ico`. Set `NALARUPA_RELEASE=1` on Unix to strip the `MYGO_AUTOMATION` test plugin.
 
-To build local release packages, first stamp the version (`sh packaging/set-version.sh <X.Y.Z>`), build the core
-in `core-go/` and run `cd app && bun run build`, then package for your platform:
+To build local release packages, first stamp the version (`sh packaging/set-version.sh <X.Y.Z>`) and run
+`cd app && NALARUPA_RELEASE=1 bash build.sh` (`build.ps1` on Windows), then package for your platform:
 
 - **Windows (NSIS installer + portable zip):**
   ```powershell
@@ -185,22 +188,25 @@ in `core-go/` and run `cd app && bun run build`, then package for your platform:
 ### Architecture
 
 ```
-app/  (Bun + @gpuix/react)                core-go/  (Go + cgo, nalarupa_core.dll)
-┌──────────────────────────────┐  bun:ffi  ┌───────────────────────────────────────────────┐
-│ Home · Editor · Present      │──────────▶│ nr_call(json) → json   nr_render(...) → RGBA  │
-│ Layers/Slides · Inspector    │           │ doc/        document model (lossless)         │
-│ Agent chat · Canvas (<img>)  │◀── RGBA ──│ resolve/    components/refs, variables+themes │
-│ setImagePixels per frame     │           │ layout/     flexbox auto layout               │
-└──────────────────────────────┘           │ text/       go-text shaping + UAX #14, fonts  │
-                                           │ svg/ → usvg/ → resvg/ + skia/ (pure Go)       │
- Claude Code / Cursor / Codex              │ render/     view cache + dirty rect + culling │
-   ── HTTP MCP 127.0.0.1:47700/mcp ───────▶│ script/     `execute` in QuickJS-NG (cgo)     │
-                                           │ shader/     GLSL fills on wgpu-native (cgo)   │
-                                           │ editor/     snap, marquee, layout, pen tool   │
-                                           │ agent/      MCP server, Claude API loop,      │
-                                           │             Claude Code CLI, AI Pen           │
-                                           │ html/ pdf/  HTML+CSS export, PDF              │
-                                           └───────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────────────────┐
+│ single Go binary (`app/` + `core-go/` linked in-process)                      │
+│                                                                               │
+│  app/  (MyGo Native UI: github.com/egoist/mygo/ui)                            │
+│  ┌──────────────────────────────┐  direct   ┌───────────────────────────────┐ │
+│  │ Home · Editor · Present      │─── Go ───▶│ engine.Dispatch / Render      │ │
+│  │ Layers/Slides · Inspector    │           │ doc/     document model       │ │
+│  │ Agent chat · Canvas (*Bitmap)│◀─ RGBA8 ──│ resolve/ components & tokens  │ │
+│  │ Vector & AgentLayer overlays │           │ layout/  flexbox auto layout  │ │
+│  └──────────────────────────────┘           │ text/    go-text + UAX #14    │ │
+│                                             │ svg/ → usvg/ → resvg/ + skia/ │ │
+│  Claude Code / Cursor / Codex               │ render/  view cache + culling │ │
+│    ── HTTP MCP 127.0.0.1:47700/mcp ────────▶│ script/  QuickJS-NG (cgo)     │ │
+│                                             │ shader/  GLSL on wgpu-native  │ │
+│                                             │ editor/  snap, marquee, pen   │ │
+│                                             │ agent/   MCP, Claude API/CLI  │ │
+│                                             │ html/ pdf/ HTML+CSS & PDF     │ │
+│                                             └───────────────────────────────┘ │
+└───────────────────────────────────────────────────────────────────────────────┘
 ```
 
 The agent guides live in `core-go/guide/md/*.md` (document schema, the `execute` API, components, slides, design,
@@ -209,88 +215,37 @@ code), embedded into the Go core at build time.
 ### Checks
 
 ```bash
-cd core-go && go vet ./... && go test ./...
+cd core-go && CGO_ENABLED=1 go vet ./... && CGO_ENABLED=1 go test ./...
 ```
 
 ```bash
-cd app && bun run typecheck && bun run smoke && bun run e2e
+cd app && CGO_ENABLED=1 go tool mygo vet . && CGO_ENABLED=1 go vet ./... && CGO_ENABLED=1 go test ./...
 ```
+
+On a Linux server without a display, run the real OS-windowed E2E suite inside a private headless Wayland compositor
+(needs `sway`, `grim`, `mesa-vulkan-drivers`):
 
 ```bash
-cd app && bun run editor-check && bun run editor-e2e
+cd app && bash scripts/wl-run.sh env NALARUPA_E2E=1 CGO_ENABLED=1 go test -v -run TestRealE2E .
 ```
 
-```bash
-cd app && bun run mcp-check && bun run doc-check && bun run file-e2e
-```
+- `core-go` tests cover the document model, layout, text shaping, SVG/Skia rendering, shaders, scripts, Figma import,
+  HTML/PDF exports, MCP tools, and agent loop parity.
+- `app` unit & `ui.Tester` suites (`geometry_pen_test.go`, `agent_store_test.go`, `checks_test.go`, `ui_test.go`)
+  cover 2D affine/Bézier geometry, the reactive agent store, MCP HTTP Origin guards & batches, client MCP installation
+  in a throwaway `HOME`, shader/script/component rendering, lock-freedom during exports, full WAI-ARIA accessibility
+  audits (`AccessAll` zero-unnamed-control check across views), and *reduced motion* behavior.
+- `TestRealE2E_*` (`e2e_test.go`) builds `app/dist/nalarupa`, launches a real OS window via `MYGO_AUTOMATION`, drives
+  Home → Slides/Design/Mobile/Empty templates → Canvas drawing & Pen tool → live HTTP MCP `execute` → Presentation
+  mode → Save/Recent/Unsaved guard → live streaming `claude` agent, and verifies real window PNG captures.
+- `cmd/design-eval` measures the design agent: `cd app && CGO_ENABLED=1 go run ./cmd/design-eval run` sends eight fixed
+  eval briefs through the agent and keeps the eval run (PNGs, documents, transcripts, `metrics.json`, `summary.md`; by
+  default in `~/nalarupa-eval/`), and `CGO_ENABLED=1 go run ./cmd/design-eval compare <runA> <runB>` compares two eval
+  runs side by side and flags sameness across unrelated briefs.
+- `cd app && CGO_ENABLED=1 go run ./cmd/shots` regenerates the README screenshots in `docs/screenshots/` using a fresh
+  temporary `NALARUPA_DATA`.
 
-```bash
-cd app && bun run script-check && bun run chat-check && bun run mcp-install-check
-```
-
-```bash
-cd app && bun run drag-check && bun run viewport-check && bun run issues-check
-```
-
-```bash
-cd app && bun run layout-check && bun run text-check && bun run scriptnode-check
-```
-
-```bash
-cd app && bun run shader-check && bun run paint-check && bun run component-check
-```
-
-`text-check` depends on the installed fonts and runs only in the Linux CI job for now.
-
-```bash
-cd app && bun run a11y-check && bun run motion-check && bun run window-check
-```
-
-- `e2e` opens a GPU window in the background: Home → slides template → drawing → an external agent adds a
-  slide over MCP → Present.
-- `editor-e2e` tests editor interactions (snapping, marquee, group, auto layout, rename, pen tool).
-- `mcp-check` covers the MCP HTTP contract external agents rely on (status codes, foreign-origin guard,
-  JSON-RPC errors, every tool); `doc-check` covers save/open round trips, exports, variables, settings and
-  edit commands; both run without a window in a throwaway data folder. `file-e2e` saves and reopens through
-  the window (toolbar Save → Home → Recent).
-- `script-check` covers the agent `execute` API (Copy, Update, Replace, Move, Delete, Get, variables,
-  FindEmptySpace, rollback and editId repair); `chat-check` covers the saved chat history (list, load, delete,
-  clear, the 20-day expiry and the running-agent guards); `mcp-install-check` covers "connect an agent" (Cursor,
-  Codex and Claude Code config) against a throwaway home. All three run without a window; `mcp-install-check`
-  is skipped on Windows.
-- `drag-check` covers the canvas drag gestures (`drag_begin` / `drag_end`: a move, resize, rotate or pen drag is one
-  undo step, an unchanged drag none); `viewport-check` covers the camera the agent is told about (`[user visible]` /
-  `[outside viewport]` marks and visible-first order in the editor state); `issues-check` covers the feedback after an
-  `execute` call (the "Issues detected" warnings, `Generate` errors, `Export` and `TakeScreenshot` lines). All three run
-  without a window.
-- `layout-check` covers auto layout as the document is edited (gap, padding, alignment, `fill_container`,
-  `fit_content`, absolute children, reorder, delete, undo, save and reopen); `text-check` covers text sizing
-  (`textGrowth`, line height, letter spacing, wrapping, re-measuring after an edit, font fallback);
-  `scriptnode-check` covers script nodes (inputs and their clamping, re-running on a new input or size, the
-  error shown in the node, children never saved). All three run without a window; `text-check` is Linux-only for
-  now (it depends on the installed fonts).
-- `shader-check` covers shader fills (`.glsl` uniforms and their defaults, `@resolution`, `@sdf`, opacity, an edited
-  file, the red hatch for a missing or broken file, save and reopen); `paint-check` covers fills and strokes read
-  back as pixels (image modes, mesh, linear, radial and angular gradients, stacked and blended fills, stroke
-  alignment); `component-check` covers instances (root and `descendants` overrides, `enabled: false`, a replacing
-  `type`, component edits reaching instances, nested instances, undeletable instance children, a deleted
-  component). All three run without a window; `shader-check` needs a Vulkan device (lavapipe on CI).
-- `a11y-check` reads the Windows UI Automation tree and fails on any unnamed control; `motion-check` makes
-  sure animations stop under *reduced motion*; `window-check` makes sure the window fits the screen and its
-  frame carries the Nalarupa icon (`bun run window-check dist/nalarupa.exe` for the built exe).
-- `exe-check` runs the built binary; `model-check` runs two real agent turns.
-- `design-eval` measures the design agent: `bun run design-eval run` sends eight fixed eval briefs (pages, mobile
-  screens, slide decks, and one document with an existing style) through the agent and keeps the eval run (PNGs,
-  documents, transcripts, `metrics.json`, `summary.md`; by default in `~/nalarupa-eval/`), and
-  `bun run design-eval compare <runA> <runB>` puts two eval runs side by side and flags unrelated briefs that look
-  alike. It uses the Claude Code backend unless given `--backend api`. It spends model tokens, so it runs by hand,
-  not in CI: once before a change to the agent's instructions and once after.
-- On a Linux server without a display, prefix each windowed check (`e2e`, `editor-e2e`, `file-e2e`) with
-  `bash scripts/wl-run.sh` from `app/`, e.g. `cd app && bash scripts/wl-run.sh bun run file-e2e`, to run the window under a headless
-  Wayland compositor (needs `sway`, `grim`, `mesa-vulkan-drivers`).
-- `bun run shots` regenerates the README screenshots in `docs/screenshots/`.
-
-Canvas performance (`bash build.sh cli` in `core-go/` first):
+Canvas performance (`bash build.sh` in `core-go/` first):
 
 ```bash
 ./core-go/out/nalarupa-cli bench file.nala 1600 1000
@@ -316,14 +271,14 @@ claude mcp add --transport http --scope user nalarupa http://127.0.0.1:47700/mcp
 
 - Background blur in exports (through resvg) only blurs content of the same top-level frame.
 - `execute` is limited to 30 s, 64 MB of memory and a 512 KB stack.
-- The system clipboard is Windows-only; on macOS/Linux copy/paste works only inside the app.
 - AI/stock image generation inserts placeholder photos; there is no image generation backend yet.
 - PDF export (`core-go/pdf`): 1 px = 1 pt, and filters (blur, shadows) are embedded as bitmaps.
 - WebP is always lossless; JPEG has no alpha (transparent areas become white).
-- The Claude API key is stored as-is in `%LOCALAPPDATA%\Nalarupa\settings.json`.
+- The Claude API key is stored as-is in `settings.json` inside the user app-data folder.
 
 ## License
 
 [MIT](LICENSE). Full third-party copyright notices and license texts (including the Go ports of resvg 0.47.0,
-usvg 0.47.0, tiny-skia 0.12, unicode-linebreak, QuickJS-NG, and [Lucide](https://lucide.dev) icons) are preserved
-in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and shipped alongside packaged builds.
+usvg 0.47.0, tiny-skia 0.12, unicode-linebreak, QuickJS-NG, [MyGo](https://mygo.run/), purego, and
+[Lucide](https://lucide.dev) icons) are preserved in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and shipped
+alongside packaged builds.
