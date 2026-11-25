@@ -451,7 +451,12 @@ func cmdRun(args []string) error {
 		fmt.Printf("== %s\n", b.ID)
 
 		if err := dispatch(eng, "agent_reset", nil, nil); err != nil {
-			_ = dispatch(eng, "agent_stop", nil, nil)
+			if stopErr := stopAndWaitAgent(eng, 15*time.Second); stopErr != nil {
+				br.OK = false
+				br.Error = fmt.Sprintf("reset failed (%v); stop wait failed: %v", err, stopErr)
+				run.Briefs = append(run.Briefs, br)
+				continue
+			}
 			if resetErr := dispatch(eng, "agent_reset", nil, nil); resetErr != nil {
 				br.OK = false
 				br.Error = resetErr.Error()
@@ -514,7 +519,6 @@ func cmdRun(args []string) error {
 			if err := dispatch(eng, "poll", nil, &poll); err != nil {
 				br.OK = false
 				br.Error = "poll failed: " + err.Error()
-				_ = dispatch(eng, "agent_stop", nil, nil)
 				break
 			}
 			for _, ev := range poll.Events {
@@ -565,10 +569,14 @@ func cmdRun(args []string) error {
 			}
 		}
 		if !finished {
-			_ = dispatch(eng, "agent_stop", nil, nil)
+			stopErr := stopAndWaitAgent(eng, 15*time.Second)
 			br.OK = false
 			if br.Error == "" {
-				br.Error = "agent timed out"
+				if stopErr != nil {
+					br.Error = fmt.Sprintf("agent timed out (%v)", stopErr)
+				} else {
+					br.Error = "agent timed out"
+				}
 			}
 		}
 		br.WallMS = time.Since(start).Milliseconds()
@@ -626,6 +634,28 @@ func cmdRun(args []string) error {
 	fmt.Println(summaryMD)
 	fmt.Printf("Saved eval run to %s\n", outDir)
 	return nil
+}
+
+func stopAndWaitAgent(eng *engine.Engine, timeout time.Duration) error {
+	if err := dispatch(eng, "agent_stop", nil, nil); err != nil {
+		return err
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		var poll struct {
+			State struct {
+				AgentRunning bool `json:"agentRunning"`
+			} `json:"state"`
+		}
+		if err := dispatch(eng, "poll", nil, &poll); err != nil {
+			return err
+		}
+		if !poll.State.AgentRunning {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("agent did not stop within %s", timeout)
 }
 
 func extractExecuteIssues(output string) []string {

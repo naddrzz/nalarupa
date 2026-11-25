@@ -180,29 +180,49 @@ func runShots(staticOnly bool) error {
 		time.Sleep(250 * time.Millisecond)
 	}
 
-	if started {
-		runDeadline := time.Now().Add(15 * time.Minute)
-		frameIdx := 0
-		finished := false
-		for time.Now().Before(runDeadline) {
-			keys, err := client.treeKeys()
-			if err != nil {
-				return err
-			}
-			if keys["error-sign-in"] {
-				return fmt.Errorf("Claude Code sign-in required during live screenshot run")
-			}
-			if !keys["agent-stop"] {
-				finished = true
-				break
-			}
-			frameIdx++
-			_ = client.capturePNG(filepath.Join(liveDir, fmt.Sprintf("agent-%02d.png", frameIdx)))
-			time.Sleep(1500 * time.Millisecond)
+	if !started {
+		return fmt.Errorf("live agent did not start within 15s")
+	}
+
+	runDeadline := time.Now().Add(15 * time.Minute)
+	var liveFrames []string
+	finished := false
+	for time.Now().Before(runDeadline) {
+		frameIdx := len(liveFrames) + 1
+		framePath := filepath.Join(liveDir, fmt.Sprintf("agent-%02d.png", frameIdx))
+		if err := client.capturePNG(framePath); err != nil {
+			return fmt.Errorf("capture live frame %d: %w", frameIdx, err)
 		}
-		if !finished {
-			return fmt.Errorf("timed out waiting for live agent screenshot run to finish")
+		liveFrames = append(liveFrames, framePath)
+
+		time.Sleep(1500 * time.Millisecond)
+
+		keys, err := client.treeKeys()
+		if err != nil {
+			return err
 		}
+		if keys["error-sign-in"] {
+			return fmt.Errorf("Claude Code sign-in required during live screenshot run")
+		}
+		if !keys["agent-stop"] {
+			finished = true
+			break
+		}
+	}
+	if !finished {
+		return fmt.Errorf("timed out waiting for live agent screenshot run to finish")
+	}
+	if len(liveFrames) == 0 {
+		return fmt.Errorf("no live agent frames were captured")
+	}
+
+	midFrame := liveFrames[len(liveFrames)/2]
+	midBytes, err := os.ReadFile(midFrame)
+	if err != nil {
+		return fmt.Errorf("read live frame %s: %w", midFrame, err)
+	}
+	if err := os.WriteFile(filepath.Join(shotsDir, "agent-live.png"), midBytes, 0o644); err != nil {
+		return fmt.Errorf("write agent-live.png: %w", err)
 	}
 
 	_ = client.idle(2000)
@@ -215,8 +235,14 @@ func runShots(staticOnly bool) error {
 	}
 
 	// Select first top-level layer and switch to Design inspector tab for design.png
-	if firstLayer, err := client.firstLayerKey(); err == nil && firstLayer != "" {
-		_ = client.pressKey(firstLayer)
+	firstLayer, err := client.firstLayerKey()
+	if err != nil {
+		return err
+	}
+	if firstLayer != "" {
+		if err := client.pressKey(firstLayer); err != nil {
+			return err
+		}
 		_ = client.idle(1500)
 	}
 	if err := client.pressKey("tab-design"); err != nil {
@@ -227,7 +253,7 @@ func runShots(staticOnly bool) error {
 		return err
 	}
 
-	fmt.Println("shots: captured home.png, slides.png, present.png, agent.png, design.png")
+	fmt.Println("shots: captured home.png, slides.png, present.png, agent-live.png, agent.png, design.png")
 	return nil
 }
 

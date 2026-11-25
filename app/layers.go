@@ -835,20 +835,24 @@ func (a *NalarupaApp) viewSlidesTab(c *ui.Context) {
 				ct, hasThumb := a.Layers.Thumbs[s.ID]
 				if (!hasThumb || ct.version != a.State.Version) && renderedThisFrame < 8 {
 					renderedThisFrame++
-					if hasThumb && ct.bmp != nil {
-						ct.bmp.ReleasePixels()
-					}
-					nextThumb := cachedThumb{version: a.State.Version, failed: true}
 					scale := min(1.0, SlideThumbW/max(s.W, 1.0))
 					var b64 string
+					var decoded *ui.Bitmap
 					if a.Bridge.TryCall("png", map[string]any{"id": s.ID, "scale": scale}, &b64) && b64 != "" {
 						if raw, err := DecodeBase64Image(b64); err == nil {
 							if bmp, err := ui.DecodeBitmap(raw); err == nil {
-								nextThumb = cachedThumb{version: a.State.Version, bmp: bmp}
+								decoded = bmp
 							}
 						}
 					}
-					ct = nextThumb
+					if decoded != nil {
+						if hasThumb && ct.bmp != nil {
+							ct.bmp.ReleasePixels()
+						}
+						ct = cachedThumb{version: a.State.Version, bmp: decoded}
+					} else {
+						ct = cachedThumb{version: a.State.Version, bmp: ct.bmp, failed: true}
+					}
 					a.Layers.Thumbs[s.ID] = ct
 					hasThumb = true
 				}

@@ -309,10 +309,10 @@ func TestPathsIconsThemeAndInspectorValidators(t *testing.T) {
 		"pad":    map[string]any{"type": "number", "value": 16.0},
 		"weight": map[string]any{"type": "string", "value": "bold"},
 	}
-	if !ValidPaint("#FF6A3D", vars) || !ValidPaint("$brand", vars) || !ValidPaint(`["#FF6A3D", "$brand"]`, vars) {
+	if !ValidPaint("#FF6A3D", vars) || !ValidPaint("$brand", vars) || !ValidPaint(`["#FF6A3D", "$brand"]`, vars) || !ValidPaint(`{"type":"gradient","colors":[{"color":"#FF6A3D","position":0},{"color":"$brand","position":1}]}`, vars) {
 		t.Fatal("ValidPaint expected valid colors to pass")
 	}
-	if ValidPaint("$missing", vars) || ValidPaint("$pad", vars) || ValidPaint("$weight", vars) || ValidPaint("not-a-color", vars) || ValidPaint(`["#zzz"]`, vars) || ValidPaint(`{"color":"banana"}`, vars) {
+	if ValidPaint("$missing", vars) || ValidPaint("$pad", vars) || ValidPaint("$weight", vars) || ValidPaint("not-a-color", vars) || ValidPaint(`["#zzz"]`, vars) || ValidPaint(`{"color":"banana"}`, vars) || ValidPaint(`{"type":"gradient","colors":[{"position":0}]}`, vars) || ValidPaint(`{"type":"gradient","colors":[{"color":"banana","position":0}]}`, vars) {
 		t.Fatal("ValidPaint expected invalid vars/colors to fail")
 	}
 	if _, ok := SolidSwatchHex("$brand", vars); !ok {

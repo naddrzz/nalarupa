@@ -157,7 +157,8 @@ func ValidPaint(v string, vars map[string]any) bool {
 						return false
 					}
 				case map[string]any:
-					if cVal, hasC := sv["color"]; hasC && !isValidPaintColor(cVal, vars) {
+					cVal, hasC := sv["color"]
+					if !hasC || !isValidPaintColor(cVal, vars) {
 						return false
 					}
 				default:
