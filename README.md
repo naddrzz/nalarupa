@@ -275,7 +275,7 @@ claude mcp add --transport http --scope user nalarupa http://127.0.0.1:47700/mcp
 - AI/stock image generation inserts placeholder photos; there is no image generation backend yet.
 - PDF export (`core-go/pdf`): 1 px = 1 pt, and filters (blur, shadows) are embedded as bitmaps.
 - WebP is always lossless; JPEG has no alpha (transparent areas become white).
-- The Claude API key is stored as-is in `settings.json` inside the user app-data folder.
+- API keys (Claude API and custom BYOK providers) are stored as-is in `settings.json` inside the user app-data folder.
 
 ## License
 
