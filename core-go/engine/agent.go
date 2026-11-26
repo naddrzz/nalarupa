@@ -121,6 +121,20 @@ type AgentState struct {
 	Flagged []string
 	// Stops counts the user's Stops: a Stop while a call's script runs still reaches the pens it starts.
 	Stops uint64
+	// ActiveSkillDirs holds resolved skill directories activated for the current turn.
+	ActiveSkillDirs []string
+	// Team holds pre-allocated parallel designer profiles for the current turn so all N cursors show immediately.
+	Team            []Profile
+	TeamConsumed    int
+	IsVariationTurn bool
+	PreTurnTopIDs   map[string]bool
+	PreTurnVars     *jsonv.Object
+	TurnEditedPreTop map[string]bool
+	TurnNewTopIDs   []string
+	TurnScreenTeam   map[string]string
+	ChildScopes      map[string]map[string]bool
+	ContextUsed      int
+	ContextLimit     int
 }
 
 // PenFrames are the frames the pens draw into.
@@ -151,6 +165,13 @@ func (a *AgentState) Record(ev jsonv.Value) bool {
 	case "tool_progress", "all_done", "permission", "permission_done":
 		// Permission cards only matter while they wait.
 		return false
+	case "context":
+		for i := len(a.Chat.Events) - 1; i >= 0; i-- {
+			if jsonv.StrIs(jsonv.Get(a.Chat.Events[i], "kind"), "context") {
+				a.Chat.Events[i] = setKey(jsonv.Clone(ev), "at", u64(NowMs()))
+				return false
+			}
+		}
 	case "text_delta", "thinking_delta":
 		id := jsonv.Get(jsonv.Get(ev, "agent"), "id")
 		for i := len(a.Chat.Events) - 1; i >= 0; i-- {
@@ -199,6 +220,17 @@ func (a *AgentState) Clear() {
 	a.Session = ""
 	a.Main = ""
 	a.Profiles = nil
+	a.Team = nil
+	a.TeamConsumed = 0
+	a.IsVariationTurn = false
+	a.PreTurnTopIDs = nil
+	a.PreTurnVars = nil
+	a.TurnEditedPreTop = nil
+	a.TurnNewTopIDs = nil
+	a.TurnScreenTeam = nil
+	a.ChildScopes = nil
+	a.ContextUsed = 0
+	a.ContextLimit = 0
 	a.Queue = nil
 	a.Chat = nil
 	a.Cook = 1
@@ -216,6 +248,12 @@ func (a *AgentState) Restore(id string, saved jsonv.Value) {
 		a.addSaved(jsonv.Get(ev, "agent"))
 	}
 	title, _ := jsonv.Str(jsonv.Get(saved, "title"))
+	if cu, ok := jsonv.F64(jsonv.Get(saved, "contextUsed")); ok && cu > 0 {
+		a.ContextUsed = int(cu)
+	}
+	if cl, ok := jsonv.F64(jsonv.Get(saved, "contextLimit")); ok && cl > 0 {
+		a.ContextLimit = int(cl)
+	}
 	a.Chat = &Chat{ID: id, Title: title, Events: events}
 }
 
@@ -290,4 +328,35 @@ func (a *AgentState) NewProfile(parent string) Profile {
 	p := Profile{ID: id, Name: name, Color: color, Parent: parent}
 	a.Profiles = append(a.Profiles, p)
 	return p
+}
+
+// AllocTeam pre-allocates extra child designer profiles for a parallel turn so their cursors appear right away.
+func (a *AgentState) AllocTeam(parent string, extra int) []Profile {
+	a.Team = nil
+	a.TeamConsumed = 0
+	if extra <= 0 {
+		return nil
+	}
+	a.Team = make([]Profile, extra)
+	for i := 0; i < extra; i++ {
+		a.Team[i] = a.NewProfile(parent)
+	}
+	return slices.Clone(a.Team)
+}
+
+// TakeTeamMember pops the next pre-allocated team profile for spawn_agents, or creates a fresh one if none left.
+func (a *AgentState) TakeTeamMember(parent string) Profile {
+	if a.TeamConsumed < len(a.Team) {
+		p := a.Team[a.TeamConsumed]
+		a.TeamConsumed++
+		p.Parent = parent
+		for i := range a.Profiles {
+			if a.Profiles[i].ID == p.ID {
+				a.Profiles[i].Parent = parent
+				break
+			}
+		}
+		return p
+	}
+	return a.NewProfile(parent)
 }

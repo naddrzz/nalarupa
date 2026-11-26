@@ -121,6 +121,16 @@ func Export(d *doc.Doc, libs []resolve.Lib, id string, fonts layout.TextMeasurer
 // in each axis at scale. With embed, image files are written as tokens of the returned Embedded. libs are the
 // libraries the document's components may come from.
 func NodeSVGAt(d *doc.Doc, libs []resolve.Lib, id string, scale float64, embed bool, fonts layout.TextMeasurer, assets *Assets, expand Expand) (string, Rect, Embedded, bool) {
+	return nodeSVGAt(d, libs, id, scale, embed, false, fonts, assets, expand)
+}
+
+// NodeSVGAtRaster is NodeSVGAt for Nalarupa's native resvg rasterizer (screenshots, PNG/JPEG/WebP/PDF):
+// trees with many backdrop blurs automatically emit lightweight `nrbb:` markers instead of `<use>` trees.
+func NodeSVGAtRaster(d *doc.Doc, libs []resolve.Lib, id string, scale float64, fonts layout.TextMeasurer, assets *Assets, expand Expand) (string, Rect, Embedded, bool) {
+	return nodeSVGAt(d, libs, id, scale, false, true, fonts, assets, expand)
+}
+
+func nodeSVGAt(d *doc.Doc, libs []resolve.Lib, id string, scale float64, embed, autoNativeBackdrop bool, fonts layout.TextMeasurer, assets *Assets, expand Expand) (string, Rect, Embedded, bool) {
 	top := topIndex(d, id)
 	if top < 0 {
 		return "", Rect{}, Embedded{}, false
@@ -145,6 +155,7 @@ func NodeSVGAt(d *doc.Doc, libs []resolve.Lib, id string, scale float64, embed b
 	view := Rect{b.X, b.Y, pw / scale, ph / scale}
 	s := New(fonts, assets, d.Dir())
 	s.Embed = embed
+	s.AutoNativeBackdrop = autoNativeBackdrop
 	s.Node(node)
 	return s.Finish(&view), view, s.Embedded, true
 }

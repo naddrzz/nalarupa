@@ -8,6 +8,8 @@
 package resvg
 
 import (
+	"strings"
+
 	"github.com/naddrzz/nalarupa/core-go/skia"
 	"github.com/naddrzz/nalarupa/core-go/usvg"
 )
@@ -59,6 +61,11 @@ func renderNode(node usvg.Node, transform skia.Transform, pixmap skia.PixmapMut)
 
 func renderGroup(group *usvg.Group, transform skia.Transform, pixmap skia.PixmapMut) {
 	transform = transform.PreConcat(group.Transform())
+
+	if rest, ok := strings.CutPrefix(group.ID(), "nrbb:"); ok && isNativeBackdropGroup(group) {
+		renderBackdropBlur(group, rest, transform, pixmap)
+		return
+	}
 
 	if !group.ShouldIsolate() {
 		renderNodes(group, transform, pixmap)

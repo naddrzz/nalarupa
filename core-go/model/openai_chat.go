@@ -20,7 +20,9 @@ type Chat struct {
 	vision bool
 	// openai: OpenAI's own API, which renames a few fields for its reasoning models.
 	openai bool
-	stall  time.Duration
+	// canReason: non-localhost OpenAI / OpenAI-compatible endpoints that may support reasoning effort.
+	canReason bool
+	stall     time.Duration
 }
 
 // NewChat is a client for base, the server's API root as the provider documents it (e.g.
@@ -30,23 +32,55 @@ func NewChat(base, key string, vision bool) *Chat {
 	if strings.TrimSpace(key) == "" {
 		key = ""
 	}
+	isOpenAI := strings.Contains(base, "://api.openai.com")
 	return &Chat{url: Endpoint(base, "/chat/completions"), key: key, vision: vision,
-		openai: strings.Contains(base, "://api.openai.com"), stall: stallLimit}
+		openai: isOpenAI, canReason: supportsReasoningEndpoint(base), stall: stallLimit}
 }
 
 // Stream sends one request and returns `{content, stop_reason, usage}`; beta is ignored.
 func (c *Chat) Stream(body jsonv.Value, _ string, cancel func() bool, on func(Event)) (jsonv.Value, error) {
-	req := ChatTranslate(body, c.vision, c.openai)
+	stall := effectiveStall(c.stall, body)
+	req := chatTranslateOpts(body, c.vision, c.openai, c.openai || c.canReason)
 	// Usage comes only when asked for; a server that rejects the option is asked once more without it. Only a 400
 	// before the stream (nothing shown yet), never an error in the middle of one, so no reply is repeated.
-	out, err := c.attempt(jsonv.Clone(req), true, cancel, on)
-	if err != nil && strings.HasPrefix(err.Error(), "Provider error 400:") && strings.Contains(err.Error(), "stream_options") {
-		return c.attempt(req, false, cancel, on)
+	usageOpt := true
+	transientRetries := 0
+	for attemptIdx := 0; attemptIdx < 6; attemptIdx++ {
+		emitted := false
+		out, err := c.attempt(jsonv.Clone(req), usageOpt, stall, cancel, func(ev Event) {
+			emitted = true
+			on(ev)
+		})
+		if err == nil {
+			return out, nil
+		}
+		if !emitted && usageOpt && strings.HasPrefix(err.Error(), "Provider error 400:") && strings.Contains(err.Error(), "stream_options") {
+			usageOpt = false
+			continue
+		}
+		if !emitted && shouldRetryReasoning400(err, !c.openai) {
+			if obj := jsonv.Obj(req); obj != nil && obj.Has("reasoning_effort") {
+				if cur, ok := jsonv.Str(jsonv.Get(obj, "reasoning_effort")); ok && cur == "xhigh" {
+					obj.Set("reasoning_effort", "high")
+					continue
+				}
+				obj.Remove("reasoning_effort")
+				continue
+			}
+		}
+		if !emitted && transientRetries < 2 && isRetryablePreStreamError(err) {
+			if !sleepCancelable(retryBackoff(c.stall, transientRetries), cancel) {
+				return nil, errors.New("stopped")
+			}
+			transientRetries++
+			continue
+		}
+		return out, err
 	}
-	return out, err
+	return nil, errors.New("request attempts exhausted")
 }
 
-func (c *Chat) attempt(body jsonv.Value, usageOption bool, cancel func() bool, on func(Event)) (jsonv.Value, error) {
+func (c *Chat) attempt(body jsonv.Value, usageOption bool, stall time.Duration, cancel func() bool, on func(Event)) (jsonv.Value, error) {
 	headers := [][2]string{{"content-type", "application/json"}}
 	if c.key != "" {
 		headers = append(headers, [2]string{"authorization", "Bearer " + c.key})
@@ -62,7 +96,7 @@ func (c *Chat) attempt(body jsonv.Value, usageOption bool, cancel func() bool, o
 	type call struct{ id, name, args string }
 	var calls []call
 	var usage jsonv.Value = jsonv.NewObject()
-	err := post(c.url, headers, body, c.stall, "the provider", cancel, providerError, func(data string) (bool, error) {
+	err := post(c.url, headers, body, stall, "the provider", cancel, providerError, func(data string) (bool, error) {
 		if strings.TrimSpace(data) == "[DONE]" {
 			ended = true
 			return false, nil
@@ -74,8 +108,8 @@ func (c *Chat) attempt(body jsonv.Value, usageOption bool, cancel func() bool, o
 		if msg, ok := jsonv.Str(jsonv.Get(jsonv.Get(ev, "error"), "message")); ok {
 			return false, fmt.Errorf("Provider stream error: %s", msg)
 		}
-		if u := jsonv.Obj(jsonv.Get(ev, "usage")); u != nil {
-			usage = obj("input_tokens", jsonv.Clone(jsonv.Get(u, "prompt_tokens")), "output_tokens", jsonv.Clone(jsonv.Get(u, "completion_tokens")))
+		if parsedUsage, ok := extractChatUsage(ev); ok {
+			usage = parsedUsage
 		}
 		choices := jsonv.Items(jsonv.Get(ev, "choices"))
 		if len(choices) == 0 {
@@ -209,11 +243,41 @@ const (
 	shotBlind   = "\n[A screenshot was taken, but this model cannot see images: the screenshot is not available.]"
 )
 
+func extractChatUsage(ev jsonv.Value) (jsonv.Value, bool) {
+	candidates := []jsonv.Value{jsonv.Get(ev, "usage")}
+	if choices := jsonv.Items(jsonv.Get(ev, "choices")); len(choices) > 0 {
+		candidates = append(candidates, jsonv.Get(choices[0], "usage"))
+	}
+	candidates = append(candidates, jsonv.Get(jsonv.Get(ev, "x_groq"), "usage"))
+	for _, cand := range candidates {
+		u := jsonv.Obj(cand)
+		if u == nil {
+			continue
+		}
+		inp := jsonv.Get(u, "prompt_tokens")
+		if inp == nil {
+			inp = jsonv.Get(u, "input_tokens")
+		}
+		out := jsonv.Get(u, "completion_tokens")
+		if out == nil {
+			out = jsonv.Get(u, "output_tokens")
+		}
+		if inp != nil || out != nil {
+			return obj("input_tokens", jsonv.Clone(inp), "output_tokens", jsonv.Clone(out)), true
+		}
+	}
+	return nil, false
+}
+
 // ChatTranslate is a Claude Messages request as a Chat Completions request (openai_chat.rs `translate`).
 // Claude-only fields (prompt caching, thinking, betas) are dropped; tool results become `tool` messages, and
 // their screenshots one user message after all of a turn's tool replies (tool messages are text-only), or a note
 // when the model cannot see images.
 func ChatTranslate(body jsonv.Value, vision, openai bool) jsonv.Value {
+	return chatTranslateOpts(body, vision, openai, openai)
+}
+
+func chatTranslateOpts(body jsonv.Value, vision, openai, includeReasoning bool) jsonv.Value {
 	var messages []jsonv.Value
 	if system := systemText(jsonv.Get(body, "system")); system != "" {
 		messages = append(messages, obj("role", "system", "content", system))
@@ -291,23 +355,92 @@ func ChatTranslate(body jsonv.Value, vision, openai bool) jsonv.Value {
 		}
 		out.Set(k, jsonv.Number(fmt.Sprint(n)))
 	}
-	if effort, ok := jsonv.Str(jsonv.Get(jsonv.Get(body, "output_config"), "effort")); ok && openai && ReasoningModel(jsonv.StrOr(jsonv.Get(body, "model"))) {
-		out.Set("reasoning_effort", effort)
+	if effort, ok := jsonv.Str(jsonv.Get(jsonv.Get(body, "output_config"), "effort")); ok && includeReasoning && ReasoningModel(jsonv.StrOr(jsonv.Get(body, "model"))) {
+		if norm := normalizeOpenAIEffort(effort); norm != "" {
+			out.Set("reasoning_effort", norm)
+		}
 	}
 	return out
 }
 
-// ReasoningModel reports OpenAI's reasoning models (o-series, gpt-5 and later), the only ones that take a
-// reasoning effort.
-func ReasoningModel(model string) bool {
-	m := model[strings.LastIndexByte(model, '/')+1:]
-	if len(m) > 1 && m[0] == 'o' && m[1] >= '0' && m[1] <= '9' {
+func normalizeOpenAIEffort(effort string) string {
+	switch strings.ToLower(strings.TrimSpace(effort)) {
+	case "max":
+		return "xhigh"
+	case "low", "medium", "high", "xhigh", "minimal":
+		return strings.ToLower(strings.TrimSpace(effort))
+	default:
+		return strings.ToLower(strings.TrimSpace(effort))
+	}
+}
+
+func supportsReasoningEndpoint(base string) bool {
+	if strings.Contains(base, "://api.openai.com") {
 		return true
 	}
-	for _, p := range []string{"gpt-5", "gpt-6", "gpt-7"} {
+	trimmed := strings.TrimSpace(base)
+	if idx := strings.Index(trimmed, "://"); idx >= 0 {
+		trimmed = trimmed[idx+3:]
+	}
+	if idx := strings.IndexAny(trimmed, "/?#"); idx >= 0 {
+		trimmed = trimmed[:idx]
+	}
+	host := strings.ToLower(trimmed)
+	if strings.HasPrefix(host, "[") {
+		if end := strings.IndexByte(host, ']'); end >= 0 {
+			host = host[1:end]
+		}
+	} else if colon := strings.LastIndexByte(host, ':'); colon >= 0 {
+		host = host[:colon]
+	}
+	switch host {
+	case "", "localhost", "127.0.0.1", "::1":
+		return false
+	default:
+		return true
+	}
+}
+
+func shouldRetryReasoning400(err error, thirdParty bool) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	is400 := strings.HasPrefix(msg, "Provider error 400:") || strings.HasPrefix(msg, "Provider error 422:")
+	if !is400 {
+		return false
+	}
+	low := strings.ToLower(msg)
+	if strings.Contains(low, "reasoning") || strings.Contains(low, "effort") {
+		return true
+	}
+	if thirdParty {
+		// Compatible servers often reject unknown/extra reasoning_effort fields with generic 400/422 errors.
+		return !strings.Contains(low, "model") && !strings.Contains(low, "context") && !strings.Contains(low, "token")
+	}
+	return false
+}
+
+// ReasoningModel reports models across OpenAI and OpenAI-compatible gateways that accept reasoning effort.
+func ReasoningModel(model string) bool {
+	m := strings.ToLower(model[strings.LastIndexByte(model, '/')+1:])
+	if len(m) > 1 && m[0] == 'o' && m[1] >= '1' && m[1] <= '9' {
+		return true
+	}
+	for _, p := range []string{
+		"gpt-5", "gpt-6", "gpt-7",
+		"deepseek-r1", "deepseek-reasoner", "deepseek-v3",
+		"qwq", "qwen3", "qwen4", "qwen-max", "qwen-plus",
+		"gemini-2.5", "gemini-3", "gemini-4",
+		"grok-3", "grok-4",
+		"glm-4", "glm-5", "kimi-k2", "minimax",
+	} {
 		if strings.HasPrefix(m, p) {
 			return true
 		}
+	}
+	if strings.HasPrefix(m, "claude-") && (strings.Contains(m, "thinking") || strings.Contains(m, "opus") || strings.Contains(m, "sonnet") || strings.Contains(m, "fable")) {
+		return true
 	}
 	return false
 }

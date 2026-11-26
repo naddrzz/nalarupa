@@ -22,13 +22,15 @@ func IconBtn(c *ui.Context, key, icon, label string, size float32, active bool) 
 	if size <= 0 {
 		size = 28
 	}
+	reduced := EffectiveReducedMotion(c)
 	b := ui.ButtonBase(c.Key(key)).
 		Size(size, size).
 		Radius(6).
 		Center().
 		Label(label).
 		Tooltip(label).
-		Cursor(ui.CursorPointer)
+		Cursor(ui.CursorPointer).
+		Transition(ColorHoverTransition(reduced))
 	iconCol := C.Muted
 	switch {
 	case active:
@@ -51,11 +53,12 @@ func IconBtn(c *ui.Context, key, icon, label string, size float32, active bool) 
 	return b
 }
 
-// DangerIconBtn renders a destructive icon button (e.g. Stop agent).
+// DangerIconBtn renders a destructive icon button (e.g. Stop agent) with 0.96 tactile press scale.
 func DangerIconBtn(c *ui.Context, key, icon, label string, size float32) ui.Element {
 	if size <= 0 {
 		size = 28
 	}
+	reduced := EffectiveReducedMotion(c)
 	b := ui.ButtonBase(c.Key(key)).
 		Size(size, size).
 		Radius(6).
@@ -63,25 +66,29 @@ func DangerIconBtn(c *ui.Context, key, icon, label string, size float32) ui.Elem
 		Label(label).
 		Tooltip(label).
 		Cursor(ui.CursorPointer).
-		Border(1, C.DangerEdge)
-	if b.Pressed() {
+		Border(1, C.DangerEdge).
+		Transition(ColorHoverTransition(reduced))
+	pressed := b.Pressed()
+	if pressed {
 		b.Background(C.DangerEdge)
 	} else if b.Hovered() {
 		b.Background(C.DangerBg)
 	} else {
 		b.Background(C.DangerBg)
 	}
+	ApplyPressScale(b, pressed, false, reduced)
 	b.Children(func() {
 		ui.Icon(c, IconSVG(icon)).FontSize(15).TextColor(C.Danger)
 	})
 	return b
 }
 
-// AccentIconBtn renders a primary orange icon button (e.g. Send message).
+// AccentIconBtn renders a primary orange icon button (e.g. Send message) with 0.96 tactile press scale.
 func AccentIconBtn(c *ui.Context, key, icon, label string, size float32, disabled bool) ui.Element {
 	if size <= 0 {
 		size = 28
 	}
+	reduced := EffectiveReducedMotion(c)
 	b := ui.ButtonBase(c.Key(key)).
 		Size(size, size).
 		Radius(6).
@@ -89,11 +96,13 @@ func AccentIconBtn(c *ui.Context, key, icon, label string, size float32, disable
 		Label(label).
 		Tooltip(label).
 		Disabled(disabled).
-		Cursor(ui.CursorPointer)
+		Cursor(ui.CursorPointer).
+		Transition(ColorHoverTransition(reduced))
+	pressed := b.Pressed()
 	bg := C.Accent
 	if disabled {
 		bg = C.Raised
-	} else if b.Pressed() {
+	} else if pressed {
 		bg = C.AccentPress
 	} else if b.Hovered() {
 		bg = C.AccentHover
@@ -102,14 +111,16 @@ func AccentIconBtn(c *ui.Context, key, icon, label string, size float32, disable
 	if disabled {
 		fg = C.Ghost
 	}
+	ApplyPressScale(b, pressed, disabled, reduced)
 	b.Background(bg).Children(func() {
 		ui.Icon(c, IconSVG(icon)).FontSize(14).TextColor(fg)
 	})
 	return b
 }
 
-// ActionBtn renders a standard, "primary", or "danger" rectangular button with optional leading icon.
+// ActionBtn renders a standard, "primary", or "danger" rectangular button with optional leading icon and 0.96 press feedback.
 func ActionBtn(c *ui.Context, key, label, icon, variant string) ui.Element {
+	reduced := EffectiveReducedMotion(c)
 	b := ui.ButtonBase(c.Key(key)).
 		Height(30).
 		Padding(0, 12).
@@ -119,14 +130,16 @@ func ActionBtn(c *ui.Context, key, label, icon, variant string) ui.Element {
 		AlignItems(ui.Center).
 		Justify(ui.Center).
 		Label(label).
-		Cursor(ui.CursorPointer)
+		Cursor(ui.CursorPointer).
+		Transition(ColorHoverTransition(reduced))
+	pressed := b.Pressed()
 	fg := C.Text
 	weight := 500
 	switch variant {
 	case "primary":
 		fg = C.AccentText
 		weight = 600
-		if b.Pressed() {
+		if pressed {
 			b.Background(C.AccentPress)
 		} else if b.Hovered() {
 			b.Background(C.AccentHover)
@@ -136,7 +149,7 @@ func ActionBtn(c *ui.Context, key, label, icon, variant string) ui.Element {
 	case "danger":
 		fg = C.Danger
 		b.Border(1, C.Border)
-		if b.Pressed() {
+		if pressed {
 			b.Background(C.Border)
 		} else if b.Hovered() {
 			b.Background(C.RaisedHover)
@@ -145,7 +158,7 @@ func ActionBtn(c *ui.Context, key, label, icon, variant string) ui.Element {
 		}
 	default:
 		b.Border(1, C.Border)
-		if b.Pressed() {
+		if pressed {
 			b.Background(C.Border)
 		} else if b.Hovered() {
 			b.Background(C.RaisedHover)
@@ -153,6 +166,7 @@ func ActionBtn(c *ui.Context, key, label, icon, variant string) ui.Element {
 			b.Background(C.Raised)
 		}
 	}
+	ApplyPressScale(b, pressed, false, reduced)
 	b.Children(func() {
 		if icon != "" {
 			ui.Icon(c, IconSVG(icon)).FontSize(14).TextColor(fg)
@@ -164,6 +178,7 @@ func ActionBtn(c *ui.Context, key, label, icon, variant string) ui.Element {
 
 // ToggleChip renders a compact 24px-tall checkbox chip ("Hug W", "Fast", etc.).
 func ToggleChip(c *ui.Context, key, label string, on bool) (ui.Element, bool) {
+	reduced := EffectiveReducedMotion(c)
 	b := ui.ButtonBase(c.Key(key)).
 		Height(24).
 		Padding(0, 8).
@@ -174,7 +189,8 @@ func ToggleChip(c *ui.Context, key, label string, on bool) (ui.Element, bool) {
 		Role(ui.RoleCheckBox).
 		Checked(on).
 		Label(label).
-		Cursor(ui.CursorPointer)
+		Cursor(ui.CursorPointer).
+		Transition(ColorHoverTransition(reduced))
 	fg := C.Muted
 	if on {
 		fg = C.Text
@@ -207,6 +223,7 @@ type SegOption[V comparable] struct {
 
 // SegmentedTabs renders a full-width WAI-ARIA tablist with individually keyed tab buttons.
 func SegmentedTabs[V comparable](c *ui.Context, key, ariaLabel string, current V, opts []SegOption[V]) (V, bool) {
+	reduced := EffectiveReducedMotion(c)
 	next := current
 	changed := false
 	ui.Row(c.Key(key)).
@@ -235,7 +252,8 @@ func SegmentedTabs[V comparable](c *ui.Context, key, ariaLabel string, current V
 					Role(ui.RoleTab).
 					Selected(sel).
 					Label(opt.Label).
-					Cursor(ui.CursorPointer)
+					Cursor(ui.CursorPointer).
+					Transition(ColorHoverTransition(reduced))
 				fg := C.Muted
 				if sel {
 					fg = C.Text

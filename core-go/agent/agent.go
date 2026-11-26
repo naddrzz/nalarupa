@@ -28,7 +28,7 @@ import (
 const DefaultModel = model.DefaultModel
 
 // FastModels are the models with a fast output mode (Claude Code `fastMode`, API `speed: "fast"`).
-var FastModels = []string{"claude-opus-5-5", "claude-opus-5", "claude-opus-4-8"}
+var FastModels = []string{"claude-fable-5-2", "claude-opus-5-5", "claude-opus-5", "claude-opus-4-8", "fable", "opus"}
 
 // fastFor: fast mode only where the model has it; m is a full id ("" for the CLI default).
 func fastFor(m string, fast bool) bool {
@@ -47,7 +47,7 @@ const (
 	maxTurns    = 80
 	maxChildren = 5
 	// streamThrottle: the streamed snippet is re-run at most this often while the model is writing it.
-	streamThrottle = 120 * time.Millisecond
+	streamThrottle = 90 * time.Millisecond
 	// progressThrottle: `tool_progress` of an API run at most this often.
 	progressThrottle = 300 * time.Millisecond
 )
@@ -151,7 +151,11 @@ func clampU(v, lo, hi uint64) int { return int(max(lo, min(v, hi))) }
 
 // begin starts a turn without the busy check: also how a finished run hands over to its continuation (resume).
 func begin(e *engine.Engine, prompt string, o engine.QueueOpts, resume bool) {
+	var docPath string
 	e.Locked(func() {
+		if e.Doc != nil {
+			docPath = e.Doc.Path
+		}
 		e.Agent.Parallel = clampU(o.Parallel, 1, maxChildren+1)
 		e.Agent.Mode = "split"
 		if o.Mode == "side" {
@@ -162,8 +166,18 @@ func begin(e *engine.Engine, prompt string, o engine.QueueOpts, resume bool) {
 		if o.Iterate == "style" {
 			e.Agent.Iterate = "style"
 		}
+		e.Agent.ActiveSkillDirs = nil
 	})
-	text := wrapParallel(e, prompt)
+	expanded := prompt
+	if !resume && strings.Contains(prompt, "/") {
+		catalog := DiscoverSkills(docPath)
+		if matched, clean := ExtractSlashSkills(prompt, catalog); len(matched) > 0 {
+			dirs := SkillDirs(matched)
+			e.Locked(func() { e.Agent.ActiveSkillDirs = dirs })
+			expanded = ExpandPromptWithSkills(clean, matched)
+		}
+	}
+	text := wrapParallel(e, expanded)
 	if o.Designs > 1 {
 		text += "\n\n" + firstDesign
 	}
@@ -213,8 +227,21 @@ func startTurn(e *engine.Engine, shown, prompt string, resume bool) {
 			e.Agent.Main = p.ID
 		}
 		main = p
+		e.Agent.IsVariationTurn = resume || e.Agent.Mode == "side"
+		e.BeginTurnSnapshot()
 		e.Agent.Cancel = engine.NewFlag()
 		e.Agent.Spawned = 0
+		if e.Agent.Parallel > 1 {
+			team := e.Agent.AllocTeam(main.ID, e.Agent.Parallel-1)
+			members := make([]jsonv.Value, 0, len(team)+1)
+			members = append(members, main.JSON())
+			for _, tm := range team {
+				members = append(members, tm.JSON())
+			}
+			e.Emit(engine.Object("type", "agent_team", "members", jsonv.NewArray(members...)))
+		} else {
+			e.Agent.AllocTeam(main.ID, 0)
+		}
 	})
 	if stopped {
 		chatOps.Unlock()
@@ -240,16 +267,18 @@ func wrapParallel(e *engine.Engine, prompt string) string {
 		return fmt.Sprintf("%s\n\nWork as the coordinator of %d designers who each design their own take on this task side by side.\n"+
 			"1. Decide %d design directions for this brief, one per designer, each apart from the others on at least two variation axes "+
 			"(Designing). Post them first: Framing / Direction / Why for yours, one Direction line for each other designer.\n"+
-			"2. Pick a sensible screen size for the task.\n"+
-			"3. Create %d empty top-level frames in one row, named \"1. <short title>\" … \"%d. <short title>\" (not placeholders), using FindEmptySpace.\n"+
-			"4. Call spawn_agents with %d entries: entry k gets containerNodes [frame k+1] and, as its prompt, designer k+1's design direction "+
+			"2. Pick a sensible screen size for the task. Never edit or overwrite earlier finished screens already on the canvas unless the user asked to edit them.\n"+
+			"3. Create %d empty top-level frames in one row, named \"1. <short title>\" … \"%d. <short title>\" (not placeholders), using FindEmptySpace(w, h, \"right\", 120).\n"+
+			"4. Immediately call spawn_agents with %d entries: entry k gets containerNodes [frame k+1] and, as its prompt, designer k+1's design direction "+
 			"(concept · palette · type · signature move).\n"+
 			"5. Then design your own direction inside frame 1. Do not touch the other frames.",
 			prompt, n, n, n, n, n-1)
 	}
-	return fmt.Sprintf("%s\n\nSplit this work across at most %d extra designers with the `spawn_agents` tool. First create the container frames each part needs "+
-		"(top-level frames placed with FindEmptySpace), give each designer one or more containers and a self-contained task, keep the last part for yourself, "+
-		"and continue with your own part right after spawning.", prompt, n-1)
+	return fmt.Sprintf("%s\n\nSplit this work across %d extra designers (total %d parallel designers) using the `spawn_agents` tool. "+
+		"Never modify or recolor earlier finished screens already on the canvas unless the user explicitly asked to edit them; if introducing a new palette alongside existing screens, prefix your new variable names so existing screens stay untouched. "+
+		"First lock the shared system in one compact setup `execute` call: define semantic `SetVariables`, "+
+		"place any shared `reusable: true` components above the screens with FindEmptySpace(w, h, \"top\", 80), and place the empty top-level screen frames in a clean row with FindEmptySpace(w, h, \"right\", 120). "+
+		"Immediately call `spawn_agents` right after that setup call, giving each designer its container frame id(s), `$variable` names, reusable component ids, typography scale, and a self-contained task; keep one screen for yourself and build it right after spawning.", prompt, n-1, n)
 }
 
 // startRun starts p's run on a goroutine; parent is "" for the main agent. False when a child was not started
@@ -341,7 +370,9 @@ func run(e *engine.Engine, p engine.Profile, prompt string, child bool) {
 				e.Locked(func() { e.Agent.Cook = 1 })
 			}
 		}
-		usage = jsonv.NewObject()
+		if usage == nil {
+			usage = jsonv.NewObject()
+		}
 	}
 	e.Locked(func() {
 		e.StreamsOfAgentEnd(p.ID)

@@ -17,8 +17,9 @@ import (
 
 // backdrop is a background blur's doc-space box and how far around it content feeds its blur.
 type backdrop struct {
-	box   Rect
-	reach float64
+	box    Rect
+	reach  float64
+	native bool
 }
 
 type sceneScan struct {
@@ -181,7 +182,16 @@ func (s *sceneScan) backdrop(g *usvg.Group, abs skia.Transform, sigma float64) {
 		return
 	}
 	box := Rect{X: float64(b.X()), Y: float64(b.Y()), W: float64(b.Width()), H: float64(b.Height())}
-	s.out = append(s.out, backdrop{box, float64(3 * float64(sigma*absScale(abs)))})
+	native := len(g.Filters()) == 0
+	if native {
+		for _, k := range g.Children() {
+			if _, isGrp := k.(*usvg.Group); isGrp {
+				native = false
+				break
+			}
+		}
+	}
+	s.out = append(s.out, backdrop{box, float64(3 * float64(sigma*absScale(abs))), native})
 }
 
 func (s *sceneScan) path(p *usvg.Path, abs skia.Transform) {

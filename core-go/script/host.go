@@ -2,6 +2,7 @@ package script
 
 import (
 	"github.com/naddrzz/nalarupa/core-go/doc"
+	"github.com/naddrzz/nalarupa/core-go/jsonv"
 	"github.com/naddrzz/nalarupa/core-go/resolve"
 	"github.com/naddrzz/nalarupa/core-go/svg"
 	"github.com/naddrzz/nalarupa/core-go/text"
@@ -18,6 +19,18 @@ type Host interface {
 	Changed()
 	// SlideIn lets a node an Insert placed below the top level slide into place.
 	SlideIn(id string)
+	// BeforeModify snapshots path's visual state right before Update, Replace, or Move mutates it.
+	BeforeModify(path string)
+	// AfterModify registers a progressive edit or copy transition once the mutation succeeded.
+	AfterModify(oldPath, newID string)
+	// CheckEditTarget validates whether the current agent is allowed to mutate targetID (enforcing child container scopes).
+	CheckEditTarget(op, targetID string, isReusableRoot bool) error
+	// FilterSetVars adjusts SetVariables arguments before applying them (protecting shared/pre-turn variables).
+	FilterSetVars(vars jsonv.Value, replace bool) (jsonv.Value, bool)
+	// AfterRootInsert runs top-level overlap deconfliction and pre-turn variable isolation after Insert into document.
+	AfterRootInsert(id string)
+	// AfterSetVars reconciles pre-turn screen variable isolation after SetVariables succeeds.
+	AfterSetVars()
 	// LaidOut is the top-level node at index resolved and laid out, its script nodes run; nil when there is none.
 	LaidOut(index int) *resolve.RNode
 	// FindEmptySpace is render.rs `find_empty_space` on the synced renderer: a free spot of w×h toward dir,

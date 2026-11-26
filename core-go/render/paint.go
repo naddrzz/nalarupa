@@ -1,6 +1,7 @@
 package render
 
 import (
+	"math"
 	"sync"
 
 	"github.com/naddrzz/nalarupa/core-go/resvg"
@@ -21,6 +22,34 @@ type painter struct {
 func (p *painter) band(h uint32) uint32 {
 	threads := uint32(p.threads)
 	return max((h+threads-1)/threads, 128)
+}
+
+// backdropPadPx returns vertical overscan in pixels needed so native backdrop blurs crossing a
+// band seam sample pixels smoothly from neighbouring bands. Returns 0 when no backdrop overlaps area.
+func (p *painter) backdropPadPx(solo string, zoom float64, area Rect) uint32 {
+	maxReach := 0.0
+	for _, id := range p.order {
+		if solo != "" && id != solo {
+			continue
+		}
+		l, ok := p.layers[id]
+		if !ok || len(l.backdrops) == 0 || !overlaps(l.paint, area) {
+			continue
+		}
+		for _, bd := range l.backdrops {
+			if bd.native && overlaps(bd.box, area) && bd.reach > maxReach {
+				maxReach = bd.reach
+			}
+		}
+	}
+	if maxReach <= 0 {
+		return 0
+	}
+	px := math.Ceil(maxReach * zoom)
+	if px > 192 {
+		px = 192
+	}
+	return uint32(px)
 }
 
 // area is the world-device pixels [x0, x1) × [y0, y1).
@@ -71,22 +100,52 @@ func (p *painter) paintBands(solo string, zoom float64, bg [3]uint8, x0, y0 int3
 				}
 			}()
 			if only == nil {
-				paintBand(p.layers, p.order, solo, zoom, bg, x0, by, w, bh, view, cull, part)
+				pad := p.backdropPadPx(solo, zoom, view)
+				if pad == 0 {
+					paintBand(p.layers, p.order, solo, zoom, bg, x0, by, w, bh, view, cull, part)
+					return
+				}
+				padH := bh + 2*pad
+				padY := by - int32(pad)
+				padView := Rect{X: float64(x0) / zoom, Y: float64(padY) / zoom, W: float64(w) / zoom, H: float64(padH) / zoom}
+				need := int(w * padH * 4)
+				buf, _ := scratch.Get().(*[]byte)
+				if buf == nil || cap(*buf) < need {
+					b := make([]byte, need)
+					buf = &b
+				}
+				defer scratch.Put(buf)
+				tmp := (*buf)[:need]
+				paintBand(p.layers, p.order, solo, zoom, bg, x0, padY, w, padH, padView, padView, tmp)
+				stride := int(w) * 4
+				copy(part, tmp[int(pad)*stride:int(pad+bh)*stride])
 				return
 			}
+			pad := p.backdropPadPx(solo, zoom, cull)
+			padH := bh + 2*pad
+			padY := by - int32(pad)
+			padView := view
+			padCull := cull
+			if pad > 0 {
+				padView = Rect{X: float64(x0) / zoom, Y: float64(padY) / zoom, W: float64(w) / zoom, H: float64(padH) / zoom}
+				padDoc := float64(pad) / zoom
+				padCull = Rect{X: cull.X, Y: cull.Y - padDoc, W: cull.W, H: cull.H + 2*padDoc}
+			}
+			need := int(w * padH * 4)
 			buf, _ := scratch.Get().(*[]byte)
-			if buf == nil || cap(*buf) < len(part) {
-				b := make([]byte, len(part))
+			if buf == nil || cap(*buf) < need {
+				b := make([]byte, need)
 				buf = &b
 			}
 			defer scratch.Put(buf)
 			// paintBand fills the whole band first, so what the buffer held does not matter.
-			tmp := (*buf)[:len(part)]
-			paintBand(p.layers, p.order, solo, zoom, bg, x0, by, w, bh, view, cull, tmp)
+			tmp := (*buf)[:need]
+			paintBand(p.layers, p.order, solo, zoom, bg, x0, padY, w, padH, padView, padCull, tmp)
 			stride := int(w) * 4
 			from, to := int(a.x0-x0)*4, int(a.x1-x0)*4
 			for row := int(a.y0 - by); row < int(a.y1-by); row++ {
-				copy(part[row*stride+from:row*stride+to], tmp[row*stride+from:row*stride+to])
+				srcRow := row + int(pad)
+				copy(part[row*stride+from:row*stride+to], tmp[srcRow*stride+from:srcRow*stride+to])
 			}
 		}
 		if p.serial {

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -29,9 +30,100 @@ const poll = 200 * time.Millisecond
 // errorBodyMax caps how much of an HTTP error body is read.
 const errorBodyMax = 1 << 20
 
-// httpClient has the clients' overall timeout. A silent connect or header wait needs no timeout of its own: the
-// caller reports the stall and cancels the request.
-var httpClient = &http.Client{Timeout: 900 * time.Second}
+// httpClient has the clients' overall timeout and active TCP keep-alive so NATs/proxies do not drop
+// connections during multi-minute reasoning prefill.
+var httpClient = &http.Client{
+	Timeout: 2400 * time.Second,
+	Transport: &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 15 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          32,
+		MaxIdleConnsPerHost:   8,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   20 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	},
+}
+
+// effectiveStall scales the default stall window up for high/max reasoning effort or vision image payloads,
+// while leaving custom per-client test timeouts untouched.
+func effectiveStall(base time.Duration, body jsonv.Value) time.Duration {
+	if base != stallLimit {
+		return base
+	}
+	eff := strings.ToLower(strings.TrimSpace(jsonv.StrOr(jsonv.Get(jsonv.Get(body, "output_config"), "effort"))))
+	if eff == "high" || eff == "xhigh" || eff == "max" || bodyHasImageBlocks(body) {
+		return highEffortStallLimit
+	}
+	return base
+}
+
+func bodyHasImageBlocks(body jsonv.Value) bool {
+	for _, m := range jsonv.Items(jsonv.Get(body, "messages")) {
+		for _, b := range jsonv.Items(jsonv.Get(m, "content")) {
+			switch jsonv.StrOr(jsonv.Get(b, "type")) {
+			case "image", "image_url", "input_image":
+				return true
+			case "tool_result":
+				for _, p := range jsonv.Items(jsonv.Get(b, "content")) {
+					if jsonv.StrIs(jsonv.Get(p, "type"), "image") {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
+func isRetryablePreStreamError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	if msg == "stopped" {
+		return false
+	}
+	for _, prefix := range []string{
+		"connection stalled:",
+		"network error:",
+		"stream interrupted:",
+	} {
+		if strings.HasPrefix(msg, prefix) {
+			return true
+		}
+	}
+	return strings.Contains(msg, "ended before the reply finished")
+}
+
+func retryBackoff(stall time.Duration, attempt int) time.Duration {
+	if stall < 2*time.Second {
+		return 20 * time.Millisecond
+	}
+	if attempt <= 0 {
+		return 500 * time.Millisecond
+	}
+	return 1200 * time.Millisecond
+}
+
+func sleepCancelable(d time.Duration, cancel func() bool) bool {
+	deadline := time.Now().Add(d)
+	for {
+		if cancel != nil && cancel() {
+			return false
+		}
+		rem := time.Until(deadline)
+		if rem <= 0 {
+			return true
+		}
+		step := min(rem, 25*time.Millisecond)
+		time.Sleep(step)
+	}
+}
 
 // line is one read of the worker: a line, the end of the stream (end), or a failure (err).
 type line struct {

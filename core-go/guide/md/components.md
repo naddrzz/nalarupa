@@ -1,7 +1,8 @@
 # Components
 
 - A node with `reusable: true` is a component. Build components in their own
-  top-level frames (above or left of the screens), then use instances.
+  top-level frames placed cleanly above the screens with `FindEmptySpace(w, h, "top", 80)`
+  so multiple components never stack on top of each other or overlap screen headers.
 - An instance is `{type: "ref", ref: componentId}`. Any root property can be
   overridden on the instance itself (`width`, `fill`, `name`...).
 - Child overrides live in `descendants`, keyed by the child's id path inside
@@ -16,10 +17,15 @@
 - Edits to the component propagate to every instance unless overridden.
 - Frames with `slot: [componentIds]` mark places meant to be filled with
   instances of those components (menus, lists, toolbars).
+- For multi-page or multi-screen designs, build shared navigation bars,
+  footers, cards, and recurring surface/divider motifs as `reusable: true`
+  components first, then place `{type: "ref", ref: id, width: "fill_container"}`
+  instances on every screen so sibling pages never drift apart.
 
 ```js
+spot = FindEmptySpace(200, 64, "top", 80)
 btn = Insert(document, {type: "frame", name: "Button", reusable: true, padding: [10, 16], gap: 8,
-  cornerRadius: 8, fill: "#2563EB", alignItems: "center", x: 0, y: -200})
+  cornerRadius: 8, fill: "#2563EB", alignItems: "center", x: spot.x, y: spot.y})
 btnLabel = Insert(btn, {type: "text", name: "Label", content: "Button", fontFamily: "Manrope", fontSize: 14, fontWeight: "600", fill: "#FFFFFF"})
 // screenId: the screen frame the buttons go on.
 row = Insert(screenId, {type: "frame", name: "Actions", gap: 12})

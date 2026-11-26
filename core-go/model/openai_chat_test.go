@@ -239,3 +239,58 @@ func TestErrorsReadLikeTheProvidersOwn(t *testing.T) {
 		t.Fatal(e)
 	}
 }
+
+func TestReasoningModelsEffortNormalizationAnd400Fallback(t *testing.T) {
+	for _, m := range []string{"o3", "o4-mini", "gpt-5.4", "gpt-6.2-astra", "deepseek/deepseek-r1", "qwen3-coder", "gemini-3.8-flash", "grok-4", "claude-opus-5-5"} {
+		if !ReasoningModel(m) {
+			t.Fatalf("expected ReasoningModel(%q) = true", m)
+		}
+	}
+	if ReasoningModel("gpt-4o-mini") {
+		t.Fatal("gpt-4o-mini should not be treated as a reasoning model")
+	}
+	if supportsReasoningEndpoint("http://127.0.0.1:11434/v1") || supportsReasoningEndpoint("http://localhost:8080/v1") {
+		t.Fatal("localhost endpoints should default canReason to false")
+	}
+	if !supportsReasoningEndpoint("https://openrouter.ai/api/v1") {
+		t.Fatal("remote OpenAI-compatible gateway should enable reasoning forwarding")
+	}
+	// max normalizes to xhigh for OpenAI-family endpoints
+	req := ChatTranslate(jsonv.MustParse(`{"model":"gpt-6.2-astra","output_config":{"effort":"max"},"messages":[]}`), true, true)
+	eq(t, at(req, "reasoning_effort"), `"xhigh"`)
+
+	// When remote gateway rejects xhigh or reasoning_effort with 400, Chat retries downgraded then stripped.
+	var mu sync.Mutex
+	var seen []jsonv.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		parsed, _ := jsonv.Parse(raw)
+		mu.Lock()
+		seen = append(seen, parsed)
+		n := len(seen)
+		mu.Unlock()
+		if n <= 2 {
+			w.Header().Set("content-type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			io.WriteString(w, `{"error":{"message":"Unsupported parameter reasoning_effort"}}`)
+			return
+		}
+		w.Header().Set("content-type", "text/event-stream")
+		io.WriteString(w, chunks(`{"choices": [{"index": 0, "delta": {"content": "ok"}, "finish_reason": "stop"}]}`))
+	}))
+	defer srv.Close()
+	c := NewChat(srv.URL, "k", true)
+	c.canReason = true
+	out := mustStream(t, c, `{"model":"gpt-6.2-astra","output_config":{"effort":"max"},"messages":[]}`, ignore)
+	eq(t, at(out, "content", 0, "text"), `"ok"`)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 3 {
+		t.Fatalf("expected 3 attempts (xhigh -> high -> stripped), got %d", len(seen))
+	}
+	eq(t, at(seen[0], "reasoning_effort"), `"xhigh"`)
+	eq(t, at(seen[1], "reasoning_effort"), `"high"`)
+	if jsonv.Obj(seen[2]).Has("reasoning_effort") {
+		t.Fatal("final fallback should omit reasoning_effort")
+	}
+}

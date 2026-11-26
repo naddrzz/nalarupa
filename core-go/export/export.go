@@ -10,7 +10,9 @@ import (
 	"image/jpeg"
 	"image/png"
 	"math"
+	"runtime"
 	"strings"
+	"sync"
 
 	"github.com/naddrzz/nalarupa/core-go/doc"
 	"github.com/naddrzz/nalarupa/core-go/layout"
@@ -91,9 +93,9 @@ func (c *Ctx) Missing(id string) string {
 	return id + " is hidden (or inside a hidden layer); show it before exporting"
 }
 
-// NodeTreeAt is the usvg tree of node id's SVG at scale (see svg.NodeSVGAt).
+// NodeTreeAt is the usvg tree of node id's SVG at scale (see svg.NodeSVGAtRaster).
 func (c *Ctx) NodeTreeAt(id string, scale float64) (*usvg.Tree, error) {
-	markup, _, _, ok := svg.NodeSVGAt(c.Doc, c.Libs, id, scale, false, c.Fonts, c.Assets, c.expand())
+	markup, _, _, ok := svg.NodeSVGAtRaster(c.Doc, c.Libs, id, scale, c.Fonts, c.Assets, c.expand())
 	if !ok {
 		return nil, errors.New(c.Missing(id))
 	}
@@ -128,12 +130,17 @@ func EncodeTree(tree *usvg.Tree, format string, scale float64, quality uint8) ([
 	if !ok {
 		return nil, errors.New("image too large")
 	}
-	if format == "jpeg" {
-		pm.Fill(skia.ColorFromRGBA8(255, 255, 255, 255))
-	}
 	sx := float32(pw) / size.Width()
 	sy := float32(ph) / size.Height()
-	resvg.Render(tree, skia.TransformFromScale(sx, sy), pm.AsMut())
+	large := int64(pw)*int64(ph) > 2_000_000
+	if !large {
+		if format == "jpeg" {
+			pm.Fill(skia.ColorFromRGBA8(255, 255, 255, 255))
+		}
+		resvg.Render(tree, skia.TransformFromScale(sx, sy), pm.AsMut())
+	} else {
+		renderTreeParallel(tree, sx, sy, format, pm)
+	}
 
 	rect := image.Rect(0, 0, int(pw), int(ph))
 	var out bytes.Buffer
@@ -148,11 +155,54 @@ func EncodeTree(tree *usvg.Tree, format string, scale float64, quality uint8) ([
 		return encodeWebP(pm.TakeDemultiplied(), pw, ph)
 	default:
 		img := &image.NRGBA{Pix: pm.TakeDemultiplied(), Stride: int(pw) * 4, Rect: rect}
-		if err := png.Encode(&out, img); err != nil {
+		enc := png.Encoder{}
+		if large {
+			enc.CompressionLevel = png.BestSpeed
+		}
+		if err := enc.Encode(&out, img); err != nil {
 			return nil, fmt.Errorf("png: %w", err)
 		}
 	}
 	return out.Bytes(), nil
+}
+
+func renderTreeParallel(tree *usvg.Tree, sx, sy float32, format string, pm *skia.Pixmap) {
+	pw, ph := pm.Width(), pm.Height()
+	threads := min(max(runtime.NumCPU(), 1), 16)
+	bandH := max((ph+uint32(threads)-1)/uint32(threads), 256)
+	const padY = uint32(256)
+	dst := pm.DataMut()
+	stride := int(pw) * 4
+
+	var wg sync.WaitGroup
+	for y0 := uint32(0); y0 < ph; y0 += bandH {
+		y0 := y0
+		y1 := min(y0+bandH, ph)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { _ = recover() }()
+			var sy0 uint32
+			if y0 > padY {
+				sy0 = y0 - padY
+			}
+			sy1 := min(y1+padY, ph)
+			strip, ok := skia.NewPixmap(pw, sy1-sy0)
+			if !ok {
+				return
+			}
+			if format == "jpeg" {
+				strip.Fill(skia.ColorFromRGBA8(255, 255, 255, 255))
+			}
+			tf := skia.TransformFromRow(sx, 0, 0, sy, 0, -float32(sy0))
+			resvg.Render(tree, tf, strip.AsMut())
+			srcOff := int(y0-sy0) * stride
+			dstOff := int(y0) * stride
+			copyLen := int(y1-y0) * stride
+			copy(dst[dstOff:dstOff+copyLen], strip.Data()[srcOff:srcOff+copyLen])
+		}()
+	}
+	wg.Wait()
 }
 
 // clampSize is `(x as u32).clamp(1, 8192)`.

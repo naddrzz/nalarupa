@@ -27,6 +27,7 @@ func SpawnChildren(e *engine.Engine, parent string, config jsonv.Value) engine.T
 	}
 	var plans []plan
 	var vars jsonv.Value
+	var compSummary []string
 	var total int
 	var side bool
 	// Checked, reserved and read under one lock: concurrent calls cannot both spend the same remaining slot.
@@ -73,8 +74,17 @@ func SpawnChildren(e *engine.Engine, parent string, config jsonv.Value) engine.T
 		e.Agent.Spawned += len(entries)
 		// Only cloned here: serializing a large document would hold the engine lock against render and poll.
 		vars = e.Doc.Variables()
+		for _, ch := range e.Doc.Children() {
+			if jsonv.IsTrue(jsonv.Get(ch, "reusable")) && len(compSummary) < 24 {
+				cid := jsonv.StrOr(jsonv.Get(ch, "id"))
+				cname := jsonv.StrOr(jsonv.Get(ch, "name"))
+				compSummary = append(compSummary, fmt.Sprintf("`%s` %q", cid, cname))
+			}
+		}
 		for _, ids := range all {
-			child := e.Agent.NewProfile(parent)
+			child := e.Agent.TakeTeamMember(parent)
+			e.SetAgentContainerScope(child.ID, ids)
+			e.Emit(engine.Object("type", "agent_activity", "agent", child.ID, "op", "read", "ids", engine.Strings(ids), "streaming", false))
 			var nodes []jsonv.Value
 			for _, id := range ids {
 				if n := e.Doc.Find(id); n != nil {
@@ -89,9 +99,13 @@ func SpawnChildren(e *engine.Engine, parent string, config jsonv.Value) engine.T
 		return bad(refused.Error())
 	}
 	varsText := truncate(string(jsonv.Marshal(vars)), 4000)
+	compsText := ""
+	if len(compSummary) > 0 {
+		compsText = "\nReusable components (instantiate with `{type: \"ref\", ref: id}` so chrome and surfaces match): " + strings.Join(compSummary, ", ")
+	}
 	var started []string
 	for i, pl := range plans {
-		context := truncate(string(jsonv.Marshal(jsonv.NewArray(pl.nodes...))), 12000) + "\n\nDocument variables: " + varsText
+		context := truncate(string(jsonv.Marshal(jsonv.NewArray(pl.nodes...))), 12000) + "\n\nDocument variables: " + varsText + compsText
 		task := strings.TrimSpace(jsonv.StrOr(jsonv.Get(entries[i], "prompt")))
 		prompt := childPrompt(side, len(started)+2, total, pl.ids, context, task)
 		label := pl.child.Name + " → " + strings.Join(pl.ids, ", ")

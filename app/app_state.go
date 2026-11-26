@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -59,8 +60,16 @@ type NalarupaApp struct {
 	nudgeCoalesce     string
 	nudgeLastAt       time.Time
 
-	pollStop  chan struct{}
-	closeOnce sync.Once
+	pollStop   chan struct{}
+	closeOnce  sync.Once
+	bgWG       sync.WaitGroup
+	exporting  atomic.Bool
+	exportDone chan exportOutcome
+}
+
+type exportOutcome struct {
+	files []string
+	err   error
 }
 
 // NewNalarupaApp constructs a new NalarupaApp backed by an in-process Bridge at dataDir.
@@ -73,8 +82,9 @@ func NewNalarupaApp(dataDir string) *NalarupaApp {
 		Cam:      Camera{X: -100, Y: -100, Zoom: 0.5},
 		CanvasW:  float64(DefaultWinW - LeftW - RightW),
 		CanvasH:  float64(DefaultWinH - TopH),
-		Store:    NewAgentStore(),
-		pollStop: make(chan struct{}),
+		Store:      NewAgentStore(),
+		pollStop:   make(chan struct{}),
+		exportDone: make(chan exportOutcome, 4),
 	}
 	app.initLayersState()
 	app.initCanvasState()
@@ -97,7 +107,7 @@ func (a *NalarupaApp) Init() {
 	a.RefreshHomeRecents()
 }
 
-// AttachWindow binds a live *mygo.Window and starts the background core event poller.
+// AttachWindow binds a live *mygo.Window and starts the background core event poller and async canvas worker.
 func (a *NalarupaApp) AttachWindow(win *mygo.Window) {
 	a.Window = win
 	if os.Getenv("NALARUPA_REDUCED_MOTION") == "" {
@@ -105,16 +115,81 @@ func (a *NalarupaApp) AttachWindow(win *mygo.Window) {
 		a.lastReducedMotion = &rm
 		a.Bridge.TryCall("reduce_motion", map[string]any{"on": rm}, nil)
 	}
+	a.Canvas.worker = NewCanvasRenderWorker(a.Bridge, func() {
+		if a.Canvas.vsyncActive.Load() {
+			// Painter.AnimationFrame() is already driving vp.Draw at hardware VSync and will swap
+			// TakeReady() on the very next refresh without triggering a full-window View(c) rebuild.
+			return
+		}
+		if a.Window != nil && !a.Window.IsDestroyed() {
+			a.Window.Update(func() {})
+		}
+	})
 	a.syncWindowTitle()
 	go a.pollLoop()
 }
 
-// Close stops the poller and flushes agent sessions / subprocesses cleanly.
+// Close stops the poller, async render/export workers, and flushes agent sessions / subprocesses cleanly.
 func (a *NalarupaApp) Close() {
 	a.closeOnce.Do(func() {
 		close(a.pollStop)
+		if a.Canvas.worker != nil {
+			a.Canvas.worker.Close()
+		}
+		a.bgWG.Wait()
 		a.Bridge.Shutdown()
 	})
+}
+
+// TriggerExport runs document/node export on a managed background goroutine so heavy PNG/JPEG/WebP/PDF
+// rasterization and encoding never block the main UI thread or cause Windows "(Not Responding)".
+func (a *NalarupaApp) TriggerExport(ids []string, format, label string, opts map[string]any) {
+	if !a.exporting.CompareAndSwap(false, true) {
+		a.ShowToast("Export already in progress…", false)
+		return
+	}
+	idsCopy := append([]string(nil), ids...)
+	a.ShowToast("Exporting "+label+"…", false)
+
+	a.bgWG.Add(1)
+	go func() {
+		defer a.bgWG.Done()
+		defer a.exporting.Store(false)
+		args := map[string]any{
+			"ids":    idsCopy,
+			"format": format,
+			"path":   "",
+		}
+		if opts != nil {
+			args["opts"] = opts
+		}
+		var files []string
+		err := a.Bridge.Call("export", args, &files)
+		select {
+		case a.exportDone <- exportOutcome{files: files, err: err}:
+		default:
+		}
+		if a.Window != nil && !a.Window.IsDestroyed() {
+			a.Window.Update(func() {
+				a.drainExportDone()
+			})
+		}
+	}()
+}
+
+func (a *NalarupaApp) drainExportDone() {
+	for {
+		select {
+		case out := <-a.exportDone:
+			if out.err != nil {
+				a.ShowToast(out.err.Error(), true)
+			} else if len(out.files) > 0 {
+				a.ShowToast("Exported "+strings.Join(out.files, ", "), false)
+			}
+		default:
+			return
+		}
+	}
 }
 
 func sameCoreState(x, y CoreState) bool {
@@ -136,27 +211,55 @@ func sameCoreState(x, y CoreState) bool {
 	return slices.Equal(x.Selection, y.Selection)
 }
 
+func sameUICoreState(x, y CoreState) bool {
+	if x.Title != y.Title || x.Dirty != y.Dirty ||
+		x.AgentRunning != y.AgentRunning || x.Executing != y.Executing ||
+		x.PenDrawing != y.PenDrawing || x.MCPPort != y.MCPPort {
+		return false
+	}
+	px, py := "", ""
+	if x.Path != nil {
+		px = *x.Path
+	}
+	if y.Path != nil {
+		py = *y.Path
+	}
+	if px != py {
+		return false
+	}
+	return slices.Equal(x.Selection, y.Selection)
+}
+
 func (a *NalarupaApp) pollLoop() {
-	ticker := time.NewTicker(80 * time.Millisecond)
+	ticker := time.NewTicker(30 * time.Millisecond)
 	defer ticker.Stop()
 	var last CoreState
+	var lastViewSync time.Time
 	hasLast := false
 	for {
 		select {
 		case <-a.pollStop:
 			return
 		case <-ticker.C:
-			var res PollResult
-			if err := a.Bridge.Call("poll", nil, &res); err != nil {
+			res, ok := a.Bridge.TryPollFast()
+			if !ok {
 				continue
 			}
 			if !hasLast || len(res.Events) > 0 || !sameCoreState(res.State, last) {
+				// While VSync AnimationFrame is actively painting the canvas (which reads VersionDirect atomically),
+				// coalesce pure Version/Animating-only ticks (with zero events and unchanged UI chrome state) so we
+				// don't force full-window View(c) rebuilds every 30ms just for slide expiration ticks.
+				if hasLast && len(res.Events) == 0 && sameUICoreState(res.State, last) &&
+					a.Canvas.vsyncActive.Load() && time.Since(lastViewSync) < 220*time.Millisecond {
+					continue
+				}
 				last = res.State
 				hasLast = true
+				lastViewSync = time.Now()
 				if a.Window != nil && !a.Window.IsDestroyed() {
 					resCopy := res
 					a.Window.Update(func() {
-						a.ApplyPollResult(resCopy, float64(time.Now().UnixMilli()))
+						a.ApplyPollResult(resCopy, float64(time.Now().UnixNano())/1e6)
 					})
 				}
 			}
@@ -166,10 +269,8 @@ func (a *NalarupaApp) pollLoop() {
 
 // PollNow synchronously polls core events on the UI thread (used in headless tests and immediate actions).
 func (a *NalarupaApp) PollNow(nowMS float64) {
-	var res PollResult
-	if err := a.Bridge.Call("poll", nil, &res); err == nil {
-		a.ApplyPollResult(res, nowMS)
-	}
+	res := a.Bridge.PollFast()
+	a.ApplyPollResult(res, nowMS)
 }
 
 // applyCoreState updates a.State, syncs window title, and triggers selection reveal/tab updates when selection changed.
@@ -184,10 +285,7 @@ func (a *NalarupaApp) applyCoreState(st CoreState) {
 
 // RefreshState refreshes a.State synchronously after a local edit command.
 func (a *NalarupaApp) RefreshState() {
-	var st CoreState
-	if err := a.Bridge.Call("state", nil, &st); err == nil {
-		a.applyCoreState(st)
-	}
+	a.applyCoreState(a.Bridge.CoreStateDirect())
 }
 
 // ApplyPollResult applies a PollResult onto NalarupaApp on the main thread.
@@ -201,12 +299,15 @@ func (a *NalarupaApp) ApplyPollResult(res PollResult, nowMS float64) {
 			}
 		case "document_opened":
 			a.onDocumentOpened()
+		case "models_fetched":
+			a.onModelsFetched(ev)
 		}
 	}
 	a.Store.ViewCenter = Pt{
 		a.Cam.X + (a.CanvasW/2)/max(0.02, a.Cam.Zoom),
 		a.Cam.Y + (a.CanvasH/2)/max(0.02, a.Cam.Zoom),
 	}
+	a.Store.ViewZoom = a.Cam.Zoom
 	a.Store.ApplyEvents(res.Events, nowMS)
 }
 
@@ -255,6 +356,7 @@ func (a *NalarupaApp) onDocumentOpened() {
 	a.RefreshState()
 	a.RefreshHomeRecents()
 	a.FitTo(nil)
+	a.Canvas.pendingInitialFit = true
 }
 
 func (a *NalarupaApp) onSelectionChanged(ids []string) {
@@ -264,14 +366,15 @@ func (a *NalarupaApp) onSelectionChanged(ids []string) {
 	}
 }
 
-// Select updates the core selection and triggers reveal/tab side-effects.
+// Select updates the core selection and triggers reveal/tab side-effects when selection actually changes.
 func (a *NalarupaApp) Select(ids []string) {
 	if ids == nil {
 		ids = []string{}
 	}
-	var st CoreState
-	if err := a.Bridge.Call("select", map[string]any{"ids": ids}, &st); err == nil {
-		a.State = st
+	changed := !slices.Equal(a.State.Selection, ids)
+	st := a.Bridge.SelectDirect(ids)
+	a.State = st
+	if changed {
 		a.onSelectionChanged(st.Selection)
 	}
 }
@@ -391,36 +494,67 @@ func (a *NalarupaApp) TriggerSaveAsDialog() {
 	}()
 }
 
-// FitTo adjusts Cam to fit ids (or all content if len(ids) == 0) with 60px padding and max zoom 1.
-func (a *NalarupaApp) FitTo(ids []string) {
+func (a *NalarupaApp) computeFitCamera(ids []string) Camera {
 	reqIDs := ids
 	if reqIDs == nil {
 		reqIDs = []string{}
 	}
 	var b *Box
 	if err := a.Bridge.Call("bounds", map[string]any{"ids": reqIDs}, &b); err != nil || b == nil || b.W <= 0 || b.H <= 0 {
-		a.Cam = Camera{X: -100, Y: -100, Zoom: 0.5}
-		a.Canvas.markSharpDirty()
-		a.syncViewport()
-		return
+		return Camera{X: -100, Y: -100, Zoom: 0.5}
 	}
-	a.Cam = FitCamera(b.RectOf(), a.CanvasW, a.CanvasH, 60, 1.0)
+	return FitCamera(b.RectOf(), a.CanvasW, a.CanvasH, 60, 1.0)
+}
+
+// FitTo immediately adjusts Cam to fit ids (or all content if len(ids) == 0) with 60px padding and max zoom 1.
+func (a *NalarupaApp) FitTo(ids []string) {
+	a.Canvas.camAnim = camAnimState{}
+	a.Cam = a.computeFitCamera(ids)
 	a.Canvas.markSharpDirty()
 	a.syncViewport()
 }
 
-// ZoomBy multiplies zoom around the center of the canvas viewport.
+// FitToAnimated smoothly glides Cam to fit ids (snapping immediately when Reduced Motion is enabled).
+func (a *NalarupaApp) FitToAnimated(ids []string) {
+	target := a.computeFitCamera(ids)
+	if a.lastReducedMotion != nil && *a.lastReducedMotion {
+		a.Canvas.camAnim = camAnimState{}
+		a.Cam = target
+		a.Canvas.markSharpDirty()
+		a.syncViewport()
+		return
+	}
+	if math.Abs(target.Zoom-a.Cam.Zoom) < 1e-4 && math.Hypot(target.X-a.Cam.X, target.Y-a.Cam.Y) < 0.5 {
+		return
+	}
+	a.Canvas.camAnim = camAnimState{
+		active:  true,
+		mode:    "camera",
+		targetX: target.X,
+		targetY: target.Y,
+		targetZ: target.Zoom,
+		lastAt:  time.Now(),
+	}
+	a.Canvas.markFastDirty()
+}
+
+// ZoomBy smoothly multiplies zoom around the center of the canvas viewport.
 func (a *NalarupaApp) ZoomBy(factor float64) {
-	a.ZoomAt(a.CanvasW/2, a.CanvasH/2, a.Cam.Zoom*factor, true)
+	baseZ := a.Cam.Zoom
+	if a.Canvas.camAnim.active && a.Canvas.camAnim.mode == "zoom-anchor" {
+		baseZ = a.Canvas.camAnim.targetZ
+	}
+	a.ZoomAt(a.CanvasW/2, a.CanvasH/2, baseZ*factor, false)
 }
 
-// ZoomTo sets zoom to targetZoom around the center of the canvas viewport.
+// ZoomTo smoothly sets zoom to targetZoom around the center of the canvas viewport.
 func (a *NalarupaApp) ZoomTo(targetZoom float64) {
-	a.ZoomAt(a.CanvasW/2, a.CanvasH/2, targetZoom, true)
+	a.ZoomAt(a.CanvasW/2, a.CanvasH/2, targetZoom, false)
 }
 
-// ZoomAt zooms to nextZoom keeping canvas screen point (sx, sy) anchored on the same document point.
-func (a *NalarupaApp) ZoomAt(sx, sy, nextZoom float64, sharp bool) {
+// ZoomAtImmediate snaps zoom immediately to nextZoom keeping screen point (sx, sy) anchored on the same document point.
+func (a *NalarupaApp) ZoomAtImmediate(sx, sy, nextZoom float64, sharp bool) {
+	a.Canvas.camAnim = camAnimState{}
 	nextZoom = max(0.02, min(64.0, nextZoom))
 	if math.Abs(nextZoom-a.Cam.Zoom) < 1e-9 {
 		return
@@ -438,20 +572,56 @@ func (a *NalarupaApp) ZoomAt(sx, sy, nextZoom float64, sharp bool) {
 	a.syncViewport()
 }
 
+// ZoomAt smoothly zooms toward nextZoom keeping canvas screen point (sx, sy) anchored on the same document point.
+func (a *NalarupaApp) ZoomAt(sx, sy, nextZoom float64, sharp bool) {
+	nextZoom = max(0.02, min(64.0, nextZoom))
+	if sharp || (a.lastReducedMotion != nil && *a.lastReducedMotion) {
+		a.ZoomAtImmediate(sx, sy, nextZoom, sharp)
+		return
+	}
+	curTarget := a.Cam.Zoom
+	if a.Canvas.camAnim.active && a.Canvas.camAnim.mode == "zoom-anchor" {
+		curTarget = a.Canvas.camAnim.targetZ
+	}
+	if math.Abs(nextZoom-curTarget) < 1e-9 && math.Abs(nextZoom-a.Cam.Zoom) < 1e-9 {
+		return
+	}
+	if a.Canvas.camAnim.active && a.Canvas.camAnim.mode == "zoom-anchor" &&
+		math.Hypot(sx-a.Canvas.camAnim.anchorSX, sy-a.Canvas.camAnim.anchorSY) <= 8.0 {
+		a.Canvas.camAnim.targetZ = nextZoom
+	} else {
+		a.Canvas.camAnim = camAnimState{
+			active:   true,
+			mode:     "zoom-anchor",
+			anchorSX: sx,
+			anchorSY: sy,
+			docX:     a.Cam.X + sx/max(0.02, a.Cam.Zoom),
+			docY:     a.Cam.Y + sy/max(0.02, a.Cam.Zoom),
+			targetZ:  nextZoom,
+			lastAt:   time.Now(),
+		}
+	}
+	a.Canvas.markFastDirty()
+}
+
 func (a *NalarupaApp) syncViewport() {
+	a.syncViewportMode(false)
+}
+
+func (a *NalarupaApp) syncViewportNonBlocking() {
+	a.syncViewportMode(true)
+}
+
+func (a *NalarupaApp) syncViewportMode(nonBlocking bool) {
 	if a.CanvasW <= 0 || a.CanvasH <= 0 || a.Cam.Zoom <= 0 {
 		return
 	}
-	a.Bridge.TryCall("viewport", map[string]any{
-		"x": a.Cam.X,
-		"y": a.Cam.Y,
-		"w": a.CanvasW / a.Cam.Zoom,
-		"h": a.CanvasH / a.Cam.Zoom,
-	}, nil)
+	a.Bridge.ViewportDirect(a.Cam.X, a.Cam.Y, a.CanvasW/a.Cam.Zoom, a.CanvasH/a.Cam.Zoom, nonBlocking)
 	a.Store.ViewCenter = Pt{
 		a.Cam.X + (a.CanvasW/2)/a.Cam.Zoom,
 		a.Cam.Y + (a.CanvasH/2)/a.Cam.Zoom,
 	}
+	a.Store.ViewZoom = a.Cam.Zoom
 }
 
 // EnterPresent enters full-window presentation mode starting from the current selection (or first slide).
@@ -497,6 +667,7 @@ func (a *NalarupaApp) SetTool(tool string, returnFocus bool) {
 		}
 	}
 	a.Tool = tool
+	a.syncGrabCursorNow()
 	if returnFocus {
 		a.CanvasHandle.Focus()
 	}
@@ -891,13 +1062,13 @@ func (a *NalarupaApp) HandleEditorShortcut(mods ui.Modifiers, key ui.Key) bool {
 			a.FlipSelection(false)
 			return true
 		case ui.Key1:
-			a.FitTo(nil)
+			a.FitToAnimated(nil)
 			return true
 		case ui.Key2:
 			if len(a.State.Selection) > 0 {
-				a.FitTo(a.State.Selection)
+				a.FitToAnimated(a.State.Selection)
 			} else {
-				a.FitTo(nil)
+				a.FitToAnimated(nil)
 			}
 			return true
 		}
@@ -1243,6 +1414,7 @@ func (a *NalarupaApp) View(c *ui.Context) {
 	c.SetTheme(NalarupaTheme())
 	c.SetMenuPresentation(ui.PopoverMenus)
 	a.Services = c.Services()
+	a.drainExportDone()
 
 	rm := EffectiveReducedMotion(c)
 	if a.lastReducedMotion == nil || *a.lastReducedMotion != rm {
@@ -1276,8 +1448,28 @@ func (a *NalarupaApp) viewEditor(c *ui.Context) {
 		a.EnterPresent()
 	})
 
+	if takesText && a.Canvas.SpaceHeld {
+		a.Canvas.SpaceHeld = false
+	}
 	shell := ui.Column(c.Key("editor-shell")).Fill().Background(C.BG)
 	shell.HandleInput(func(ev ui.InputEvent) bool {
+		if !takesText && a.Canvas.textEdit == nil && a.Canvas.frameRename == nil {
+			if ev.Kind == ui.InputKeyDown && ev.Key == ui.KeySpace {
+				a.Canvas.SpaceHeld = true
+				a.syncGrabCursorNow()
+				return true
+			}
+			if ev.Kind == ui.InputKeyUp && ev.Key == ui.KeySpace {
+				a.Canvas.SpaceHeld = false
+				a.syncGrabCursorNow()
+				return true
+			}
+		}
+		if ev.Kind == ui.InputKeyUp && ev.Key == ui.KeySpace && a.Canvas.SpaceHeld {
+			a.Canvas.SpaceHeld = false
+			a.syncGrabCursorNow()
+			return true
+		}
 		if ev.Kind == ui.InputKeyDown && !takesText {
 			return a.HandleEditorShortcut(ev.Mods, ev.Key)
 		}
@@ -1285,7 +1477,7 @@ func (a *NalarupaApp) viewEditor(c *ui.Context) {
 	})
 	shell.Children(func() {
 		a.viewToolbar(c)
-		ui.Row(c.Key("editor-body")).Fill().Children(func() {
+		ui.Row(c.Key("editor-body")).FillWidth().Grow(1).MinHeight(0).Children(func() {
 			a.viewLeftPanel(c)
 			a.viewCanvas(c)
 			a.viewRightPanel(c)
@@ -1297,12 +1489,15 @@ func (a *NalarupaApp) viewRightPanel(c *ui.Context) {
 	ui.Column(c.Key("right-panel")).
 		Width(RightW).
 		FillHeight().
+		Shrink(0).
+		MinHeight(0).
 		Background(C.Panel).
 		BorderWidth(0, 0, 0, 1).
 		BorderColor(C.Border).
 		Children(func() {
 			ui.Box(c.Key("right-tabs-wrap")).
 				FillWidth().
+				Shrink(0).
 				Padding(10).
 				BorderWidth(0, 0, 1, 0).
 				BorderColor(C.Border).
@@ -1359,7 +1554,8 @@ func (a *NalarupaApp) viewToastOverlay(c *ui.Context) {
 		Border(1, borderCol).
 		Shadow(0, 8, 24, 0, ui.Hex("#00000080")).
 		ZIndex(200).
-		Role(role)
+		Role(role).
+		Transition(ToastTransition(EffectiveReducedMotion(c)))
 	if !a.Toast.Danger {
 		rem := time.Until(a.Toast.ExpiresAt)
 		toastBox.Draw(func(p *ui.Painter, _ ui.Rect) {

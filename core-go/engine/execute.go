@@ -38,9 +38,10 @@ type AgentHooks struct {
 
 // executeCall is one `execute` call between beginExecute and endExecute.
 type executeCall struct {
-	args  jsonv.Value
-	seen  int
-	agent string
+	args      jsonv.Value
+	seen      int
+	agent     string
+	skipEdits map[string]bool
 }
 
 // beginExecute starts an `execute` call: it retires the stream the call belongs to, and then runs with that
@@ -60,6 +61,7 @@ func (e *Engine) beginExecute(args jsonv.Value) executeCall {
 			c.args = o
 		}
 		c.seen = s.Touched
+		c.skipEdits = s.Edited
 		if !hasAgent {
 			c.agent = s.Agent
 		}
@@ -77,7 +79,13 @@ func (e *Engine) endExecute(c executeCall) {
 		return
 	}
 	if ids := jsonv.Items(jsonv.Get(ev, "ids")); len(ids) > c.seen {
-		e.Emit(Object("type", "agent_activity", "agent", c.agent, "op", "write", "ids", jsonv.NewArray(ids[c.seen:]...), "streaming", false))
+		strIDs := make([]string, 0, len(ids)-c.seen)
+		for _, v := range ids[c.seen:] {
+			if s, ok := jsonv.Str(v); ok {
+				strIDs = append(strIDs, s)
+			}
+		}
+		e.EmitWriteActivityWithTeam(c.agent, e.Doc, strIDs, false)
 	}
 	if read := jsonv.Items(jsonv.Get(ev, "read")); len(read) > 0 {
 		e.Emit(Object("type", "agent_activity", "agent", c.agent, "op", "read", "ids", jsonv.Get(ev, "read"), "streaming", false))
@@ -103,7 +111,9 @@ func (e *Engine) CallTool(name string, args jsonv.Value) ToolOut {
 	if e.Hooks.Stop != nil {
 		stop = e.Hooks.Stop(c.agent)
 	}
+	e.commitSkipEdits = c.skipEdits
 	out := e.execute(c.args, script.Call{Stop: stop, Locker: e})
+	e.commitSkipEdits = nil
 	e.endExecute(c)
 	return out
 }
@@ -130,9 +140,14 @@ func (e *Engine) execute(args jsonv.Value, c script.Call) ToolOut {
 	}
 	was := e.Executing
 	e.Executing = true
+	prevExecAgent := e.currentExecAgent
+	e.currentExecAgent = agent
 	// Cleared once the JavaScript has run, before the report validates (script.rs `bind`, `execute_shared`), and
 	// on a panic.
-	defer func() { e.Executing = was }()
+	defer func() {
+		e.Executing = was
+		e.currentExecAgent = prevExecAgent
+	}()
 	c.Ran = func() { e.Executing = was }
 	out := script.Execute(e.Host(), args, c)
 	if out.Before == nil {
@@ -164,6 +179,11 @@ func (e *Engine) execute(args jsonv.Value, c script.Call) ToolOut {
 		e.Script.Globals[agent] = g
 	}
 	out.Globals.Each(func(k string, v jsonv.Value) { g.Set(k, jsonv.Clone(v)) })
+	if e.Agent.Running {
+		e.DeconflictTopLevelNodes(e.Doc)
+	}
+	e.reconcilePreTurnScreenIsolation(e.Doc)
+	e.ExpandProgressiveRootSlides(e.Doc, out.Touched)
 	e.Commit(out.Before)
 	edit := Object("type", "agent_edit", "ids", Strings(out.Touched), "read", Strings(out.Read))
 	e.Script.edit = edit

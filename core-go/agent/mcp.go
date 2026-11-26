@@ -257,6 +257,7 @@ func callTool(e *engine.Engine, name string, args jsonv.Value, has bool, agent s
 	}
 	// The engine lock is not held here: rasterize screenshots without blocking the canvas.
 	out = out.Finish(e)
+	out.Text = AppendDesignAudit(e, name, out.Text, out.Error)
 	// Logged once the call is over, so the chat row says whether the edit landed.
 	if agent == "" && name != "spawn_agents" {
 		e.Locked(func() { e.Emit(engine.Object("type", "agent", "kind", "external", "text", name, "error", out.Error)) })

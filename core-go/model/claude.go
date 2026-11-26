@@ -13,9 +13,11 @@ import (
 // claudeURL is the Anthropic Messages endpoint.
 const claudeURL = "https://api.anthropic.com/v1/messages"
 
-// stallLimit: a stream (or the wait for its headers) silent this long fails as stalled; the APIs ping every few
-// seconds.
-const stallLimit = 120 * time.Second
+// stallLimit: a stream (or the wait for its headers) silent this long fails as stalled.
+const (
+	stallLimit           = 240 * time.Second
+	highEffortStallLimit = 420 * time.Second
+)
 
 // EventKind is what an Event reports.
 type EventKind uint8
@@ -110,11 +112,33 @@ func (c *Claude) Stream(body jsonv.Value, beta string, cancel func() bool, on fu
 	if beta != "" {
 		headers = append(headers, [2]string{"anthropic-beta", beta})
 	}
+	stall := effectiveStall(c.stall, body)
+	for attempt := 0; attempt < 2; attempt++ {
+		emitted := false
+		out, err := c.attempt(body, headers, stall, cancel, func(ev Event) {
+			emitted = true
+			on(ev)
+		})
+		if err == nil {
+			return out, nil
+		}
+		if attempt == 0 && !emitted && isRetryablePreStreamError(err) {
+			if !sleepCancelable(retryBackoff(c.stall, attempt), cancel) {
+				return nil, errors.New("stopped")
+			}
+			continue
+		}
+		return nil, err
+	}
+	return nil, errors.New("request attempts exhausted")
+}
+
+func (c *Claude) attempt(body jsonv.Value, headers [][2]string, stall time.Duration, cancel func() bool, on func(Event)) (jsonv.Value, error) {
 	var blocks []jsonv.Value
 	var partial []string
 	var stopReason jsonv.Value
 	var usage jsonv.Value = jsonv.NewObject()
-	err := post(c.url, headers, body, c.stall, "the Claude API", cancel, claudeError, func(data string) (bool, error) {
+	err := post(c.url, headers, body, stall, "the Claude API", cancel, claudeError, func(data string) (bool, error) {
 		ev, err := jsonv.Parse([]byte(data))
 		if err != nil {
 			return false, fmt.Errorf("bad stream event: %v", err)

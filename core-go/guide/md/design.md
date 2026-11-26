@@ -26,21 +26,43 @@ subject itself beats any list.
 ## Spacing
 
 - Use a 4/8px rhythm: 4, 8, 12, 16, 24, 32, 48, 64, 96, 128.
+- Spatial grammar expresses grouping: parts of one control (4–8px) < items in a
+  group (12–16px) < groups in a section (24–32px) < major sections (48–96px).
+  Never flatten a screen to a single repeated gap.
+- Concentric nested radii: `innerRadius = max(0, outerRadius - padding)` so
+  nested cards and controls share an even optical rim.
 - Generous outer padding on screens: 64–120px desktop, 20–24px mobile.
 
-## Color
+## Color & surfaces
 
+- Bind semantic roles (`$ground`, `$surface`, `$ink`, `$muted`, `$border`,
+  `$accent`) with `SetVariables` before building screens, and reference `$vars`
+  everywhere instead of repeating hex literals.
+- Multi-screen surface consistency: every screen in the same product or flow
+  must share the exact ground token, surface texture/grid/grain treatment, and
+  reusable header/footer chrome. Never put a dot-grid or paper motif on screen 1
+  and leave screen 2 on a flat solid fill.
 - Gradients, shadows and big radii each earn their place in the direction;
-  use them on purpose, not as decoration.
+  use them on purpose, not as decoration. Avoid cards nested inside cards when a
+  hairline rule or spacing tier already separates groups.
 - Dark themes: avoid pure black/white; use #0E0F12-ish backgrounds and
   #F2F2F2-ish text.
 - Light/dark: define themed variables
   (`value: [{value, theme: {mode: "light"}}, {value, theme: {mode: "dark"}}]`)
   and set `theme: {mode: "dark"}` on a frame to preview.
 
-## Layout
+## Layout & width budgets
 
 - Desktop screens 1440 wide; tablets 834; phones 393×852.
+- Prevent horizontal overflow & right-edge clipping: inside any padded frame,
+  set horizontal rows (`nav`, filter bars, card grids, footers) to
+  `width: "fill_container"`, and give equal-width grid columns/cards
+  `width: "fill_container"` rather than fixed pixel widths (`4 × 340 + gaps +
+  padding > 1440` clips the last column!). When a fixed width is required, check
+  `2*padding + sum(widths) + (n-1)*gap <= frameWidth`.
+- Keep reading prose comfortable at 45–75 characters per line (`maxWidth` or a
+  dedicated text column width). For uppercase eyebrows/badges, drop size to
+  11–12px, weight 600–700, and add positive `letterSpacing` (+1 to +2.5).
 - Use a content column (e.g. 1200 max) inside the screen with
   `alignItems: "center"` on the screen frame.
 - Make each section distinct: vary alignment, density and scale between

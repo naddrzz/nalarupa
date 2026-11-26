@@ -15,7 +15,7 @@ import (
 // search, as Rust's.
 func command(program string, args ...string) *exec.Cmd {
 	if runtime.GOOS != "windows" || strings.ContainsAny(program, `/\`) {
-		return exec.Command(program, args...)
+		return hideConsole(exec.Command(program, args...))
 	}
 	name := program
 	if filepath.Ext(name) == "" {
@@ -35,10 +35,10 @@ func command(program string, args ...string) *exec.Cmd {
 		}
 		p := filepath.Join(d, name)
 		if st, err := os.Stat(p); err == nil && !st.IsDir() {
-			return exec.Command(p, args...)
+			return hideConsole(exec.Command(p, args...))
 		}
 	}
-	cmd := exec.Command(program, args...)
+	cmd := hideConsole(exec.Command(program, args...))
 	cmd.Err = &exec.Error{Name: program, Err: exec.ErrNotFound}
 	return cmd
 }

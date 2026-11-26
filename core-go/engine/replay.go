@@ -60,6 +60,16 @@ func Object(kv ...any) *jsonv.Object {
 
 func u64(v uint64) jsonv.Number { return jsonv.Number(fmt.Sprint(v)) }
 
+// IsAnimating reports whether slide or script animations are currently active.
+func (e *Engine) IsAnimating() bool {
+	return len(e.Renderer.Slides) > 0 || script.Busy()
+}
+
+// HasSlides reports whether canvas node slide-in animations are currently active.
+func (e *Engine) HasSlides() bool {
+	return len(e.Renderer.Slides) > 0
+}
+
 // State is lib.rs `state`: what the UI shows of the engine.
 func (e *Engine) State() *jsonv.Object {
 	var path jsonv.Value
@@ -68,7 +78,7 @@ func (e *Engine) State() *jsonv.Object {
 	}
 	return Object("version", u64(e.Version), "title", e.Title(), "path", path, "dirty", e.Dirty(), "selection", Strings(e.Selection),
 		"agentRunning", e.Agent.Running, "executing", e.Executing, "penDrawing", len(e.Agent.Pens) > 0, "mcpPort", u64(uint64(e.MCPPort)),
-		"animating", len(e.Renderer.Slides) > 0 || script.Busy())
+		"animating", e.IsAnimating())
 }
 
 // Command is a UI command of another package (the editor operations), added to the dispatcher with Handle. It

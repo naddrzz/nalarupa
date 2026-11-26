@@ -81,6 +81,7 @@ func (a *NalarupaApp) RefreshHomeRecents() {
 }
 
 func (a *NalarupaApp) viewHome(c *ui.Context) {
+	reduced := EffectiveReducedMotion(c)
 	scroll := ui.Scroll(c.Key("home-scroll")).
 		Fill().
 		Background(C.BG).
@@ -130,6 +131,7 @@ func (a *NalarupaApp) viewHome(c *ui.Context) {
 						Border(1, C.Accent).
 						Role(ui.RoleDialog).
 						Label("Unsaved changes").
+						Transition(DialogBannerTransition(reduced)).
 						Children(func() {
 							ui.Text(c, fmt.Sprintf("Save changes to %s first? Without saving they are lost.", title)).
 								FontSize(12).
@@ -175,14 +177,25 @@ func (a *NalarupaApp) viewHome(c *ui.Context) {
 								AlignItems(ui.Start).
 								Gap(6).
 								Label(t.A11yName).
-								Cursor(ui.CursorPointer)
-							if card.Hovered() {
+								Cursor(ui.CursorPointer).
+								Transition(ColorHoverTransition(reduced))
+							hovered := card.Hovered()
+							pressed := card.Pressed()
+							if hovered {
 								card.Background(C.Panel2).Border(1, C.Accent)
 							} else {
 								card.Background(C.Panel).Border(1, C.Border)
 							}
+							ApplyPressScale(card, pressed, false, reduced)
 							card.Children(func() {
-								ui.Icon(c, IconSVG(t.Icon)).FontSize(20).TextColor(C.Accent)
+								ic := ui.Icon(c.Key(t.Key+"-ic"), IconSVG(t.Icon)).FontSize(20).TextColor(C.Accent)
+								if !reduced {
+									liftTarget := float32(0)
+									if hovered {
+										liftTarget = -2
+									}
+									ic.Translate(0, ic.AnimateWith("lift", liftTarget, DurHover, EaseOutQuint))
+								}
 								ui.Spacer(c)
 								ui.Text(c, t.Title).FontSize(14).FontWeight(600).TextColor(C.Text)
 								ui.Text(c, t.Subtitle).FontSize(11).TextColor(C.Muted).MaxLines(2)
@@ -238,7 +251,8 @@ func (a *NalarupaApp) viewHome(c *ui.Context) {
 							AlignItems(ui.Center).
 							Label("Open " + base).
 							Tooltip(pathCopy).
-							Cursor(ui.CursorPointer)
+							Cursor(ui.CursorPointer).
+							Transition(ColorHoverTransition(reduced))
 						if row.Hovered() {
 							row.Background(C.Panel2).Border(1, C.Border)
 						} else {

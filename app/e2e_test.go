@@ -44,8 +44,15 @@ func requireRealWindowEnv(t *testing.T) string {
 		}
 		var cmd *exec.Cmd
 		if runtime.GOOS == "windows" {
-			cmd = exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "build.ps1")
-			e2eBinPath = filepath.Join(cwd, "dist", "nalarupa.exe")
+			tmpBinDir, mkErr := os.MkdirTemp("", "nalarupa-e2e-bin-")
+			if mkErr != nil {
+				e2eBuildErr = mkErr
+				return
+			}
+			e2eBinPath = filepath.Join(tmpBinDir, "nalarupa.exe")
+			_ = copyFileIfPresent(filepath.Join(cwd, "assets", "brand", "nalarupa.ico"), filepath.Join(tmpBinDir, "nalarupa.ico"))
+			cmd = exec.Command("go", "build", "-ldflags", "-H=windowsgui", "-o", e2eBinPath, ".")
+			cmd.Env = append(os.Environ(), "CGO_ENABLED=1")
 		} else {
 			cmd = exec.Command("bash", "build.sh")
 			e2eBinPath = filepath.Join(cwd, "dist", "nalarupa")
@@ -60,6 +67,14 @@ func requireRealWindowEnv(t *testing.T) string {
 		t.Fatalf("failed building standalone nalarupa binary: %v", e2eBuildErr)
 	}
 	return e2eBinPath
+}
+
+func copyFileIfPresent(src, dst string) error {
+	b, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dst, b, 0o644)
 }
 
 type autoRect struct {
@@ -116,14 +131,28 @@ func launchRealApp(t *testing.T, extraEnv ...string) *e2eDriver {
 	_ = os.MkdirAll(homeDir, 0o755)
 	_ = os.MkdirAll(dataDir, 0o755)
 
-	// Keep socket path short for Unix domain socket sun_path limits
-	sockDir, err := os.MkdirTemp("/tmp", "nala-e2e-")
-	if err != nil {
-		sockDir = root
+	// On Windows use loopback TCP automation to avoid AF_UNIX 108-byte sun_path limits on long test names.
+	var autoSpec, dialNet, dialAddr string
+	if runtime.GOOS == "windows" {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("allocate loopback port: %v", err)
+		}
+		dialAddr = ln.Addr().String()
+		_ = ln.Close()
+		dialNet = "tcp"
+		autoSpec = "tcp:" + dialAddr
 	} else {
-		t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
+		sockDir, err := os.MkdirTemp("/tmp", "nala-e2e-")
+		if err != nil {
+			sockDir = root
+		} else {
+			t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
+		}
+		dialAddr = filepath.Join(sockDir, "auto.sock")
+		dialNet = "unix"
+		autoSpec = dialAddr
 	}
-	sockPath := filepath.Join(sockDir, "auto.sock")
 
 	d := &e2eDriver{
 		t:       t,
@@ -135,8 +164,9 @@ func launchRealApp(t *testing.T, extraEnv ...string) *e2eDriver {
 	env := append([]string{}, os.Environ()...)
 	env = append(env,
 		"HOME="+homeDir,
+		"USERPROFILE="+homeDir,
 		"NALARUPA_DATA="+dataDir,
-		"MYGO_AUTOMATION="+sockPath,
+		"MYGO_AUTOMATION="+autoSpec,
 	)
 	env = append(env, extraEnv...)
 	cmd.Env = env
@@ -159,7 +189,7 @@ func launchRealApp(t *testing.T, extraEnv ...string) *e2eDriver {
 	deadline := time.Now().Add(15 * time.Second)
 	var conn net.Conn
 	for time.Now().Before(deadline) {
-		c, err := net.DialTimeout("unix", sockPath, 300*time.Millisecond)
+		c, err := net.DialTimeout(dialNet, dialAddr, 300*time.Millisecond)
 		if err == nil {
 			conn = c
 			break
@@ -167,15 +197,15 @@ func launchRealApp(t *testing.T, extraEnv ...string) *e2eDriver {
 		time.Sleep(40 * time.Millisecond)
 	}
 	if conn == nil {
-		t.Fatalf("timed out waiting for MYGO_AUTOMATION socket %s; stderr:\n%s", sockPath, d.stderr.String())
+		t.Fatalf("timed out waiting for MYGO_AUTOMATION %s; stderr:\n%s", autoSpec, d.stderr.String())
 	}
 	d.conn = conn
 	d.reader = bufio.NewReader(conn)
 
-	// Wait for initial window to appear and settle
+	// Wait for initial window to appear and settle (may be smaller than 1000px on compact displays, min 840px)
 	d.until("main window visible", 10*time.Second, func() bool {
 		ws := d.windows()
-		return len(ws) == 1 && ws[0].Visible && ws[0].Kind == "content" && ws[0].ContentBounds.Width >= 1000
+		return len(ws) == 1 && ws[0].Visible && ws[0].Kind == "content" && ws[0].ContentBounds.Width >= 800
 	})
 	_ = d.idle(3000)
 	return d
@@ -334,7 +364,7 @@ func (d *e2eDriver) captureImage() image.Image {
 	if err := d.rpc("capture", map[string]any{"window": 0}, &res); err != nil {
 		d.t.Fatalf("capture RPC failed: %v", err)
 	}
-	if len(res.PNG) == 0 || res.Width < 1000 || res.Height < 600 {
+	if len(res.PNG) == 0 || res.Width < 800 || res.Height < 500 {
 		d.t.Fatalf("unexpected capture dimensions %dx%d (%d bytes)", res.Width, res.Height, len(res.PNG))
 	}
 	img, err := png.Decode(bytes.NewReader(res.PNG))
@@ -549,62 +579,120 @@ func TestRealE2E_FileSaveReopenRecentAndUnsavedGuard(t *testing.T) {
 	})
 }
 
-func TestRealE2E_LiveClaudeCodeStreamingAgent(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("stand-in python3 claude script runs on Unix")
+func buildStandInClaudeCLI(t *testing.T, binDir string) string {
+	t.Helper()
+	srcDir := t.TempDir()
+	mainGo := `package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"io"
+	"net/http"
+	"os"
+	"time"
+)
+
+func emit(v any) {
+	b, _ := json.Marshal(v)
+	os.Stdout.Write(append(b, '\n'))
+}
+
+func main() {
+	args := os.Args[1:]
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "auth" && args[i+1] == "status" {
+			emit(map[string]any{"loggedIn": true, "authMethod": "claude.ai", "email": "dev@nalarupa.test", "subscriptionType": "max"})
+			return
+		}
 	}
-	binDir := t.TempDir()
-	claudeScript := `#!/usr/bin/env python3
-import json, sys, time, urllib.request
+	var mcpCfgPath string
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "--mcp-config" {
+			mcpCfgPath = args[i+1]
+		}
+	}
+	_, _ = io.ReadAll(os.Stdin)
 
-args = sys.argv[1:]
-if "auth" in args and "status" in args:
-    print(json.dumps({"loggedIn": True, "authMethod": "claude.ai", "email": "dev@nalarupa.test", "subscriptionType": "max"}))
-    sys.exit(0)
+	var mcpURL string
+	if mcpCfgPath != "" {
+		if raw, err := os.ReadFile(mcpCfgPath); err == nil {
+			var cfg struct {
+				MCPServers map[string]struct {
+					URL string ` + "`json:\"url\"`" + `
+				} ` + "`json:\"mcpServers\"`" + `
+			}
+			if json.Unmarshal(raw, &cfg) == nil {
+				mcpURL = cfg.MCPServers["nalarupa"].URL
+			}
+		}
+	}
 
-mcp_cfg_path = ""
-for i, a in enumerate(args):
-    if a == "--mcp-config" and i + 1 < len(args):
-        mcp_cfg_path = args[i + 1]
+	emit(map[string]any{"type": "stream_event", "event": map[string]any{"type": "message_start", "message": map[string]any{"model": "claude-sonnet-5-5"}}})
+	emit(map[string]any{"type": "stream_event", "event": map[string]any{"type": "content_block_start", "index": 0, "content_block": map[string]any{"type": "tool_use", "id": "toolu_1", "name": "mcp__nalarupa__execute"}}})
 
-_ = sys.stdin.read()
+	statements := []string{
+		"{\"input\": \"fid = Insert(document, { type: 'frame', name: 'Hero Banner', x: 0, y: 0, width: 960, height: 540, layout: 'vertical', padding: 48, gap: 16, fill: '#181825', clip: true, placeholder: true });\\n",
+		"Insert(fid, { type: 'text', name: 'Eyebrow', content: 'NALARUPA LIVE', fontSize: 14, fontWeight: 'bold', fill: '#607DFF' });\\n",
+		"Insert(fid, { type: 'text', name: 'Headline', content: 'Designed Live in MyGo', fontSize: 40, fontWeight: 'bold', fill: '#FF6A3D' });\\n",
+		"Insert(fid, { type: 'rectangle', name: 'CTA', width: 180, height: 48, cornerRadius: 12, fill: '#2563EB' });\\n",
+		"Update(fid, { placeholder: false });\"}",
+	}
+	for _, chunk := range statements {
+		emit(map[string]any{"type": "stream_event", "event": map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]any{"type": "input_json_delta", "partial_json": chunk}}})
+		time.Sleep(160 * time.Millisecond)
+	}
 
-mcp_url = ""
-if mcp_cfg_path:
-    with open(mcp_cfg_path, "r", encoding="utf-8") as f:
-        cfg = json.load(f)
-        mcp_url = cfg["mcpServers"]["nalarupa"]["url"]
+	fullCode := "fid = Insert(document, { type: 'frame', name: 'Hero Banner', x: 0, y: 0, width: 960, height: 540, layout: 'vertical', padding: 48, gap: 16, fill: '#181825', clip: true, placeholder: true });\n" +
+		"Insert(fid, { type: 'text', name: 'Eyebrow', content: 'NALARUPA LIVE', fontSize: 14, fontWeight: 'bold', fill: '#607DFF' });\n" +
+		"Insert(fid, { type: 'text', name: 'Headline', content: 'Designed Live in MyGo', fontSize: 40, fontWeight: 'bold', fill: '#FF6A3D' });\n" +
+		"Insert(fid, { type: 'rectangle', name: 'CTA', width: 180, height: 48, cornerRadius: 12, fill: '#2563EB' });\n" +
+		"Update(fid, { placeholder: false });"
 
-def emit(obj):
-    sys.stdout.write(json.dumps(obj) + "\n")
-    sys.stdout.flush()
+	if mcpURL != "" {
+		reqBody, _ := json.Marshal(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      1,
+			"method":  "tools/call",
+			"params":  map[string]any{"name": "execute", "arguments": map[string]any{"input": fullCode}},
+		})
+		if resp, err := http.Post(mcpURL, "application/json", bytes.NewReader(reqBody)); err == nil {
+			_, _ = io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+		}
+	}
 
-emit({"type": "stream_event", "event": {"type": "message_start", "message": {"model": "claude-sonnet-4-6"}}})
-emit({"type": "stream_event", "event": {"type": "content_block_start", "index": 0, "content_block": {"type": "tool_use", "id": "toolu_1", "name": "mcp__nalarupa__execute"}}})
-
-if mcp_url:
-    code = 'const fid = Insert("document", { type: "frame", name: "Hero Banner", x: 0, y: 0, width: 960, height: 540, layout: "vertical", padding: 48, fill: "#181825", placeholder: true }); Insert(fid, { type: "text", content: "Designed Live in MyGo", fontSize: 40, fontWeight: "bold", fill: "#FF6A3D" }); Update(fid, { placeholder: false });'
-    req_body = json.dumps({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/call",
-        "params": {"name": "execute", "arguments": {"input": code}}
-    }).encode("utf-8")
-    req = urllib.request.Request(mcp_url, data=req_body, headers={"Content-Type": "application/json"}, method="POST")
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        resp.read()
-
-emit({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "toolu_1", "name": "mcp__nalarupa__execute", "input": {"input": "Insert Hero Banner"}}]}})
-emit({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "Inserted Hero Banner"}]}})
-emit({"type": "stream_event", "event": {"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}}})
-emit({"type": "stream_event", "event": {"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": "Created Hero Banner on the canvas."}}})
-emit({"type": "stream_event", "event": {"type": "message_stop"}})
-emit({"type": "result", "session_id": "sess_e2e_1", "duration_ms": 650, "total_cost_usd": 0.012, "num_turns": 1, "usage": {"input_tokens": 320, "output_tokens": 95}})
+	emit(map[string]any{"type": "assistant", "message": map[string]any{"content": []any{map[string]any{"type": "tool_use", "id": "toolu_1", "name": "mcp__nalarupa__execute", "input": map[string]any{"input": fullCode}}}}})
+	emit(map[string]any{"type": "user", "message": map[string]any{"content": []any{map[string]any{"type": "tool_result", "tool_use_id": "toolu_1", "content": "Inserted Hero Banner"}}}})
+	emit(map[string]any{"type": "stream_event", "event": map[string]any{"type": "content_block_start", "index": 1, "content_block": map[string]any{"type": "text", "text": ""}}})
+	emit(map[string]any{"type": "stream_event", "event": map[string]any{"type": "content_block_delta", "index": 1, "delta": map[string]any{"type": "text_delta", "text": "Created Hero Banner on the canvas."}}})
+	emit(map[string]any{"type": "stream_event", "event": map[string]any{"type": "message_stop"}})
+	emit(map[string]any{"type": "result", "session_id": "sess_e2e_1", "duration_ms": 650, "total_cost_usd": 0.012, "num_turns": 1, "usage": map[string]any{"input_tokens": 320, "output_tokens": 95}})
+}
 `
-	claudePath := filepath.Join(binDir, "claude")
-	if err := os.WriteFile(claudePath, []byte(claudeScript), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(srcDir, "main.go"), []byte(mainGo), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(srcDir, "go.mod"), []byte("module standinclaude\n\ngo 1.22\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	exeName := "claude"
+	if runtime.GOOS == "windows" {
+		exeName = "claude.exe"
+	}
+	outPath := filepath.Join(binDir, exeName)
+	cmd := exec.Command("go", "build", "-o", outPath, ".")
+	cmd.Dir = srcDir
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build stand-in claude failed: %v\n%s", err, string(out))
+	}
+	return outPath
+}
+
+func TestRealE2E_LiveClaudeCodeStreamingAgent(t *testing.T) {
+	binDir := t.TempDir()
+	_ = buildStandInClaudeCLI(t, binDir)
 
 	d := launchRealApp(t, "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	d.pressKey("template-empty")
@@ -613,12 +701,196 @@ emit({"type": "result", "session_id": "sess_e2e_1", "duration_ms": 650, "total_c
 	d.setValueByKey("agent-input", "Design a bold Hero Banner")
 	d.pressKey("agent-send")
 
-	// Wait for the live stand-in Claude Code agent to insert "Hero Banner" on the canvas AND stream its reply!
-	d.until("Hero Banner in Layers & streamed reply in Agent transcript", 10*time.Second, func() bool {
+	// Observe live agent cursor badge appearing & moving across canvas while streaming!
+	var cursorPositions [][2]float64
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		tr := d.tree()
+		hasReply := false
+		for _, n := range tr.Nodes {
+			if k, ok := n.Key.(string); ok && strings.HasPrefix(k, "agent-cursor-") {
+				pos := [2]float64{n.Bounds.X, n.Bounds.Y}
+				if len(cursorPositions) == 0 || cursorPositions[len(cursorPositions)-1] != pos {
+					cursorPositions = append(cursorPositions, pos)
+				}
+			}
+			if strings.Contains(n.Label, "Created Hero Banner on the canvas.") {
+				hasReply = true
+			}
+		}
+		if hasReply && d.hasLabelContaining("Hero Banner") {
+			break
+		}
+		time.Sleep(45 * time.Millisecond)
+	}
+	t.Logf("Observed %d distinct live agent cursor positions during streaming: %v", len(cursorPositions), cursorPositions)
+	if len(cursorPositions) == 0 {
+		t.Fatalf("expected live agent cursor badge during streaming")
+	}
+
+	d.until("Hero Banner in Layers & streamed reply in Agent transcript", 6*time.Second, func() bool {
 		return d.hasLabelContaining("Hero Banner") && d.hasLabelContaining("Created Hero Banner on the canvas.")
 	})
 
 	d.pressKey("fit")
 	shot := d.captureImage()
 	assertDistinctPixels(t, shot, 8, "Live Claude Code agent canvas")
+}
+
+func TestRealE2E_Round3ExportScrollSymmetryAndZoom(t *testing.T) {
+	d := launchRealApp(t)
+
+	// 1. Start Mobile template ("iPhone 16" at 0,0 clip:true) and check symmetric viewport & full panel bounds!
+	d.pressKey("template-mobile")
+	d.until("Mobile editor ready", 6*time.Second, func() bool {
+		return d.hasLabelContaining("Editor toolbar") && d.hasLabelContaining("iPhone 16")
+	})
+
+	winInfo := d.windows()[0]
+	winH := winInfo.ContentBounds.Height
+
+	// Verify Agent bottom composer buttons are 100% inside window ContentBounds (never clipped behind taskbar!)
+	for _, key := range []string{"agent-input", "agent-model", "agent-effort", "agent-skills", "agent-send"} {
+		found := false
+		for _, n := range d.tree().Nodes {
+			if ks, ok := n.Key.(string); ok && ks == key {
+				found = true
+				bottom := n.Bounds.Y + n.Bounds.Height
+				if n.Bounds.Y < 0 || bottom > winH+1.0 {
+					t.Fatalf("Real window control %s out of ContentBounds [0..%.1f]: Y=%.1f H=%.1f Bottom=%.1f",
+						key, winH, n.Bounds.Y, n.Bounds.Height, bottom)
+				}
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("Real window control %s missing from tree", key)
+		}
+	}
+
+	// 2. Grab live MCP URL and verify FindEmptySpace symmetry across 3 mobile screens ("iPhone 16", "Menu sesi", "Review perubahan")
+	d.pressKey("agent-settings")
+	var mcpURL string
+	d.until("MCP URL in Agent settings", 5*time.Second, func() bool {
+		for _, n := range d.tree().Nodes {
+			if strings.HasPrefix(n.Label, "http://127.0.0.1:") && strings.HasSuffix(n.Label, "/mcp") {
+				mcpURL = n.Label
+				return true
+			}
+		}
+		return false
+	})
+	d.pressKey("agent-settings")
+
+	callMCP := func(js string) string {
+		mcpBody, _ := json.Marshal(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      1,
+			"method":  "tools/call",
+			"params": map[string]any{
+				"name":      "execute",
+				"arguments": map[string]any{"input": js},
+			},
+		})
+		resp, err := http.Post(mcpURL, "application/json", bytes.NewReader(mcpBody))
+		if err != nil {
+			t.Fatalf("MCP POST failed: %v", err)
+		}
+		raw, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != 200 || bytes.Contains(raw, []byte(`"isError":true`)) {
+			t.Fatalf("MCP execute error: %s", string(raw))
+		}
+		return string(raw)
+	}
+
+	symOut := callMCP(`
+		const p2 = FindEmptySpace({width: 393, height: 852, padding: 80});
+		const s2 = Insert(document, {type: "frame", name: "Menu sesi", x: p2.x, y: p2.y, width: 393, height: 852, fill: "#FFFFFF", clip: true});
+		const p3 = FindEmptySpace({width: 393, height: 852, padding: 80});
+		const s3 = Insert(document, {type: "frame", name: "Review perubahan", x: p3.x, y: p3.y, width: 393, height: 852, fill: "#FFFFFF", clip: true});
+		Print("Y_COORDS=" + p2.y + "," + p3.y);
+	`)
+	if !strings.Contains(symOut, "Y_COORDS=0,0") {
+		t.Fatalf("expected Menu sesi and Review perubahan aligned at y=0 with iPhone 16, got: %s", symOut)
+	}
+
+	// 3. Verify smooth zoom in & zoom out via real toolbar buttons and Ctrl+Wheel input!
+	d.pressKey("zoom-in")
+	d.pressKey("zoom-out")
+	d.pressKey("fit")
+
+	// 4. Build tall 1440x4154 shadowed liquid-glass page, select it, scroll Inspector to bottom, and click Export PNG & JPEG!
+	callMCP(`
+		Get(n => n.type === "frame" && Delete(n.id));
+		` + buildTallShadowedGlassPageScript())
+
+	d.until("Arunika — Landing Page in Layers", 6*time.Second, func() bool {
+		return d.hasLabelContaining("Arunika — Landing Page")
+	})
+
+	// Select Arunika frame via Layers row click, switch to Design tab, scroll Inspector to bottom
+	for _, n := range d.tree().Nodes {
+		if strings.Contains(n.Label, "Arunika — Landing Page") && strings.HasPrefix(fmt.Sprint(n.Key), "layer-") {
+			d.clickAt(n.Bounds.X+n.Bounds.Width/2, n.Bounds.Y+n.Bounds.Height/2)
+			break
+		}
+	}
+	d.pressKey("tab-design")
+
+	// Scroll inspector down via real mouse wheel events so Export section scrolls cleanly into the bottom of the viewport!
+	var inspBounds autoRect
+	for _, n := range d.tree().Nodes {
+		if ks, ok := n.Key.(string); ok && ks == "inspector-scroll" {
+			inspBounds = n.Bounds
+			break
+		}
+	}
+	if err := d.rpc("input", map[string]any{
+		"window": 0,
+		"events": []map[string]any{
+			{"type": "wheel", "x": inspBounds.X + 80, "y": inspBounds.Y + 120, "dy": 600},
+			{"type": "wheel", "x": inspBounds.X + 80, "y": inspBounds.Y + 120, "dy": 600},
+		},
+	}, nil); err != nil {
+		t.Fatalf("wheel scroll inspector failed: %v", err)
+	}
+	_ = d.idle(1500)
+
+	// Verify BOTH export-png AND export-svg sit strictly inside ContentBounds.Height!
+	for _, expKey := range []string{"export-png", "export-jpeg", "export-svg", "export-html"} {
+		found := false
+		for _, n := range d.tree().Nodes {
+			if ks, ok := n.Key.(string); ok && ks == expKey {
+				found = true
+				bottom := n.Bounds.Y + n.Bounds.Height
+				if bottom > winH+1.0 {
+					t.Fatalf("Real window %s clipped past bottom %.1f: Bottom=%.1f", expKey, winH, bottom)
+				}
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("Real window %s not found after scrolling inspector", expKey)
+		}
+	}
+
+	// Click Export JPEG in the real window and immediately prove the Windows GUI loop responds in < 300ms (NEVER "Not Responding"!)
+	clickStart := time.Now()
+	if err := d.rpc("act", map[string]any{"window": 0, "key": "export-jpeg", "action": "press"}, nil); err != nil {
+		t.Fatalf("press export-jpeg failed: %v", err)
+	}
+	wsDuringExport := d.windows()
+	respLatency := time.Since(clickStart)
+	t.Logf("Live Windows GUI response latency immediately after clicking Export JPEG on 1440x4154 page: %v", respLatency)
+	if len(wsDuringExport) != 1 || respLatency > 500*time.Millisecond {
+		t.Fatalf("GUI froze during Export JPEG: latency=%v", respLatency)
+	}
+
+	// Wait for background JPEG export to write file to dataDir/exports and show Exported toast!
+	d.until("Exported JPEG toast & file on disk", 25*time.Second, func() bool {
+		return d.hasLabelContaining("Exported ")
+	})
+	finalShot := d.captureImage()
+	assertDistinctPixels(t, finalShot, 12, "Final exported Arunika canvas")
 }

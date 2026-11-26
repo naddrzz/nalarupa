@@ -3,8 +3,10 @@ package engine
 import (
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/naddrzz/nalarupa/core-go/doc"
@@ -108,6 +110,42 @@ func (e *Engine) SettingsView() *jsonv.Object {
 	return s
 }
 
+// ParseContextWindow parses a context window token limit (int/float or shorthand string like "128k", "1m").
+// Returns 0 when unset/auto, else clamped to [4096, 4000000].
+func ParseContextWindow(v jsonv.Value) int {
+	if v == nil {
+		return 0
+	}
+	if f, ok := jsonv.F64(v); ok {
+		n := int(math.Round(f))
+		if n <= 0 {
+			return 0
+		}
+		return min(max(n, 4096), 4_000_000)
+	}
+	if s, ok := jsonv.Str(v); ok {
+		s = strings.ToLower(strings.TrimSpace(strings.ReplaceAll(s, ",", "")))
+		s = strings.ReplaceAll(s, "_", "")
+		if s == "" || s == "auto" || s == "default" || s == "0" {
+			return 0
+		}
+		mult := 1.0
+		switch {
+		case strings.HasSuffix(s, "m"):
+			mult = 1_000_000
+			s = strings.TrimSpace(strings.TrimSuffix(s, "m"))
+		case strings.HasSuffix(s, "k"):
+			mult = 1_000
+			s = strings.TrimSpace(strings.TrimSuffix(s, "k"))
+		}
+		if f, err := strconv.ParseFloat(s, 64); err == nil && f > 0 {
+			n := int(math.Round(f * mult))
+			return min(max(n, 4096), 4_000_000)
+		}
+	}
+	return 0
+}
+
 // providerFormats are the API formats a provider can speak (provider.rs `FORMATS`).
 var providerFormats = []string{"anthropic", "chat", "responses"}
 
@@ -150,8 +188,17 @@ func (e *Engine) SaveProvider(p jsonv.Value) (string, error) {
 	if name = strings.TrimSpace(name); name == "" {
 		name = base
 	}
+	var cw int
+	if pObj := jsonv.Obj(p); pObj != nil && pObj.Has("context_window") {
+		cw = ParseContextWindow(jsonv.Get(p, "context_window"))
+	} else if old >= 0 {
+		cw = ParseContextWindow(jsonv.Get(list.Items[old], "context_window"))
+	}
 	saved := Object("id", id, "name", name, "format", format, "base_url", base, "api_key", key, "models", Strings(models),
 		"vision", !jsonv.IsFalse(jsonv.Get(p, "vision")))
+	if cw > 0 {
+		saved.Set("context_window", jsonv.Int(int64(cw)))
+	}
 	if old >= 0 {
 		list.Items[old] = saved
 	} else {

@@ -51,6 +51,9 @@ type InspectorState struct {
 	MixedSession string
 	MixedBase    map[string]float64
 	MixedAccum   float64
+	CachedVer    uint64
+	CachedSel    []string
+	CachedInfos  []selectedNodeEntry
 }
 
 // ParseInspectorJSONOrScalar parses numbers, JSON arrays/objects, or strings; empty returns nil (JSON null).
@@ -426,7 +429,11 @@ type selectedNodeEntry struct {
 func (a *NalarupaApp) viewInspector(c *ui.Context) {
 	takesText := c.FocusTakesText()
 	scroll := ui.Scroll(c.Key("inspector-scroll")).
-		Fill().
+		FillWidth().
+		Grow(1).
+		MinHeight(0).
+		KeepScrollbars(true).
+		Padding(0, 0, 14, 0).
 		TrackScroll(&a.Inspector.Scroll)
 
 	scroll.HandleInput(func(ev ui.InputEvent) bool {
@@ -450,13 +457,19 @@ func (a *NalarupaApp) viewInspector(c *ui.Context) {
 			return
 		}
 
-		var infos []selectedNodeEntry
-		for _, id := range a.State.Selection {
-			var nd NodeDetail
-			if a.Bridge.TryCall("node", map[string]any{"id": id}, &nd) && nd.Exists && nd.Node != nil {
-				infos = append(infos, selectedNodeEntry{id: id, nd: nd})
+		if a.Inspector.CachedVer != a.State.Version || !slices.Equal(a.Inspector.CachedSel, a.State.Selection) {
+			var fresh []selectedNodeEntry
+			for _, id := range a.State.Selection {
+				var nd NodeDetail
+				if a.Bridge.TryCall("node", map[string]any{"id": id}, &nd) && nd.Exists && nd.Node != nil {
+					fresh = append(fresh, selectedNodeEntry{id: id, nd: nd})
+				}
 			}
+			a.Inspector.CachedVer = a.State.Version
+			a.Inspector.CachedSel = append([]string(nil), a.State.Selection...)
+			a.Inspector.CachedInfos = fresh
 		}
+		infos := a.Inspector.CachedInfos
 
 		// Pure instance child selection without direct node record
 		if len(infos) == 0 {
@@ -1478,19 +1491,7 @@ func (a *NalarupaApp) viewInspector(c *ui.Context) {
 		InspectorSection(c, "sec-export", "Export", nil, func() {
 			exportFmt := func(key, label, format string) {
 				if ActionBtn(c, key, label, "download", "").Clicked() {
-					var files []string
-					if err := a.Bridge.Call("export", map[string]any{
-						"ids":    a.State.Selection,
-						"format": format,
-						"path":   "",
-						"opts":   map[string]any{"scale": 2},
-					}, &files); err != nil {
-						a.ShowToast(err.Error(), true)
-						return
-					}
-					if len(files) > 0 {
-						a.ShowToast("Exported "+strings.Join(files, ", "), false)
-					}
+					a.TriggerExport(a.State.Selection, format, label, map[string]any{"scale": 2})
 				}
 			}
 			ui.Row(c.Key("export-row-1")).FillWidth().Gap(6).Children(func() {

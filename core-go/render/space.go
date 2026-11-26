@@ -31,10 +31,14 @@ func FindEmptySpaceOK(r *Renderer, w, h float64, dir string, pad float64, anchor
 	switch {
 	case anchor != nil:
 		a = Rect{X: anchor.X, Y: anchor.Y, W: anchor.W, H: anchor.H}
-	default:
-		if b, ok := r.Bounds(); ok {
-			a = Rect{X: b.X + 64, Y: b.Y + 64, W: b.W - 128, H: b.H - 128}
+	case len(boxes) > 0:
+		x0, y0 := boxes[0].X, boxes[0].Y
+		x1, y1 := x0+boxes[0].W, y0+boxes[0].H
+		for _, b := range boxes[1:] {
+			x0, y0 = fmin(x0, b.X), fmin(y0, b.Y)
+			x1, y1 = fmax(x1, b.X+b.W), fmax(y1, b.Y+b.H)
 		}
+		a = Rect{X: x0, Y: y0, W: x1 - x0, H: y1 - y0}
 	}
 	switch dir {
 	case "left":

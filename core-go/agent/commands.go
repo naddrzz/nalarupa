@@ -3,9 +3,11 @@ package agent
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/naddrzz/nalarupa/core-go/engine"
 	"github.com/naddrzz/nalarupa/core-go/jsonv"
+	"github.com/naddrzz/nalarupa/core-go/model"
 )
 
 // The agent's UI commands (lib.rs `dispatch`). They lock the engine themselves, so they join the dispatcher
@@ -115,5 +117,93 @@ func init() {
 			return nil, err
 		}
 		return text, nil
+	})
+	engine.HandleUnlocked("models_fetch", func(e *engine.Engine, req jsonv.Value) (jsonv.Value, error) {
+		target := strings.TrimSpace(orDefault(req, "target", "provider"))
+		provID := strings.TrimSpace(jsonv.StrOr(jsonv.Get(req, "id")))
+		format := strings.TrimSpace(jsonv.StrOr(jsonv.Get(req, "format")))
+		baseURL := strings.TrimSpace(jsonv.StrOr(jsonv.Get(req, "base_url")))
+		apiKey := strings.TrimSpace(jsonv.StrOr(jsonv.Get(req, "api_key")))
+
+		e.Locked(func() {
+			if target == "api" {
+				if format == "" {
+					format = "anthropic"
+				}
+				if baseURL == "" {
+					baseURL, _ = e.Setting("anthropic_base_url")
+				}
+				if apiKey == "" || apiKey == engine.Mask {
+					apiKey, _ = e.APIKey()
+				}
+				return
+			}
+			for _, p := range jsonv.Items(jsonv.Get(e.Settings, "providers")) {
+				if provID != "" && jsonv.StrIs(jsonv.Get(p, "id"), provID) {
+					if format == "" {
+						format = jsonv.StrOr(jsonv.Get(p, "format"))
+					}
+					if baseURL == "" {
+						baseURL = jsonv.StrOr(jsonv.Get(p, "base_url"))
+					}
+					if apiKey == "" || apiKey == engine.Mask {
+						apiKey = jsonv.StrOr(jsonv.Get(p, "api_key"))
+					}
+					break
+				}
+			}
+		})
+		if target != "api" && baseURL == "" {
+			return nil, errors.New("A base URL is required to fetch models.")
+		}
+		if apiKey == engine.Mask {
+			apiKey = ""
+		}
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					e.Locked(func() {
+						e.Emit(engine.Object("type", "models_fetched", "target", target, "id", provID, "ok", false,
+							"models", engine.Strings(nil), "error", fmt.Sprintf("internal error (panic): %v", r)))
+					})
+				}
+			}()
+			models, err := model.FetchModels(format, baseURL, apiKey)
+			e.Locked(func() {
+				if err != nil {
+					e.Emit(engine.Object("type", "models_fetched", "target", target, "id", provID, "ok", false,
+						"models", engine.Strings(nil), "error", err.Error()))
+					return
+				}
+				if target == "api" && len(models) > 0 {
+					_ = e.SetSetting("anthropic_models", engine.Strings(models))
+				}
+				e.Emit(engine.Object("type", "models_fetched", "target", target, "id", provID, "ok", true,
+					"models", engine.Strings(models), "error", ""))
+			})
+		}()
+		return true, nil
+	})
+	engine.HandleUnlocked("skills_list", func(e *engine.Engine, req jsonv.Value) (jsonv.Value, error) {
+		var docPath string
+		e.Locked(func() {
+			if e.Doc != nil {
+				docPath = e.Doc.Path
+			}
+		})
+		force := jsonv.IsTrue(jsonv.Get(req, "refresh"))
+		skills := DiscoverSkillsRefresh(docPath, force)
+		out := jsonv.NewArray()
+		out.Items = make([]jsonv.Value, 0, len(skills))
+		for _, s := range skills {
+			out.Items = append(out.Items, engine.Object(
+				"name", s.Name,
+				"description", s.Description,
+				"path", s.Path,
+				"dir", s.Dir,
+				"source", s.Source,
+			))
+		}
+		return out, nil
 	})
 }

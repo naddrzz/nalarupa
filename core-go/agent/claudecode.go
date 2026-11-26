@@ -132,16 +132,21 @@ func runClaudeCode(e *engine.Engine, p engine.Profile, prompt string, child bool
 		return nil, err
 	}
 	defer doc.RemoveFile(cfg)
-	var session, state string
+	var session, state, effort string
 	var cancel *engine.Flag
 	var auto, fast bool
+	var skillDirs []string
 	e.Locked(func() {
 		if !child {
 			state, session = e.EditorState(), e.Agent.Session
+			skillDirs = append([]string(nil), e.Agent.ActiveSkillDirs...)
 		}
 		cancel = e.Agent.Cancel
 		fast = fastFor(name, jsonv.IsTrue(jsonv.Get(e.Settings, "agent_fast")))
 		auto = jsonv.IsTrue(jsonv.Get(e.Settings, "agent_auto_permissions"))
+		if eff, ok := jsonv.Str(jsonv.Get(e.Settings, "agent_effort")); ok {
+			effort = strings.ToLower(strings.TrimSpace(eff))
+		}
 	})
 	full := prompt
 	if !child {
@@ -150,9 +155,9 @@ func runClaudeCode(e *engine.Engine, p engine.Profile, prompt string, child bool
 	// The prompt goes in on stdin: as an argument a long message or selection overflows the OS limit.
 	args := []string{"-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--strict-mcp-config",
 		"--mcp-config", cfg,
-		// Pre-allowed set: the canvas tools plus web search/fetch. Every other tool asks the user through the MCP
-		// permission tool (a permission card).
-		"--allowedTools", "mcp__nalarupa,WebSearch,WebFetch",
+		// Pre-allowed set: the canvas tools, web search/fetch, and Claude Skills. Every other tool asks the user
+		// through the MCP permission tool (a permission card).
+		"--allowedTools", "mcp__nalarupa,WebSearch,WebFetch,Skill",
 		"--disallowedTools", "Task,Agent,AskUserQuestion",
 		"--permission-prompt-tool", "mcp__nalarupa__" + PermissionTool,
 		"--append-system-prompt", Instructions("claude-code")}
@@ -168,6 +173,15 @@ func runClaudeCode(e *engine.Engine, p engine.Profile, prompt string, child bool
 	}
 	if fast {
 		args = append(args, "--settings", `{"fastMode":true}`)
+	}
+	switch effort {
+	case "low", "medium", "high", "xhigh", "max":
+		args = append(args, "--effort", effort)
+	}
+	for _, dir := range skillDirs {
+		if dir != "" {
+			args = append(args, "--add-dir", dir)
+		}
 	}
 	cmd := command(claudeProgram, args...)
 	stdin, err := cmd.StdinPipe()
@@ -295,6 +309,15 @@ func claudeEvent(e *engine.Engine, p engine.Profile, child bool, session string,
 		switch jsonv.StrOr(jsonv.Get(se, "type")) {
 		case "message_start":
 			clear(tools)
+			if !child {
+				mu := jsonv.Get(jsonv.Get(se, "message"), "usage")
+				inTok := int(asU64(jsonv.Get(mu, "input_tokens")) + asU64(jsonv.Get(mu, "cache_read_input_tokens")) + asU64(jsonv.Get(mu, "cache_creation_input_tokens")))
+				if inTok > 0 {
+					var lim int
+					e.Locked(func() { lim = e.EffectiveContextWindow() })
+					emitContextUsage(e, p, false, inTok, lim)
+				}
+			}
 		case "content_block_start":
 			block := jsonv.Get(se, "content_block")
 			if jsonv.StrIs(jsonv.Get(block, "type"), "tool_use") {
@@ -357,6 +380,12 @@ func claudeEvent(e *engine.Engine, p engine.Profile, child bool, session string,
 		c := func(v jsonv.Value, k string) jsonv.Value { return jsonv.Clone(jsonv.Get(v, k)) }
 		usage = engine.Object("input", c(u, "input_tokens"), "output", c(u, "output_tokens"), "cacheRead", c(u, "cache_read_input_tokens"),
 			"cacheWrite", c(u, "cache_creation_input_tokens"), "turns", c(ev, "num_turns"), "costUsd", c(ev, "total_cost_usd"))
+		ctxUsed := int(asU64(jsonv.Get(u, "input_tokens")) + asU64(jsonv.Get(u, "cache_read_input_tokens")) + asU64(jsonv.Get(u, "cache_creation_input_tokens")) + asU64(jsonv.Get(u, "output_tokens")))
+		if ctxUsed > 0 && !child {
+			var lim int
+			e.Locked(func() { lim = e.EffectiveContextWindow() })
+			emitContextUsage(e, p, false, ctxUsed, lim)
+		}
 		if jsonv.IsTrue(jsonv.Get(ev, "is_error")) {
 			// Without text the card would hide the real cause; leave that to the exit error (stderr).
 			text, ok := errorCause(ev)

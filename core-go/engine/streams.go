@@ -23,6 +23,8 @@ type Stream struct {
 	Seed uint64
 	// Touched is how many ids the stream has reported in `agent_activity` events.
 	Touched int
+	// Edited tracks node ids that already spawned an edit slide during streaming so final execute commit doesn't replay them.
+	Edited map[string]bool
 }
 
 // StreamUpdate: the model streamed more of an `execute` call. Its newly completed statements run once, in the
@@ -47,11 +49,18 @@ func (e *Engine) StreamUpdate(key, agent, source string) {
 		ok := false
 		e.onPreview(func() { touched, ok = e.streamStep(key, agent, prefix, s.Seed) })
 		if ok {
-			e.redraw(clean)
 			seen := s.Touched
 			s.Touched = len(touched)
+			if e.Agent.Running {
+				e.DeconflictTopLevelNodes(e.Preview)
+			}
+			e.reconcilePreTurnScreenIsolation(e.Preview)
 			if len(touched) > seen {
-				e.Emit(streamWrite(s.Agent, touched[seen:]))
+				e.ExpandProgressiveRootSlides(e.Preview, touched[seen:])
+			}
+			e.redraw(clean)
+			if len(touched) > seen {
+				e.EmitWriteActivityWithTeam(s.Agent, e.Preview, touched[seen:], true)
 			}
 			return
 		}
@@ -117,7 +126,12 @@ func (e *Engine) streamStep(key, agent, source string, seed uint64) ([]string, b
 		defer e.ids.SetState(state)
 	}
 	e.Executing = true
-	defer func() { e.Executing = was }()
+	prevExecAgent := e.currentExecAgent
+	e.currentExecAgent = agent
+	defer func() {
+		e.Executing = was
+		e.currentExecAgent = prevExecAgent
+	}()
 	if e.Script.live == nil {
 		e.Script.live = map[string]*script.Live{}
 	}

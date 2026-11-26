@@ -171,9 +171,13 @@ func (a *NalarupaApp) viewPresent(c *ui.Context) {
 			Radius(6).
 			Background(ui.Hex("#00000099")).
 			Border(1, ui.Hex("#FFFFFF22")).
+			Transition(ChipTransition(EffectiveReducedMotion(c))).
 			IgnoreInput(true).
 			Children(func() {
-				ui.Text(c, hudText).FontSize(11).TextColor(C.Text)
+				hudEl := ui.Text(c.Key("present-hud-txt"), hudText).FontSize(11).FontFeatures("tnum").TextColor(C.Text)
+				if !EffectiveReducedMotion(c) {
+					hudEl.ContentTransition(ui.ContentTransition{Numeric: true, Animation: &NumericRollAnim})
+				}
 			})
 	})
 }

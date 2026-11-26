@@ -348,29 +348,31 @@ func flatten(d string) []poly {
 // only its children can be hit: a point inside its box but on none of them falls through to the layers
 // below. The same goes for the empty part of an ellipse's, path's or line's box (see Shape).
 func HitChain(r *Renderer, x, y float64) []string {
+	type step struct {
+		i              int
+		open, scripted bool
+	}
+	var pathBuf [16]step
+	path := pathBuf[:0]
+	inside := func(f *Flat) bool {
+		px, py := x, y
+		if f.M != nil {
+			px, py = Unapply(*f.M, x, y)
+		}
+		// A shape's own test also takes the stroke it paints outside its box.
+		if f.shape != nil {
+			return f.shape.Hits(px, py)
+		}
+		return px >= f.X && py >= f.Y && px <= f.X+f.W && py <= f.Y+f.H
+	}
 	for li := len(r.Order) - 1; li >= 0; li-- {
 		layer, ok := r.Layers[r.Order[li]]
 		if !ok {
 			continue
 		}
-		inside := func(f *Flat) bool {
-			px, py := x, y
-			if f.M != nil {
-				px, py = Unapply(*f.M, x, y)
-			}
-			// A shape's own test also takes the stroke it paints outside its box.
-			if f.shape != nil {
-				return f.shape.Hits(px, py)
-			}
-			return px >= f.X && py >= f.Y && px <= f.X+f.W && py <= f.Y+f.H
-		}
 		// Per node, in paint order: is it reachable (no clipping ancestor misses the point), and is it under
 		// a script node (whose generated children select the script node).
-		type step struct {
-			i              int
-			open, scripted bool
-		}
-		var path []step
+		path = path[:0]
 		hit := -1
 		for i := range layer.Flat {
 			f := &layer.Flat[i]

@@ -162,7 +162,7 @@ func TestAClaudeCodeRunStreamsItsEventsAndResumesItsSession(t *testing.T) {
 		cfg = args[i+1]
 	}
 	want = []string{"-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--strict-mcp-config", "--mcp-config", cfg,
-		"--allowedTools", "mcp__nalarupa,WebSearch,WebFetch", "--disallowedTools", "Task,Agent,AskUserQuestion",
+		"--allowedTools", "mcp__nalarupa,WebSearch,WebFetch,Skill", "--disallowedTools", "Task,Agent,AskUserQuestion",
 		"--permission-prompt-tool", "mcp__nalarupa__approve", "--append-system-prompt", Instructions("claude-code"),
 		"--permission-mode", "auto", "--model", "claude-opus-5", "--settings", `{"fastMode":true}`}
 	if !slices.Equal(args, want) {
@@ -385,5 +385,56 @@ func TestTheCLIIsFoundAsAnExeOnly(t *testing.T) {
 	}
 	if cmd := command(filepath.Join(dir, "claude.cmd")); cmd.Err != nil {
 		t.Error("an explicit path is used as is:", cmd.Err)
+	}
+}
+
+func TestAClaudeCodeRunPassesConfiguredEffort(t *testing.T) {
+	e, log := ccEngine(t, "ok")
+	e.Locked(func() {
+		e.Settings.Set("agent_effort", "xhigh")
+	})
+	Send(e, "Hello", 1, "split", 1, "layout")
+	waitIdle(t, e)
+	r := runs(t, log)
+	if len(r) != 1 {
+		t.Fatal(len(r))
+	}
+	args := argsOf(r[0])
+	idx := slices.Index(args, "--effort")
+	if idx < 0 || idx+1 >= len(args) || args[idx+1] != "xhigh" {
+		t.Fatalf("expected --effort xhigh in argv, got %q", args)
+	}
+}
+
+func TestAClaudeCodeRunActivatesMultipleSkillsAndAddsDirs(t *testing.T) {
+	skillsRoot := filepath.Join(t.TempDir(), "skills")
+	dirA := writeSkillFixture(t, skillsRoot, "alpha-skill", "---\nname: alpha-skill\ndescription: First skill\n---\nAlpha rule.")
+	dirB := writeSkillFixture(t, skillsRoot, "beta-skill", "---\nname: beta-skill\ndescription: Second skill\n---\nBeta rule.")
+	t.Setenv("NALARUPA_SKILLS_ONLY", "1")
+	t.Setenv("NALARUPA_SKILLS_DIR", skillsRoot)
+
+	e, log := ccEngine(t, "ok")
+	Send(e, "/alpha-skill /beta-skill Build clean dashboard", 1, "split", 1, "layout")
+	waitIdle(t, e)
+	r := runs(t, log)
+	if len(r) != 1 {
+		t.Fatal(len(r))
+	}
+	args := argsOf(r[0])
+	if i := slices.Index(args, "--allowedTools"); i < 0 || !strings.Contains(args[i+1], "Skill") {
+		t.Fatalf("expected Skill in --allowedTools, got %q", args)
+	}
+	var addedDirs []string
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "--add-dir" {
+			addedDirs = append(addedDirs, args[i+1])
+		}
+	}
+	if !slices.Contains(addedDirs, filepath.Clean(dirA)) || !slices.Contains(addedDirs, filepath.Clean(dirB)) {
+		t.Fatalf("expected --add-dir for %q and %q, got %q", dirA, dirB, addedDirs)
+	}
+	stdin := jsonv.StrOr(jsonv.Get(r[0], "stdin"))
+	if !strings.Contains(stdin, "Alpha rule.") || !strings.Contains(stdin, "Beta rule.") {
+		t.Fatalf("expected stdin to expand both skills, got:\n%s", stdin)
 	}
 }

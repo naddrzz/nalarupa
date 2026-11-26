@@ -36,10 +36,16 @@ type docHost struct {
 
 var _ script.Host = (*docHost)(nil)
 
-func (h *docHost) Doc() *doc.Doc       { return h.doc }
-func (h *docHost) Changed()            { h.version++ }
-func (h *docHost) SlideIn(id string)   { h.slid = append(h.slid, id) }
-func (h *docHost) IDs() *doc.IDSource  { return h.ids }
+func (h *docHost) Doc() *doc.Doc                                             { return h.doc }
+func (h *docHost) Changed()                                                  { h.version++ }
+func (h *docHost) SlideIn(id string)                                         { h.slid = append(h.slid, id) }
+func (h *docHost) BeforeModify(string)                                       {}
+func (h *docHost) AfterModify(string, string)                                {}
+func (h *docHost) CheckEditTarget(string, string, bool) error                { return nil }
+func (h *docHost) FilterSetVars(v jsonv.Value, r bool) (jsonv.Value, bool)   { return v, r }
+func (h *docHost) AfterRootInsert(string)                                    {}
+func (h *docHost) AfterSetVars()                                             {}
+func (h *docHost) IDs() *doc.IDSource                                        { return h.ids }
 func (h *docHost) Fonts() *text.Fonts  { return h.fonts }
 func (h *docHost) Assets() *svg.Assets { return h.assets }
 
