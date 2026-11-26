@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/naddrzz/nalarupa/core-go/doc"
 	"github.com/naddrzz/nalarupa/core-go/engine"
 	"github.com/naddrzz/nalarupa/core-go/jsonv"
 )
@@ -52,11 +53,13 @@ func SpawnChildren(e *engine.Engine, parent string, config jsonv.Value) engine.T
 			}
 		}
 		var all [][]string
+		var allFlatIDs []string
 		for _, entry := range entries {
 			var ids []string
 			for _, v := range jsonv.Items(jsonv.Get(entry, "containerNodes")) {
-				if s, ok := jsonv.Str(v); ok {
+				if s, ok := jsonv.Str(v); ok && s != "" {
 					ids = append(ids, s)
+					allFlatIDs = append(allFlatIDs, s)
 				}
 			}
 			if len(ids) == 0 {
@@ -71,18 +74,22 @@ func SpawnChildren(e *engine.Engine, parent string, config jsonv.Value) engine.T
 			}
 			all = append(all, ids)
 		}
+		if err := e.ValidateChildScopes(allFlatIDs); err != nil {
+			refused = err
+			return
+		}
 		e.Agent.Spawned += len(entries)
 		// Only cloned here: serializing a large document would hold the engine lock against render and poll.
 		vars = e.Doc.Variables()
-		for _, ch := range e.Doc.Children() {
+		doc.Walk(e.Doc.Children(), func(ch jsonv.Value) {
 			if jsonv.IsTrue(jsonv.Get(ch, "reusable")) && len(compSummary) < 24 {
 				cid := jsonv.StrOr(jsonv.Get(ch, "id"))
 				cname := jsonv.StrOr(jsonv.Get(ch, "name"))
 				compSummary = append(compSummary, fmt.Sprintf("`%s` %q", cid, cname))
 			}
-		}
+		})
 		for _, ids := range all {
-			child := e.Agent.TakeTeamMember(parent)
+			child := e.Agent.TakeTeamMemberForContainer(parent, ids[0])
 			e.SetAgentContainerScope(child.ID, ids)
 			e.Emit(engine.Object("type", "agent_activity", "agent", child.ID, "op", "read", "ids", engine.Strings(ids), "streaming", false))
 			var nodes []jsonv.Value

@@ -124,17 +124,37 @@ func init() {
 		format := strings.TrimSpace(jsonv.StrOr(jsonv.Get(req, "format")))
 		baseURL := strings.TrimSpace(jsonv.StrOr(jsonv.Get(req, "base_url")))
 		apiKey := strings.TrimSpace(jsonv.StrOr(jsonv.Get(req, "api_key")))
+		reqID := strings.TrimSpace(jsonv.StrOr(jsonv.Get(req, "req_id")))
+		persist := jsonv.IsTrue(jsonv.Get(req, "persist"))
 
+		normEndpoint := func(u, def string) string {
+			u = strings.TrimRight(strings.TrimSpace(u), "/")
+			if u == "" {
+				return strings.TrimRight(def, "/")
+			}
+			return u
+		}
+
+		var precheckErr error
+		var savedBase string
 		e.Locked(func() {
 			if target == "api" {
 				if format == "" {
 					format = "anthropic"
 				}
+				savedBase, _ = e.Setting("anthropic_base_url")
 				if baseURL == "" {
-					baseURL, _ = e.Setting("anthropic_base_url")
+					baseURL = savedBase
 				}
 				if apiKey == "" || apiKey == engine.Mask {
-					apiKey, _ = e.APIKey()
+					if normEndpoint(baseURL, "https://api.anthropic.com") != normEndpoint(savedBase, "https://api.anthropic.com") {
+						if _, hasSaved := e.APIKey(); hasSaved {
+							precheckErr = errors.New("Enter the API key for the edited Base URL before fetching models.")
+							return
+						}
+					} else {
+						apiKey, _ = e.APIKey()
+					}
 				}
 				return
 			}
@@ -143,16 +163,28 @@ func init() {
 					if format == "" {
 						format = jsonv.StrOr(jsonv.Get(p, "format"))
 					}
+					savedBase = strings.TrimSpace(jsonv.StrOr(jsonv.Get(p, "base_url")))
 					if baseURL == "" {
-						baseURL = jsonv.StrOr(jsonv.Get(p, "base_url"))
+						baseURL = savedBase
 					}
 					if apiKey == "" || apiKey == engine.Mask {
-						apiKey = jsonv.StrOr(jsonv.Get(p, "api_key"))
+						savedKey := strings.TrimSpace(jsonv.StrOr(jsonv.Get(p, "api_key")))
+						if normEndpoint(baseURL, "") != normEndpoint(savedBase, "") {
+							if savedKey != "" {
+								precheckErr = errors.New("Base URL changed; enter the API key for this endpoint before fetching models.")
+								return
+							}
+						} else {
+							apiKey = savedKey
+						}
 					}
 					break
 				}
 			}
 		})
+		if precheckErr != nil {
+			return nil, precheckErr
+		}
 		if target != "api" && baseURL == "" {
 			return nil, errors.New("A base URL is required to fetch models.")
 		}
@@ -163,7 +195,7 @@ func init() {
 			defer func() {
 				if r := recover(); r != nil {
 					e.Locked(func() {
-						e.Emit(engine.Object("type", "models_fetched", "target", target, "id", provID, "ok", false,
+						e.Emit(engine.Object("type", "models_fetched", "target", target, "id", provID, "req_id", reqID, "ok", false,
 							"models", engine.Strings(nil), "error", fmt.Sprintf("internal error (panic): %v", r)))
 					})
 				}
@@ -171,14 +203,52 @@ func init() {
 			models, err := model.FetchModels(format, baseURL, apiKey)
 			e.Locked(func() {
 				if err != nil {
-					e.Emit(engine.Object("type", "models_fetched", "target", target, "id", provID, "ok", false,
+					e.Emit(engine.Object("type", "models_fetched", "target", target, "id", provID, "req_id", reqID, "ok", false,
 						"models", engine.Strings(nil), "error", err.Error()))
 					return
 				}
+				var saveErr error
 				if target == "api" && len(models) > 0 {
-					_ = e.SetSetting("anthropic_models", engine.Strings(models))
+					saveErr = e.SetSetting("anthropic_models", engine.Strings(models))
+				} else if target == "provider" && persist && provID != "" && len(models) > 0 {
+					list := jsonv.Arr(jsonv.Clone(jsonv.Get(e.Settings, "providers")))
+					if list != nil {
+						for i, p := range list.Items {
+							if jsonv.StrIs(jsonv.Get(p, "id"), provID) &&
+								normEndpoint(jsonv.StrOr(jsonv.Get(p, "base_url")), "") == normEndpoint(baseURL, "") {
+								seen := map[string]bool{}
+								var merged []string
+								for _, em := range jsonv.Items(jsonv.Get(p, "models")) {
+									if s, ok := jsonv.Str(em); ok && strings.TrimSpace(s) != "" && !seen[strings.TrimSpace(s)] {
+										s = strings.TrimSpace(s)
+										seen[s] = true
+										merged = append(merged, s)
+									}
+								}
+								for _, nm := range models {
+									nm = strings.TrimSpace(nm)
+									if nm != "" && !seen[nm] {
+										seen[nm] = true
+										merged = append(merged, nm)
+									}
+								}
+								pObj := jsonv.Obj(jsonv.Clone(p))
+								if pObj != nil {
+									pObj.Set("models", engine.Strings(merged))
+									list.Items[i] = pObj
+									saveErr = e.SetSetting("providers", list)
+								}
+								break
+							}
+						}
+					}
 				}
-				e.Emit(engine.Object("type", "models_fetched", "target", target, "id", provID, "ok", true,
+				if saveErr != nil {
+					e.Emit(engine.Object("type", "models_fetched", "target", target, "id", provID, "req_id", reqID, "ok", false,
+						"models", engine.Strings(nil), "error", saveErr.Error()))
+					return
+				}
+				e.Emit(engine.Object("type", "models_fetched", "target", target, "id", provID, "req_id", reqID, "ok", true,
 					"models", engine.Strings(models), "error", ""))
 			})
 		}()

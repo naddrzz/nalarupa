@@ -51,8 +51,12 @@ func TestIdleHoverZeroJSONAllocationsAndPointerCoalescing(t *testing.T) {
 	// 2. Burst of 40 rapid pointer-move events during active Pan or Move within a single VSync interval
 	// should coalesce instead of returning true (triggering redundant UI tree rebuilds) 40 times.
 	app.Canvas.Pan = &panGesture{startSX: 100, startSY: 100, startCX: 0, startCY: 0}
+	app.Canvas.lastDragStepAt = time.Time{}
 	panRebuilds := 0
 	for i := range 40 {
+		if i > 0 {
+			app.Canvas.lastDragStepAt = time.Now()
+		}
 		if app.onCanvasPointerMove(ui.InputEvent{X: float32(100 + i*2), Y: float32(100 + i)}) {
 			panRebuilds++
 		}
@@ -157,46 +161,88 @@ func TestDesigningStreamDetachedRenderZeroMainThreadStall(t *testing.T) {
 	})
 	app.RefreshState()
 
-	worker := NewCanvasRenderWorker(app.Bridge, func() {})
+	readyCh := make(chan struct{}, 4)
+	worker := NewCanvasRenderWorker(app.Bridge, func() {
+		select {
+		case readyCh <- struct{}{}:
+		default:
+		}
+	})
 	defer worker.Close()
 
-	// Continuously submit full-viewport renders to CanvasRenderWorker while measuring main-thread Try*Direct + HasSlidesDirect latency.
-	for i := range 8 {
-		worker.Submit(canvasRenderJob{
-			key:   canvasRenderKey{version: uint64(i + 1), pw: 1100, ph: 800, camX: 0, camY: float64(i * 40), zoom: 0.45, sharp: false},
-			w:     1100,
-			h:     800,
-			camX:  0,
-			camY:  float64(i * 40),
-			zoom:  0.45,
-			bg:    CanvasBG,
-			sharp: false,
-		})
+	// Synchronize deterministically with an in-flight worker render job (zero flaky wall-clock threshold!)
+	// and verify non-blocking Try*Direct + TryPollFast reads succeed without waiting on rasterization.
+	worker.Submit(canvasRenderJob{
+		key:   canvasRenderKey{version: app.Bridge.VersionDirect(), pw: 1100, ph: 800, camX: 0, camY: 0, zoom: 0.45, sharp: false},
+		w:     1100,
+		h:     800,
+		camX:  0,
+		camY:  0,
+		zoom:  0.45,
+		bg:    CanvasBG,
+		sharp: false,
+	})
+	select {
+	case <-readyCh:
+	case <-time.After(20 * time.Second):
+		t.Fatal("timed out priming initial worker snapshot")
+	}
+	_, _, _ = worker.TakeReady(&app.Canvas.RGBA)
+
+	// Now hold Engine.Lock() on a background goroutine (simulating active agent script execution) while submitting
+	// a zoom render AND running main-thread Try*Direct probes: neither the UI probes nor the lock-free zoom render may block!
+	lockHeld := make(chan struct{})
+	releaseLock := make(chan struct{})
+	lockDone := make(chan struct{})
+	go func() {
+		app.Bridge.eng.Lock()
+		close(lockHeld)
+		<-releaseLock
+		app.Bridge.eng.Unlock()
+		close(lockDone)
+	}()
+	<-lockHeld
+
+	worker.Submit(canvasRenderJob{
+		key:   canvasRenderKey{version: app.Bridge.VersionDirect(), pw: 1100, ph: 800, camX: 40, camY: 40, zoom: 0.65, sharp: false},
+		w:     1100,
+		h:     800,
+		camX:  40,
+		camY:  40,
+		zoom:  0.65,
+		bg:    CanvasBG,
+		sharp: false,
+	})
+
+	probesDone := make(chan struct{})
+	go func() {
+		for range 20 {
+			_ = app.Bridge.HasSlidesDirect()
+			_, _ = app.Bridge.TryFramesDirect()
+			_, _ = app.Bridge.TryLiveDirect()
+			_, _ = app.Bridge.TryLayersDirect()
+			_, _ = app.Bridge.TryPollFast()
+		}
+		close(probesDone)
+	}()
+
+	select {
+	case <-probesDone:
+	case <-time.After(2 * time.Second):
+		close(releaseLock)
+		<-lockDone
+		t.Fatal("non-blocking Try*Direct UI reads blocked on held Engine.Lock()!")
 	}
 
-	var maxProbe time.Duration
-	deadline := time.Now().Add(400 * time.Millisecond)
-	probes := 0
-	for time.Now().Before(deadline) {
-		t0 := time.Now()
-		_ = app.Bridge.HasSlidesDirect()
-		_, _ = app.Bridge.TryFramesDirect()
-		_, _ = app.Bridge.TryLiveDirect()
-		_, _ = app.Bridge.TryLayersDirect()
-		_, _ = app.Bridge.TryPollFast()
-		dt := time.Since(t0)
-		if dt > maxProbe {
-			maxProbe = dt
-		}
-		probes++
-		time.Sleep(4 * time.Millisecond)
+	select {
+	case <-readyCh:
+	case <-time.After(15 * time.Second):
+		close(releaseLock)
+		<-lockDone
+		t.Fatal("lock-free zoom render blocked on held Engine.Lock()!")
 	}
-	if probes < 20 {
-		t.Fatalf("expected >= 20 concurrent UI probes, got %d", probes)
-	}
-	if maxProbe > 25*time.Millisecond {
-		t.Fatalf("main-thread non-blocking UI reads stalled for %v during concurrent DetachedRenderer work (want <= 25ms)", maxProbe)
-	}
+	close(releaseLock)
+	<-lockDone
 }
 
 

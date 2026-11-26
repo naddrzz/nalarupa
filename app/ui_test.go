@@ -479,15 +479,26 @@ func TestUIAgentModelsEffortAndMultiSkills(t *testing.T) {
 		t.Fatalf("unexpected Draft after removing ui-craft: %q", app.AgentUI.Draft)
 	}
 
-	// 4. Typing /prefix triggers inline slash skill autocomplete with full naming.
+	// 4. Typing /prefix triggers inline slash skill autocomplete with full naming, and Escape keeps it dismissed until token changes.
 	app.AgentUI.Draft = "/ui-"
 	tt.Frame()
 	if !tt.HasText("/ui-craft") {
 		t.Fatalf("expected /ui-craft in slash autocomplete, texts=%v", tt.Texts())
 	}
 	assertAllInteractiveControlsNamed(t, tt, "Agent slash skill autocomplete")
+	app.AgentUI.InputHandle.Focus()
+	tt.Frame()
+	tt.Key(0, ui.KeyEscape)
+	tt.Frame()
+	tt.Frame()
+	if tt.HasText("Use skill ui-craft") || app.AgentUI.DismissedSlash != "/ui-" {
+		t.Fatalf("expected Escape to dismiss slash menu persistently for /ui-, got DismissedSlash=%q", app.AgentUI.DismissedSlash)
+	}
+	// Changing the token re-opens autocomplete cleanly.
+	app.AgentUI.Draft = "/ui-c"
+	tt.Frame()
 	if err := tt.Click("Use skill ui-craft"); err != nil {
-		t.Fatalf("pick slash autocomplete option: %v", err)
+		t.Fatalf("pick slash autocomplete option after token change: %v", err)
 	}
 	if app.AgentUI.Draft != "/ui-craft " {
 		t.Fatalf("Draft after slash autocomplete = %q, want %q", app.AgentUI.Draft, "/ui-craft ")

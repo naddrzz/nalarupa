@@ -22,10 +22,12 @@ type canvasRenderJob struct {
 // CanvasRenderWorker renders canvas bitmaps (both overscanned detail and whole-document overview)
 // off the UI thread with single-slot coalescing and zero-copy double-buffered *image.RGBA swaps.
 type CanvasRenderWorker struct {
-	bridge  *Bridge
-	onReady func()
+	bridge           *Bridge
+	onReady          func()
+	testBeforeRender func(job canvasRenderJob)
 
 	mu           sync.Mutex
+	docEpoch     uint64
 	pending      *canvasRenderJob
 	inFlight     bool
 	closed       bool
@@ -157,6 +159,20 @@ func (w *CanvasRenderWorker) PeekReadyKey() (canvasRenderKey, bool) {
 	return key, ok
 }
 
+// ResetForNewDoc discards any pending or ready frames from a previously open document.
+func (w *CanvasRenderWorker) ResetForNewDoc() {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	w.docEpoch++
+	w.pending = nil
+	w.readyValid = false
+	w.ovReadyValid = false
+	w.lastOvVer = ^uint64(0)
+	w.mu.Unlock()
+}
+
 // Close stops the worker goroutine and waits for it to exit cleanly.
 func (w *CanvasRenderWorker) Close() {
 	if w == nil {
@@ -178,6 +194,8 @@ func (w *CanvasRenderWorker) loop() {
 	defer close(w.done)
 	det := render.NewDetachedRenderer()
 	var cachedSnap render.SceneSnapshot
+	var cachedRelSeq uint64
+	var cachedEpoch uint64
 	hasCached := false
 	var lastZoom, lastCamX, lastCamY float64
 	for {
@@ -199,15 +217,27 @@ func (w *CanvasRenderWorker) loop() {
 					break
 				}
 				w.inFlight = true
+				jobEpoch := w.docEpoch
 				wantOv := job.wantOverview
+				hook := w.testBeforeRender
 				w.mu.Unlock()
+
+				if cachedEpoch != jobEpoch {
+					cachedSnap = render.SceneSnapshot{}
+					cachedRelSeq = 0
+					hasCached = false
+					cachedEpoch = jobEpoch
+				}
+				if hook != nil {
+					hook(*job)
+				}
 
 				preferLockFree := hasCached && (math.Abs(job.zoom-lastZoom)/max(0.01, job.zoom) > 0.004 ||
 					math.Hypot(job.camX-lastCamX, job.camY-lastCamY)*job.zoom > 2.0)
 
 				start := time.Now()
-				renderedVer, ovRect, ovVer, ovOK := w.bridge.RenderDetachedCachedWithOverview(
-					det, &cachedSnap, &hasCached, preferLockFree,
+				renderedVer, renderedRelSeq, ovRect, ovVer, ovOK := w.bridge.RenderDetachedCachedWithOverview(
+					det, &cachedSnap, &cachedRelSeq, &hasCached, preferLockFree,
 					&w.backBuf, job.w, job.h, job.camX, job.camY, job.zoom,
 					job.bg, "", job.sharp, wantOv, &w.ovBackBuf, 1664,
 				)
@@ -215,13 +245,15 @@ func (w *CanvasRenderWorker) loop() {
 				lastZoom, lastCamX, lastCamY = job.zoom, job.camX, job.camY
 
 				doneKey := job.key
-				if hasCached && renderedVer < job.key.version {
+				if renderedVer > 0 || hasCached {
 					doneKey.version = renderedVer
 				}
+				doneKey.releaseSeq = min(job.key.releaseSeq, renderedRelSeq)
 
 				w.mu.Lock()
 				closed := w.closed
-				if !closed {
+				sameDoc := w.docEpoch == jobEpoch
+				if !closed && sameDoc {
 					w.readyBuf, w.backBuf = w.backBuf, w.readyBuf
 					w.readyKey = doneKey
 					w.readyMS = elapsedMS
@@ -244,7 +276,7 @@ func (w *CanvasRenderWorker) loop() {
 				w.inFlight = w.pending != nil
 				w.mu.Unlock()
 
-				if !closed && w.onReady != nil {
+				if !closed && sameDoc && w.onReady != nil {
 					w.onReady()
 				}
 			}

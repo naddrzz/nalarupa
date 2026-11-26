@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/naddrzz/nalarupa/core-go/engine"
 )
 
 func colorDistRGB(a color.RGBA, r, g, b uint8) float64 {
@@ -56,6 +57,8 @@ func TestRound9_InsertedNodesStayUnrevealedUntilCursorArrives(t *testing.T) {
 
 	tt := ui.NewTester(app.View, 1280, 760)
 	app.Bridge.eng.Renderer.Now = func() time.Time { return tt.Now() }
+	// Settle initial Artboard slide before inserting cards so #FAF8F5 ground is 100% opaque (Thread 41).
+	tt.Advance(3 * time.Second)
 	now0 := float64(tt.Now().UnixNano()) / 1e6
 	app.PollNow(now0)
 	tt.Frame()
@@ -182,7 +185,7 @@ func TestRound9_EditedNodeHoldsOldVisualUntilCursorArrivesThenMorphs(t *testing.
 	tt := ui.NewTester(app.View, 1280, 760)
 	app.Bridge.eng.Renderer.Now = func() time.Time { return tt.Now() }
 	// Advance past initial insert so TargetCard is 100% settled in emerald green (#047857).
-	tt.Advance(2 * time.Second)
+	tt.Advance(3 * time.Second)
 	app.PollNow(float64(tt.Now().UnixNano()) / 1e6)
 	tt.Frame()
 
@@ -277,7 +280,7 @@ func TestRound9_StreamedEditCommitDoesNotReplayOrFlashAheadOfCursor(t *testing.T
 
 	tt := ui.NewTester(app.View, 1280, 760)
 	app.Bridge.eng.Renderer.Now = func() time.Time { return tt.Now() }
-	tt.Advance(2 * time.Second)
+	tt.Advance(3 * time.Second)
 	app.PollNow(float64(tt.Now().UnixNano()) / 1e6)
 	tt.Frame()
 
@@ -306,15 +309,19 @@ func TestRound9_StreamedEditCommitDoesNotReplayOrFlashAheadOfCursor(t *testing.T
 		t.Fatalf("streamed Replace jumped ahead of cursor! cur=(%.1f, %.1f), pixel=%+v (want #1D4ED8)", cur.X, cur.Y, pxEarly)
 	}
 
-	// Commit final execute call with matching __stream key while cursor is mid-flight, then finish cursor flight!
-	var callErr error
-	if _, callErr = app.Bridge.CallRaw("execute", map[string]any{
-		"__stream": "stream_edit_1",
-		"__agent":  "agent",
-		"input":    stmt,
-	}); callErr != nil {
-		// Fallback to ExecuteJS if CallRaw("execute") is internal-only
-		_, _ = app.Bridge.ExecuteJS(stmt)
+	// Commit final execute call with matching __stream key while cursor is mid-flight (must succeed without fallback!),
+	// verify post-commit approach frames STILL hold #1D4ED8 ahead of cursor, then finish cursor flight!
+	commitOut := app.Bridge.eng.CallTool("execute", engine.Object("__stream", "stream_edit_1", "__agent", "agent", "input", stmt))
+	if commitOut.Error {
+		t.Fatalf("CallTool execute finalization failed: %s", commitOut.Text)
+	}
+	app.PollNow(float64(tt.Now().UnixNano()) / 1e6)
+	tt.Advance(16 * time.Millisecond)
+	if math.Hypot(cur.X-680, cur.Y-270) > 220 {
+		pxPostCommit := sampleDocPixel(t, app, 680, 270)
+		if colorDistRGB(pxPostCommit, 29, 78, 216) > 18 {
+			t.Fatalf("post-commit Badge flashed ahead of cursor! cur=(%.1f, %.1f), pixel=%+v (want #1D4ED8)", cur.X, cur.Y, pxPostCommit)
+		}
 	}
 	for step := 0; step < 65; step++ {
 		app.PollNow(float64(tt.Now().UnixNano()) / 1e6)

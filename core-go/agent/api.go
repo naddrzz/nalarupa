@@ -44,10 +44,9 @@ const editorStateNote = "\n\nThe result of `get_editor_state` (fresh; call it ag
 
 // runAPI runs p's turn over a model API: the streamed reply, its tool calls and their results, until the model
 // ends its turn.
-func runAPI(e *engine.Engine, p engine.Profile, prompt string, child bool, name string, client model.Provider) (*jsonv.Object, error) {
-	var effort, state, backend string
+func runAPI(e *engine.Engine, p engine.Profile, prompt string, child bool, name string, client model.Provider, contextLimit int) (*jsonv.Object, error) {
+	var effort, state string
 	var fast bool
-	var contextLimit int
 	var cancel *engine.Flag
 	var messages []jsonv.Value
 	if name == "" {
@@ -58,8 +57,9 @@ func runAPI(e *engine.Engine, p engine.Profile, prompt string, child bool, name 
 		if effort, ok = e.Setting("agent_effort"); !ok {
 			effort = "high"
 		}
-		backend = e.Backend()
-		contextLimit = e.ContextWindowLimit(backend, name)
+		if contextLimit <= 0 {
+			contextLimit = e.ContextWindowLimit(e.Backend(), name)
+		}
 		fast = fastFor(name, jsonv.IsTrue(jsonv.Get(e.Settings, "agent_fast")))
 		cancel, state = e.Agent.Cancel, e.EditorState()
 		if !child {
@@ -105,6 +105,12 @@ func runAPI(e *engine.Engine, p engine.Profile, prompt string, child bool, name 
 			emitContextUsage(e, p, child, estInput, contextLimit)
 		}
 		maxOut := ClampMaxOutputTokens(contextLimit, estInput)
+		if contextLimit > 0 && (maxOut < 64 || estInput >= contextLimit) {
+			if turn > 0 {
+				save()
+			}
+			return usage, fmt.Errorf("prompt exceeds configured context window (%d estimated input tokens, limit %d); shorten the prompt or increase the context window limit in Agent settings", estInput, contextLimit)
+		}
 		body := engine.Object("model", name, "max_tokens", jsonv.Int(int64(maxOut)), "system", system, "tools", tools,
 			"messages", jsonv.NewArray(messages...), "output_config", engine.Object("effort", effort))
 		var betas []string
@@ -227,8 +233,9 @@ func runAPI(e *engine.Engine, p engine.Profile, prompt string, child bool, name 
 				out = e.CallTool(tool, args)
 			}
 			// Outside the engine lock: screenshots rasterize here.
+			auditSnap := out.Audit
 			out = out.Finish(e)
-			out.Text = AppendDesignAudit(e, tool, out.Text, out.Error)
+			out.Text = AppendDesignAuditWithSnapshot(e, auditSnap, tool, out.Text, out.Error)
 			if !child && tool == "execute" && !out.Error && !hasSpawnInBatch {
 				needSpawnHint := false
 				e.Locked(func() {

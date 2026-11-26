@@ -656,9 +656,14 @@ func main() {
 			"method":  "tools/call",
 			"params":  map[string]any{"name": "execute", "arguments": map[string]any{"input": fullCode}},
 		})
-		if resp, err := http.Post(mcpURL, "application/json", bytes.NewReader(reqBody)); err == nil {
-			_, _ = io.ReadAll(resp.Body)
-			_ = resp.Body.Close()
+		resp, err := http.Post(mcpURL, "application/json", bytes.NewReader(reqBody))
+		if err != nil {
+			os.Exit(1)
+		}
+		respRaw, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != 200 || bytes.Contains(respRaw, []byte("\"isError\":true")) || bytes.Contains(respRaw, []byte("\"error\":")) {
+			os.Exit(1)
 		}
 	}
 
@@ -875,12 +880,15 @@ func TestRealE2E_Round3ExportScrollSymmetryAndZoom(t *testing.T) {
 		}
 	}
 
-	// Click Export JPEG in the real window and immediately prove the Windows GUI loop responds in < 300ms (NEVER "Not Responding"!)
+	// Click Export JPEG in the real window and immediately prove the Windows GUI loop responds in < 500ms (NEVER "Not Responding"!)
 	clickStart := time.Now()
+	_ = d.conn.SetDeadline(time.Now().Add(2 * time.Second))
 	if err := d.rpc("act", map[string]any{"window": 0, "key": "export-jpeg", "action": "press"}, nil); err != nil {
+		_ = d.conn.SetDeadline(time.Time{})
 		t.Fatalf("press export-jpeg failed: %v", err)
 	}
 	wsDuringExport := d.windows()
+	_ = d.conn.SetDeadline(time.Time{})
 	respLatency := time.Since(clickStart)
 	t.Logf("Live Windows GUI response latency immediately after clicking Export JPEG on 1440x4154 page: %v", respLatency)
 	if len(wsDuringExport) != 1 || respLatency > 500*time.Millisecond {

@@ -1,7 +1,7 @@
 # Components
 
 - A node with `reusable: true` is a component. Build components in their own
-  top-level frames placed cleanly above the screens with `FindEmptySpace(w, h, "top", 80)`
+  top-level frames placed cleanly above the screens with `FindEmptySpace({width: w, height: h, direction: "top", padding: 80})`
   so multiple components never stack on top of each other or overlap screen headers.
 - An instance is `{type: "ref", ref: componentId}`. Any root property can be
   overridden on the instance itself (`width`, `fill`, `name`...).
@@ -23,7 +23,7 @@
   instances on every screen so sibling pages never drift apart.
 
 ```js
-spot = FindEmptySpace(200, 64, "top", 80)
+spot = FindEmptySpace({width: 200, height: 64, direction: "top", padding: 80})
 btn = Insert(document, {type: "frame", name: "Button", reusable: true, padding: [10, 16], gap: 8,
   cornerRadius: 8, fill: "#2563EB", alignItems: "center", x: spot.x, y: spot.y})
 btnLabel = Insert(btn, {type: "text", name: "Label", content: "Button", fontFamily: "Manrope", fontSize: 14, fontWeight: "600", fill: "#FFFFFF"})

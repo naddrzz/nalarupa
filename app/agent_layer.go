@@ -151,7 +151,22 @@ func triggerWaypointArrival(a *NalarupaApp, cur *CursorState, nowMS float64) {
 	cur.PlacePulseAt = nowMS
 	cur.LastActivity = nowMS
 	var bPtr *Box
-	if wp.HasBox {
+	if wp.BoxID != "" {
+		if a.Window != nil {
+			if fbs, ok := a.Bridge.TryBoxesDirect([]string{wp.BoxID}); ok {
+				if len(fbs) > 0 {
+					cp := fbs[0]
+					bPtr = &cp
+				}
+			} else if wp.HasBox {
+				cp := wp.Box
+				bPtr = &cp
+			}
+		} else if fbs := a.Bridge.BoxesDirect([]string{wp.BoxID}); len(fbs) > 0 {
+			cp := fbs[0]
+			bPtr = &cp
+		}
+	} else if wp.HasBox {
 		cp := wp.Box
 		bPtr = &cp
 	}
@@ -181,9 +196,19 @@ func filterChoreographyBoxes(boxes []Box) []filteredChoreoItem {
 	// skip the outer screen center so the cursor glides top-to-bottom across the actual elements being built.
 	startIdx := 0
 	var pendingExact []string
-	if (boxes[0].Parent == nil || *boxes[0].Parent == "" || *boxes[0].Parent == "document") && len(boxes) > 1 {
-		startIdx = 1
-		if boxes[0].ID != "" {
+	if (boxes[0].Parent == nil || *boxes[0].Parent == "" || *boxes[0].Parent == "document") && boxes[0].ID != "" && len(boxes) > 1 {
+		anc := map[string]bool{boxes[0].ID: true}
+		hasDescendant := false
+		for j := 1; j < len(boxes); j++ {
+			if boxes[j].Parent != nil && anc[*boxes[j].Parent] {
+				if boxes[j].ID != "" {
+					anc[boxes[j].ID] = true
+				}
+				hasDescendant = true
+			}
+		}
+		if hasDescendant {
+			startIdx = 1
 			pendingExact = append(pendingExact, "@exact:"+boxes[0].ID)
 		}
 	}
@@ -263,7 +288,10 @@ func (a *NalarupaApp) consumeCanvasActivity(nowMS float64) {
 	for _, req := range reqs {
 		prof := a.Store.ProfileOf(req.Agent)
 		a.Store.Profiles[prof.ID] = prof
-		lookupIDs := normalizeActivityRootIDs(req.IDs)
+		lookupIDs := req.IDs
+		if req.Op == "write" {
+			lookupIDs = normalizeActivityRootIDs(req.IDs)
+		}
 		var boxes []Box
 		if len(lookupIDs) > 0 {
 			if a.Window != nil {
@@ -345,7 +373,7 @@ func (a *NalarupaApp) consumeCanvasActivity(nowMS float64) {
 		for _, it := range items {
 			b := it.box
 			c := PointIn(b, 0.5, 0.5)
-			if n := len(cur.Waypoints); n > 0 && cur.Waypoints[n-1].BoxID == b.ID {
+			if n := len(cur.Waypoints); n > 0 && cur.Waypoints[n-1].BoxID == b.ID && cur.Waypoints[n-1].Op == req.Op {
 				cur.Waypoints[n-1].X = c[0]
 				cur.Waypoints[n-1].Y = c[1]
 				cur.Waypoints[n-1].Box = b
@@ -353,7 +381,7 @@ func (a *NalarupaApp) consumeCanvasActivity(nowMS float64) {
 				cur.Waypoints[n-1].ReleaseIDs = append(cur.Waypoints[n-1].ReleaseIDs, it.releaseIDs...)
 				continue
 			}
-			if cur.HasActiveWP && len(cur.Waypoints) == 0 && cur.ActiveWP.BoxID == b.ID {
+			if cur.HasActiveWP && len(cur.Waypoints) == 0 && cur.ActiveWP.BoxID == b.ID && cur.ActiveWP.Op == req.Op {
 				cur.ActiveWP.X = c[0]
 				cur.ActiveWP.Y = c[1]
 				cur.ActiveWP.Box = b
@@ -873,6 +901,21 @@ func (a *NalarupaApp) drawAgentLayer(p *ui.Painter, vpRect ui.Rect, liveNodes []
 	}
 
 	chatOpen := a.RightTab == "agent"
+	hasVisiblePills := false
+	for id, pe := range a.Store.Pills {
+		if nowMS-pe.At < PillMS && a.Store.PillShown(id, chatOpen) {
+			hasVisiblePills = true
+			break
+		}
+	}
+	if a.Canvas.hadVisiblePills && !hasVisiblePills {
+		a.Canvas.hadVisiblePills = false
+		if a.Window != nil && !a.Window.IsDestroyed() {
+			a.Window.Update(func() {})
+		}
+	} else {
+		a.Canvas.hadVisiblePills = hasVisiblePills
+	}
 	animFrame, after := a.Store.FrameSchedule(nowMS, reduced, len(liveNodes), prevMS, chatOpen)
 	if !animFrame && after > 0 {
 		p.After(after)

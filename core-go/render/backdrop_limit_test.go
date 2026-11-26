@@ -118,6 +118,32 @@ func TestNativeBackdropBlurBlursUnderlyingPixels(t *testing.T) {
 	}
 }
 
+func TestNativeBackdropBlurInsideClippedFrameBlursParentBackground(t *testing.T) {
+	// Root frame has clip: true and fill #ff0000 (painted onto root pixmap BEFORE the isolated clip child group).
+	// Right half is a child rectangle #0000ff inside the isolated clip group.
+	// Glass card at the seam must composite the isolated sub-pixmap over the parent backdrop and blur red + blue.
+	js := `{"version":"2.19","children":[{"type":"frame","id":"root","x":0,"y":0,"width":200,"height":200,"layout":"none","clip":true,"fill":"#ff0000","children":[
+		{"type":"rectangle","id":"right","x":100,"y":0,"width":100,"height":200,"fill":"#0000ff"},
+		{"type":"frame","id":"glass","x":40,"y":40,"width":120,"height":120,"cornerRadius":16,"fill":"#ffffff20","effect":{"type":"background_blur","radius":16}},
+		{"type":"rectangle","id":"b1","x":170,"y":10,"width":16,"height":16,"fill":"#ffffff20","effect":{"type":"background_blur","radius":4}},
+		{"type":"rectangle","id":"b2","x":170,"y":34,"width":16,"height":16,"fill":"#ffffff20","effect":{"type":"background_blur","radius":4}},
+		{"type":"rectangle","id":"b3","x":170,"y":58,"width":16,"height":16,"fill":"#ffffff20","effect":{"type":"background_blur","radius":4}},
+		{"type":"rectangle","id":"b4","x":170,"y":82,"width":16,"height":16,"fill":"#ffffff20","effect":{"type":"background_blur","radius":4}}
+	]}]}`
+	d := openJSON(t, js)
+	cx := offline(t, d)
+	r := &Renderer{}
+	r.Sync(cx)
+	pix := r.Render(200, 200, 0, 0, 1, [3]uint8{255, 255, 255}, "", true)
+
+	off := (100*200 + 96) * 4
+	red, blue := pix[off], pix[off+2]
+	if red < 80 || blue < 60 {
+		t.Fatalf("expected clipped-frame native backdrop blur to mix parent red and child blue at (96,100), got RGBA=(%d,%d,%d,%d)",
+			pix[off], pix[off+1], pix[off+2], pix[off+3])
+	}
+}
+
 func TestOverlappingGlassExportStaysBelowNodesLimit(t *testing.T) {
 	// 25 overlapping background_blur cards at identical coordinates would expand to O(2^25) > 33M
 	// <use> nodes without bounded expansion tracking. Both canvas sync and standalone SVG export

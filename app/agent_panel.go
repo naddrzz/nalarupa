@@ -95,13 +95,18 @@ type AgentPanelState struct {
 	ActiveProvID  string
 	Providers     []ProviderConfig
 
-	APIModels        []string
-	FetchingModels   bool
-	CustomModelDraft string
+	APIModels          []string
+	FetchingModels     bool
+	ModelFetchSeq      uint64
+	ActiveFetchReqID   string
+	ActiveFetchEditSeq uint64
+	ActiveFetchProvID  string
+	CustomModelDraft   string
 
 	Skills         []SkillItem
 	SkillsLoaded   bool
 	SkillsLoading  bool
+	SkillsReqSeq   uint64
 	SkillsOpen     bool
 	SkillsFilter   string
 	SkillsScroll   ui.ScrollState
@@ -129,6 +134,7 @@ type AgentPanelState struct {
 	AuthLoggingIn  bool
 
 	EditingProv          *ProviderConfig
+	ProvEditSeq          uint64
 	ProvKeyDraft         string
 	ProvModelsCSV        string
 	ProvContextDraft     string
@@ -302,15 +308,23 @@ func parseUIContextWindow(raw string) (int, bool) {
 		s = strings.TrimSpace(strings.TrimSuffix(s, "k"))
 	}
 	f, err := strconv.ParseFloat(s, 64)
-	if err != nil || f <= 0 {
+	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) || f <= 0 {
 		return 0, false
 	}
-	n := int(math.Round(f * mult))
-	return min(max(n, 4096), 4_000_000), true
+	scaled := f * mult
+	if math.IsNaN(scaled) || math.IsInf(scaled, 0) {
+		return 0, false
+	}
+	clamped := math.Min(math.Max(math.Round(scaled), 4096), 4_000_000)
+	return int(clamped), true
 }
 
 func defaultUIContextWindow(backend, modelID string) int {
 	m := strings.ToLower(strings.TrimSpace(modelID))
+	base := m
+	if slash := strings.LastIndexByte(m, '/'); slash >= 0 {
+		base = m[slash+1:]
+	}
 	switch {
 	case strings.Contains(m, "1m") || strings.Contains(m, "gemini-"):
 		return 1_000_000
@@ -319,7 +333,7 @@ func defaultUIContextWindow(backend, modelID string) int {
 	case strings.Contains(m, "qwen3") || strings.Contains(m, "qwen4") || strings.Contains(m, "kimi") || strings.Contains(m, "codestral"):
 		return 262_144
 	case strings.Contains(m, "claude") || strings.Contains(m, "fable") || strings.Contains(m, "opus") ||
-		strings.Contains(m, "sonnet") || strings.Contains(m, "haiku") || strings.HasPrefix(m, "o3") || strings.HasPrefix(m, "o4"):
+		strings.Contains(m, "sonnet") || strings.Contains(m, "haiku") || strings.HasPrefix(base, "o3") || strings.HasPrefix(base, "o4"):
 		return 200_000
 	case backend == "api" || backend == "claude-code":
 		return 200_000
@@ -1201,7 +1215,7 @@ func (a *NalarupaApp) viewBYOKProviderSettings(c *ui.Context) {
 					fetchLabel = "Fetching…"
 				}
 				if ActionBtn(c, "provider-fetch-models", fetchLabel, "", "").Clicked() {
-					a.requestFetchModels("provider", ed.ID, ed.Format, ed.BaseURL, a.AgentUI.ProvKeyDraft)
+					a.requestFetchModels("provider", ed.ID, ed.Format, ed.BaseURL, a.AgentUI.ProvKeyDraft, false, a.AgentUI.ProvEditSeq)
 				}
 				if ActionBtn(c, "provider-save", "Save", "", "primary").Clicked() {
 					var models []string
@@ -1234,15 +1248,30 @@ func (a *NalarupaApp) viewBYOKProviderSettings(c *ui.Context) {
 						a.ShowToast(err.Error(), true)
 					} else {
 						a.setSetting("agent_provider", savedID)
+						a.AgentUI.ProvEditSeq++
+						if a.AgentUI.ActiveFetchEditSeq > 0 {
+							a.AgentUI.FetchingModels = false
+							a.AgentUI.ActiveFetchReqID = ""
+						}
 						a.AgentUI.EditingProv = nil
 					}
 				}
 				if ActionBtn(c, "provider-cancel", "Cancel", "", "").Clicked() {
+					a.AgentUI.ProvEditSeq++
+					if a.AgentUI.ActiveFetchEditSeq > 0 {
+						a.AgentUI.FetchingModels = false
+						a.AgentUI.ActiveFetchReqID = ""
+					}
 					a.AgentUI.EditingProv = nil
 				}
 				if ed.ID != "" {
 					if ActionBtn(c, "provider-remove", "Remove", "", "danger").Clicked() {
 						a.Bridge.TryCall("provider_remove", map[string]any{"id": ed.ID}, nil)
+						a.AgentUI.ProvEditSeq++
+						if a.AgentUI.ActiveFetchEditSeq > 0 {
+							a.AgentUI.FetchingModels = false
+							a.AgentUI.ActiveFetchReqID = ""
+						}
 						a.AgentUI.EditingProv = nil
 						a.reloadAgentSettings()
 					}
@@ -1273,6 +1302,11 @@ func (a *NalarupaApp) viewBYOKProviderSettings(c *ui.Context) {
 
 	ui.Row(c.Key("provider-actions")).Wrap().Gap(6).Children(func() {
 		if ActionBtn(c, "provider-add", "Add provider", "plus", "").Clicked() {
+			a.AgentUI.ProvEditSeq++
+			if a.AgentUI.ActiveFetchEditSeq > 0 {
+				a.AgentUI.FetchingModels = false
+				a.AgentUI.ActiveFetchReqID = ""
+			}
 			a.AgentUI.EditingProv = &ProviderConfig{Format: "chat", Vision: true}
 			a.AgentUI.ProvKeyDraft = ""
 			a.AgentUI.ProvModelsCSV = ""
@@ -1280,6 +1314,11 @@ func (a *NalarupaApp) viewBYOKProviderSettings(c *ui.Context) {
 		}
 		if ap := a.activeProvider(); ap != nil {
 			if ActionBtn(c, "provider-edit", "Edit", "", "").Clicked() {
+				a.AgentUI.ProvEditSeq++
+				if a.AgentUI.ActiveFetchEditSeq > 0 {
+					a.AgentUI.FetchingModels = false
+					a.AgentUI.ActiveFetchReqID = ""
+				}
 				cp := *ap
 				a.AgentUI.EditingProv = &cp
 				a.AgentUI.ProvKeyDraft = ""
@@ -2456,7 +2495,7 @@ func (a *NalarupaApp) viewAgentComposer(c *ui.Context) {
 										ui.Text(c, lbl).FontSize(11).TextColor(C.Accent)
 									})
 									if rb.Clicked() {
-										a.requestFetchModels("provider", ap.ID, ap.Format, ap.BaseURL, "")
+										a.requestFetchModels("provider", ap.ID, ap.Format, ap.BaseURL, "", true, 0)
 									}
 								}
 								return
@@ -2505,7 +2544,7 @@ func (a *NalarupaApp) viewAgentComposer(c *ui.Context) {
 									ui.Text(c, lbl).FontSize(11).TextColor(C.Accent)
 								})
 								if rb.Clicked() {
-									a.requestFetchModels("api", "", "anthropic", a.AgentUI.BaseURL, "")
+									a.requestFetchModels("api", "", "anthropic", a.AgentUI.BaseURL, "", true, 0)
 								}
 							}
 						})

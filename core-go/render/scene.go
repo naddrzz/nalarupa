@@ -191,7 +191,11 @@ func (s *sceneScan) backdrop(g *usvg.Group, abs skia.Transform, sigma float64) {
 			}
 		}
 	}
-	s.out = append(s.out, backdrop{box, float64(3 * float64(sigma*absScale(abs))), native})
+	reachMul := 3.0
+	if native {
+		reachMul = 4.0
+	}
+	s.out = append(s.out, backdrop{box, float64(reachMul * float64(sigma*absScale(abs))), native})
 }
 
 func (s *sceneScan) path(p *usvg.Path, abs skia.Transform) {

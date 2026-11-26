@@ -25,6 +25,8 @@ type Host interface {
 	AfterModify(oldPath, newID string)
 	// CheckEditTarget validates whether the current agent is allowed to mutate targetID (enforcing child container scopes).
 	CheckEditTarget(op, targetID string, isReusableRoot bool) error
+	// RecordEditTarget marks targetID's pre-turn top-level ancestor as intentionally edited once the mutation succeeds.
+	RecordEditTarget(op, targetID string)
 	// FilterSetVars adjusts SetVariables arguments before applying them (protecting shared/pre-turn variables).
 	FilterSetVars(vars jsonv.Value, replace bool) (jsonv.Value, bool)
 	// AfterRootInsert runs top-level overlap deconfliction and pre-turn variable isolation after Insert into document.

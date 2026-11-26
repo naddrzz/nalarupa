@@ -3,6 +3,7 @@ package main
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/naddrzz/nalarupa/core-go/engine"
@@ -188,15 +189,29 @@ func TestFrameScheduleAndDragCoalescing(t *testing.T) {
 		started:   true,
 		begunDrag: false,
 	}
-	// Simulate immediate burst of two pointer moves inside the 12ms coalescing window.
+	// Simulate immediate burst of two pointer moves inside the coalescing window using a pinned timestamp.
 	app.onCanvasPointerMove(ui.InputEvent{X: 30, Y: 30})
+	app.Canvas.lastDragStepAt = time.Now()
 	app.onCanvasPointerMove(ui.InputEvent{X: 70, Y: 50})
 	if app.Canvas.pendingDragEv == nil {
-		t.Fatalf("expected second burst move within 12ms to be coalesced into pendingDragEv")
+		t.Fatalf("expected second burst move within coalescing window to be coalesced into pendingDragEv")
 	}
 	app.onCanvasPointerUp(ui.InputEvent{X: 70, Y: 50})
 	boxes := app.Bridge.BoxesDirect([]string{id})
-	if len(boxes) != 1 || boxes[0].X < 59 || boxes[0].Y < 39 {
-		t.Fatalf("pending drag move was not flushed on pointer up: boxes=%+v", boxes)
+	if len(boxes) != 1 || boxes[0].X < 58.5 || boxes[0].X > 61.5 || boxes[0].Y < 38.5 || boxes[0].Y > 41.5 {
+		t.Fatalf("pending drag move was not flushed to (60, 40) on pointer up: boxes=%+v", boxes)
+	}
+
+	// Verify unsynced TryBoxesDirect preserves rotation/flip M matrix (Thread 54).
+	var rotIns map[string]any
+	if err := app.Bridge.Call("insert", map[string]any{
+		"node": map[string]any{"type": "rectangle", "name": "Rot", "x": 100, "y": 100, "width": 80, "height": 40, "rotation": 45},
+	}, &rotIns); err != nil {
+		t.Fatalf("insert rotated rect: %v", err)
+	}
+	rotID, _ := rotIns["id"].(string)
+	unsyncedBoxes, ok := app.Bridge.TryBoxesDirect([]string{rotID})
+	if !ok || len(unsyncedBoxes) != 1 || unsyncedBoxes[0].M == nil {
+		t.Fatalf("expected unsynced TryBoxesDirect to preserve rotation matrix M, got ok=%v boxes=%+v", ok, unsyncedBoxes)
 	}
 }

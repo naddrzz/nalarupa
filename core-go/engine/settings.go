@@ -111,17 +111,26 @@ func (e *Engine) SettingsView() *jsonv.Object {
 }
 
 // ParseContextWindow parses a context window token limit (int/float or shorthand string like "128k", "1m").
-// Returns 0 when unset/auto, else clamped to [4096, 4000000].
+// Returns 0 when unset/auto or non-finite, else clamped to [4096, 4000000].
 func ParseContextWindow(v jsonv.Value) int {
+	clampFinite := func(f float64) int {
+		if math.IsNaN(f) || math.IsInf(f, 0) || f <= 0 {
+			return 0
+		}
+		r := math.Round(f)
+		if r < 4096 {
+			return 4096
+		}
+		if r > 4_000_000 {
+			return 4_000_000
+		}
+		return int(r)
+	}
 	if v == nil {
 		return 0
 	}
 	if f, ok := jsonv.F64(v); ok {
-		n := int(math.Round(f))
-		if n <= 0 {
-			return 0
-		}
-		return min(max(n, 4096), 4_000_000)
+		return clampFinite(f)
 	}
 	if s, ok := jsonv.Str(v); ok {
 		s = strings.ToLower(strings.TrimSpace(strings.ReplaceAll(s, ",", "")))
@@ -138,9 +147,8 @@ func ParseContextWindow(v jsonv.Value) int {
 			mult = 1_000
 			s = strings.TrimSpace(strings.TrimSuffix(s, "k"))
 		}
-		if f, err := strconv.ParseFloat(s, 64); err == nil && f > 0 {
-			n := int(math.Round(f * mult))
-			return min(max(n, 4096), 4_000_000)
+		if f, err := strconv.ParseFloat(s, 64); err == nil && !math.IsNaN(f) && !math.IsInf(f, 0) && f > 0 {
+			return clampFinite(f * mult)
 		}
 	}
 	return 0

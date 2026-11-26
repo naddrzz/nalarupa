@@ -144,6 +144,32 @@ func countBackdropBlurs(n *resolve.RNode, limit int) int {
 	return count
 }
 
+func nodeBaseWeight(n *resolve.RNode, fx Effects) int {
+	w := baseNodesPerElement
+	if fv, ok := n.P.Get("fill"); ok && fv != nil {
+		w += max(len(Fills(fv)), 1) * 6
+	}
+	if sv, ok := n.P.Get("strokeWidth"); ok && sv != nil {
+		w += 6
+	}
+	if len(fx.shadows) > 0 {
+		w += 4 + len(fx.shadows)*8
+	}
+	if fx.Blur > 0 {
+		w += 4
+	}
+	if fx.Backdrop > 0 {
+		w += 5
+	}
+	if n.B("clip") {
+		w += 3
+	}
+	if len(n.Lines) > 0 {
+		w += len(n.Lines) * 8
+	}
+	return w
+}
+
 // Node emits n and its subtree.
 func (s *Svg) Node(n *resolve.RNode) {
 	if len(s.painted) == 0 {
@@ -156,10 +182,11 @@ func (s *Svg) Node(n *resolve.RNode) {
 	if opacity <= 0 || s.Skip[n.ID] {
 		return
 	}
-	startExpanded := s.expandedNodes
-	s.expandedNodes += baseNodesPerElement
 	tf := transform(n)
 	fx := EffectsOf(n)
+	ownWeight := nodeBaseWeight(n, fx)
+	startExpanded := s.expandedNodes
+	s.expandedNodes += ownWeight
 	// The backdrop is blurred inside the node's opacity layer, which starts out empty: below full
 	// opacity nothing shows.
 	backdrop := fx.Backdrop > 0 && opacity >= 1
@@ -217,7 +244,7 @@ func (s *Svg) Node(n *resolve.RNode) {
 		l.items = append(l.items, paintedItem{
 			id:     gid,
 			bounds: VisualBounds(n),
-			weight: max(baseNodesPerElement, s.expandedNodes-startExpanded),
+			weight: max(ownWeight, s.expandedNodes-startExpanded),
 		})
 	}
 }

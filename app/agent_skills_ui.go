@@ -59,12 +59,19 @@ func effortShortLabel(id string) string {
 	return "High"
 }
 
-func (a *NalarupaApp) requestFetchModels(target, provID, format, baseURL, apiKey string) {
-	if a.AgentUI.FetchingModels {
-		return
-	}
+func (a *NalarupaApp) requestFetchModels(target, provID, format, baseURL, apiKey string, persist bool, editSeq uint64) {
+	a.AgentUI.ModelFetchSeq++
+	reqID := fmt.Sprintf("mf_%d", a.AgentUI.ModelFetchSeq)
 	a.AgentUI.FetchingModels = true
-	args := map[string]any{"target": target}
+	a.AgentUI.ActiveFetchReqID = reqID
+	a.AgentUI.ActiveFetchEditSeq = editSeq
+	a.AgentUI.ActiveFetchProvID = provID
+
+	args := map[string]any{
+		"target":  target,
+		"req_id":  reqID,
+		"persist": persist,
+	}
 	if provID != "" {
 		args["id"] = provID
 	}
@@ -78,13 +85,24 @@ func (a *NalarupaApp) requestFetchModels(target, provID, format, baseURL, apiKey
 		args["api_key"] = apiKey
 	}
 	if err := a.Bridge.Call("models_fetch", args, nil); err != nil {
-		a.AgentUI.FetchingModels = false
+		if a.AgentUI.ActiveFetchReqID == reqID {
+			a.AgentUI.FetchingModels = false
+			a.AgentUI.ActiveFetchReqID = ""
+		}
 		a.ShowToast(err.Error(), true)
 	}
 }
 
 func (a *NalarupaApp) onModelsFetched(ev map[string]any) {
+	reqID, _ := ev["req_id"].(string)
+	if reqID != "" && a.AgentUI.ActiveFetchReqID != "" && reqID != a.AgentUI.ActiveFetchReqID {
+		return
+	}
+	editSeq := a.AgentUI.ActiveFetchEditSeq
+	expectedProvID := a.AgentUI.ActiveFetchProvID
 	a.AgentUI.FetchingModels = false
+	a.AgentUI.ActiveFetchReqID = ""
+
 	okVal, _ := ev["ok"].(bool)
 	if !okVal {
 		msg, _ := ev["error"].(string)
@@ -107,7 +125,8 @@ func (a *NalarupaApp) onModelsFetched(ev map[string]any) {
 		a.ShowToast(fmt.Sprintf("Loaded %d Anthropic models", len(models)), false)
 		return
 	}
-	if len(models) > 0 && a.AgentUI.EditingProv != nil {
+	if len(models) > 0 && editSeq > 0 && a.AgentUI.EditingProv != nil &&
+		a.AgentUI.ProvEditSeq == editSeq && a.AgentUI.EditingProv.ID == expectedProvID {
 		var existing []string
 		seen := map[string]bool{}
 		for _, part := range strings.Split(a.AgentUI.ProvModelsCSV, ",") {
@@ -135,12 +154,15 @@ func (a *NalarupaApp) ensureSkillsLoaded(force bool) {
 	if a.Bridge == nil || a.Bridge.Engine() == nil {
 		return
 	}
+	a.AgentUI.SkillsReqSeq++
+	reqSeq := a.AgentUI.SkillsReqSeq
 	// Run synchronously when running headless without a window (ui.Tester), async in live desktop UI.
 	if a.Window == nil {
 		var list []SkillItem
 		if a.Bridge.TryCall("skills_list", map[string]any{"refresh": force}, &list) {
 			a.AgentUI.Skills = list
 			a.AgentUI.SkillsLoaded = true
+			a.AgentUI.SkillsLoading = false
 		}
 		return
 	}
@@ -150,6 +172,9 @@ func (a *NalarupaApp) ensureSkillsLoaded(force bool) {
 		ok := a.Bridge.TryCall("skills_list", map[string]any{"refresh": force}, &list)
 		if a.Window != nil && !a.Window.IsDestroyed() {
 			a.Window.Update(func() {
+				if a.AgentUI.SkillsReqSeq != reqSeq {
+					return
+				}
 				a.AgentUI.SkillsLoading = false
 				if ok {
 					a.AgentUI.Skills = list
@@ -236,21 +261,32 @@ func removeDraftSkill(draft, skillName string) string {
 		for end < len(draft) && isDraftSkillChar(draft[end]) {
 			end++
 		}
+		if end < len(draft) && (draft[end] == '/' || draft[end] == '\\') {
+			i = end
+			continue
+		}
 		if strings.ToLower(draft[i+1:end]) == target {
-			b.WriteString(draft[cur:i])
-			cur = end
-			if cur < len(draft) && draft[cur] == ' ' {
-				cur++
+			seg := draft[cur:i]
+			nextCur := end
+			if nextCur < len(draft) && draft[nextCur] == ' ' {
+				nextCur++
+			} else if len(seg) > 0 && seg[len(seg)-1] == ' ' && (nextCur == len(draft) || draft[nextCur] == '\n' || draft[nextCur] == '\r') {
+				seg = seg[:len(seg)-1]
 			}
+			b.WriteString(seg)
+			cur = nextCur
 			i = end - 1
 		}
+	}
+	if cur == 0 {
+		return draft
 	}
 	if cur < len(draft) {
 		b.WriteString(draft[cur:])
 	}
-	res := strings.TrimLeft(b.String(), " ")
-	for strings.Contains(res, "  ") {
-		res = strings.ReplaceAll(res, "  ", " ")
+	res := b.String()
+	if strings.TrimSpace(res) == "" {
+		return ""
 	}
 	return res
 }
@@ -282,15 +318,30 @@ func matchingSlashSkills(draft, dismissed string, catalog []SkillItem) (matches 
 	}
 	startIdx = len(draft)
 	for startIdx > 0 {
-		ch := draft[startIdx-1]
-		if ch == ' ' || ch == '\n' || ch == '\t' || ch == '\r' || ch == '(' || ch == '[' || ch == ',' {
+		prevRune := rune(draft[startIdx-1])
+		runeLen := 1
+		if draft[startIdx-1] >= 0x80 {
+			for idx, r := range draft[:startIdx] {
+				prevRune = r
+				runeLen = startIdx - idx
+			}
+		}
+		if isAllowedBeforeDraftSlash(prevRune) {
 			break
 		}
-		startIdx--
+		startIdx -= runeLen
 	}
 	token = draft[startIdx:]
-	if !strings.HasPrefix(token, "/") || token == dismissed {
+	if !strings.HasPrefix(token, "/") {
 		return nil, "", "", 0
+	}
+	for i := 1; i < len(token); i++ {
+		if !isDraftSkillChar(token[i]) {
+			return nil, "", "", 0
+		}
+	}
+	if dismissed != "" && token == dismissed {
+		return nil, token, "", startIdx
 	}
 	query = strings.ToLower(token[1:])
 	if strings.Contains(query, "/") {

@@ -45,9 +45,10 @@ func (c *Chat) Stream(body jsonv.Value, _ string, cancel func() bool, on func(Ev
 	// before the stream (nothing shown yet), never an error in the middle of one, so no reply is repeated.
 	usageOpt := true
 	transientRetries := 0
+	idemKey := fmt.Sprintf("nr-%x-%x", time.Now().UnixNano(), doc.RandomU64())
 	for attemptIdx := 0; attemptIdx < 6; attemptIdx++ {
 		emitted := false
-		out, err := c.attempt(jsonv.Clone(req), usageOpt, stall, cancel, func(ev Event) {
+		out, err := c.attempt(jsonv.Clone(req), usageOpt, idemKey, stall, cancel, func(ev Event) {
 			emitted = true
 			on(ev)
 		})
@@ -80,8 +81,11 @@ func (c *Chat) Stream(body jsonv.Value, _ string, cancel func() bool, on func(Ev
 	return nil, errors.New("request attempts exhausted")
 }
 
-func (c *Chat) attempt(body jsonv.Value, usageOption bool, stall time.Duration, cancel func() bool, on func(Event)) (jsonv.Value, error) {
+func (c *Chat) attempt(body jsonv.Value, usageOption bool, idemKey string, stall time.Duration, cancel func() bool, on func(Event)) (jsonv.Value, error) {
 	headers := [][2]string{{"content-type", "application/json"}}
+	if idemKey != "" {
+		headers = append(headers, [2]string{"idempotency-key", idemKey})
+	}
 	if c.key != "" {
 		headers = append(headers, [2]string{"authorization", "Bearer " + c.key})
 	}
@@ -109,7 +113,16 @@ func (c *Chat) attempt(body jsonv.Value, usageOption bool, stall time.Duration, 
 			return false, fmt.Errorf("Provider stream error: %s", msg)
 		}
 		if parsedUsage, ok := extractChatUsage(ev); ok {
-			usage = parsedUsage
+			if u := jsonv.Obj(parsedUsage); u != nil {
+				uObj := jsonv.Obj(usage)
+				for _, k := range []string{"input_tokens", "output_tokens"} {
+					if v, has := u.Get(k); has && v != nil {
+						uObj.Set(k, jsonv.Clone(v))
+					} else if !uObj.Has(k) {
+						uObj.Set(k, nil)
+					}
+				}
+			}
 		}
 		choices := jsonv.Items(jsonv.Get(ev, "choices"))
 		if len(choices) == 0 {

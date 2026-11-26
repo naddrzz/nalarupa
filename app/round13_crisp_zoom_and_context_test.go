@@ -2,6 +2,10 @@ package main
 
 import (
 	"image"
+	"net/http"
+	"net/http/httptest"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,6 +33,10 @@ func TestRound13_ZoomInAndZoomOutStayCrispEvenWhileAgentHoldsEngineLock(t *testi
 	`); err != nil {
 		t.Fatalf("setup card: %v", err)
 	}
+
+	// Settle initial slides so FirmCard (#111622) and Pricing — Control Deck (#090D16) are crisp in cachedSnap.
+	settledAt := time.Now().Add(4 * time.Second)
+	app.Bridge.eng.Renderer.Now = func() time.Time { return settledAt }
 
 	readyCh := make(chan struct{}, 8)
 	worker := NewCanvasRenderWorker(app.Bridge, func() {
@@ -108,6 +116,13 @@ func TestRound13_ZoomInAndZoomOutStayCrispEvenWhileAgentHoldsEngineLock(t *testi
 	if zoomInElapsed > 400*time.Millisecond {
 		t.Fatalf("expected fast lock-free 135%% vector raster, took %v", zoomInElapsed)
 	}
+	// Verify rendered 135% pixels: doc (420, 500) is inside FirmCard (#111622 = 17, 22, 34),
+	// doc (700, 500) is on screen background (#090D16 = 9, 13, 22).
+	pxCard135 := imgOut.RGBAAt(int((420-60)*1.35), int((500-60)*1.35))
+	pxScreen135 := imgOut.RGBAAt(int((700-60)*1.35), int((500-60)*1.35))
+	if colorDistRGB(pxCard135, 17, 22, 34) > 8 || colorDistRGB(pxScreen135, 9, 13, 22) > 8 {
+		t.Fatalf("135%% raster pixel mismatch: card=%+v (want #111622), screen=%+v (want #090D16)", pxCard135, pxScreen135)
+	}
 
 	// Step 3: Zoom OUT from 135% -> 35% while Engine.Lock() is STILL held!
 	worker.Submit(canvasRenderJob{
@@ -129,6 +144,11 @@ func TestRound13_ZoomInAndZoomOutStayCrispEvenWhileAgentHoldsEngineLock(t *testi
 	doneKey35, _, ok := worker.TakeReady(&imgOut)
 	if !ok || doneKey35.zoom != 0.35 {
 		t.Fatalf("expected crisp 0.35 ready frame on zoom-out, got ok=%v key=%+v", ok, doneKey35)
+	}
+	pxCard35 := imgOut.RGBAAt(int((420 - (-100))*0.35), int((500 - (-60))*0.35))
+	pxScreen35 := imgOut.RGBAAt(int((900 - (-100))*0.35), int((500 - (-60))*0.35))
+	if colorDistRGB(pxCard35, 17, 22, 34) > 8 || colorDistRGB(pxScreen35, 9, 13, 22) > 8 {
+		t.Fatalf("35%% raster pixel mismatch: card=%+v (want #111622), screen=%+v (want #090D16)", pxCard35, pxScreen35)
 	}
 	close(releaseLock)
 
@@ -202,4 +222,75 @@ func TestRound13_CustomProviderContextWindowAndLiveChatContextRemainingUI(t *tes
 
 	// Audit accessibility across all new context meter & custom provider context window controls!
 	assertAllInteractiveControlsNamed(t, tt, "Round 13 context window & custom provider settings")
+}
+
+func TestRound13_ModelFetchSessionIsolationAndEditedBaseURLGuard(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"qwen4-coder"},{"id":"qwen4-max"}]}`))
+	}))
+	defer srv.Close()
+
+	app := NewNalarupaApp(t.TempDir())
+	app.Init()
+	defer app.Close()
+
+	var savedID string
+	if err := app.Bridge.Call("provider_save", map[string]any{
+		"provider": map[string]any{
+			"name":     "Trusted Gateway",
+			"format":   "chat",
+			"base_url": srv.URL + "/v1",
+			"api_key":  "sk-secret-saved",
+			"models":   []string{},
+			"vision":   true,
+		},
+	}, &savedID); err != nil {
+		t.Fatalf("provider_save: %v", err)
+	}
+	app.setSetting("agent_backend", "provider")
+	app.setSetting("agent_provider", savedID)
+
+	// 1. Editing BaseURL to a different host without entering a new API key must NOT leak the saved API key!
+	err := app.Bridge.Call("models_fetch", map[string]any{
+		"target":   "provider",
+		"id":       savedID,
+		"format":   "chat",
+		"base_url": "http://127.0.0.1:9/v1",
+	}, nil)
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "api key") {
+		t.Fatalf("expected models_fetch with edited base_url and blank api_key to be blocked, got: %v", err)
+	}
+
+	// 2. Fetching models from the composer picker (persist=true) persists them into activeProvider().Models!
+	app.requestFetchModels("provider", savedID, "chat", srv.URL+"/v1", "", true, 0)
+	deadline := time.Now().Add(3 * time.Second)
+	for app.AgentUI.FetchingModels && time.Now().Before(deadline) {
+		app.PollNow(1000)
+		time.Sleep(10 * time.Millisecond)
+	}
+	ap := app.activeProvider()
+	if ap == nil || !slices.Equal(ap.Models, []string{"qwen4-coder", "qwen4-max"}) {
+		t.Fatalf("expected persisted picker models [qwen4-coder qwen4-max], got ap=%+v", ap)
+	}
+
+	// 3. Stale editor-session response after canceling/reopening EditingProv must NOT clobber the new editor draft!
+	app.AgentUI.ProvEditSeq = 10
+	app.AgentUI.ActiveFetchReqID = "mf_old"
+	app.AgentUI.ActiveFetchEditSeq = 10
+	app.AgentUI.ActiveFetchProvID = savedID
+	// User cancels and opens a fresh "Add provider" draft (ProvEditSeq advances to 11):
+	app.AgentUI.ProvEditSeq = 11
+	app.AgentUI.EditingProv = &ProviderConfig{Format: "chat", Vision: true}
+	app.AgentUI.ProvModelsCSV = "my-draft-model"
+	app.AgentUI.ActiveFetchReqID = "mf_old"
+	app.onModelsFetched(map[string]any{
+		"ok":     true,
+		"req_id": "mf_old",
+		"target": "provider",
+		"models": []any{"stale-model"},
+	})
+	if app.AgentUI.ProvModelsCSV != "my-draft-model" {
+		t.Fatalf("stale models_fetched clobbered fresh editor draft: got %q", app.AgentUI.ProvModelsCSV)
+	}
 }

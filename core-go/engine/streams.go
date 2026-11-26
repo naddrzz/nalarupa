@@ -47,7 +47,10 @@ func (e *Engine) StreamUpdate(key, agent, source string) {
 		s := e.Streams[i]
 		var touched []string
 		ok := false
+		prevStream := e.activeStream
+		e.activeStream = s
 		e.onPreview(func() { touched, ok = e.streamStep(key, agent, prefix, s.Seed) })
+		e.activeStream = prevStream
 		if ok {
 			seen := s.Touched
 			s.Touched = len(touched)
@@ -197,18 +200,35 @@ func (e *Engine) rebuildPreview() {
 		return
 	}
 	e.Preview = &doc.Doc{Root: cloneRoot(e.Doc.Root), Path: e.Doc.Path, IDs: e.ids}
-	var activity []jsonv.Value
+	type pendingStreamAct struct {
+		agent string
+		ids   []string
+	}
+	var activity []pendingStreamAct
 	e.onPreview(func() {
+		prevStream := e.activeStream
+		defer func() { e.activeStream = prevStream }()
 		for _, s := range append([]*Stream(nil), e.Streams...) {
+			e.activeStream = s
 			touched, _ := e.streamStep(s.Key, s.Agent, s.Source, s.Seed)
 			if len(touched) > s.Touched {
-				activity = append(activity, streamWrite(s.Agent, touched[s.Touched:]))
+				activity = append(activity, pendingStreamAct{
+					agent: s.Agent,
+					ids:   append([]string(nil), touched[s.Touched:]...),
+				})
 			}
 			s.Touched = len(touched)
 		}
 	})
+	if e.Agent.Running {
+		e.DeconflictTopLevelNodes(e.Preview)
+	}
+	e.reconcilePreTurnScreenIsolation(e.Preview)
+	for _, act := range activity {
+		e.ExpandProgressiveRootSlides(e.Preview, act.ids)
+	}
 	e.redraw(clean)
-	for _, a := range activity {
-		e.Emit(a)
+	for _, act := range activity {
+		e.EmitWriteActivityWithTeam(act.agent, e.Preview, act.ids, true)
 	}
 }

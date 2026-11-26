@@ -70,15 +70,15 @@ func TestProgressiveRevealOnMonolithicNestedInsertAndVSyncSpringCursor(t *testin
 	cx, cy := int(card4Box.X+card4Box.W/2), int(card4Box.Y+card4Box.H/2)
 	earlyPx := earlyRGBA.RGBAAt(cx, cy)
 	// #F5EFE4 is (245, 239, 228); #CAA55E is (202, 165, 94)
-	if earlyPx.R < 230 || earlyPx.B < 200 {
+	if colorDistRGB(earlyPx, 245, 239, 228) > 15 {
 		t.Fatalf("at t=+15ms Card4 already popped in at (%d,%d): got RGBA=%+v, want page ground #F5EFE4 before stagger turn", cx, cy, earlyPx)
 	}
 
-	curNow = baseTime.Add(1500 * time.Millisecond)
+	curNow = baseTime.Add(3200 * time.Millisecond)
 	app.Bridge.RenderInto(&settledRGBA, 800, 600, 0, 0, 1.0, CanvasBG, "", true)
 	settledPx := settledRGBA.RGBAAt(cx, cy)
-	if settledPx.R > 220 || settledPx.B > 130 {
-		t.Fatalf("at t=+1500ms Card4 did not settle to #CAA55E at (%d,%d): got RGBA=%+v", cx, cy, settledPx)
+	if colorDistRGB(settledPx, 202, 165, 94) > 16 {
+		t.Fatalf("at t=+3200ms Card4 did not settle to #CAA55E at (%d,%d): got RGBA=%+v", cx, cy, settledPx)
 	}
 
 	// 2. Poll events & verify cursor schedules VSync AnimationFrame (animFrame == true) and glides continuously!

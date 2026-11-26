@@ -158,10 +158,12 @@ func TestRound12_FlightStrip16NodeStreamedCardCollapsesToSingleCardWithZeroWiref
 		sampleY := cardCenterY
 		px := sampleDocPixel(t, app, sampleX, sampleY)
 		// Screen ground #F8FAFC is (248, 250, 252); CardJM102 #1D4ED8 is (29, 78, 216).
-		if appearedStep < 0 && colorDistRGB(px, 248, 250, 252) > 35 {
+		// Measure progression specifically toward CardJM102's cobalt blue fill!
+		distToBlue := colorDistRGB(px, 29, 78, 216)
+		if appearedStep < 0 && distToBlue < 220 && px.B > px.R+40 {
 			appearedStep = step
 		}
-		if settledStep < 0 && colorDistRGB(px, 29, 78, 216) < 16 {
+		if settledStep < 0 && distToBlue < 16 {
 			settledStep = step
 		}
 	}

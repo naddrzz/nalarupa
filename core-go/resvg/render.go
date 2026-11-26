@@ -17,10 +17,16 @@ import (
 // Upstream threads a render::Context holding `max_bbox` through every call. The Nalarupa patches in
 // render_group replaced its only use, so the port leaves it out.
 
+type backdropLayer struct {
+	data       []byte
+	w, h       uint32
+	offX, offY int32
+}
+
 // Render paints tree onto pixmap; transform is the root transform (it can position the SVG inside the
 // pixmap). The result is in the sRGB color space.
 func Render(tree *usvg.Tree, transform skia.Transform, pixmap skia.PixmapMut) {
-	renderNodes(tree.Root(), transform, pixmap)
+	renderNodesWithBackdrop(tree.Root(), transform, pixmap, nil)
 }
 
 // RenderNode paints node onto pixmap, shifted so its abs layer bounding box starts at the pixmap origin;
@@ -36,39 +42,44 @@ func RenderNode(node usvg.Node, transform skia.Transform, pixmap skia.PixmapMut)
 	if ok {
 		transform = transform.PreTranslate(-bbox.X(), -bbox.Y())
 	}
-	renderNode(node, transform, pixmap)
+	renderNode(node, transform, pixmap, nil)
 	return true
 }
 
 func renderNodes(parent *usvg.Group, transform skia.Transform, pixmap skia.PixmapMut) {
+	renderNodesWithBackdrop(parent, transform, pixmap, nil)
+}
+
+func renderNodesWithBackdrop(parent *usvg.Group, transform skia.Transform, pixmap skia.PixmapMut, bgStack []backdropLayer) {
 	for _, node := range parent.Children() {
-		renderNode(node, transform, pixmap)
+		renderNode(node, transform, pixmap, bgStack)
 	}
 }
 
-func renderNode(node usvg.Node, transform skia.Transform, pixmap skia.PixmapMut) {
+func renderNode(node usvg.Node, transform skia.Transform, pixmap skia.PixmapMut, bgStack []backdropLayer) {
 	switch n := node.(type) {
 	case *usvg.Group:
-		renderGroup(n, transform, pixmap)
+		renderGroup(n, transform, pixmap, bgStack)
 	case *usvg.Path:
 		renderPath(n, skia.BlendModeSourceOver, transform, pixmap)
 	case *usvg.Image:
 		renderImage(n, transform, pixmap)
 	case *usvg.Text:
-		renderGroup(n.Flattened(), transform, pixmap)
+		renderGroup(n.Flattened(), transform, pixmap, bgStack)
 	}
 }
 
-func renderGroup(group *usvg.Group, transform skia.Transform, pixmap skia.PixmapMut) {
+func renderGroup(group *usvg.Group, transform skia.Transform, pixmap skia.PixmapMut, bgStack []backdropLayer) {
 	transform = transform.PreConcat(group.Transform())
 
-	if rest, ok := strings.CutPrefix(group.ID(), "nrbb:"); ok && isNativeBackdropGroup(group) {
-		renderBackdropBlur(group, rest, transform, pixmap)
+	if rest, ok := strings.CutPrefix(group.ID(), "nrbb:"); ok &&
+		group.ClipPath() == nil && group.BlendMode() == usvg.BlendModeNormal && isNativeBackdropGroup(group) {
+		renderBackdropBlur(group, rest, transform, pixmap, bgStack)
 		return
 	}
 
 	if !group.ShouldIsolate() {
-		renderNodes(group, transform, pixmap)
+		renderNodesWithBackdrop(group, transform, pixmap, bgStack)
 		return
 	}
 
@@ -131,7 +142,28 @@ func renderGroup(group *usvg.Group, transform skia.Transform, pixmap skia.Pixmap
 		return // Rust logs "Failed to allocate a group layer"
 	}
 
-	renderNodes(group, transform, sub.AsMut())
+	var childBg []backdropLayer
+	if len(group.Filters()) == 0 && group.BlendMode() == usvg.BlendModeNormal {
+		childBg = make([]backdropLayer, len(bgStack)+1)
+		for i, l := range bgStack {
+			childBg[i] = backdropLayer{
+				data: l.data,
+				w:    l.w,
+				h:    l.h,
+				offX: l.offX + ibbox.X(),
+				offY: l.offY + ibbox.Y(),
+			}
+		}
+		childBg[len(bgStack)] = backdropLayer{
+			data: pixmap.DataMut(),
+			w:    pixmap.Width(),
+			h:    pixmap.Height(),
+			offX: ibbox.X(),
+			offY: ibbox.Y(),
+		}
+	}
+
+	renderNodesWithBackdrop(group, transform, sub.AsMut(), childBg)
 
 	for _, filter := range group.Filters() {
 		applyFilter(filter, transform, sub)

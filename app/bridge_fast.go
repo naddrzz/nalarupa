@@ -12,6 +12,7 @@ import (
 	"github.com/naddrzz/nalarupa/core-go/jsonv"
 	"github.com/naddrzz/nalarupa/core-go/render"
 	"github.com/naddrzz/nalarupa/core-go/resolve"
+	"github.com/naddrzz/nalarupa/core-go/svg"
 )
 
 func flatToBox(f *render.Flat) Box {
@@ -345,11 +346,16 @@ func (b *Bridge) TrySubtreeBoxesDirect(ids []string, maxNodes int) ([]Box, bool)
 	return out, true
 }
 
-func rnodeToBox(rn *resolve.RNode, parentID string, depth int) Box {
+func rnodeToBox(rn *resolve.RNode, parentID string, depth int, m *[6]float64) Box {
 	var pPtr *string
 	if parentID != "" && parentID != doc.Root {
 		cp := parentID
 		pPtr = &cp
+	}
+	var mPtr *Matrix6
+	if m != nil {
+		mv := Matrix6(*m)
+		mPtr = &mv
 	}
 	name, _ := rn.S("name")
 	return Box{
@@ -362,8 +368,17 @@ func rnodeToBox(rn *resolve.RNode, parentID string, depth int) Box {
 		H:           rn.H,
 		Parent:      pPtr,
 		Depth:       depth,
+		M:           mPtr,
 		Placeholder: rn.B("placeholder"),
 	}
+}
+
+func composeRNodeMatrix(parentM *[6]float64, rn *resolve.RNode) *[6]float64 {
+	if rn != nil && svg.IsTurned(rn) {
+		m := render.Compose(parentM, svg.OwnMatrix(rn))
+		return &m
+	}
+	return parentM
 }
 
 func rnodeBoxesLocked(e *engine.Engine, ids []string) []Box {
@@ -387,21 +402,22 @@ func rnodeBoxesLocked(e *engine.Engine, ids []string) []Box {
 		}
 	}
 	var out []Box
-	var walk func(rn *resolve.RNode, parent string, depth int)
-	walk = func(rn *resolve.RNode, parent string, depth int) {
+	var walk func(rn *resolve.RNode, parent string, depth int, parentM *[6]float64)
+	walk = func(rn *resolve.RNode, parent string, depth int, parentM *[6]float64) {
 		if rn == nil {
 			return
 		}
+		curM := composeRNodeMatrix(parentM, rn)
 		if want[rn.ID] {
-			out = append(out, rnodeToBox(rn, parent, depth))
+			out = append(out, rnodeToBox(rn, parent, depth, curM))
 		}
 		for _, k := range rn.Kids {
-			walk(k, rn.ID, depth+1)
+			walk(k, rn.ID, depth+1, curM)
 		}
 	}
 	for i := range d.Children() {
 		if root, ok := laid[i]; ok {
-			walk(root, doc.Root, 0)
+			walk(root, doc.Root, 0, nil)
 		}
 	}
 	return out
@@ -430,11 +446,12 @@ func rnodeSubtreeBoxesLocked(e *engine.Engine, ids []string, maxNodes int) []Box
 	cx := &render.Ctx{Doc: d, Libs: e.Libs, Fonts: e.Fonts, Assets: e.Assets}
 	seenOut := make(map[string]bool, maxNodes)
 	out := make([]Box, 0, min(maxNodes, len(ids)*2))
-	var walk func(rn *resolve.RNode, parent string, depth int, inside bool)
-	walk = func(rn *resolve.RNode, parent string, depth int, inside bool) {
+	var walk func(rn *resolve.RNode, parent string, depth int, inside bool, parentM *[6]float64)
+	walk = func(rn *resolve.RNode, parent string, depth int, inside bool, parentM *[6]float64) {
 		if rn == nil || len(out) >= maxNodes {
 			return
 		}
+		curM := composeRNodeMatrix(parentM, rn)
 		inSub := inside || roots[rn.ID]
 		if inSub {
 			isTop := parent == "" || parent == doc.Root
@@ -446,22 +463,25 @@ func rnodeSubtreeBoxesLocked(e *engine.Engine, ids []string, maxNodes int) []Box
 			}
 			if !seenOut[rn.ID] {
 				seenOut[rn.ID] = true
-				out = append(out, rnodeToBox(rn, parent, depth))
+				out = append(out, rnodeToBox(rn, parent, depth, curM))
 			}
 			if isCohesive || len(out) >= maxNodes {
 				return
 			}
 		}
 		for _, k := range rn.Kids {
-			walk(k, rn.ID, depth+1, inSub)
+			walk(k, rn.ID, depth+1, inSub, curM)
 			if len(out) >= maxNodes {
 				return
 			}
 		}
 	}
 	for i := range d.Children() {
+		if len(out) >= maxNodes {
+			break
+		}
 		if topNeeded[i] {
-			walk(cx.LaidOutLive(i), doc.Root, 0, false)
+			walk(cx.LaidOutLive(i), doc.Root, 0, false, nil)
 		}
 	}
 	return out
@@ -814,9 +834,10 @@ func (b *Bridge) RenderDetachedWithOverview(
 	ovMaxSide int,
 ) (ovRect RectD, ovVer uint64, ovOK bool) {
 	var snap render.SceneSnapshot
+	var cachedRel uint64
 	hasSnap := false
-	_, ovRect, ovVer, ovOK = b.RenderDetachedCachedWithOverview(
-		det, &snap, &hasSnap, false, dst, w, h, camX, camY, zoom, bg, solo, sharp, wantOverview, ovDst, ovMaxSide,
+	_, _, ovRect, ovVer, ovOK = b.RenderDetachedCachedWithOverview(
+		det, &snap, &cachedRel, &hasSnap, false, dst, w, h, camX, camY, zoom, bg, solo, sharp, wantOverview, ovDst, ovMaxSide,
 	)
 	return ovRect, ovVer, ovOK
 }
@@ -826,6 +847,7 @@ func (b *Bridge) RenderDetachedWithOverview(
 func (b *Bridge) RenderDetachedCachedWithOverview(
 	det *render.DetachedRenderer,
 	cachedSnap *render.SceneSnapshot,
+	cachedReleaseSeq *uint64,
 	hasCached *bool,
 	preferLockFree bool,
 	dst **image.RGBA,
@@ -837,9 +859,9 @@ func (b *Bridge) RenderDetachedCachedWithOverview(
 	wantOverview bool,
 	ovDst **image.RGBA,
 	ovMaxSide int,
-) (renderedVer uint64, ovRect RectD, ovVer uint64, ovOK bool) {
+) (renderedVer uint64, renderedRelSeq uint64, ovRect RectD, ovVer uint64, ovOK bool) {
 	if b == nil || b.eng == nil || det == nil {
-		return 0, RectD{}, 0, false
+		return 0, 0, RectD{}, 0, false
 	}
 	cw := max(1, min(8192, w))
 	ch := max(1, min(8192, h))
@@ -849,22 +871,38 @@ func (b *Bridge) RenderDetachedCachedWithOverview(
 
 	var snap render.SceneSnapshot
 	curVer := b.VersionDirect()
+	seqBefore := b.SlideReleaseSeqDirect()
 	hasSlides := b.HasSlidesDirect()
 	switch {
 	case cachedSnap != nil && hasCached != nil && *hasCached && !hasSlides && len(cachedSnap.Slides) == 0 && cachedSnap.Version == curVer:
 		snap = *cachedSnap
+		renderedRelSeq = seqBefore
+		if cachedReleaseSeq != nil {
+			*cachedReleaseSeq = seqBefore
+		}
 	case cachedSnap != nil && hasCached != nil && *hasCached && preferLockFree:
 		if got, ok := b.eng.TrySnapshotForRender(solo); ok {
 			snap = got
 			*cachedSnap = got
+			renderedRelSeq = seqBefore
+			if cachedReleaseSeq != nil {
+				*cachedReleaseSeq = seqBefore
+			}
 		} else {
 			snap = *cachedSnap
+			if cachedReleaseSeq != nil {
+				renderedRelSeq = *cachedReleaseSeq
+			}
 		}
 	default:
 		snap = b.eng.SnapshotForRender(solo)
+		renderedRelSeq = seqBefore
 		if cachedSnap != nil && hasCached != nil {
 			*cachedSnap = snap
 			*hasCached = true
+		}
+		if cachedReleaseSeq != nil {
+			*cachedReleaseSeq = seqBefore
 		}
 	}
 
@@ -878,10 +916,10 @@ func (b *Bridge) RenderDetachedCachedWithOverview(
 				*ovDst = image.NewRGBA(image.Rect(0, 0, iw, ih))
 			}
 			copy((*ovDst).Pix, ovPx)
-			return snap.Version, RectD{X: dr.X, Y: dr.Y, W: dr.W, H: dr.H}, snap.Version, true
+			return snap.Version, renderedRelSeq, RectD{X: dr.X, Y: dr.Y, W: dr.W, H: dr.H}, snap.Version, true
 		}
 	}
-	return snap.Version, RectD{}, snap.Version, false
+	return snap.Version, renderedRelSeq, RectD{}, snap.Version, false
 }
 
 // TryRenderInto renders a frame only if the engine lock is immediately uncontended; returns (nil, false)

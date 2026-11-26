@@ -139,18 +139,23 @@ func Send(e *engine.Engine, prompt string, parallel uint64, mode string, designs
 			e.Agent.QueueOpts = engine.QueueOpts{Parallel: parallel, Mode: mode, Designs: designs, Iterate: iterate}
 			e.Emit(engine.Object("type", "agent", "kind", "queued", "text", prompt))
 			queued = true
+			return
 		}
+		// Reserve the turn under the same lock before releasing it for skill discovery so concurrent Sends queue cleanly.
+		e.Agent.Running = true
+		e.Agent.Cancel = engine.NewFlag()
 	})
 	if !queued {
-		begin(e, prompt, engine.QueueOpts{Parallel: parallel, Mode: mode, Designs: designs, Iterate: iterate}, false)
+		begin(e, prompt, engine.QueueOpts{Parallel: parallel, Mode: mode, Designs: designs, Iterate: iterate}, true)
 	}
 	return nil
 }
 
 func clampU(v, lo, hi uint64) int { return int(max(lo, min(v, hi))) }
 
-// begin starts a turn without the busy check: also how a finished run hands over to its continuation (resume).
-func begin(e *engine.Engine, prompt string, o engine.QueueOpts, resume bool) {
+// begin starts a user turn (either immediately from Send with Running reserved, or dequeued after a finished run).
+// Slash skills are always expanded for user prompts, including queued ones.
+func begin(e *engine.Engine, prompt string, o engine.QueueOpts, checkCancel bool) {
 	var docPath string
 	e.Locked(func() {
 		if e.Doc != nil {
@@ -169,7 +174,7 @@ func begin(e *engine.Engine, prompt string, o engine.QueueOpts, resume bool) {
 		e.Agent.ActiveSkillDirs = nil
 	})
 	expanded := prompt
-	if !resume && strings.Contains(prompt, "/") {
+	if strings.Contains(prompt, "/") {
 		catalog := DiscoverSkills(docPath)
 		if matched, clean := ExtractSlashSkills(prompt, catalog); len(matched) > 0 {
 			dirs := SkillDirs(matched)
@@ -181,7 +186,7 @@ func begin(e *engine.Engine, prompt string, o engine.QueueOpts, resume bool) {
 	if o.Designs > 1 {
 		text += "\n\n" + firstDesign
 	}
-	startTurn(e, prompt, text, resume)
+	startTurn(e, prompt, text, checkCancel, false)
 }
 
 // chatTitle is the first prompt on one line: whitespace runs (line breaks too) collapsed, capped at 100 chars.
@@ -193,9 +198,10 @@ func chatTitle(shown string) string {
 	return string(r)
 }
 
-// startTurn sends prompt to the main agent (same conversation), showing shown as the user's message. A resume
-// turn continues a finished run: it is dropped when Stop came in since that run ended.
-func startTurn(e *engine.Engine, shown, prompt string, resume bool) {
+// startTurn sends prompt to the main agent (same conversation), showing shown as the user's message. When
+// checkCancel is true, the turn is dropped if Stop ran since the reservation or previous run ended; isIteration
+// marks automatic "Let it cook" variation turns (distinct from queued user edit prompts).
+func startTurn(e *engine.Engine, shown, prompt string, checkCancel, isIteration bool) {
 	// Held until the run is marked running: a clear that sweeps the chat files must not interleave with a new
 	// chat's first save.
 	chatOps.Lock()
@@ -204,7 +210,7 @@ func startTurn(e *engine.Engine, shown, prompt string, resume bool) {
 	var opts engine.QueueOpts
 	stopped, again := false, false
 	e.Locked(func() {
-		if resume && e.Agent.Cancel.IsSet() {
+		if checkCancel && e.Agent.Cancel != nil && e.Agent.Cancel.IsSet() {
 			// Prompts sent after Stop queued behind this continuation: run them now as a fresh turn, keeping the
 			// agent busy so nothing else slips in, instead of leaving them stranded.
 			stopped = true
@@ -212,8 +218,10 @@ func startTurn(e *engine.Engine, shown, prompt string, resume bool) {
 			queued, opts, ok = takeQueue(e)
 			if !ok {
 				e.Agent.Running = false
+				e.Agent.EndTurnIsolation()
 				return
 			}
+			e.Agent.Cancel = engine.NewFlag()
 			again = true
 			return
 		}
@@ -227,7 +235,7 @@ func startTurn(e *engine.Engine, shown, prompt string, resume bool) {
 			e.Agent.Main = p.ID
 		}
 		main = p
-		e.Agent.IsVariationTurn = resume || e.Agent.Mode == "side"
+		e.Agent.IsVariationTurn = isIteration || e.Agent.Mode == "side"
 		e.BeginTurnSnapshot()
 		e.Agent.Cancel = engine.NewFlag()
 		e.Agent.Spawned = 0
@@ -246,7 +254,7 @@ func startTurn(e *engine.Engine, shown, prompt string, resume bool) {
 	if stopped {
 		chatOps.Unlock()
 		if again {
-			begin(e, queued, opts, false)
+			begin(e, queued, opts, true)
 		}
 		return
 	}
@@ -268,7 +276,7 @@ func wrapParallel(e *engine.Engine, prompt string) string {
 			"1. Decide %d design directions for this brief, one per designer, each apart from the others on at least two variation axes "+
 			"(Designing). Post them first: Framing / Direction / Why for yours, one Direction line for each other designer.\n"+
 			"2. Pick a sensible screen size for the task. Never edit or overwrite earlier finished screens already on the canvas unless the user asked to edit them.\n"+
-			"3. Create %d empty top-level frames in one row, named \"1. <short title>\" … \"%d. <short title>\" (not placeholders), using FindEmptySpace(w, h, \"right\", 120).\n"+
+			"3. Create %d empty top-level frames in aligned rows, named \"1. <short title>\" … \"%d. <short title>\" (not placeholders), using FindEmptySpace({width: w, height: h, direction: \"right\", padding: 160}).\n"+
 			"4. Immediately call spawn_agents with %d entries: entry k gets containerNodes [frame k+1] and, as its prompt, designer k+1's design direction "+
 			"(concept · palette · type · signature move).\n"+
 			"5. Then design your own direction inside frame 1. Do not touch the other frames.",
@@ -277,7 +285,7 @@ func wrapParallel(e *engine.Engine, prompt string) string {
 	return fmt.Sprintf("%s\n\nSplit this work across %d extra designers (total %d parallel designers) using the `spawn_agents` tool. "+
 		"Never modify or recolor earlier finished screens already on the canvas unless the user explicitly asked to edit them; if introducing a new palette alongside existing screens, prefix your new variable names so existing screens stay untouched. "+
 		"First lock the shared system in one compact setup `execute` call: define semantic `SetVariables`, "+
-		"place any shared `reusable: true` components above the screens with FindEmptySpace(w, h, \"top\", 80), and place the empty top-level screen frames in a clean row with FindEmptySpace(w, h, \"right\", 120). "+
+		"place any shared `reusable: true` components above the screens with FindEmptySpace({width: w, height: h, direction: \"top\", padding: 80}), and place the empty top-level screen frames in aligned rows with FindEmptySpace({width: w, height: h, direction: \"right\", padding: 160}). "+
 		"Immediately call `spawn_agents` right after that setup call, giving each designer its container frame id(s), `$variable` names, reusable component ids, typography scale, and a self-contained task; keep one screen for yourself and build it right after spawning.", prompt, n-1, n)
 }
 
@@ -332,10 +340,16 @@ func run(e *engine.Engine, p engine.Profile, prompt string, child bool) {
 	var backend, name string
 	var hasModel bool
 	var client model.Provider
+	var contextLimit int
 	var setup error
 	e.Locked(func() {
 		backend = e.Backend()
 		name, hasModel, setup = e.RunModel(backend)
+		effModel := name
+		if !hasModel || effModel == "" {
+			effModel = DefaultModel
+		}
+		contextLimit = e.ContextWindowLimit(backend, effModel)
 		if setup == nil && backend != "claude-code" {
 			client, setup = e.CurrentProvider()
 		}
@@ -354,7 +368,7 @@ func run(e *engine.Engine, p engine.Profile, prompt string, child bool) {
 			// A provider with no model listed (or no key) fails the turn with what to fix.
 			return nil, setup
 		case client != nil:
-			return runAPI(e, p, prompt, child, name, client)
+			return runAPI(e, p, prompt, child, name, client, contextLimit)
 		}
 		return runClaudeCode(e, p, prompt, child, name)
 	})
@@ -415,11 +429,14 @@ func run(e *engine.Engine, p engine.Profile, prompt string, child bool) {
 		}
 		// A continuation keeps the agent busy until its run starts, so a reset cannot slip in between.
 		e.Agent.Running = then != nil
+		if then == nil {
+			e.Agent.EndTurnIsolation()
+		}
 	})
 	switch {
 	case then == nil:
 	case then.iterate:
-		startTurn(e, iterating, wrapParallel(e, then.prompt), true)
+		startTurn(e, iterating, wrapParallel(e, then.prompt), true, true)
 	default:
 		begin(e, then.queued, then.opts, true)
 	}

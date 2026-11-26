@@ -138,8 +138,8 @@ func EncodeTree(tree *usvg.Tree, format string, scale float64, quality uint8) ([
 			pm.Fill(skia.ColorFromRGBA8(255, 255, 255, 255))
 		}
 		resvg.Render(tree, skia.TransformFromScale(sx, sy), pm.AsMut())
-	} else {
-		renderTreeParallel(tree, sx, sy, format, pm)
+	} else if err := renderTreeParallel(tree, sx, sy, format, pm); err != nil {
+		return nil, err
 	}
 
 	rect := image.Rect(0, 0, int(pw), int(ph))
@@ -166,22 +166,36 @@ func EncodeTree(tree *usvg.Tree, format string, scale float64, quality uint8) ([
 	return out.Bytes(), nil
 }
 
-func renderTreeParallel(tree *usvg.Tree, sx, sy float32, format string, pm *skia.Pixmap) {
+func renderTreeParallel(tree *usvg.Tree, sx, sy float32, format string, pm *skia.Pixmap) error {
 	pw, ph := pm.Width(), pm.Height()
 	threads := min(max(runtime.NumCPU(), 1), 16)
 	bandH := max((ph+uint32(threads)-1)/uint32(threads), 256)
-	const padY = uint32(256)
+	const padY = uint32(512)
 	dst := pm.DataMut()
 	stride := int(pw) * 4
 
 	var wg sync.WaitGroup
+	var errMu sync.Mutex
+	var firstErr error
+	recordErr := func(err error) {
+		errMu.Lock()
+		if firstErr == nil {
+			firstErr = err
+		}
+		errMu.Unlock()
+	}
+
 	for y0 := uint32(0); y0 < ph; y0 += bandH {
 		y0 := y0
 		y1 := min(y0+bandH, ph)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			defer func() { _ = recover() }()
+			defer func() {
+				if r := recover(); r != nil {
+					recordErr(fmt.Errorf("export render strip panic: %v", r))
+				}
+			}()
 			var sy0 uint32
 			if y0 > padY {
 				sy0 = y0 - padY
@@ -189,6 +203,7 @@ func renderTreeParallel(tree *usvg.Tree, sx, sy float32, format string, pm *skia
 			sy1 := min(y1+padY, ph)
 			strip, ok := skia.NewPixmap(pw, sy1-sy0)
 			if !ok {
+				recordErr(fmt.Errorf("export strip allocation failed (%dx%d)", pw, sy1-sy0))
 				return
 			}
 			if format == "jpeg" {
@@ -203,6 +218,7 @@ func renderTreeParallel(tree *usvg.Tree, sx, sy float32, format string, pm *skia
 		}()
 	}
 	wg.Wait()
+	return firstErr
 }
 
 // clampSize is `(x as u32).clamp(1, 8192)`.

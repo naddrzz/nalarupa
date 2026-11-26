@@ -26,6 +26,7 @@ func (h host) SlideIn(id string)                                         { h.e.S
 func (h host) BeforeModify(path string)                                  { h.e.BeforeModify(path) }
 func (h host) AfterModify(oldPath, newID string)                         { h.e.AfterModify(oldPath, newID) }
 func (h host) CheckEditTarget(op, target string, reu bool) error         { return h.e.CheckEditTarget(op, target, reu) }
+func (h host) RecordEditTarget(op, target string)                        { h.e.RecordEditTarget(op, target) }
 func (h host) FilterSetVars(v jsonv.Value, r bool) (jsonv.Value, bool)   { return h.e.FilterSetVars(v, r) }
 func (h host) AfterRootInsert(id string)                                 { h.e.AfterRootInsert(id) }
 func (h host) AfterSetVars()                                             { h.e.AfterSetVars() }

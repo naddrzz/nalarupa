@@ -224,6 +224,7 @@ func (ex *exec) insert(a []string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	ex.host.RecordEditTarget("insert", parent)
 	ex.record(node, id)
 	if parent == doc.Root {
 		ex.host.AfterRootInsert(id)
@@ -240,7 +241,7 @@ func (ex *exec) copy(a []string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := ex.host.CheckEditTarget("copy", parent, false); err != nil {
+	if err := ex.host.CheckEditTarget("copy", parent, parent == doc.Root && jsonv.IsTrue(jsonv.Get(data, "reusable"))); err != nil {
 		return "", err
 	}
 	d := ex.host.Doc()
@@ -254,6 +255,7 @@ func (ex *exec) copy(a []string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	ex.host.RecordEditTarget("copy", parent)
 	named := source
 	if _, ok := jsonv.Get(data, "name").(string); ok {
 		named = data
@@ -281,6 +283,7 @@ func (ex *exec) update(a []string) (string, error) {
 	if err := ex.host.Doc().Update(path, data); err != nil {
 		return "", err
 	}
+	ex.host.RecordEditTarget("update", path)
 	ex.touched = append(ex.touched, path)
 	ex.host.AfterModify(path, path)
 	ex.host.Changed()
@@ -301,6 +304,7 @@ func (ex *exec) replace(a []string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	ex.host.RecordEditTarget("replace", id)
 	ex.record(node, id)
 	ex.host.AfterModify(path, id)
 	ex.host.Changed()
@@ -309,11 +313,16 @@ func (ex *exec) replace(a []string) (string, error) {
 
 func (ex *exec) move(a []string) (string, error) {
 	path, parent := arg(a, 0), arg(a, 1)
+	origParent, _, hasOrigParent := ex.host.Doc().ParentOf(path)
+	moveParent := parent
+	if moveParent == "" && hasOrigParent {
+		moveParent = origParent
+	}
 	if err := ex.host.CheckEditTarget("move", path, false); err != nil {
 		return "", err
 	}
-	if parent != doc.Root {
-		if err := ex.host.CheckEditTarget("insert", parent, false); err != nil {
+	if moveParent != "" {
+		if err := ex.host.CheckEditTarget("insert", moveParent, false); err != nil {
 			return "", err
 		}
 	}
@@ -330,6 +339,10 @@ func (ex *exec) move(a []string) (string, error) {
 	if err := ex.host.Doc().MoveNode(path, parent, idx); err != nil {
 		return "", err
 	}
+	if hasOrigParent && origParent != "" && origParent != doc.Root {
+		ex.host.RecordEditTarget("move", origParent)
+	}
+	ex.host.RecordEditTarget("move", path)
 	ex.touched = append(ex.touched, path)
 	ex.host.AfterModify(path, path)
 	ex.host.Changed()
@@ -341,8 +354,12 @@ func (ex *exec) delete(a []string) (string, error) {
 	if err := ex.host.CheckEditTarget("delete", target, false); err != nil {
 		return "", err
 	}
+	origParent, _, hasOrigParent := ex.host.Doc().ParentOf(target)
 	if err := ex.host.Doc().Delete(target); err != nil {
 		return "", err
+	}
+	if hasOrigParent && origParent != "" && origParent != doc.Root {
+		ex.host.RecordEditTarget("delete", origParent)
 	}
 	ex.host.Changed()
 	return "", nil

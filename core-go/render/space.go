@@ -14,10 +14,31 @@ func FindEmptySpace(r *Renderer, w, h float64, dir string, pad float64, anchor *
 func FindEmptySpaceOK(r *Renderer, w, h float64, dir string, pad float64, anchor *Flat) (x, y float64, ok bool) {
 	var boxes []Rect
 	for _, id := range r.Order {
-		if l, ok := r.Layers[id]; ok && len(l.Flat) > 0 {
-			f := &l.Flat[0]
-			boxes = append(boxes, Rect{X: f.X, Y: f.Y, W: f.W, H: f.H})
+		l, ok := r.Layers[id]
+		if !ok || len(l.Flat) == 0 {
+			continue
 		}
+		f := &l.Flat[0]
+		x0, y0, x1, y1 := f.X, f.Y, f.X+f.W, f.Y+f.H
+		if !f.Clip && len(l.Flat) > 1 {
+			clipDepth := -1
+			for j := 1; j < len(l.Flat); j++ {
+				d := &l.Flat[j]
+				if clipDepth >= 0 && d.Depth > clipDepth {
+					continue
+				}
+				clipDepth = -1
+				if d.Faded {
+					continue
+				}
+				x0, y0 = fmin(x0, d.X), fmin(y0, d.Y)
+				x1, y1 = fmax(x1, d.X+d.W), fmax(y1, d.Y+d.H)
+				if d.Clip {
+					clipDepth = d.Depth
+				}
+			}
+		}
+		boxes = append(boxes, Rect{X: x0, Y: y0, W: x1 - x0, H: y1 - y0})
 	}
 	busy := func(x, y float64) bool {
 		for _, b := range boxes {

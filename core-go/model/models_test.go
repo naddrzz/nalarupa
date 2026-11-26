@@ -37,6 +37,32 @@ func TestFetchModelsAnthropicAndOpenAI(t *testing.T) {
 		}
 	})
 
+	t.Run("anthropic_pagination", func(t *testing.T) {
+		var calls []string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls = append(calls, r.URL.RequestURI())
+			w.Header().Set("content-type", "application/json")
+			if r.URL.Query().Get("after_id") == "" {
+				io.WriteString(w, `{"data":[{"id":"claude-fable-5-2"},{"id":"claude-opus-5-5"}],"has_more":true,"last_id":"claude-opus-5-5"}`)
+				return
+			}
+			io.WriteString(w, `{"data":[{"id":"claude-opus-5-5"},{"id":"claude-sonnet-5-5"}],"has_more":false,"last_id":"claude-sonnet-5-5"}`)
+		}))
+		defer srv.Close()
+
+		models, err := FetchModels("anthropic", srv.URL+"/v1", "sk-ant-page")
+		if err != nil {
+			t.Fatalf("FetchModels anthropic pagination: %v", err)
+		}
+		if len(calls) != 2 || !strings.Contains(calls[1], "after_id=claude-opus-5-5") {
+			t.Fatalf("unexpected pagination requests: %v", calls)
+		}
+		want := []string{"claude-fable-5-2", "claude-opus-5-5", "claude-sonnet-5-5"}
+		if !slices.Equal(models, want) {
+			t.Fatalf("paginated models = %v, want %v", models, want)
+		}
+	})
+
 	t.Run("openai_chat_and_error", func(t *testing.T) {
 		var gotAuth, gotPath string
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

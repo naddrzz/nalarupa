@@ -156,11 +156,15 @@ func TestRound7_WorkerReadySkipsRedundantFullWindowUpdateDuringVSync(t *testing.
 	defer app.Close()
 
 	var windowUpdates atomic.Int32
+	cbDone := make(chan struct{}, 4)
 	worker := NewCanvasRenderWorker(app.Bridge, func() {
-		if app.Canvas.vsyncActive.Load() {
-			return
+		if shouldWakeWindowOnWorkerReady(&app.Canvas.vsyncActive) {
+			windowUpdates.Add(1)
 		}
-		windowUpdates.Add(1)
+		select {
+		case cbDone <- struct{}{}:
+		default:
+		}
 	})
 	defer worker.Close()
 
@@ -170,12 +174,13 @@ func TestRound7_WorkerReadySkipsRedundantFullWindowUpdateDuringVSync(t *testing.
 		key: canvasRenderKey{version: app.Bridge.VersionDirect(), pw: 320, ph: 200, zoom: 1, dpr: 1},
 		w:   320, h: 200, zoom: 1, bg: CanvasBG,
 	})
-	deadline := time.Now().Add(2 * time.Second)
-	for !worker.HasReady() && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
+	select {
+	case <-cbDone:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("expected worker to finish job and run onReady")
 	}
 	if !worker.HasReady() {
-		t.Fatalf("expected worker to finish job")
+		t.Fatalf("expected worker to have ready frame")
 	}
 	if got := windowUpdates.Load(); got != 0 {
 		t.Fatalf("expected 0 redundant Window.Update calls while vsyncActive=true, got %d", got)
@@ -188,9 +193,10 @@ func TestRound7_WorkerReadySkipsRedundantFullWindowUpdateDuringVSync(t *testing.
 		key: canvasRenderKey{version: app.Bridge.VersionDirect(), pw: 320, ph: 200, zoom: 1, dpr: 1, sharp: true},
 		w:   320, h: 200, zoom: 1, bg: CanvasBG, sharp: true,
 	})
-	deadline = time.Now().Add(2 * time.Second)
-	for windowUpdates.Load() == 0 && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
+	select {
+	case <-cbDone:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("expected second worker job to finish")
 	}
 	if got := windowUpdates.Load(); got != 1 {
 		t.Fatalf("expected 1 Window.Update call when vsyncActive=false, got %d", got)

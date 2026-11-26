@@ -5,33 +5,57 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strings"
 
 	"github.com/naddrzz/nalarupa/core-go/doc"
 	"github.com/naddrzz/nalarupa/core-go/jsonv"
 	"github.com/naddrzz/nalarupa/core-go/layout"
 	"github.com/naddrzz/nalarupa/core-go/resolve"
+	"github.com/naddrzz/nalarupa/core-go/svg"
 )
+
+type cachedTopBound struct {
+	x, y, w, h float64
+	varsHash   uint64
+}
+
+func isUntouchedTemplateStarter(e *Engine, kids []jsonv.Value, ch jsonv.Value) bool {
+	if e.Dirty() || e.Doc == nil || e.Doc.Path != "" || len(kids) != 1 {
+		return false
+	}
+	if !jsonv.StrIs(jsonv.Get(ch, "type"), "frame") || jsonv.IsTrue(jsonv.Get(ch, "reusable")) {
+		return false
+	}
+	ck := jsonv.Arr(jsonv.Get(ch, "children"))
+	if ck != nil && len(ck.Items) > 0 {
+		return false
+	}
+	id := jsonv.StrOr(jsonv.Get(ch, "id"))
+	return (id == "frm01" || id == "mob01") && jsonv.StrIs(jsonv.Get(ch, "fill"), "#FFFFFF")
+}
 
 // BeginTurnSnapshot captures existing top-level node IDs and document variables at the start of an agent turn,
 // protecting finished screens from accidental variable clobbering or unintended edits when new screens are added.
 func (e *Engine) BeginTurnSnapshot() {
 	e.Agent.PreTurnTopIDs = map[string]bool{}
+	e.Agent.ProtectedVars = nil
 	e.Agent.TurnEditedPreTop = map[string]bool{}
 	e.Agent.TurnNewTopIDs = nil
 	e.Agent.TurnScreenTeam = map[string]string{}
+	e.Agent.FixedTopBounds = nil
 	if e.Doc == nil {
 		e.Agent.PreTurnVars = nil
 		return
 	}
-	for _, ch := range e.Doc.Children() {
+	kids := e.Doc.Children()
+	for _, ch := range kids {
 		id := jsonv.StrOr(jsonv.Get(ch, "id"))
 		if id == "" {
 			continue
 		}
-		// An untouched empty template starter frame with zero children needn't block Turn 1 edits,
-		// whereas any populated user/agent screen or component is recorded and protected.
-		kids := jsonv.Arr(jsonv.Get(ch, "children"))
-		if jsonv.StrOr(jsonv.Get(ch, "type")) == "frame" && (kids == nil || len(kids.Items) == 0) && !jsonv.IsTrue(jsonv.Get(ch, "reusable")) {
+		// Exclude only the untouched blank/mobile template starter frame so Turn 1 can edit or replace it;
+		// finished screens (including empty background-only frames using $ground) remain protected.
+		if isUntouchedTemplateStarter(e, kids, ch) {
 			continue
 		}
 		e.Agent.PreTurnTopIDs[id] = true
@@ -64,12 +88,50 @@ func (e *Engine) SetAgentContainerScope(agentID string, containerIDs []string) {
 	e.Agent.ChildScopes[agentID] = m
 }
 
+func scopesOverlap(d *doc.Doc, a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	ra, rb := rootTargetID(a), rootTargetID(b)
+	if ra == rb {
+		return true
+	}
+	return isNodeWithinScope(d, map[string]bool{ra: true}, rb) ||
+		isNodeWithinScope(d, map[string]bool{rb: true}, ra)
+}
+
+// ValidateChildScopes checks that new spawn container assignments are disjoint from each other and from active child scopes.
+func (e *Engine) ValidateChildScopes(containers []string) error {
+	if e.Doc == nil || len(containers) == 0 {
+		return nil
+	}
+	for i := 0; i < len(containers); i++ {
+		ci := containers[i]
+		if ci == "" {
+			continue
+		}
+		for j := i + 1; j < len(containers); j++ {
+			if scopesOverlap(e.Doc, ci, containers[j]) {
+				return fmt.Errorf("overlapping container assignment %q and %q: each spawned designer must own a disjoint frame", ci, containers[j])
+			}
+		}
+		for _, activeScope := range e.Agent.ChildScopes {
+			for existing := range activeScope {
+				if scopesOverlap(e.Doc, ci, existing) {
+					return fmt.Errorf("container %q overlaps active spawned designer scope %q", ci, existing)
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func isNodeWithinScope(d *doc.Doc, scope map[string]bool, targetID string) bool {
 	if d == nil || targetID == "" {
 		return false
 	}
 	cur := rootTargetID(targetID)
-	for range 32 {
+	for range doc.MaxLevels + 2 {
 		if scope[cur] {
 			return true
 		}
@@ -97,7 +159,7 @@ func topAncestorID(d *doc.Doc, targetID string) string {
 	return jsonv.StrOr(jsonv.Get(kids[idx], "id"))
 }
 
-// CheckEditTarget validates whether the currently executing agent may mutate targetID.
+// CheckEditTarget validates whether the currently executing agent may mutate targetID without side effects.
 func (e *Engine) CheckEditTarget(op, targetID string, isReusableRoot bool) error {
 	agentID := e.currentExecAgent
 	d := e.Doc
@@ -116,7 +178,7 @@ func (e *Engine) CheckEditTarget(op, targetID string, isReusableRoot bool) error
 				}
 				return nil
 			default:
-				if !isNodeWithinScope(d, scope, targetID) {
+				if targetID == doc.Root || !isNodeWithinScope(d, scope, targetID) {
 					return errors.New("spawned designer may only edit inside its assigned container frame(s)")
 				}
 				return nil
@@ -124,22 +186,39 @@ func (e *Engine) CheckEditTarget(op, targetID string, isReusableRoot bool) error
 		}
 	}
 
-	if d != nil && len(e.Agent.PreTurnTopIDs) > 0 && (op == "update" || op == "replace" || op == "delete" || op == "move") {
+	if d != nil && e.Agent.Running && e.Agent.IsVariationTurn && len(e.Agent.PreTurnTopIDs) > 0 &&
+		(op == "update" || op == "replace" || op == "delete" || op == "move" || op == "insert" || op == "copy") {
 		topID := topAncestorID(d, targetID)
 		if topID != "" && e.Agent.PreTurnTopIDs[topID] {
-			if e.Agent.IsVariationTurn {
-				return errors.New("do not modify earlier finished screens during variation generation; build inside the new frame")
-			}
-			if e.Agent.TurnEditedPreTop == nil {
-				e.Agent.TurnEditedPreTop = map[string]bool{}
-			}
-			e.Agent.TurnEditedPreTop[topID] = true
+			return errors.New("do not modify earlier finished screens during variation generation; build inside the new frame")
 		}
 	}
 	return nil
 }
 
-// FilterSetVars prevents child agents from overwriting shared variables and prevents replace=true from dropping pre-turn variables.
+// RecordEditTarget marks targetID's pre-turn top-level ancestor as intentionally edited after a mutation succeeds.
+func (e *Engine) RecordEditTarget(op, targetID string) {
+	if e.Doc == nil || targetID == "" || targetID == doc.Root {
+		return
+	}
+	topID := topAncestorID(e.Doc, targetID)
+	if topID == "" {
+		return
+	}
+	if len(e.Agent.FixedTopBounds) > 0 {
+		delete(e.Agent.FixedTopBounds, topID)
+	}
+	if len(e.Agent.PreTurnTopIDs) > 0 && e.Agent.PreTurnTopIDs[topID] &&
+		(op == "update" || op == "replace" || op == "delete" || op == "move" || op == "insert" || op == "copy") {
+		if e.Agent.TurnEditedPreTop == nil {
+			e.Agent.TurnEditedPreTop = map[string]bool{}
+		}
+		e.Agent.TurnEditedPreTop[topID] = true
+	}
+}
+
+// FilterSetVars prevents child agents from overwriting shared variables and prevents replace=true from dropping
+// pre-turn or pinned variables while preserving in-turn updates and clearing unprotected temporary keys.
 func (e *Engine) FilterSetVars(vars jsonv.Value, replace bool) (jsonv.Value, bool) {
 	vs := jsonv.Obj(vars)
 	if vs == nil || e.Doc == nil {
@@ -151,18 +230,57 @@ func (e *Engine) FilterSetVars(vars jsonv.Value, replace bool) (jsonv.Value, boo
 		existing := jsonv.Obj(rawExisting)
 		filtered := jsonv.NewObject()
 		vs.Each(func(k string, v jsonv.Value) {
+			if _, pinned := e.Agent.ProtectedVars[k]; pinned {
+				return
+			}
 			if existing == nil || !existing.Has(k) {
 				filtered.Set(k, jsonv.Clone(v))
 			}
 		})
 		return filtered, false
 	}
-	if replace && e.Agent.PreTurnVars != nil && e.Agent.PreTurnVars.Len() > 0 {
-		merged := jsonv.Obj(jsonv.Clone(e.Agent.PreTurnVars))
+	hasPreTurn := e.Agent.PreTurnVars != nil && e.Agent.PreTurnVars.Len() > 0
+	hasPinned := len(e.Agent.ProtectedVars) > 0
+	if replace && (hasPreTurn || hasPinned) {
+		rawCur, _ := e.Doc.Root.Get("variables")
+		curVars := jsonv.Obj(rawCur)
+		merged := jsonv.NewObject()
+		if hasPreTurn {
+			e.Agent.PreTurnVars.Each(func(k string, origDef jsonv.Value) {
+				if curVars != nil {
+					if curDef, ok := curVars.Get(k); ok {
+						merged.Set(k, jsonv.Clone(curDef))
+						return
+					}
+				}
+				merged.Set(k, jsonv.Clone(origDef))
+			})
+		}
 		vs.Each(func(k string, v jsonv.Value) {
 			merged.Set(k, jsonv.Clone(v))
 		})
-		return merged, false
+		for pin, def := range e.Agent.ProtectedVars {
+			merged.Set(pin, jsonv.Clone(def))
+		}
+		return merged, true
+	}
+	if !replace && hasPinned {
+		overwritesPinned := false
+		for pin := range e.Agent.ProtectedVars {
+			if vs.Has(pin) {
+				overwritesPinned = true
+				break
+			}
+		}
+		if overwritesPinned {
+			cloned := jsonv.Obj(jsonv.Clone(vs))
+			for pin, def := range e.Agent.ProtectedVars {
+				if cloned.Has(pin) {
+					cloned.Set(pin, jsonv.Clone(def))
+				}
+			}
+			return cloned, false
+		}
 	}
 	return vars, replace
 }
@@ -211,6 +329,14 @@ func (e *Engine) assignScreenTeamOwner(screenID string) {
 	e.Agent.TurnScreenTeam[screenID] = e.Agent.Team[teamIdx].ID
 }
 
+func isNonVarNodeKey(k string) bool {
+	switch k {
+	case "id", "name", "type", "ref", "theme", "slot", "version", "imports":
+		return true
+	}
+	return false
+}
+
 func valueUsesVar(v jsonv.Value, dollarName string) bool {
 	switch x := v.(type) {
 	case string:
@@ -231,6 +357,41 @@ func valueUsesVar(v jsonv.Value, dollarName string) bool {
 		return found
 	}
 	return false
+}
+
+func nodeUsesVar(node jsonv.Value, dollarName string) bool {
+	obj := jsonv.Obj(node)
+	if obj == nil {
+		return false
+	}
+	found := false
+	obj.Each(func(k string, val jsonv.Value) {
+		if found || isNonVarNodeKey(k) {
+			return
+		}
+		switch k {
+		case "children":
+			for _, kid := range jsonv.Items(val) {
+				if nodeUsesVar(kid, dollarName) {
+					found = true
+					return
+				}
+			}
+		case "descendants":
+			if dObj := jsonv.Obj(val); dObj != nil {
+				dObj.Each(func(_ string, over jsonv.Value) {
+					if !found && nodeUsesVar(over, dollarName) {
+						found = true
+					}
+				})
+			}
+		default:
+			if valueUsesVar(val, dollarName) {
+				found = true
+			}
+		}
+	})
+	return found
 }
 
 func rewriteVarRefsInValue(v jsonv.Value, fromDollar, toDollar string) jsonv.Value {
@@ -255,12 +416,106 @@ func rewriteVarRefsInValue(v jsonv.Value, fromDollar, toDollar string) jsonv.Val
 	return v
 }
 
-// reconcilePreTurnScreenIsolation pins original variable values onto untouched pre-turn screens whenever
-// a new turn adds new top-level screens/components AND redefines those variable names for the new design.
+func rewriteVarRefsInNode(node jsonv.Value, fromDollar, toDollar string) {
+	obj := jsonv.Obj(node)
+	if obj == nil {
+		return
+	}
+	for _, k := range obj.Keys() {
+		if isNonVarNodeKey(k) {
+			continue
+		}
+		switch k {
+		case "children":
+			for _, kid := range jsonv.Items(*obj.Ref(k)) {
+				rewriteVarRefsInNode(kid, fromDollar, toDollar)
+			}
+		case "descendants":
+			if dObj := jsonv.Obj(*obj.Ref(k)); dObj != nil {
+				for _, dk := range dObj.Keys() {
+					rewriteVarRefsInNode(*dObj.Ref(dk), fromDollar, toDollar)
+				}
+			}
+		default:
+			ref := obj.Ref(k)
+			*ref = rewriteVarRefsInValue(*ref, fromDollar, toDollar)
+		}
+	}
+}
+
+func substVarDefValue(v jsonv.Value, vars *jsonv.Object, depth int) jsonv.Value {
+	if depth > 16 || vars == nil {
+		return v
+	}
+	switch x := v.(type) {
+	case string:
+		if strings.HasPrefix(x, "$") {
+			if targetDef, ok := vars.Get(x[1:]); ok {
+				if tv := jsonv.Get(targetDef, "value"); tv != nil && jsonv.Arr(tv) == nil {
+					return substVarDefValue(jsonv.Clone(tv), vars, depth+1)
+				}
+			}
+		}
+		return x
+	case *jsonv.Array:
+		out := make([]jsonv.Value, len(x.Items))
+		for i, it := range x.Items {
+			out[i] = substVarDefValue(it, vars, depth)
+		}
+		return &jsonv.Array{Items: out}
+	case *jsonv.Object:
+		out := jsonv.NewObject()
+		x.Each(func(k string, it jsonv.Value) {
+			if k == "theme" {
+				out.Set(k, jsonv.Clone(it))
+				return
+			}
+			out.Set(k, substVarDefValue(it, vars, depth))
+		})
+		return out
+	}
+	return v
+}
+
+func resolveVarDefInTable(vars *jsonv.Object, def jsonv.Value) jsonv.Value {
+	cloned := jsonv.Clone(def)
+	if obj := jsonv.Obj(cloned); obj != nil {
+		if val, ok := obj.Get("value"); ok {
+			obj.Set("value", substVarDefValue(val, vars, 0))
+		}
+		return obj
+	}
+	return substVarDefValue(cloned, vars, 0)
+}
+
+func collectNodeRefTargets(node jsonv.Value, out map[string]bool) {
+	doc.Walk([]jsonv.Value{node}, func(n jsonv.Value) {
+		if jsonv.StrIs(jsonv.Get(n, "type"), "ref") {
+			ref := jsonv.StrOr(jsonv.Get(n, "ref"))
+			if ref != "" && !strings.Contains(ref, ":") {
+				out[ref] = true
+			}
+		}
+	})
+}
+
+// reconcilePreTurnScreenIsolation pins original variable values onto untouched pre-turn screens (and only the
+// untouched pre-turn reusable components transitively instantiated by those screens) whenever a turn adds new
+// top-level nodes and redefines variables directly or transitively.
 func (e *Engine) reconcilePreTurnScreenIsolation(d *doc.Doc) {
 	if d == nil || e.Agent.PreTurnVars == nil || e.Agent.PreTurnVars.Len() == 0 || len(e.Agent.PreTurnTopIDs) == 0 {
 		return
 	}
+	rawCurVars, _ := d.Root.Get("variables")
+	curVars := jsonv.Obj(rawCurVars)
+	if curVars == nil {
+		curVars = jsonv.NewObject()
+		d.Root.Set("variables", curVars)
+	}
+	for pin, def := range e.Agent.ProtectedVars {
+		curVars.Set(pin, jsonv.Clone(def))
+	}
+
 	hasNewTop := e.Agent.IsVariationTurn
 	if !hasNewTop {
 		for _, ch := range d.Children() {
@@ -275,41 +530,79 @@ func (e *Engine) reconcilePreTurnScreenIsolation(d *doc.Doc) {
 		return
 	}
 
-	rawCurVars, _ := d.Root.Get("variables")
-	curVars := jsonv.Obj(rawCurVars)
-	if curVars == nil {
-		curVars = jsonv.NewObject()
-		d.Root.Set("variables", curVars)
+	type changedVar struct {
+		name        string
+		origResolved jsonv.Value
 	}
-	var changedKeys []string
+	var changed []changedVar
 	e.Agent.PreTurnVars.Each(func(k string, origDef jsonv.Value) {
+		origRes := resolveVarDefInTable(e.Agent.PreTurnVars, origDef)
 		nowDef, ok := curVars.Get(k)
-		if !ok || !jsonv.Equal(origDef, nowDef) {
-			changedKeys = append(changedKeys, k)
+		if !ok {
+			changed = append(changed, changedVar{name: k, origResolved: origRes})
+			return
+		}
+		nowRes := resolveVarDefInTable(curVars, nowDef)
+		if !jsonv.Equal(origRes, nowRes) {
+			changed = append(changed, changedVar{name: k, origResolved: origRes})
 		}
 	})
-	if len(changedKeys) == 0 {
+	if len(changed) == 0 {
 		return
 	}
 
-	// Also protect reusable components referenced by untouched pre-turn screens!
-	protectedIDs := make(map[string]bool, len(e.Agent.PreTurnTopIDs))
-	for id := range e.Agent.PreTurnTopIDs {
-		if !e.Agent.TurnEditedPreTop[id] {
-			protectedIDs[id] = true
+	// Build protected dependency graph: untouched pre-turn non-reusable nodes + transitively referenced untouched reusable components.
+	topByID := map[string]jsonv.Value{}
+	reusableByID := map[string]jsonv.Value{}
+	doc.Walk(d.Children(), func(n jsonv.Value) {
+		if jsonv.IsTrue(jsonv.Get(n, "reusable")) {
+			if id := jsonv.StrOr(jsonv.Get(n, "id")); id != "" {
+				reusableByID[id] = n
+			}
+		}
+	})
+	protectedIDs := map[string]bool{}
+	var queue []jsonv.Value
+	for _, ch := range d.Children() {
+		cid := jsonv.StrOr(jsonv.Get(ch, "id"))
+		if cid == "" {
+			continue
+		}
+		topByID[cid] = ch
+		if e.Agent.PreTurnTopIDs[cid] && !e.Agent.TurnEditedPreTop[cid] && !jsonv.IsTrue(jsonv.Get(ch, "reusable")) {
+			protectedIDs[cid] = true
+			queue = append(queue, ch)
+		}
+	}
+	if len(protectedIDs) == 0 {
+		return
+	}
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		refs := map[string]bool{}
+		collectNodeRefTargets(cur, refs)
+		for refID := range refs {
+			topComp := topAncestorID(d, refID)
+			if topComp == "" || !e.Agent.PreTurnTopIDs[topComp] || e.Agent.TurnEditedPreTop[topComp] || protectedIDs[topComp] {
+				continue
+			}
+			if compNode, ok := topByID[topComp]; ok && jsonv.IsTrue(jsonv.Get(compNode, "reusable")) {
+				protectedIDs[topComp] = true
+				queue = append(queue, compNode)
+			} else if subComp, ok := reusableByID[refID]; ok && !protectedIDs[refID] {
+				protectedIDs[refID] = true
+				queue = append(queue, subComp)
+			}
 		}
 	}
 
-	for _, varName := range changedKeys {
-		origDef, ok := e.Agent.PreTurnVars.Get(varName)
-		if !ok {
-			continue
-		}
-		dollarOld := "$" + varName
+	for _, cv := range changed {
+		dollarOld := "$" + cv.name
 		used := false
 		for _, ch := range d.Children() {
 			cid := jsonv.StrOr(jsonv.Get(ch, "id"))
-			if protectedIDs[cid] && valueUsesVar(ch, dollarOld) {
+			if protectedIDs[cid] && nodeUsesVar(ch, dollarOld) {
 				used = true
 				break
 			}
@@ -317,19 +610,23 @@ func (e *Engine) reconcilePreTurnScreenIsolation(d *doc.Doc) {
 		if !used {
 			continue
 		}
-		pinName := "preserved_" + varName
+		pinName := "preserved_" + cv.name
 		for suffix := 2; ; suffix++ {
-			if existing, exists := curVars.Get(pinName); !exists || jsonv.Equal(existing, origDef) {
+			if existing, exists := curVars.Get(pinName); !exists || jsonv.Equal(existing, cv.origResolved) {
 				break
 			}
-			pinName = fmt.Sprintf("preserved_%d_%s", suffix, varName)
+			pinName = fmt.Sprintf("preserved_%d_%s", suffix, cv.name)
 		}
-		curVars.Set(pinName, jsonv.Clone(origDef))
+		curVars.Set(pinName, jsonv.Clone(cv.origResolved))
+		if e.Agent.ProtectedVars == nil {
+			e.Agent.ProtectedVars = map[string]jsonv.Value{}
+		}
+		e.Agent.ProtectedVars[pinName] = jsonv.Clone(cv.origResolved)
 		dollarPin := "$" + pinName
 		for _, ch := range d.Children() {
 			cid := jsonv.StrOr(jsonv.Get(ch, "id"))
 			if protectedIDs[cid] {
-				rewriteVarRefsInValue(ch, dollarOld, dollarPin)
+				rewriteVarRefsInNode(ch, dollarOld, dollarPin)
 			}
 		}
 	}
@@ -339,6 +636,7 @@ type topBoxInfo struct {
 	idx      int
 	id       string
 	obj      *jsonv.Object
+	isFrame  bool
 	reusable bool
 	fixed    bool
 	x, y     float64
@@ -375,10 +673,10 @@ func groupScreenRows(screens []topBoxInfo) []screenRowBand {
 	}
 	sorted := append([]topBoxInfo(nil), screens...)
 	slices.SortFunc(sorted, func(a, b topBoxInfo) int {
-		if math.Abs(a.y-b.y) > 40.0 {
-			if a.y < b.y {
-				return -1
-			}
+		if a.y < b.y {
+			return -1
+		}
+		if a.y > b.y {
 			return 1
 		}
 		if a.x < b.x {
@@ -434,6 +732,7 @@ func (e *Engine) FindScreenGridSpot(w, h, pad float64) (float64, float64, bool) 
 	var allBoxes []topBoxInfo
 	for i, ch := range kids {
 		id := jsonv.StrOr(jsonv.Get(ch, "id"))
+		isFrame := jsonv.StrIs(jsonv.Get(ch, "type"), "frame")
 		reusable := jsonv.IsTrue(jsonv.Get(ch, "reusable"))
 		if reusable {
 			hasReusable = true
@@ -445,9 +744,9 @@ func (e *Engine) FindScreenGridSpot(w, h, pad float64) (float64, float64, bool) 
 		if f := e.Renderer.Find(id); f != nil {
 			x, y, bw, bh = f.X, f.Y, f.W, f.H
 		}
-		tb := topBoxInfo{idx: i, id: id, reusable: reusable, x: x, y: y, w: max(bw, 1), h: max(bh, 1)}
+		tb := topBoxInfo{idx: i, id: id, isFrame: isFrame, reusable: reusable, x: x, y: y, w: max(bw, 1), h: max(bh, 1)}
 		allBoxes = append(allBoxes, tb)
-		if !reusable {
+		if isFrame && !reusable {
 			screens = append(screens, tb)
 		}
 	}
@@ -474,6 +773,7 @@ func (e *Engine) FindScreenGridSpot(w, h, pad float64) (float64, float64, bool) 
 		candX = originX
 		candY = last.bottomY + max(pad, screenGridRowGap)
 	}
+	foundFree := false
 	for range 300 {
 		busy := false
 		for _, b := range allBoxes {
@@ -484,10 +784,30 @@ func (e *Engine) FindScreenGridSpot(w, h, pad float64) (float64, float64, bool) 
 			}
 		}
 		if !busy {
+			foundFree = true
 			break
 		}
 	}
+	if !foundFree {
+		return 0, 0, false
+	}
 	return math.Round(candX), math.Round(candY), true
+}
+
+func docVarsAndReusableHash(d *doc.Doc) uint64 {
+	var b strings.Builder
+	if v, ok := d.Root.Get("variables"); ok {
+		b.Write(jsonv.Marshal(v))
+	}
+	if t, ok := d.Root.Get("themes"); ok {
+		b.Write(jsonv.Marshal(t))
+	}
+	for _, ch := range d.Children() {
+		if jsonv.IsTrue(jsonv.Get(ch, "reusable")) {
+			b.Write(jsonv.Marshal(ch))
+		}
+	}
+	return svg.FxHash(b.String())
 }
 
 // DeconflictTopLevelNodes ensures newly created top-level frames and reusable components never collide,
@@ -500,7 +820,15 @@ func (e *Engine) DeconflictTopLevelNodes(d *doc.Doc) {
 	if len(kids) <= 1 {
 		return
 	}
-	resolver := resolve.New(d.Root, e.Libs)
+	isPreviewDoc := e.Preview != nil && d == e.Preview
+	varsHash := docVarsAndReusableHash(d)
+	var resolver *resolve.Resolver
+	getResolver := func() *resolve.Resolver {
+		if resolver == nil {
+			resolver = resolve.New(d.Root, e.Libs)
+		}
+		return resolver
+	}
 	infos := make([]topBoxInfo, 0, len(kids))
 	hasPreTurn := len(e.Agent.PreTurnTopIDs) > 0
 	seenFirstScreen := false
@@ -511,28 +839,47 @@ func (e *Engine) DeconflictTopLevelNodes(d *doc.Doc) {
 			continue
 		}
 		id := jsonv.StrOr(jsonv.Get(ch, "id"))
+		isFrame := jsonv.StrIs(jsonv.Get(ch, "type"), "frame")
 		reusable := jsonv.IsTrue(jsonv.Get(ch, "reusable"))
-		x, _ := resolve.Num(jsonv.Get(ch, "x"))
-		y, _ := resolve.Num(jsonv.Get(ch, "y"))
-		w, _ := resolve.Num(jsonv.Get(ch, "width"))
-		h, _ := resolve.Num(jsonv.Get(ch, "height"))
-		if rn := resolver.Resolve(ch); rn != nil {
-			layout.Layout(rn, e.Fonts)
-			x, y, w, h = rn.X, rn.Y, rn.W, rn.H
-		}
-		w = max(w, 64.0)
-		h = max(h, 40.0)
 		fixed := false
 		if hasPreTurn {
 			fixed = e.Agent.PreTurnTopIDs[id]
-		} else if !reusable && !seenFirstScreen {
+		} else if isFrame && !reusable && !seenFirstScreen {
 			fixed = true
 			seenFirstScreen = true
+		}
+
+		var x, y, w, h float64
+		usedCache := false
+		if fixed && !e.Agent.TurnEditedPreTop[id] && e.Agent.FixedTopBounds != nil {
+			if cb, ok := e.Agent.FixedTopBounds[id]; ok && cb.varsHash == varsHash {
+				x, y, w, h = cb.x, cb.y, cb.w, cb.h
+				usedCache = true
+			}
+		}
+		if !usedCache {
+			x, _ = resolve.Num(jsonv.Get(ch, "x"))
+			y, _ = resolve.Num(jsonv.Get(ch, "y"))
+			w, _ = resolve.Num(jsonv.Get(ch, "width"))
+			h, _ = resolve.Num(jsonv.Get(ch, "height"))
+			if rn := getResolver().Resolve(ch); rn != nil {
+				layout.Layout(rn, e.Fonts)
+				x, y, w, h = rn.X, rn.Y, rn.W, rn.H
+			}
+			w = max(w, 64.0)
+			h = max(h, 40.0)
+			if !isPreviewDoc && fixed && !e.Agent.TurnEditedPreTop[id] && id != "" {
+				if e.Agent.FixedTopBounds == nil {
+					e.Agent.FixedTopBounds = map[string]cachedTopBound{}
+				}
+				e.Agent.FixedTopBounds[id] = cachedTopBound{x: x, y: y, w: w, h: h, varsHash: varsHash}
+			}
 		}
 		infos = append(infos, topBoxInfo{
 			idx:      i,
 			id:       id,
 			obj:      obj,
+			isFrame:  isFrame,
 			reusable: reusable,
 			fixed:    fixed,
 			x:        x,
@@ -549,10 +896,10 @@ func (e *Engine) DeconflictTopLevelNodes(d *doc.Doc) {
 	for _, inf := range infos {
 		if inf.fixed {
 			placed = append(placed, inf)
-			if !inf.reusable {
+			if inf.isFrame && !inf.reusable {
 				fixedScreens = append(fixedScreens, inf)
 			}
-		} else if !inf.reusable {
+		} else if inf.isFrame && !inf.reusable {
 			if newScreenCount == 0 {
 				firstNewScreenW = inf.w
 			}
@@ -608,8 +955,37 @@ func (e *Engine) DeconflictTopLevelNodes(d *doc.Doc) {
 		if inf.fixed || inf.reusable {
 			continue
 		}
+		if !inf.isFrame {
+			candX, candY := inf.x, inf.y
+			for step := 0; step < 300; step++ {
+				blocker, bad := collidesWithPlaced(candX, candY, inf.w, inf.h, false, 40.0)
+				if !bad {
+					break
+				}
+				candX = max(candX+40.0, blocker.x+blocker.w+80.0)
+			}
+			rx, ry := math.Round(candX), math.Round(candY)
+			inf.x, inf.y = rx, ry
+			inf.obj.Set("x", jsonv.Float(rx))
+			inf.obj.Set("y", jsonv.Float(ry))
+			placed = append(placed, *inf)
+			continue
+		}
 		if !hasScreen {
-			rx, ry := math.Round(inf.x), math.Round(inf.y)
+			candX, candY := inf.x, inf.y
+			for step := 0; step < 300; step++ {
+				blocker, bad := collidesWithPlaced(candX, candY, inf.w, inf.h, false, 80.0)
+				if !bad {
+					break
+				}
+				// Move below any fixed component occupying the requested origin while keeping X aligned.
+				if blocker.reusable {
+					candY = max(candY+40.0, blocker.y+blocker.h+280.0)
+				} else {
+					candX = max(candX+40.0, blocker.x+blocker.w+screenGridColGap)
+				}
+			}
+			rx, ry := math.Round(candX), math.Round(candY)
 			inf.x, inf.y = rx, ry
 			inf.obj.Set("x", jsonv.Float(rx))
 			inf.obj.Set("y", jsonv.Float(ry))
@@ -738,7 +1114,7 @@ func (e *Engine) EmitWriteActivityWithTeam(defaultAgent string, d *doc.Doc, ids 
 	if len(ids) == 0 {
 		return
 	}
-	if e.Agent.Parallel <= 1 || e.Agent.Spawned > 0 || len(e.Agent.TurnScreenTeam) == 0 || d == nil {
+	if !e.Agent.Running || e.Agent.Parallel <= 1 || e.Agent.Spawned > 0 || len(e.Agent.TurnScreenTeam) == 0 || d == nil {
 		e.Emit(Object("type", "agent_activity", "agent", defaultAgent, "op", "write", "ids", Strings(ids), "streaming", streaming))
 		return
 	}

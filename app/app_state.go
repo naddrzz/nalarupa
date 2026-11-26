@@ -107,6 +107,10 @@ func (a *NalarupaApp) Init() {
 	a.RefreshHomeRecents()
 }
 
+func shouldWakeWindowOnWorkerReady(vsyncActive *atomic.Bool) bool {
+	return vsyncActive == nil || !vsyncActive.Load()
+}
+
 // AttachWindow binds a live *mygo.Window and starts the background core event poller and async canvas worker.
 func (a *NalarupaApp) AttachWindow(win *mygo.Window) {
 	a.Window = win
@@ -116,7 +120,7 @@ func (a *NalarupaApp) AttachWindow(win *mygo.Window) {
 		a.Bridge.TryCall("reduce_motion", map[string]any{"on": rm}, nil)
 	}
 	a.Canvas.worker = NewCanvasRenderWorker(a.Bridge, func() {
-		if a.Canvas.vsyncActive.Load() {
+		if !shouldWakeWindowOnWorkerReady(&a.Canvas.vsyncActive) {
 			// Painter.AnimationFrame() is already driving vp.Draw at hardware VSync and will swap
 			// TakeReady() on the very next refresh without triggering a full-window View(c) rebuild.
 			return
@@ -329,9 +333,16 @@ func (a *NalarupaApp) syncWindowTitle() {
 	}
 }
 
-// Busy reports whether an agent run, script execution, or AI Pen is active.
+// Busy reports whether an agent run, script execution, AI Pen, or background export is active.
 func (a *NalarupaApp) Busy() bool {
-	return a.State.AgentRunning || a.State.Executing || a.State.PenDrawing
+	return a.State.AgentRunning || a.State.Executing || a.State.PenDrawing || a.exporting.Load()
+}
+
+func (a *NalarupaApp) busySwitchMessage() string {
+	if a.State.AgentRunning || a.State.Executing || a.State.PenDrawing {
+		return "Stop the agent or the AI Pen before opening another document."
+	}
+	return "Wait for the export to finish before opening another document."
 }
 
 // ShowToast displays a bottom-left toast notification (3500ms for status, sticky for errors).
@@ -349,6 +360,12 @@ func (a *NalarupaApp) ShowToast(text string, danger bool) {
 func (a *NalarupaApp) onDocumentOpened() {
 	a.Opened = true
 	a.UnsavedPending = nil
+	a.AgentUI.Skills = nil
+	a.AgentUI.SkillsLoaded = false
+	a.AgentUI.SkillsLoading = false
+	a.AgentUI.SkillsReqSeq++
+	a.AgentUI.DismissedSlash = ""
+	a.AgentUI.SlashIndex = 0
 	a.resetLayersForNewDoc()
 	a.resetCanvasForNewDoc()
 	a.Store.ClearPresence()
@@ -382,7 +399,7 @@ func (a *NalarupaApp) Select(ids []string) {
 // StartTemplate creates a new document from template ("blank","slides","mobile","empty"), guarding unsaved edits.
 func (a *NalarupaApp) StartTemplate(tmpl string, force bool) {
 	if a.Busy() {
-		a.ShowToast("Stop the agent or the AI Pen before opening another document.", true)
+		a.ShowToast(a.busySwitchMessage(), true)
 		return
 	}
 	if !force && a.Opened && a.State.Dirty {
@@ -402,7 +419,7 @@ func (a *NalarupaApp) StartTemplate(tmpl string, force bool) {
 // OpenDocument opens path on disk, guarding unsaved edits unless force is true.
 func (a *NalarupaApp) OpenDocument(path string, force bool) {
 	if a.Busy() {
-		a.ShowToast("Stop the agent or the AI Pen before opening another document.", true)
+		a.ShowToast(a.busySwitchMessage(), true)
 		return
 	}
 	if !force && a.Opened && a.State.Dirty {
@@ -525,6 +542,7 @@ func (a *NalarupaApp) FitToAnimated(ids []string) {
 		return
 	}
 	if math.Abs(target.Zoom-a.Cam.Zoom) < 1e-4 && math.Hypot(target.X-a.Cam.X, target.Y-a.Cam.Y) < 0.5 {
+		a.Canvas.camAnim = camAnimState{}
 		return
 	}
 	a.Canvas.camAnim = camAnimState{
@@ -639,6 +657,7 @@ func (a *NalarupaApp) EnterPresent() {
 func (a *NalarupaApp) SetTool(tool string, returnFocus bool) {
 	if a.Canvas.drawDrag != nil {
 		if tool == "move" {
+			a.flushPendingDragMove()
 			a.Canvas.finishDrawDrag(a)
 		} else {
 			a.Canvas.cancelDrawDrag()

@@ -28,8 +28,9 @@ func isNativeBackdropGroup(group *usvg.Group) bool {
 }
 
 // renderBackdropBlur paints a native `nrbb:{uid}:{sigma}` background-blur marker directly from
-// the already-rasterized pixels in pixmap, avoiding O(2^N) SVG `<use>` expansion.
-func renderBackdropBlur(group *usvg.Group, rest string, transform skia.Transform, pixmap skia.PixmapMut) {
+// the already-rasterized pixels in pixmap (and any enclosing clip/isolation layers in bgStack),
+// avoiding O(2^N) SVG `<use>` expansion.
+func renderBackdropBlur(group *usvg.Group, rest string, transform skia.Transform, pixmap skia.PixmapMut, bgStack []backdropLayer) {
 	mask := group.Mask()
 	if mask == nil || !mask.Root().HasChildren() {
 		return
@@ -65,8 +66,8 @@ func renderBackdropBlur(group *usvg.Group, rest string, transform skia.Transform
 	scaleY := math.Hypot(float64(transform.KX), float64(transform.SY))
 	sigmaX := sigma * scaleX
 	sigmaY := sigma * scaleY
-	padX := int32(min(math.Ceil(3*sigmaX), 256))
-	padY := int32(min(math.Ceil(3*sigmaY), 256))
+	padX := int32(min(math.Ceil(4*sigmaX), 256))
+	padY := int32(min(math.Ceil(4*sigmaY), 256))
 
 	blurW := rw + uint32(2*padX)
 	blurH := rh + uint32(2*padY)
@@ -80,45 +81,98 @@ func renderBackdropBlur(group *usvg.Group, rest string, transform skia.Transform
 	blurData := blurBuf.Data()
 	blurStride := int(blurW) * 4
 
-	// Copy backdrop pixels into padded blur buffer with edge clamping so borders never darken.
-	for by := int32(0); by < int32(blurH); by++ {
-		sy := clampI32Range(y0-padY+by, 0, ph-1)
-		srcRowOff := int(sy) * dstStride
-		dstRowOff := int(by) * blurStride
+	if len(bgStack) == 0 {
+		// Fast path: root pixmap holds the complete opaque backdrop; copy rows with edge clamping.
+		for by := int32(0); by < int32(blurH); by++ {
+			sy := clampI32Range(y0-padY+by, 0, ph-1)
+			srcRowOff := int(sy) * dstStride
+			dstRowOff := int(by) * blurStride
 
-		srcStart := x0 - padX
-		srcEnd := srcStart + int32(blurW)
+			srcStart := x0 - padX
+			srcEnd := srcStart + int32(blurW)
 
-		validStart := max(srcStart, 0)
-		validEnd := min(srcEnd, pw)
-		leftPad := validStart - srcStart
-		if leftPad > 0 {
-			r0, g0, b0, a0 := dstData[srcRowOff], dstData[srcRowOff+1], dstData[srcRowOff+2], dstData[srcRowOff+3]
-			for bx := int32(0); bx < leftPad; bx++ {
-				o := dstRowOff + int(bx)*4
-				blurData[o+0] = r0
-				blurData[o+1] = g0
-				blurData[o+2] = b0
-				blurData[o+3] = a0
+			validStart := max(srcStart, 0)
+			validEnd := min(srcEnd, pw)
+			leftPad := validStart - srcStart
+			if leftPad > 0 {
+				r0, g0, b0, a0 := dstData[srcRowOff], dstData[srcRowOff+1], dstData[srcRowOff+2], dstData[srcRowOff+3]
+				for bx := int32(0); bx < leftPad; bx++ {
+					o := dstRowOff + int(bx)*4
+					blurData[o+0] = r0
+					blurData[o+1] = g0
+					blurData[o+2] = b0
+					blurData[o+3] = a0
+				}
+			}
+			if validEnd > validStart {
+				copyLen := int(validEnd-validStart) * 4
+				copy(
+					blurData[dstRowOff+int(leftPad)*4:dstRowOff+int(leftPad)*4+copyLen],
+					dstData[srcRowOff+int(validStart)*4:srcRowOff+int(validStart)*4+copyLen],
+				)
+			}
+			rightStart := validEnd - srcStart
+			if rightStart < int32(blurW) {
+				lastOff := srcRowOff + int(pw-1)*4
+				r1, g1, b1, a1 := dstData[lastOff], dstData[lastOff+1], dstData[lastOff+2], dstData[lastOff+3]
+				for bx := max(rightStart, 0); bx < int32(blurW); bx++ {
+					o := dstRowOff + int(bx)*4
+					blurData[o+0] = r1
+					blurData[o+1] = g1
+					blurData[o+2] = b1
+					blurData[o+3] = a1
+				}
 			}
 		}
-		if validEnd > validStart {
-			copyLen := int(validEnd-validStart) * 4
-			copy(
-				blurData[dstRowOff+int(leftPad)*4:dstRowOff+int(leftPad)*4+copyLen],
-				dstData[srcRowOff+int(validStart)*4:srcRowOff+int(validStart)*4+copyLen],
-			)
-		}
-		rightStart := validEnd - srcStart
-		if rightStart < int32(blurW) {
-			lastOff := srcRowOff + int(pw-1)*4
-			r1, g1, b1, a1 := dstData[lastOff], dstData[lastOff+1], dstData[lastOff+2], dstData[lastOff+3]
-			for bx := max(rightStart, 0); bx < int32(blurW); bx++ {
+	} else {
+		// Isolated group (e.g. clip: true frame): composite current sub-pixmap over ancestor backdrop layers
+		// so parent frame fills and outer layers beneath transparent sub-pixmap pixels blur accurately.
+		for by := int32(0); by < int32(blurH); by++ {
+			rawY := y0 - padY + by
+			dstRowOff := int(by) * blurStride
+			for bx := int32(0); bx < int32(blurW); bx++ {
+				rawX := x0 - padX + bx
+				var r, g, b, a uint32
+				if rawX >= 0 && rawX < pw && rawY >= 0 && rawY < ph {
+					so := int(rawY)*dstStride + int(rawX)*4
+					r = uint32(dstData[so+0])
+					g = uint32(dstData[so+1])
+					b = uint32(dstData[so+2])
+					a = uint32(dstData[so+3])
+				}
+				for li := len(bgStack) - 1; li >= 0 && a < 255; li-- {
+					l := bgStack[li]
+					if l.w == 0 || l.h == 0 {
+						continue
+					}
+					lx := rawX + l.offX
+					ly := rawY + l.offY
+					if li == 0 {
+						lx = clampI32Range(lx, 0, int32(l.w)-1)
+						ly = clampI32Range(ly, 0, int32(l.h)-1)
+					} else if lx < 0 || lx >= int32(l.w) || ly < 0 || ly >= int32(l.h) {
+						continue
+					}
+					lo := (int(ly)*int(l.w) + int(lx)) * 4
+					lr := uint32(l.data[lo+0])
+					lg := uint32(l.data[lo+1])
+					lb := uint32(l.data[lo+2])
+					la := uint32(l.data[lo+3])
+					if a == 0 {
+						r, g, b, a = lr, lg, lb, la
+					} else if la > 0 {
+						invA := 255 - a
+						r += (lr*invA + 127) / 255
+						g += (lg*invA + 127) / 255
+						b += (lb*invA + 127) / 255
+						a += (la*invA + 127) / 255
+					}
+				}
 				o := dstRowOff + int(bx)*4
-				blurData[o+0] = r1
-				blurData[o+1] = g1
-				blurData[o+2] = b1
-				blurData[o+3] = a1
+				blurData[o+0] = uint8(min(r, 255))
+				blurData[o+1] = uint8(min(g, 255))
+				blurData[o+2] = uint8(min(b, 255))
+				blurData[o+3] = uint8(min(a, 255))
 			}
 		}
 	}

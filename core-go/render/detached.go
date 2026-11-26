@@ -33,6 +33,7 @@ type SlideSnapshot struct {
 	Tree        *usvg.Tree
 	TreeHash    uint64
 	BeforeTree  *usvg.Tree
+	BeforeClips []*usvg.Tree
 	BeforeHash  uint64
 	Over        *usvg.Tree
 	Clips       []slideClipSnap
@@ -143,6 +144,7 @@ func (r *Renderer) Snapshot(version uint64, now time.Time, solo string, streamin
 			Tree:        s.tree,
 			TreeHash:    s.treeHash,
 			BeforeTree:  s.beforeTree,
+			BeforeClips: slices.Clone(s.beforeClips),
 			BeforeHash:  s.beforeHash,
 			Over:        s.over,
 			Clips:       clips,
@@ -163,12 +165,29 @@ type detachedSlideCache struct {
 	pm       *skia.Pixmap
 }
 
+type layerCacheKey struct {
+	hash     uint64
+	scripted bool
+	finished uint64
+}
+
+func keyOfLayer(l *Layer) layerCacheKey {
+	if l == nil {
+		return layerCacheKey{}
+	}
+	var fin uint64
+	if l.scripted {
+		fin = l.finished
+	}
+	return layerCacheKey{hash: l.hash, scripted: l.scripted, finished: fin}
+}
+
 // DetachedRenderer rasterizes SceneSnapshots on a dedicated worker goroutine without holding Engine.Lock.
 type DetachedRenderer struct {
 	pix         []byte
 	basePix     []byte
 	baseValid   bool
-	baseHashes  map[string]uint64
+	baseHashes  map[string]layerCacheKey
 	baseOrder   []string
 	baseW       uint32
 	baseH       uint32
@@ -179,7 +198,7 @@ type DetachedRenderer struct {
 	baseSolo    string
 	ovPix       []byte
 	ovValid     bool
-	ovHashes    map[string]uint64
+	ovHashes    map[string]layerCacheKey
 	ovOrder     []string
 	ovW         uint32
 	ovH         uint32
@@ -241,7 +260,7 @@ func (d *DetachedRenderer) sameBase(snap SceneSnapshot, w, h uint32, vx, vy int3
 		return false
 	}
 	for id, l := range snap.Layers {
-		if h0, ok := d.baseHashes[id]; !ok || h0 != l.hash {
+		if h0, ok := d.baseHashes[id]; !ok || h0 != keyOfLayer(l) {
 			return false
 		}
 	}
@@ -253,12 +272,12 @@ func (d *DetachedRenderer) saveBase(snap SceneSnapshot, w, h uint32, vx, vy int3
 	d.basePix = resize(d.basePix, need)
 	copy(d.basePix, d.pix[:need])
 	if d.baseHashes == nil {
-		d.baseHashes = make(map[string]uint64, len(snap.Layers))
+		d.baseHashes = make(map[string]layerCacheKey, len(snap.Layers))
 	} else {
 		clear(d.baseHashes)
 	}
 	for id, l := range snap.Layers {
-		d.baseHashes[id] = l.hash
+		d.baseHashes[id] = keyOfLayer(l)
 	}
 	d.baseOrder = append(d.baseOrder[:0], snap.Order...)
 	d.baseW, d.baseH = w, h
@@ -308,6 +327,8 @@ func (d *DetachedRenderer) Render(snap SceneSnapshot, w, h uint32, camX, camY, z
 
 	if len(snap.Slides) > 0 {
 		d.compositeDetachedSlides(snap, w, h, camX, camY, zoom, solo)
+	} else if len(d.slideCaches) > 0 {
+		clear(d.slideCaches)
 	}
 	return d.pix
 }
@@ -326,7 +347,10 @@ func (d *DetachedRenderer) RenderOverview(snap SceneSnapshot, maxSide uint32, bg
 	bh := snap.Bounds.H + 2*pad
 
 	zoom := fmin(float64(maxSide)/bw, float64(maxSide)/bh)
-	zoom = fmin(fmax(zoom, 0.01), 2.0)
+	if !(zoom > 0) || math.IsNaN(zoom) || math.IsInf(zoom, 0) {
+		return nil, 0, 0, Rect{}, false
+	}
+	zoom = fmin(zoom, 2.0)
 	ow := uint32(min(max(int(math.Round(bw*zoom)), 1), int(maxSide)))
 	oh := uint32(min(max(int(math.Round(bh*zoom)), 1), int(maxSide)))
 	vx := i32(math.Round(bx * zoom))
@@ -344,7 +368,7 @@ func (d *DetachedRenderer) RenderOverview(snap SceneSnapshot, maxSide uint32, bg
 		equalStrings(d.ovOrder, snap.Order) && len(d.ovHashes) == len(snap.Layers) && len(d.ovPix) == need {
 		same := true
 		for id, l := range snap.Layers {
-			if h0, ok := d.ovHashes[id]; !ok || h0 != l.hash {
+			if h0, ok := d.ovHashes[id]; !ok || h0 != keyOfLayer(l) {
 				same = false
 				break
 			}
@@ -372,12 +396,12 @@ func (d *DetachedRenderer) RenderOverview(snap SceneSnapshot, maxSide uint32, bg
 		return nil, 0, 0, Rect{}, false
 	}
 	if d.ovHashes == nil {
-		d.ovHashes = make(map[string]uint64, len(snap.Layers))
+		d.ovHashes = make(map[string]layerCacheKey, len(snap.Layers))
 	} else {
 		clear(d.ovHashes)
 	}
 	for id, l := range snap.Layers {
-		d.ovHashes[id] = l.hash
+		d.ovHashes[id] = keyOfLayer(l)
 	}
 	d.ovOrder = append(d.ovOrder[:0], snap.Order...)
 	d.ovW, d.ovH = ow, oh
@@ -412,6 +436,8 @@ func (d *DetachedRenderer) compositeDetachedSlides(snap SceneSnapshot, w, h uint
 
 		var coverMinX, coverMinY, coverMaxX, coverMaxY int32
 		hasPainted := false
+		var bpx, bpy int32
+		var readyBPM *skia.Pixmap
 
 		if s.BeforeTree != nil && s.BeforeAlpha > 1e-3 {
 			bb0, _ := s.BeforeTree.Root().AbsLayerBoundingBox()
@@ -425,37 +451,22 @@ func (d *DetachedRenderer) compositeDetachedSlides(snap SceneSnapshot, w, h uint
 				if bsc == nil || (s.BeforeHash != 0 && bsc.treeHash != s.BeforeHash) || bsc.zoom != zoom || bsc.key != bkey {
 					if bpm, ok := skia.NewPixmap(uint32(bkey[2]), uint32(bkey[3])); ok {
 						resvg.Render(s.BeforeTree, skia.TransformFromRow(float32(zoom), 0, 0, float32(zoom), float32(-bx0), float32(-by0)), bpm.AsMut())
+						applyStaticClipTrees(bpm, s.BeforeClips, zoom, bx0, by0)
 						bsc = &detachedSlideCache{treeHash: s.BeforeHash, zoom: zoom, key: bkey, pm: bpm}
 						d.slideCaches[beforeKey] = bsc
 					}
 				}
 				if bsc != nil && bsc.pm != nil {
-					bpm := bsc.pm
-					if len(s.Clips) > 0 {
-						cut, _ := skia.PixmapFromVec(append([]byte(nil), bpm.Data()...), bpm.Size())
-						for _, c := range s.Clips {
-							shape, ok := skia.NewPixmap(cut.Width(), cut.Height())
-							if !ok {
-								continue
-							}
-							tf := skia.TransformFromRow(float32(zoom), 0, 0, float32(zoom),
-								float32(-bx0)+float32(math.Round(c.dx*zoom)), float32(-by0)+float32(math.Round(c.dy*zoom)))
-							resvg.Render(c.tree, tf, shape.AsMut())
-							cut.ApplyMask(skia.MaskFromPixmap(shape.AsRef(), skia.MaskTypeAlpha))
-						}
-						bpm = cut
-					}
-					bpaint := skia.DefaultPixmapPaint()
-					bpaint.Opacity = float32(fmin(fmax(s.BeforeAlpha, 0), 1))
-					bpx, bpy := bx0-vx, by0-vy
-					out.DrawPixmap(bpx, bpy, bpm.AsRef(), &bpaint, skia.Identity(), nil)
-					coverMinX, coverMinY = bpx, bpy
-					coverMaxX, coverMaxY = bpx+int32(bpm.Width()), bpy+int32(bpm.Height())
-					hasPainted = true
+					readyBPM = bsc.pm
+					bpx, bpy = bx0-vx, by0-vy
 				}
 			}
 		}
 
+		var px, py int32
+		var readyPM *skia.Pixmap
+		drawTF := skia.Identity()
+		useSubpixel := false
 		if !s.Waiting && s.Tree != nil && (s.BeforeTree == nil || s.Alpha > 1e-3) {
 			bb, _ := s.Tree.Root().AbsLayerBoundingBox()
 			b := Rect{X: float64(bb.X()), Y: float64(bb.Y()), W: float64(bb.Width()), H: float64(bb.Height())}
@@ -475,16 +486,13 @@ func (d *DetachedRenderer) compositeDetachedSlides(snap SceneSnapshot, w, h uint
 				}
 				if sc != nil && sc.pm != nil {
 					pm := sc.pm
-					paint := skia.DefaultPixmapPaint()
-					paint.Opacity = float32(fmin(fmax(s.Alpha, 0), 1))
 					rx, ry := i32(math.Round(s.DX*zoom)), i32(math.Round(s.DY*zoom))
-					px, py := x0-vx+rx, y0-vy+ry
-					drawTF := skia.Identity()
+					px, py = x0-vx+rx, y0-vy+ry
 					if s.Smooth {
 						fx := float32(s.DX*zoom - float64(rx))
 						fy := float32(s.DY*zoom - float64(ry))
 						if math.Abs(float64(fx)) > 1e-3 || math.Abs(float64(fy)) > 1e-3 {
-							paint.Quality = skia.FilterQualityBilinear
+							useSubpixel = true
 							drawTF = skia.TransformFromRow(1, 0, 0, 1, fx, fy)
 						}
 					}
@@ -503,15 +511,39 @@ func (d *DetachedRenderer) compositeDetachedSlides(snap SceneSnapshot, w, h uint
 						}
 						pm = cut
 					}
-					out.DrawPixmap(px, py, pm.AsRef(), &paint, drawTF, nil)
-					if !hasPainted {
-						coverMinX, coverMinY = px, py
-						coverMaxX, coverMaxY = px+int32(pm.Width()), py+int32(pm.Height())
-						hasPainted = true
-					} else {
-						coverMinX, coverMinY = min(coverMinX, px), min(coverMinY, py)
-						coverMaxX, coverMaxY = max(coverMaxX, px+int32(pm.Width())), max(coverMaxY, py+int32(pm.Height()))
-					}
+					readyPM = pm
+				}
+			}
+		}
+
+		if readyBPM != nil && readyPM != nil && s.Alpha > 1e-3 && s.Alpha < 0.999 {
+			if ux0, uy0, ux1, uy1, ok := blendEditPixmaps(out, w, h, bpx, bpy, readyBPM, px, py, readyPM, drawTF, useSubpixel, s.Alpha); ok {
+				coverMinX, coverMinY, coverMaxX, coverMaxY = ux0, uy0, ux1, uy1
+				hasPainted = true
+			}
+		} else {
+			if readyBPM != nil && (readyPM == nil || s.Alpha <= 1e-3) {
+				bpaint := skia.DefaultPixmapPaint()
+				bpaint.Opacity = float32(fmin(fmax(s.BeforeAlpha, 0), 1))
+				out.DrawPixmap(bpx, bpy, readyBPM.AsRef(), &bpaint, skia.Identity(), nil)
+				coverMinX, coverMinY = bpx, bpy
+				coverMaxX, coverMaxY = bpx+int32(readyBPM.Width()), bpy+int32(readyBPM.Height())
+				hasPainted = true
+			}
+			if readyPM != nil {
+				paint := skia.DefaultPixmapPaint()
+				paint.Opacity = float32(fmin(fmax(s.Alpha, 0), 1))
+				if useSubpixel {
+					paint.Quality = skia.FilterQualityBilinear
+				}
+				out.DrawPixmap(px, py, readyPM.AsRef(), &paint, drawTF, nil)
+				if !hasPainted {
+					coverMinX, coverMinY = px, py
+					coverMaxX, coverMaxY = px+int32(readyPM.Width()), py+int32(readyPM.Height())
+					hasPainted = true
+				} else {
+					coverMinX, coverMinY = min(coverMinX, px), min(coverMinY, py)
+					coverMaxX, coverMaxY = max(coverMaxX, px+int32(readyPM.Width())), max(coverMaxY, py+int32(readyPM.Height()))
 				}
 			}
 		}

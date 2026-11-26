@@ -19,17 +19,21 @@ func TestThirdPartyChatUsesMaxTokensAndHandlesQwen4ReasoningFallback(t *testing.
 	var reqCount atomic.Int32
 	var firstHasMaxCompletion atomic.Bool
 	var firstHasMaxTokens atomic.Bool
+	var efforts [3]string
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
 		parsed, _ := jsonv.Parse(raw)
 		n := reqCount.Add(1)
+		obj := jsonv.Obj(parsed)
+		if n >= 1 && n <= 3 && obj != nil {
+			efforts[n-1] = jsonv.StrOr(jsonv.Get(obj, "reasoning_effort"))
+		}
 		if n == 1 {
-			obj := jsonv.Obj(parsed)
 			firstHasMaxCompletion.Store(obj != nil && obj.Has("max_completion_tokens"))
 			firstHasMaxTokens.Store(obj != nil && obj.Has("max_tokens"))
 		}
-		if obj := jsonv.Obj(parsed); obj != nil && obj.Has("reasoning_effort") {
+		if obj != nil && obj.Has("reasoning_effort") {
 			// Simulate third-party gateway rejecting reasoning_effort with a generic 400 that does NOT echo field name.
 			w.Header().Set("content-type", "application/json")
 			w.WriteHeader(http.StatusBadRequest)
@@ -57,6 +61,10 @@ func TestThirdPartyChatUsesMaxTokensAndHandlesQwen4ReasoningFallback(t *testing.
 	if firstHasMaxCompletion.Load() || !firstHasMaxTokens.Load() {
 		t.Fatalf("third-party provider must receive max_tokens (got max_tokens=%v, max_completion_tokens=%v)",
 			firstHasMaxTokens.Load(), firstHasMaxCompletion.Load())
+	}
+	if reqCount.Load() != 3 || efforts != ([3]string{"xhigh", "high", ""}) {
+		t.Fatalf("expected 3 requests stepping reasoning_effort xhigh->high->omitted, got count=%d efforts=%v",
+			reqCount.Load(), efforts)
 	}
 	eq(t, at(out, "content", 0, "text"), `"done"`)
 }

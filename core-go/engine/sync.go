@@ -128,13 +128,13 @@ func docHolds(d *doc.Doc, id, inner string) bool {
 	return kids != nil && doc.FindIn(kids.Items, inner) != nil
 }
 
-func (e *Engine) slideSingle(id string) {
+func (e *Engine) slideSingle(id string) *render.Slide {
 	// A slide is snapshotted alone, so a background blur in it would blur nothing until it settles: such a node
 	// appears in place, and so does a sliding ancestor that now holds it.
 	if e.HoldsGlass(id) {
 		e.slid[id] = true
 		e.Renderer.UnslideWith(e.Doc, id)
-		return
+		return nil
 	}
 	// Past the cap nothing more slides, so skip the parent lookup (a linear search per insert).
 	capSlides := render.MaxSlides
@@ -143,11 +143,17 @@ func (e *Engine) slideSingle(id string) {
 	}
 	if len(e.Renderer.Slides) >= capSlides {
 		e.slid[id] = true
-		return
+		return nil
 	}
 	room := false
+	isTopPlaceholder := false
 	if p, _, ok := e.Doc.ParentOf(id); ok {
 		room = e.Renderer.CanSlideIntoWithCap(e.Doc, p, capSlides)
+		if p == doc.Root {
+			if n := e.Doc.Find(id); n != nil && jsonv.IsTrue(jsonv.Get(n, "placeholder")) {
+				isTopPlaceholder = true
+			}
+		}
 	}
 	fresh := !e.slid[id]
 	e.slid[id] = true
@@ -156,11 +162,15 @@ func (e *Engine) slideSingle(id string) {
 		sl := render.NewSlide(id, now)
 		if e.ProgressiveSlides {
 			sl.SetSmooth(true)
-			sl.SetCursorHeld(now, e.progressiveHoldDur())
+			if !isTopPlaceholder {
+				sl.SetCursorHeld(now, e.progressiveHoldDur())
+			}
 		}
 		e.Renderer.Slides = append(e.Renderer.Slides, sl)
 		e.hasSlidesAtomic.Store(true)
+		return sl
 	}
+	return nil
 }
 
 // BeforeModify snapshots path's visual appearance right before Update, Replace, or Move mutates it,
@@ -168,13 +178,14 @@ func (e *Engine) slideSingle(id string) {
 func (e *Engine) BeforeModify(path string) {
 	e.pendingModifyID = ""
 	e.pendingModifyTree = nil
+	e.pendingModifyClips = nil
 	e.pendingModifyHash = 0
 	e.pendingModifyHasO = false
 	if !e.ProgressiveSlides || e.ReduceMotion || e.Doc == nil {
 		return
 	}
 	targetID := rootTargetID(path)
-	if targetID == "" || targetID == doc.Root || e.commitSkipEdits[targetID] {
+	if targetID == "" || targetID == doc.Root || (e.activeStream == nil && e.commitSkipEdits[targetID]) {
 		return
 	}
 	n := e.Doc.Find(targetID)
@@ -197,9 +208,10 @@ func (e *Engine) BeforeModify(path string) {
 		return
 	}
 	cx := &render.Ctx{Doc: e.Doc, Libs: e.Libs, Fonts: e.Fonts, Assets: e.Assets}
-	if tree, hash, org, ok := e.Renderer.SnapshotNodeTree(cx, targetID); ok && tree != nil {
+	if tree, clips, hash, org, ok := e.Renderer.SnapshotNodeTree(cx, targetID); ok && tree != nil {
 		e.pendingModifyID = targetID
 		e.pendingModifyTree = tree
+		e.pendingModifyClips = clips
 		e.pendingModifyHash = hash
 		e.pendingModifyOrg = org
 		e.pendingModifyHasO = true
@@ -209,12 +221,14 @@ func (e *Engine) BeforeModify(path string) {
 // AfterModify registers a cursor-gated edit transition from BeforeModify's pre-edit snapshot to newID.
 func (e *Engine) AfterModify(oldPath, newID string) {
 	tree := e.pendingModifyTree
+	clips := e.pendingModifyClips
 	hash := e.pendingModifyHash
 	org := e.pendingModifyOrg
 	hasO := e.pendingModifyHasO
 	prevID := e.pendingModifyID
 	e.pendingModifyID = ""
 	e.pendingModifyTree = nil
+	e.pendingModifyClips = nil
 	e.pendingModifyHash = 0
 	e.pendingModifyHasO = false
 
@@ -236,15 +250,14 @@ func (e *Engine) AfterModify(oldPath, newID string) {
 	if oldTarget != targetID {
 		e.Renderer.Slides = slices.DeleteFunc(e.Renderer.Slides, func(s *render.Slide) bool { return s.ID == oldTarget })
 	}
-	if e.Preview == nil && len(e.Streams) > 0 {
-		st := e.Streams[len(e.Streams)-1]
+	if st := e.activeStream; st != nil {
 		if st.Edited == nil {
 			st.Edited = map[string]bool{}
 		}
 		st.Edited[targetID] = true
 	}
 	now := e.now()
-	sl := render.NewEditSlide(targetID, now, tree, hash, org, hasO)
+	sl := render.NewEditSlide(targetID, now, tree, clips, hash, org, hasO)
 	sl.SetCursorHeld(now, e.progressiveHoldDur())
 	e.Renderer.Slides = append(e.Renderer.Slides, sl)
 	e.hasSlidesAtomic.Store(true)
@@ -293,8 +306,8 @@ func (e *Engine) drainCursorUpdatesLocked() {
 			}
 			for _, s := range e.Renderer.Slides {
 				// Never extend a parent card slide's hold because of inner child IDs inside that card;
-				// only extend distinct sibling/future slides not yet reached.
-				if s.ID == hid || docHolds(d, hid, s.ID) {
+				// only extend distinct sibling/future slides whose hold is still live at now.
+				if (s.ID == hid || docHolds(d, hid, s.ID)) && s.IsHeld(now) {
 					s.ExtendHold(deadline)
 				}
 			}
@@ -346,8 +359,10 @@ func (e *Engine) ExpandProgressiveRootSlides(d *doc.Doc, ids []string) {
 			continue
 		}
 		targets := progressiveScreenTargets(n)
-		for _, tid := range targets {
-			e.slideSingle(tid)
+		for idx, tid := range targets {
+			if sl := e.slideSingle(tid); sl != nil {
+				sl.SetDelay(min(float64(idx)*0.03, 0.24))
+			}
 		}
 	}
 }
@@ -517,9 +532,9 @@ func (e *Engine) TrySnapshotForRender(solo string) (render.SceneSnapshot, bool) 
 	if !e.TryLock() {
 		return render.SceneSnapshot{}, false
 	}
+	defer e.Unlock()
 	e.ExpireSlides()
 	e.Sync()
 	snap := e.Renderer.Snapshot(e.Version, e.now(), solo, len(e.Streams) > 0)
-	e.Unlock()
 	return snap, true
 }

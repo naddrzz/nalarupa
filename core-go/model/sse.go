@@ -85,7 +85,7 @@ func isRetryablePreStreamError(err error) bool {
 		return false
 	}
 	msg := err.Error()
-	if msg == "stopped" {
+	if msg == "stopped" || strings.Contains(msg, "a line over ") {
 		return false
 	}
 	for _, prefix := range []string{

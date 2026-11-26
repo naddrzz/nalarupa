@@ -46,8 +46,8 @@ func (p *painter) backdropPadPx(solo string, zoom float64, area Rect) uint32 {
 		return 0
 	}
 	px := math.Ceil(maxReach * zoom)
-	if px > 192 {
-		px = 192
+	if px > 256 {
+		px = 256
 	}
 	return uint32(px)
 }
@@ -129,7 +129,7 @@ func (p *painter) paintBands(solo string, zoom float64, bg [3]uint8, x0, y0 int3
 			if pad > 0 {
 				padView = Rect{X: float64(x0) / zoom, Y: float64(padY) / zoom, W: float64(w) / zoom, H: float64(padH) / zoom}
 				padDoc := float64(pad) / zoom
-				padCull = Rect{X: cull.X, Y: cull.Y - padDoc, W: cull.W, H: cull.H + 2*padDoc}
+				padCull = Rect{X: cull.X - padDoc, Y: cull.Y - padDoc, W: cull.W + 2*padDoc, H: cull.H + 2*padDoc}
 			}
 			need := int(w * padH * 4)
 			buf, _ := scratch.Get().(*[]byte)

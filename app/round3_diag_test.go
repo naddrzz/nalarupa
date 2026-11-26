@@ -160,7 +160,11 @@ func TestAgentCursorVisitsWaypointsSmoothly(t *testing.T) {
 		t.Fatalf("expected 3 rectangles, got %d", len(ids))
 	}
 
-	now := 1000.0
+	app.Screen = "editor"
+	tt := ui.NewTester(app.View, 1024, 960)
+	tt.Frame()
+
+	now := float64(tt.Now().UnixNano()) / 1e6
 	app.Store.Running["a1"] = true
 	app.Store.Profiles["a1"] = AgentProfile{ID: "a1", Name: "Bayu", Color: "#f59e0b"}
 	app.Store.Activity = append(app.Store.Activity, ActivityReq{
@@ -169,7 +173,7 @@ func TestAgentCursorVisitsWaypointsSmoothly(t *testing.T) {
 		Op:    "write",
 		At:    now,
 	})
-	app.consumeCanvasActivity(now)
+	tt.Frame()
 	cur := app.Store.Cursors["a1"]
 	if cur == nil {
 		t.Fatal("expected cursor for a1")
@@ -181,25 +185,28 @@ func TestAgentCursorVisitsWaypointsSmoothly(t *testing.T) {
 	if cur.TX > 300 || cur.TY > 200 {
 		t.Fatalf("cursor skipped N1 and jumped ahead: TX=%.1f TY=%.1f", cur.TX, cur.TY)
 	}
-	// Simulate 60fps steps: verify cursor visits intermediate N2 (400, 280) first, then reaches final N3 (650, 680)!
-	sawN2 := false
-	for step := 1; step <= 60; step++ {
-		now += 16.6
-		cur.X = expApproach(cur.X, cur.TX, CursorDecayPerSec, 0.0166, false)
-		cur.Y = expApproach(cur.Y, cur.TY, CursorDecayPerSec, 0.0166, false)
-		if math.Hypot(cur.TX-cur.X, cur.TY-cur.Y) < 6.0 && now >= cur.DwellUntil && len(cur.Waypoints) > 0 {
-			advanceCursorWaypoint(app, cur, now)
+	// Drive real production VSync frames via tt.Advance: verify cursor physically approaches N2 (400, 280) before N3 (650, 680)!
+	reachedN2 := false
+	reachedN3 := false
+	reachedN3BeforeN2 := false
+	for step := 1; step <= 75; step++ {
+		tt.Advance(16 * time.Millisecond)
+		if math.Hypot(cur.X-400, cur.Y-280) < 65 {
+			reachedN2 = true
 		}
-		if math.Abs(cur.TX-400) < 10 && math.Abs(cur.TY-280) < 10 {
-			sawN2 = true
+		if math.Hypot(cur.X-650, cur.Y-680) < 65 {
+			if !reachedN2 {
+				reachedN3BeforeN2 = true
+			}
+			reachedN3 = true
 		}
 	}
-	if !sawN2 {
-		t.Fatal("cursor did not visit intermediate waypoint N2 before N3")
+	if !reachedN2 || reachedN3BeforeN2 {
+		t.Fatalf("cursor did not visit N2 before N3: reachedN2=%v reachedN3BeforeN2=%v cur=(%.1f,%.1f)", reachedN2, reachedN3BeforeN2, cur.X, cur.Y)
 	}
-	if len(cur.Waypoints) != 0 || cur.TX < 550 || cur.TY < 600 {
-		t.Fatalf("cursor did not finish visiting final waypoint N3: remaining=%d TX=%.1f TY=%.1f",
-			len(cur.Waypoints), cur.TX, cur.TY)
+	if len(cur.Waypoints) != 0 || !reachedN3 {
+		t.Fatalf("cursor did not finish visiting final waypoint N3: remaining=%d reachedN3=%v pos=(%.1f, %.1f)",
+			len(cur.Waypoints), reachedN3, cur.X, cur.Y)
 	}
 }
 

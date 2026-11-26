@@ -93,17 +93,19 @@ func EstimateContextTokens(baseOverhead int, messages []jsonv.Value) int {
 }
 
 // ClampMaxOutputTokens ensures max_tokens never exceeds the model's remaining context window on smaller/custom providers.
+// Returns <= 0 when estimatedInput already exhausts contextLimit.
 func ClampMaxOutputTokens(contextLimit, estimatedInput int) int {
 	if contextLimit <= 0 {
 		return defaultMaxOutTokens
 	}
-	// Cap completion budget to at most 25% of smaller windows (or 32000 max), and strictly inside remaining window.
+	rawRem := contextLimit - estimatedInput
+	if rawRem <= 0 {
+		return 0
+	}
 	quarter := max(minOutTokensFloor, contextLimit/4)
 	desired := min(defaultMaxOutTokens, quarter)
-	avail := contextLimit - estimatedInput - 256
-	if avail < minOutTokensFloor {
-		return min(minOutTokensFloor, max(256, contextLimit/8))
-	}
+	guard := min(256, rawRem/4)
+	avail := max(1, rawRem-guard)
 	return min(desired, avail)
 }
 
@@ -232,6 +234,13 @@ func EnforceContextWindow(messages []jsonv.Value, baseOverhead, contextLimit int
 		}
 	}
 
+	// Pass 4: If a single-turn or 1-tool history still exceeds maxInput, strip images and compact oversized
+	// tool_result / editor_state blocks inside the remaining messages while keeping user prompts intact.
+	blockCompacted := false
+	if EstimateContextTokens(baseOverhead, cur) > maxInput {
+		cur, blockCompacted = compactOversizedTurnBlocks(cur, baseOverhead, maxInput)
+	}
+
 	if dropped > 0 && len(cur) > 0 {
 		first := jsonv.Clone(cur[0])
 		if blocks := jsonv.Arr(jsonv.Get(first, "content")); blocks != nil && len(blocks.Items) > 0 {
@@ -245,7 +254,103 @@ func EnforceContextWindow(messages []jsonv.Value, baseOverhead, contextLimit int
 		}
 		cur[0] = first
 	}
-	return cur, stripped || dropped > 0, dropped
+	return cur, stripped || dropped > 0 || blockCompacted, dropped
+}
+
+func compactOversizedTurnBlocks(messages []jsonv.Value, baseOverhead, maxInput int) ([]jsonv.Value, bool) {
+	changed := false
+	out := make([]jsonv.Value, len(messages))
+	for i, m := range messages {
+		out[i] = jsonv.Clone(m)
+	}
+	// Step 4a: Strip screenshot images and attached editor_state snapshots if needed.
+	for i := range out {
+		if EstimateContextTokens(baseOverhead, out) <= maxInput {
+			return out, changed
+		}
+		blocks := jsonv.Arr(jsonv.Get(out[i], "content"))
+		if blocks == nil {
+			continue
+		}
+		for _, b := range blocks.Items {
+			ty := jsonv.StrOr(jsonv.Get(b, "type"))
+			if ty == "tool_result" {
+				if trContent := jsonv.Arr(jsonv.Get(b, "content")); trContent != nil {
+					kept := make([]jsonv.Value, 0, len(trContent.Items))
+					omitted := false
+					for _, sub := range trContent.Items {
+						if jsonv.StrIs(jsonv.Get(sub, "type"), "image") {
+							omitted = true
+							changed = true
+							continue
+						}
+						kept = append(kept, sub)
+					}
+					if omitted {
+						kept = append(kept, engine.Object("type", "text", "text", "[Screenshot omitted to fit context window.]"))
+						trContent.Items = kept
+					}
+				}
+			} else if ty == "text" && jsonv.StrIs(jsonv.Get(out[i], "role"), "user") {
+				txt := jsonv.StrOr(jsonv.Get(b, "text"))
+				if idx := strings.Index(txt, editorStateNote); idx >= 0 {
+					statePart := txt[idx+len(editorStateNote):]
+					if len(statePart) > 1200 {
+						trimmed := txt[:idx+len(editorStateNote)] + truncate(statePart, 1200) + "\n[editor_state truncated to fit context window.]"
+						if obj := jsonv.Obj(b); obj != nil {
+							obj.Set("text", trimmed)
+							changed = true
+						}
+					}
+				}
+			}
+		}
+	}
+	// Step 4b: Truncate oversized tool_result text blocks so a huge Get(document) output cannot exceed maxInput.
+	for i := range out {
+		excess := EstimateContextTokens(baseOverhead, out) - maxInput
+		if excess <= 0 {
+			break
+		}
+		blocks := jsonv.Arr(jsonv.Get(out[i], "content"))
+		if blocks == nil {
+			continue
+		}
+		for _, b := range blocks.Items {
+			if !jsonv.StrIs(jsonv.Get(b, "type"), "tool_result") {
+				continue
+			}
+			excess = EstimateContextTokens(baseOverhead, out) - maxInput
+			if excess <= 0 {
+				break
+			}
+			trimTextBlock := func(obj *jsonv.Object, key string) {
+				s := jsonv.StrOr(jsonv.Get(obj, key))
+				curToks := estimateStringTokens(s)
+				if curToks <= 256 {
+					return
+				}
+				keepToks := max(128, curToks-excess-64)
+				keepBytes := max(384, int(float64(keepToks)*approxCharsPerToken))
+				if keepBytes < len(s) {
+					obj.Set(key, truncate(s, keepBytes)+"\n[tool_result truncated to fit context window.]")
+					changed = true
+				}
+			}
+			if bObj := jsonv.Obj(b); bObj != nil {
+				if _, isStr := jsonv.Str(jsonv.Get(bObj, "content")); isStr {
+					trimTextBlock(bObj, "content")
+				} else if trArr := jsonv.Arr(jsonv.Get(bObj, "content")); trArr != nil {
+					for _, sub := range trArr.Items {
+						if sObj := jsonv.Obj(sub); sObj != nil && jsonv.StrIs(jsonv.Get(sObj, "type"), "text") {
+							trimTextBlock(sObj, "text")
+						}
+					}
+				}
+			}
+		}
+	}
+	return out, changed
 }
 
 func emitContextUsage(e *engine.Engine, _ engine.Profile, child bool, used, limit int) {

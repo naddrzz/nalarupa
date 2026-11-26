@@ -29,14 +29,15 @@ subject itself beats any list.
 - Spatial grammar expresses grouping: parts of one control (4–8px) < items in a
   group (12–16px) < groups in a section (24–32px) < major sections (48–96px).
   Never flatten a screen to a single repeated gap.
-- Concentric nested radii: `innerRadius = max(0, outerRadius - padding)` so
-  nested cards and controls share an even optical rim.
+- Concentric nested frame radii: `cornerRadius = max(0, outerRadius - padding)` so
+  nested cards and controls share an even optical rim (`innerRadius` is only for ellipse donut rings).
 - Generous outer padding on screens: 64–120px desktop, 20–24px mobile.
 
 ## Color & surfaces
 
 - Bind semantic roles (`$ground`, `$surface`, `$ink`, `$muted`, `$border`,
-  `$accent`) with `SetVariables` before building screens, and reference `$vars`
+  `$accent`) with `SetVariables` before building screens, and reference those named
+  role variables (`$ground`, `$surface`, `$ink`, `$muted`, `$border`, `$accent`)
   everywhere instead of repeating hex literals.
 - Multi-screen surface consistency: every screen in the same product or flow
   must share the exact ground token, surface texture/grid/grain treatment, and
@@ -60,8 +61,9 @@ subject itself beats any list.
   `width: "fill_container"` rather than fixed pixel widths (`4 × 340 + gaps +
   padding > 1440` clips the last column!). When a fixed width is required, check
   `2*padding + sum(widths) + (n-1)*gap <= frameWidth`.
-- Keep reading prose comfortable at 45–75 characters per line (`maxWidth` or a
-  dedicated text column width). For uppercase eyebrows/badges, drop size to
+- Keep reading prose comfortable at 45–75 characters per line with a dedicated
+  fixed-width text column (`textGrowth: "fixed-width"` and an explicit `width`;
+  the layout engine ignores `maxWidth`). For uppercase eyebrows/badges, drop size to
   11–12px, weight 600–700, and add positive `letterSpacing` (+1 to +2.5).
 - Use a content column (e.g. 1200 max) inside the screen with
   `alignItems: "center"` on the screen frame.

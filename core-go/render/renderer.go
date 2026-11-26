@@ -530,7 +530,7 @@ func (r *Renderer) Live() []LiveNode {
 				path = path[:f.Depth]
 			}
 			hiddenByHeldSlide := false
-			if heldUnrevealed != nil && !f.Placeholder {
+			if heldUnrevealed != nil {
 				if heldUnrevealed[f.ID] {
 					hiddenByHeldSlide = true
 				} else {

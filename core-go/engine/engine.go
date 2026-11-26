@@ -62,6 +62,9 @@ type ToolOut struct {
 	Text   string
 	Images []string
 	Error  bool
+	// Audit holds a lightweight snapshot of the committed document and screen layout boxes captured under EditGate,
+	// allowing post-execute design auditing to run completely off-lock without racing concurrent MCP edits.
+	Audit *AuditSnapshot
 	// pending is what Finish still has to do.
 	pending pendingOut
 }
@@ -137,12 +140,14 @@ type Engine struct {
 	staggerLast       time.Time
 	staggerSeq        int
 
-	pendingModifyID   string
-	pendingModifyTree *usvg.Tree
-	pendingModifyHash uint64
-	pendingModifyOrg  [2]float64
-	pendingModifyHasO bool
+	pendingModifyID    string
+	pendingModifyTree  *usvg.Tree
+	pendingModifyClips []*usvg.Tree
+	pendingModifyHash  uint64
+	pendingModifyOrg   [2]float64
+	pendingModifyHasO  bool
 	commitSkipEdits   map[string]bool
+	activeStream      *Stream
 
 	cursorMu         sync.Mutex
 	pendingReleaseID []string

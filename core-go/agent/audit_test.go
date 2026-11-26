@@ -88,4 +88,9 @@ func TestDesignHarnessAuditCatchesClippedGridAndSurfaceDrift(t *testing.T) {
 	if !strings.Contains(out3, "Page · Shelves") {
 		t.Fatalf("expected multi-screen consistency warning for Page · Shelves vs Page · Home, got:\n%s", out3)
 	}
+	for _, wantSub := range []string{"omits reusable page chrome", "has a flat", "hardcodes fill"} {
+		if !strings.Contains(out3, wantSub) {
+			t.Fatalf("expected audit report to contain %q, got:\n%s", wantSub, out3)
+		}
+	}
 }

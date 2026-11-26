@@ -4,6 +4,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -208,11 +209,19 @@ func TestRound10_NewScreenDoesNotMutateExistingScreenVariablesOrNodes(t *testing
 		}
 	}
 	app.Bridge.eng.Locked(func() {
+		app.Bridge.eng.Agent.Running = true
 		app.Bridge.eng.SetAgentContainerScope("child_1", []string{deckID})
 	})
+	okOut := app.Bridge.eng.CallTool("execute", jsonv.MustParse(`{"__agent":"child_1","input":"Update(\"`+deckID+`\", { name: \"Pricing — Control Deck V2\" });"}`))
 	out := app.Bridge.eng.CallTool("execute", jsonv.MustParse(`{"__agent":"child_1","input":"Update(\"`+tallyID+`\", { fill: \"#FF0000\" });"}`))
-	if !out.Error {
-		t.Fatalf("expected child_1 editing outside its assigned container (%s) to be rejected, but succeeded!", tallyID)
+	app.Bridge.eng.Locked(func() {
+		app.Bridge.eng.Agent.Running = false
+	})
+	if okOut.Error {
+		t.Fatalf("expected child_1 editing inside its assigned container (%s) to succeed, got: %s", deckID, okOut.Text)
+	}
+	if !out.Error || !strings.Contains(out.Text, "assigned container") {
+		t.Fatalf("expected child_1 editing outside its assigned container (%s) to fail with scope error, got err=%v text=%q", tallyID, out.Error, out.Text)
 	}
 }
 

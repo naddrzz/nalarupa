@@ -15,15 +15,26 @@ import (
 )
 
 // AppendDesignAudit runs deterministic post-execute layout overflow and multi-screen surface/token
-// consistency checks on the synced document and appends any findings under "## Issues detected".
+// consistency checks and appends any findings under "## Issues detected".
 func AppendDesignAudit(e *engine.Engine, toolName, reportText string, isError bool) string {
-	if isError || toolName != "execute" || e == nil {
+	return AppendDesignAuditWithSnapshot(e, nil, toolName, reportText, isError)
+}
+
+// AppendDesignAuditWithSnapshot audits snap completely off Engine.Lock (capturing a fresh lightweight snapshot
+// if snap is nil) so canvas renders/polls never block and concurrent MCP execute calls audit their own commit.
+func AppendDesignAuditWithSnapshot(e *engine.Engine, snap *engine.AuditSnapshot, toolName, reportText string, isError bool) string {
+	if isError || toolName != "execute" {
 		return reportText
 	}
-	var findings []string
-	e.Locked(func() {
-		findings = collectDesignAuditLocked(e, reportText)
-	})
+	if snap == nil && e != nil {
+		e.Locked(func() {
+			snap = e.CaptureAuditSnapshot()
+		})
+	}
+	if snap == nil || snap.Root == nil {
+		return reportText
+	}
+	findings := collectDesignAuditSnapshot(snap, reportText)
 	if len(findings) == 0 {
 		return reportText
 	}
@@ -72,20 +83,50 @@ type screenSummary struct {
 	surfacePattern string            // name of full-bleed / textured background child if any
 }
 
-func collectDesignAuditLocked(e *engine.Engine, existingReport string) []string {
-	if e.Doc == nil {
+func extractPrimaryColorFill(v jsonv.Value) string {
+	if v == nil {
+		return ""
+	}
+	if s, ok := jsonv.Str(v); ok {
+		return strings.TrimSpace(s)
+	}
+	if arr := jsonv.Arr(v); arr != nil {
+		for i := len(arr.Items) - 1; i >= 0; i-- {
+			if c := extractPrimaryColorFill(arr.Items[i]); c != "" {
+				return c
+			}
+		}
+		return ""
+	}
+	if obj := jsonv.Obj(v); obj != nil {
+		if jsonv.IsFalse(jsonv.Get(obj, "enabled")) {
+			return ""
+		}
+		ty := strings.ToLower(strings.TrimSpace(jsonv.StrOr(jsonv.Get(obj, "type"))))
+		if ty == "" || ty == "color" || ty == "solid" {
+			if s, ok := jsonv.Str(jsonv.Get(obj, "color")); ok && strings.TrimSpace(s) != "" {
+				return strings.TrimSpace(s)
+			}
+			if s, ok := jsonv.Str(jsonv.Get(obj, "value")); ok && strings.TrimSpace(s) != "" {
+				return strings.TrimSpace(s)
+			}
+		}
+	}
+	return ""
+}
+
+func collectDesignAuditSnapshot(snap *engine.AuditSnapshot, existingReport string) []string {
+	if snap == nil || snap.Root == nil {
 		return nil
 	}
-	e.Sync()
-
-	// Skip cross-screen style comparison when intentionally exploring divergent style variations.
-	styleVariationMode := e.Agent.Mode == "side" || (e.Agent.Cook > 1 && e.Agent.Iterate == "style")
+	root := snap.Root
+	topKids := jsonv.Items(jsonv.Get(root, "children"))
 
 	// Collect defined color variables: hex (lowercased) -> $varName
 	colorVarByHex := map[string]string{}
-	if vars := jsonv.Obj(jsonv.Get(e.Doc.Root, "variables")); vars != nil {
+	if vars := jsonv.Obj(jsonv.Get(root, "variables")); vars != nil {
 		vars.Each(func(name string, v jsonv.Value) {
-			if !jsonv.StrIs(jsonv.Get(v, "type"), "color") {
+			if strings.HasPrefix(name, "preserved_") || !jsonv.StrIs(jsonv.Get(v, "type"), "color") {
 				return
 			}
 			val := jsonv.Get(v, "value")
@@ -100,7 +141,7 @@ func collectDesignAuditLocked(e *engine.Engine, existingReport string) []string 
 
 	// Map reusable top-level / nested components: id -> name
 	compNames := map[string]string{}
-	doc.Walk(e.Doc.Children(), func(n jsonv.Value) {
+	doc.Walk(topKids, func(n jsonv.Value) {
 		if jsonv.IsTrue(jsonv.Get(n, "reusable")) {
 			cid := jsonv.StrOr(jsonv.Get(n, "id"))
 			cname := jsonv.StrOr(jsonv.Get(n, "name"))
@@ -116,30 +157,28 @@ func collectDesignAuditLocked(e *engine.Engine, existingReport string) []string 
 	var warnings []string
 	var screens []screenSummary
 
-	for _, topRaw := range e.Doc.Children() {
+	for _, topRaw := range topKids {
 		if !jsonv.StrIs(jsonv.Get(topRaw, "type"), "frame") || jsonv.IsTrue(jsonv.Get(topRaw, "reusable")) {
 			continue
 		}
 		topID := jsonv.StrOr(jsonv.Get(topRaw, "id"))
-		layer, ok := e.Renderer.Layers[topID]
-		if !ok || len(layer.Flat) == 0 {
+		flats := snap.FlatsByTopID[topID]
+		if len(flats) == 0 {
 			continue
 		}
-		rootFlat := layer.Flat[0]
+		rootFlat := flats[0]
 		if rootFlat.W < 280 || rootFlat.H < 200 {
 			continue
 		}
 
-		// 1. Deep Clipped-Screen Overflow Gate:
-		// Catch descendants (such as fixed-width cards inside a fit_content horizontal row) that overflow
-		// the clipped screen frame even when only the inner children were touched in this execute call!
+		// 1. Deep Clipped-Screen Overflow Gate
 		if rootFlat.Clip {
-			warnings = append(warnings, checkScreenOverflows(topRaw, layer.Flat, existingReport)...)
+			warnings = append(warnings, checkScreenOverflows(topRaw, flats, existingReport)...)
 		}
 
 		// Gather screen metadata for multi-screen consistency checks
-		rawFill := strings.TrimSpace(jsonv.StrOr(jsonv.Get(topRaw, "fill")))
-		resFill := resolveColorToken(rawFill, colorVarByHex, e.Doc.Root)
+		rawFill := extractPrimaryColorFill(jsonv.Get(topRaw, "fill"))
+		resFill := resolveColorToken(rawFill, colorVarByHex, root)
 		usedRefs := map[string]string{}
 		doc.Walk([]jsonv.Value{topRaw}, func(n jsonv.Value) {
 			if jsonv.StrIs(jsonv.Get(n, "type"), "ref") {
@@ -164,11 +203,9 @@ func collectDesignAuditLocked(e *engine.Engine, existingReport string) []string 
 		})
 	}
 
-	// 2. Multi-Screen Consistency Gate (when >= 2 screens exist in the same flow)
-	if !styleVariationMode && len(screens) >= 2 {
-		base := screens[0]
-		for _, sc := range screens[1:] {
-			// 2a. Raw hex on screen ground when matching semantic variable exists
+	// 2a. Semantic color binding check on EVERY screen (including screens[0]) when color variables exist
+	if !snap.StyleVariationMode && len(colorVarByHex) > 0 {
+		for _, sc := range screens {
 			if strings.HasPrefix(sc.rawFill, "#") {
 				if tok, ok := colorVarByHex[strings.ToLower(sc.rawFill)]; ok {
 					warnings = append(warnings, fmt.Sprintf(
@@ -176,6 +213,13 @@ func collectDesignAuditLocked(e *engine.Engine, existingReport string) []string 
 						sc.name, sc.id, sc.rawFill, tok))
 				}
 			}
+		}
+	}
+
+	// 2b & 2c. Multi-Screen Consistency Gate (when >= 2 screens exist in the same flow)
+	if !snap.StyleVariationMode && len(screens) >= 2 {
+		base := screens[0]
+		for _, sc := range screens[1:] {
 			// 2b. Shared chrome components (e.g., TopNav / Footer) used on Screen 1 but omitted on Screen 2+
 			if math.Abs(sc.w-base.w) < 2 {
 				var missingChrome []string
@@ -209,11 +253,9 @@ func checkScreenOverflows(topRaw jsonv.Value, flats []render.Flat, existingRepor
 		return nil
 	}
 	root := flats[0]
-	rx0 := root.X
+	rx0, ry0 := root.X, root.Y
 	rx1, ry1 := root.X+root.W, root.Y+root.H
 
-	// Index raw nodes by ID inside this screen so we can distinguish intentional decorative bleed shapes
-	// (e.g. blurred background glow ellipses) from content/layout containers, cards, controls, and text.
 	rawByID := map[string]jsonv.Value{}
 	doc.Walk([]jsonv.Value{topRaw}, func(n jsonv.Value) {
 		if id, ok := jsonv.Str(jsonv.Get(n, "id")); ok && id != "" {
@@ -241,24 +283,21 @@ func checkScreenOverflows(topRaw jsonv.Value, flats []render.Flat, existingRepor
 			continue
 		}
 
-		// Skip intermediate fit_content row/column wrappers if they have children we can point at more specifically,
-		// OR report the leaf/card that actually gets clipped at the screen boundary!
 		overRight := (f.X + f.W) - rx1
 		overLeft := rx0 - f.X
+		overTop := ry0 - f.Y
 		overBottom := (f.Y + f.H) - ry1
 
-		if overRight <= 1.0 && overLeft <= 1.0 && overBottom <= 1.0 {
+		if overRight <= 1.0 && overLeft <= 1.0 && overTop <= 1.0 && overBottom <= 1.0 {
 			continue
 		}
-		// If existing script validate already named this exact node sticking out, avoid duplicate noise unless it lacked fill_container guidance.
 		alreadyNamed := strings.Contains(existingReport, `"`+f.Name+`" (`+f.ID+`) sticks out`)
 
-		// Prefer reporting concrete clipped cards/controls/text rather than an outer auto-layout wrapper when children also overflow.
 		if f.Type == "frame" && i+1 < len(flats) && flats[i+1].Depth > f.Depth {
 			childAlsoOverflows := false
 			for j := i + 1; j < len(flats) && flats[j].Depth > f.Depth; j++ {
 				cf := flats[j]
-				if (cf.X+cf.W)-rx1 > 1.0 || rx0-cf.X > 1.0 || (cf.Y+cf.H)-ry1 > 1.0 {
+				if (cf.X+cf.W)-rx1 > 1.0 || rx0-cf.X > 1.0 || ry0-cf.Y > 1.0 || (cf.Y+cf.H)-ry1 > 1.0 {
 					childAlsoOverflows = true
 					break
 				}
@@ -279,6 +318,11 @@ func checkScreenOverflows(topRaw jsonv.Value, flats []render.Flat, existingRepor
 			out = append(out, fmt.Sprintf(
 				"%q (%s) overflows left edge of screen %q (%s) by %.0fpx; check x offset, alignment, or horizontal padding",
 				f.Name, f.ID, root.Name, root.ID, math.Round(overLeft)))
+			reportedSubtreeDepth = f.Depth
+		} else if overTop > 1.0 && !alreadyNamed {
+			out = append(out, fmt.Sprintf(
+				"%q (%s) overflows top edge of screen %q (%s) by %.0fpx; check y offset or vertical padding",
+				f.Name, f.ID, root.Name, root.ID, math.Round(overTop)))
 			reportedSubtreeDepth = f.Depth
 		} else if overBottom > 2.0 && !alreadyNamed {
 			out = append(out, fmt.Sprintf(
@@ -301,12 +345,10 @@ func isIntentionalBleedDecor(raw jsonv.Value, f render.Flat, root render.Flat) b
 	if !jsonv.StrIs(jsonv.Get(raw, "layoutPosition"), "absolute") {
 		return false
 	}
-	// Decorative background glows, ambient circles, rules, and paths placed with layoutPosition:"absolute"
 	if f.Type == "ellipse" || f.Type == "path" || f.Type == "line" || f.Type == "polygon" {
 		return true
 	}
 	if f.Type == "rectangle" {
-		// Blurred or low-opacity ambient shapes are intentional bleed backgrounds
 		if op, ok := jsonv.F64(jsonv.Get(raw, "opacity")); ok && op < 0.5 {
 			return true
 		}
@@ -328,14 +370,25 @@ func resolveColorToken(raw string, colorVarByHex map[string]string, docRoot *jso
 	}
 	if name, ok := strings.CutPrefix(raw, "$"); ok && docRoot != nil {
 		if vars := jsonv.Obj(jsonv.Get(docRoot, "variables")); vars != nil {
-			if v, exists := vars.Get(name); exists {
+			for range 16 {
+				v, exists := vars.Get(name)
+				if !exists {
+					break
+				}
 				val := jsonv.Get(v, "value")
 				if arr := jsonv.Arr(val); arr != nil && len(arr.Items) > 0 {
 					val = jsonv.Get(arr.Items[0], "value")
 				}
-				if hex, ok := jsonv.Str(val); ok {
-					return strings.ToLower(strings.TrimSpace(hex))
+				str, ok := jsonv.Str(val)
+				if !ok {
+					break
 				}
+				str = strings.TrimSpace(str)
+				if nextName, isRef := strings.CutPrefix(str, "$"); isRef {
+					name = nextName
+					continue
+				}
+				return strings.ToLower(str)
 			}
 		}
 	}
@@ -343,7 +396,6 @@ func resolveColorToken(raw string, colorVarByHex map[string]string, docRoot *jso
 }
 
 func detectSurfaceMotif(topRaw jsonv.Value, rootFlat render.Flat) string {
-	// Check if the screen frame itself uses a non-flat fill (gradient / image / pattern)
 	if fillV := jsonv.Get(topRaw, "fill"); fillV != nil {
 		for _, f := range svg.Fills(fillV) {
 			if _, isFlat := svg.Flat(f); !isFlat {
@@ -351,7 +403,6 @@ func detectSurfaceMotif(topRaw jsonv.Value, rootFlat render.Flat) string {
 			}
 		}
 	}
-	// Or if a direct child acts as a large background pattern / grid / surface motif layer
 	kids := jsonv.Items(jsonv.Get(topRaw, "children"))
 	for _, k := range kids {
 		ty := jsonv.StrOr(jsonv.Get(k, "type"))

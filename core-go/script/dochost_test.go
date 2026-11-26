@@ -42,6 +42,7 @@ func (h *docHost) SlideIn(id string)                                         { h
 func (h *docHost) BeforeModify(string)                                       {}
 func (h *docHost) AfterModify(string, string)                                {}
 func (h *docHost) CheckEditTarget(string, string, bool) error                { return nil }
+func (h *docHost) RecordEditTarget(string, string)                           {}
 func (h *docHost) FilterSetVars(v jsonv.Value, r bool) (jsonv.Value, bool)   { return v, r }
 func (h *docHost) AfterRootInsert(string)                                    {}
 func (h *docHost) AfterSetVars()                                             {}

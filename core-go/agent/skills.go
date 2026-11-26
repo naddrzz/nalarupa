@@ -288,12 +288,18 @@ func ExtractSlashSkills(prompt string, catalog []SkillInfo) (matched []SkillInfo
 	byName := make(map[string]SkillInfo, len(catalog)*2)
 	for _, s := range catalog {
 		k := strings.ToLower(strings.TrimSpace(s.Name))
-		if _, exists := byName[k]; !exists {
-			byName[k] = s
+		if k != "" {
+			if _, exists := byName[k]; !exists {
+				byName[k] = s
+			}
 		}
+	}
+	for _, s := range catalog {
 		bk := strings.ToLower(filepath.Base(s.Dir))
-		if _, exists := byName[bk]; !exists {
-			byName[bk] = s
+		if bk != "" {
+			if _, exists := byName[bk]; !exists {
+				byName[bk] = s
+			}
 		}
 	}
 
@@ -323,6 +329,11 @@ func ExtractSlashSkills(prompt string, catalog []SkillInfo) (matched []SkillInfo
 		}
 		for end < len(prompt) && isSkillTokenChar(prompt[end]) {
 			end++
+		}
+		// Reject path continuations like `/assets/logo.svg` or `/docs\file.md` so filesystem paths stay untouched.
+		if end < len(prompt) && (prompt[end] == '/' || prompt[end] == '\\') {
+			i = end
+			continue
 		}
 		token := prompt[i+1 : end]
 		skill, ok := byName[strings.ToLower(token)]
@@ -379,15 +390,19 @@ func ExpandPromptWithSkills(prompt string, matched []SkillInfo) string {
 		if total >= maxSkillTotalBytes {
 			break
 		}
-		raw, err := os.ReadFile(s.Path)
+		rem := maxSkillTotalBytes - total
+		limit := min(maxSkillFileBytes, rem)
+		raw, truncatedByRead, err := readBoundedSkillFile(s.Path, limit)
 		if err != nil {
+			fmt.Fprintf(&sb, "<skill name=%q path=%q status=\"unreadable\">\nSkill file could not be read (%v). Ask the user to reload skills and retry if these instructions are required.\n</skill>\n", s.Name, s.Path, err)
 			continue
 		}
 		body := strings.TrimSpace(strings.ReplaceAll(string(raw), "\r\n", "\n"))
-		rem := maxSkillTotalBytes - total
-		limit := min(maxSkillFileBytes, rem)
-		if len(body) > limit {
-			body = strings.ToValidUTF8(body[:limit], "") + "\n...(truncated)"
+		if len(body) > limit || truncatedByRead {
+			if len(body) > limit {
+				body = body[:limit]
+			}
+			body = strings.ToValidUTF8(body, "") + "\n...(truncated)"
 		}
 		total += len(body)
 		fmt.Fprintf(&sb, "<skill name=%q path=%q>\n%s\n</skill>\n", s.Name, s.Path, body)
@@ -397,7 +412,43 @@ func ExpandPromptWithSkills(prompt string, matched []SkillInfo) string {
 	return sb.String()
 }
 
-// SkillDirs returns deduplicated, resolved skill directories for Claude CLI --add-dir flags.
+func readBoundedSkillFile(path string, maxBytes int) ([]byte, bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, false, err
+	}
+	defer f.Close()
+	// Allow slight slack for CRLF -> LF normalization while strictly bounding memory to maxBytes + 2048.
+	capRead := int64(maxBytes) + 2048
+	buf, err := io.ReadAll(io.LimitReader(f, capRead+1))
+	if err != nil {
+		return nil, false, err
+	}
+	if int64(len(buf)) > capRead {
+		return buf[:capRead], true, nil
+	}
+	return buf, false, nil
+}
+
+func claudeProjectRootForSkillDir(dir string) string {
+	clean := filepath.Clean(dir)
+	parent := filepath.Dir(clean)
+	if !strings.EqualFold(filepath.Base(parent), "skills") {
+		return ""
+	}
+	dotClaude := filepath.Dir(parent)
+	if !strings.EqualFold(filepath.Base(dotClaude), ".claude") {
+		return ""
+	}
+	root := filepath.Dir(dotClaude)
+	if root == "" || root == dotClaude {
+		return ""
+	}
+	return root
+}
+
+// SkillDirs returns deduplicated, resolved skill directories for Claude CLI --add-dir flags (including the
+// enclosing project root when a skill lives inside a `.claude/skills/<name>` layout, plus the skill folder itself).
 func SkillDirs(matched []SkillInfo) []string {
 	if len(matched) == 0 {
 		return nil
@@ -420,8 +471,14 @@ func SkillDirs(matched []SkillInfo) []string {
 		out = append(out, clean)
 	}
 	for _, s := range matched {
+		if root := claudeProjectRootForSkillDir(s.Dir); root != "" {
+			add(root)
+		}
 		add(s.Dir)
 		if resolved, err := filepath.EvalSymlinks(s.Dir); err == nil && resolved != "" {
+			if root := claudeProjectRootForSkillDir(resolved); root != "" {
+				add(root)
+			}
 			add(resolved)
 		}
 	}

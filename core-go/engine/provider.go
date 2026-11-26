@@ -80,6 +80,7 @@ func (e *Engine) settingOr(key string) string {
 // DefaultModelContextWindow returns a sensible default context window (in tokens) for modelID when not explicitly configured.
 func DefaultModelContextWindow(backend, modelID string) int {
 	m := strings.ToLower(strings.TrimSpace(modelID))
+	base := m[strings.LastIndexByte(m, '/')+1:]
 	switch {
 	case strings.Contains(m, "1m") || strings.Contains(m, "gemini-"):
 		return 1_000_000
@@ -88,7 +89,7 @@ func DefaultModelContextWindow(backend, modelID string) int {
 	case strings.Contains(m, "qwen3") || strings.Contains(m, "qwen4") || strings.Contains(m, "kimi") || strings.Contains(m, "codestral"):
 		return 262_144
 	case strings.Contains(m, "claude") || strings.Contains(m, "fable") || strings.Contains(m, "opus") ||
-		strings.Contains(m, "sonnet") || strings.Contains(m, "haiku") || strings.HasPrefix(m, "o3") || strings.HasPrefix(m, "o4"):
+		strings.Contains(m, "sonnet") || strings.Contains(m, "haiku") || strings.HasPrefix(base, "o3") || strings.HasPrefix(base, "o4"):
 		return 200_000
 	case backend == "api" || backend == "claude-code":
 		return 200_000

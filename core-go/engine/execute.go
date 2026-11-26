@@ -6,6 +6,7 @@ package engine
 // back, keeps it clean if it was, and stores the snippet under the editId the agent repairs it with.
 
 import (
+	"maps"
 	"time"
 
 	"github.com/naddrzz/nalarupa/core-go/export"
@@ -55,16 +56,19 @@ func (e *Engine) beginExecute(args jsonv.Value) executeCall {
 		c.agent = "agent"
 	}
 	if s := e.takeStream(key, hasKey, agent, hasAgent, input); s != nil {
+		if !hasAgent && s.Agent != "" {
+			c.agent = s.Agent
+		}
 		if o := jsonv.Obj(args); o != nil {
 			o = jsonv.Obj(jsonv.Clone(o))
 			o.Set("__seed", u64(s.Seed))
+			if !hasAgent && s.Agent != "" {
+				o.Set("__agent", s.Agent)
+			}
 			c.args = o
 		}
 		c.seen = s.Touched
 		c.skipEdits = s.Edited
-		if !hasAgent {
-			c.agent = s.Agent
-		}
 	}
 	e.Script.edit = nil
 	return c
@@ -111,11 +115,16 @@ func (e *Engine) CallTool(name string, args jsonv.Value) ToolOut {
 	if e.Hooks.Stop != nil {
 		stop = e.Hooks.Stop(c.agent)
 	}
-	e.commitSkipEdits = c.skipEdits
-	out := e.execute(c.args, script.Call{Stop: stop, Locker: e})
-	e.commitSkipEdits = nil
+	out := e.executeWithSkipEdits(c, script.Call{Stop: stop, Locker: e})
 	e.endExecute(c)
 	return out
+}
+
+func (e *Engine) executeWithSkipEdits(c executeCall, sc script.Call) ToolOut {
+	prevSkip := e.commitSkipEdits
+	e.commitSkipEdits = c.skipEdits
+	defer func() { e.commitSkipEdits = prevSkip }()
+	return e.execute(c.args, sc)
 }
 
 // ExecuteWithin runs one `execute` call with the wall-clock budget (script.rs `execute_within`) under the engine
@@ -149,12 +158,14 @@ func (e *Engine) execute(args jsonv.Value, c script.Call) ToolOut {
 		e.currentExecAgent = prevExecAgent
 	}()
 	c.Ran = func() { e.Executing = was }
+	marks := maps.Clone(e.Agent.TurnEditedPreTop)
 	out := script.Execute(e.Host(), args, c)
 	if out.Before == nil {
 		// Refused before anything ran.
 		return ToolOut{Text: out.Text, Error: out.Error}
 	}
 	if out.Error {
+		e.Agent.TurnEditedPreTop = marks
 		e.ForgetGoneSlides()
 		e.Touch()
 		e.KeepClean(wasClean)
@@ -200,5 +211,7 @@ func (e *Engine) execute(args jsonv.Value, c script.Call) ToolOut {
 			}
 		}
 	}
-	return e.planOutputs(out)
+	res := e.planOutputs(out)
+	res.Audit = e.CaptureAuditSnapshot()
+	return res
 }

@@ -217,6 +217,7 @@ type AgentStore struct {
 	ContextUsed        int
 	ContextLimit       int
 	ContextStreamExtra int
+	contextStreamBytes int
 }
 
 // NewAgentStore constructs an initialized AgentStore.
@@ -316,6 +317,7 @@ func (s *AgentStore) FrameSchedule(now float64, reduced bool, liveCount int, pai
 	}
 	hasPillAnim := false
 	hasActivePill := false
+	nextWakeMS := 80.0
 	for id, p := range s.Pills {
 		if !s.PillShown(id, chatOpen) {
 			continue
@@ -327,13 +329,17 @@ func (s *AgentStore) FrameSchedule(now float64, reduced bool, liveCount int, pai
 				hasPillAnim = true
 				break
 			}
+			toFade := (PillMS - FadeDurMS) - elapsed
+			if toFade > 0 && toFade < nextWakeMS {
+				nextWakeMS = toFade
+			}
 		}
 	}
 	if hasPillAnim {
 		return true, 0
 	}
 	if hasActivePill {
-		return false, 80 * time.Millisecond
+		return false, time.Duration(max(5.0, min(80.0, nextWakeMS+2.0))) * time.Millisecond
 	}
 	return false, 0
 }
@@ -555,6 +561,7 @@ func (s *AgentStore) ApplyEvents(events []map[string]any, now float64) bool {
 			if u := int(asFloat(ev["used"])); u >= 0 {
 				s.ContextUsed = u
 				s.ContextStreamExtra = 0
+				s.contextStreamBytes = 0
 			}
 			if l := int(asFloat(ev["limit"])); l > 0 {
 				s.ContextLimit = l
@@ -661,7 +668,8 @@ func (s *AgentStore) ApplyEvents(events []map[string]any, now float64) bool {
 		case "text_delta":
 			txt, _ := ev["text"].(string)
 			if pVal.Parent == "" && len(txt) > 0 {
-				s.ContextStreamExtra += max(1, int(math.Ceil(float64(len(txt))/3.6)))
+				s.contextStreamBytes += len(txt)
+				s.ContextStreamExtra = max(1, int(math.Ceil(float64(s.contextStreamBytes)/3.6)))
 			}
 			last := s.lastOf(aid, "assistant", "thinking", "tool")
 			if last != nil && last.Kind == "assistant" && last.Streaming {
@@ -691,7 +699,8 @@ func (s *AgentStore) ApplyEvents(events []map[string]any, now float64) bool {
 		case "thinking_delta":
 			txt, _ := ev["text"].(string)
 			if pVal.Parent == "" && len(txt) > 0 {
-				s.ContextStreamExtra += max(1, int(math.Ceil(float64(len(txt))/3.6)))
+				s.contextStreamBytes += len(txt)
+				s.ContextStreamExtra = max(1, int(math.Ceil(float64(s.contextStreamBytes)/3.6)))
 			}
 			last := s.lastOf(aid, "thinking", "assistant", "tool")
 			if last != nil && last.Kind == "thinking" && last.EndedAt == nil {
@@ -979,6 +988,7 @@ func (s *AgentStore) ResetChat() {
 	s.ContextUsed = 0
 	s.ContextLimit = 0
 	s.ContextStreamExtra = 0
+	s.contextStreamBytes = 0
 	s.ClearPresence()
 }
 
