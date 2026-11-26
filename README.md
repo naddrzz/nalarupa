@@ -35,7 +35,8 @@ The logo combines a wayang *gunungan* that doubles as a pen nib (the pen tool), 
 - **1–4 parallel agents**: split the work (*Split*) or create several variants side by side (*Side by side*).
 - **Let it cook**: once a design is done, the agent keeps producing variations (layout or style) on its own.
 - **Model picker** (Opus 5.5, Sonnet 5.5, Haiku 5.5, Fable 5.1) and **Fast mode** where the model supports it.
-- Two backends: **Claude Code** (uses your existing Claude Code login) or the **Claude API** (API key).
+- Three backends: **Claude Code** (uses your existing Claude Code login), **Claude API** (API key), or
+  **custom BYOK providers** (OpenAI Chat / Responses / Anthropic-compatible endpoints).
 - Saved chat history, expandable thinking, inline screenshots, a work plan (TODO), message queue, and a
   permission card before the agent runs tools outside the canvas.
 - **AI Pen**: SVG illustrations drawn progressively into a frame.
@@ -83,7 +84,7 @@ The logo combines a wayang *gunungan* that doubles as a pen nib (the pen tool), 
 ### Accessibility
 
 - Every control is reachable with Tab and works with Enter/Space, with a clear focus ring.
-- Every control has a screen-reader name (Windows UI Automation / Narrator).
+- Every control has a screen-reader name (Windows UI Automation, macOS VoiceOver, Linux AT-SPI).
 - Text contrast meets WCAG AA; animations stop when the OS asks for *reduced motion*.
 
 ![Home screen](docs/screenshots/home.png)
@@ -104,12 +105,12 @@ then open System Settings > Privacy & Security and click **Open Anyway** next to
 
 **Linux x64:** unpack `Nalarupa-<version>-linux-x64.tar.gz`, `cd Nalarupa-<version>-linux-x64`, and run
 `./install.sh` (it installs into `~/.local`; `./install.sh --uninstall` removes it), or run `./nalarupa` in place.
-It needs a Wayland session and Vulkan drivers.
+It needs GTK 3 (`libgtk-3-0` / `libgtk-3-0t64`), Wayland or X11, and Vulkan drivers.
 
 For the AI agents, install and sign in to [Claude Code](https://claude.com/claude-code) (`claude` on your
-PATH), or enter an Anthropic API key in the agent settings. App data (settings, chat history, font cache)
-lives in `%LOCALAPPDATA%\Nalarupa` on Windows, `~/Library/Application Support/Nalarupa` on macOS and
-`${XDG_DATA_HOME:-~/.local/share}/Nalarupa` on Linux.
+PATH), enter an Anthropic API key, or configure a custom OpenAI/Anthropic-compatible provider in agent settings.
+App data (settings, chat history, font cache) lives in `%LOCALAPPDATA%\Nalarupa` on Windows,
+`~/Library/Application Support/Nalarupa` on macOS and `${XDG_DATA_HOME:-~/.local/share}/Nalarupa` on Linux.
 
 ## Development
 
@@ -274,11 +275,11 @@ claude mcp add --transport http --scope user nalarupa http://127.0.0.1:47700/mcp
 - AI/stock image generation inserts placeholder photos; there is no image generation backend yet.
 - PDF export (`core-go/pdf`): 1 px = 1 pt, and filters (blur, shadows) are embedded as bitmaps.
 - WebP is always lossless; JPEG has no alpha (transparent areas become white).
-- The Claude API key is stored as-is in `settings.json` inside the user app-data folder.
+- API keys (Claude API and custom BYOK providers) are stored as-is in `settings.json` inside the user app-data folder.
 
 ## License
 
 [MIT](LICENSE). Full third-party copyright notices and license texts (including the Go ports of resvg 0.47.0,
-usvg 0.47.0, tiny-skia 0.12, unicode-linebreak, QuickJS-NG, [MyGo](https://mygo.run/), purego, and
+usvg 0.47.0, tiny-skia 0.12, unicode-linebreak, QuickJS-NG, wgpu-native, [MyGo](https://mygo.run/), purego, and
 [Lucide](https://lucide.dev) icons) are preserved in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and shipped
 alongside packaged builds.
