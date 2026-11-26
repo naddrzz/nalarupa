@@ -217,12 +217,18 @@ func (ex *exec) insert(a []string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if err := ex.host.CheckEditTarget("insert", parent, parent == doc.Root && jsonv.IsTrue(jsonv.Get(node, "reusable"))); err != nil {
+		return "", err
+	}
 	id, err := ex.host.Doc().Insert(parent, node, -1)
 	if err != nil {
 		return "", err
 	}
+	ex.host.RecordEditTarget("insert", parent)
 	ex.record(node, id)
-	if parent != doc.Root {
+	if parent == doc.Root {
+		ex.host.AfterRootInsert(id)
+	} else {
 		ex.host.SlideIn(id)
 	}
 	ex.host.Changed()
@@ -233,6 +239,9 @@ func (ex *exec) copy(a []string) (string, error) {
 	path, parent := arg(a, 0), arg(a, 1)
 	data, err := jsonArg(a, 2)
 	if err != nil {
+		return "", err
+	}
+	if err := ex.host.CheckEditTarget("copy", parent, parent == doc.Root && jsonv.IsTrue(jsonv.Get(data, "reusable"))); err != nil {
 		return "", err
 	}
 	d := ex.host.Doc()
@@ -246,11 +255,17 @@ func (ex *exec) copy(a []string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	ex.host.RecordEditTarget("copy", parent)
 	named := source
 	if _, ok := jsonv.Get(data, "name").(string); ok {
 		named = data
 	}
 	ex.record(named, id)
+	if parent == doc.Root {
+		ex.host.AfterRootInsert(id)
+	} else {
+		ex.host.AfterModify("", id)
+	}
 	ex.host.Changed()
 	return id, nil
 }
@@ -261,10 +276,16 @@ func (ex *exec) update(a []string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if err := ex.host.CheckEditTarget("update", path, false); err != nil {
+		return "", err
+	}
+	ex.host.BeforeModify(path)
 	if err := ex.host.Doc().Update(path, data); err != nil {
 		return "", err
 	}
+	ex.host.RecordEditTarget("update", path)
 	ex.touched = append(ex.touched, path)
+	ex.host.AfterModify(path, path)
 	ex.host.Changed()
 	return "", nil
 }
@@ -275,17 +296,36 @@ func (ex *exec) replace(a []string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if err := ex.host.CheckEditTarget("replace", path, false); err != nil {
+		return "", err
+	}
+	ex.host.BeforeModify(path)
 	id, err := ex.host.Doc().Replace(path, node)
 	if err != nil {
 		return "", err
 	}
+	ex.host.RecordEditTarget("replace", id)
 	ex.record(node, id)
+	ex.host.AfterModify(path, id)
 	ex.host.Changed()
 	return id, nil
 }
 
 func (ex *exec) move(a []string) (string, error) {
 	path, parent := arg(a, 0), arg(a, 1)
+	origParent, _, hasOrigParent := ex.host.Doc().ParentOf(path)
+	moveParent := parent
+	if moveParent == "" && hasOrigParent {
+		moveParent = origParent
+	}
+	if err := ex.host.CheckEditTarget("move", path, false); err != nil {
+		return "", err
+	}
+	if moveParent != "" {
+		if err := ex.host.CheckEditTarget("insert", moveParent, false); err != nil {
+			return "", err
+		}
+	}
 	// Rust's `str::parse::<f64>`, -1 when it fails; a negative or NaN index is the end, a huge one saturates.
 	index, err := strconv.ParseFloat(arg(a, 2), 64)
 	if err != nil && !errors.Is(err, strconv.ErrRange) {
@@ -295,17 +335,31 @@ func (ex *exec) move(a []string) (string, error) {
 	if index >= 0 {
 		idx = int(math.Min(index, 1<<62))
 	}
+	ex.host.BeforeModify(path)
 	if err := ex.host.Doc().MoveNode(path, parent, idx); err != nil {
 		return "", err
 	}
+	if hasOrigParent && origParent != "" && origParent != doc.Root {
+		ex.host.RecordEditTarget("move", origParent)
+	}
+	ex.host.RecordEditTarget("move", path)
 	ex.touched = append(ex.touched, path)
+	ex.host.AfterModify(path, path)
 	ex.host.Changed()
 	return "", nil
 }
 
 func (ex *exec) delete(a []string) (string, error) {
-	if err := ex.host.Doc().Delete(arg(a, 0)); err != nil {
+	target := arg(a, 0)
+	if err := ex.host.CheckEditTarget("delete", target, false); err != nil {
 		return "", err
+	}
+	origParent, _, hasOrigParent := ex.host.Doc().ParentOf(target)
+	if err := ex.host.Doc().Delete(target); err != nil {
+		return "", err
+	}
+	if hasOrigParent && origParent != "" && origParent != doc.Root {
+		ex.host.RecordEditTarget("delete", origParent)
 	}
 	ex.host.Changed()
 	return "", nil
@@ -316,9 +370,11 @@ func (ex *exec) setVars(a []string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := ex.host.Doc().SetVariables(vars, arg(a, 1) == "true"); err != nil {
+	filteredVars, replace := ex.host.FilterSetVars(vars, arg(a, 1) == "true")
+	if err := ex.host.Doc().SetVariables(filteredVars, replace); err != nil {
 		return "", err
 	}
+	ex.host.AfterSetVars()
 	ex.host.Changed()
 	return "", nil
 }

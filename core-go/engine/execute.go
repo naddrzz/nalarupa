@@ -38,9 +38,10 @@ type AgentHooks struct {
 
 // executeCall is one `execute` call between beginExecute and endExecute.
 type executeCall struct {
-	args  jsonv.Value
-	seen  int
-	agent string
+	args      jsonv.Value
+	seen      int
+	agent     string
+	skipEdits map[string]bool
 }
 
 // beginExecute starts an `execute` call: it retires the stream the call belongs to, and then runs with that
@@ -54,15 +55,19 @@ func (e *Engine) beginExecute(args jsonv.Value) executeCall {
 		c.agent = "agent"
 	}
 	if s := e.takeStream(key, hasKey, agent, hasAgent, input); s != nil {
+		if !hasAgent && s.Agent != "" {
+			c.agent = s.Agent
+		}
 		if o := jsonv.Obj(args); o != nil {
 			o = jsonv.Obj(jsonv.Clone(o))
 			o.Set("__seed", u64(s.Seed))
+			if !hasAgent && s.Agent != "" {
+				o.Set("__agent", s.Agent)
+			}
 			c.args = o
 		}
 		c.seen = s.Touched
-		if !hasAgent {
-			c.agent = s.Agent
-		}
+		c.skipEdits = s.Edited
 	}
 	e.Script.edit = nil
 	return c
@@ -77,7 +82,13 @@ func (e *Engine) endExecute(c executeCall) {
 		return
 	}
 	if ids := jsonv.Items(jsonv.Get(ev, "ids")); len(ids) > c.seen {
-		e.Emit(Object("type", "agent_activity", "agent", c.agent, "op", "write", "ids", jsonv.NewArray(ids[c.seen:]...), "streaming", false))
+		strIDs := make([]string, 0, len(ids)-c.seen)
+		for _, v := range ids[c.seen:] {
+			if s, ok := jsonv.Str(v); ok {
+				strIDs = append(strIDs, s)
+			}
+		}
+		e.EmitWriteActivityWithTeam(c.agent, e.Doc, strIDs, false)
 	}
 	if read := jsonv.Items(jsonv.Get(ev, "read")); len(read) > 0 {
 		e.Emit(Object("type", "agent_activity", "agent", c.agent, "op", "read", "ids", jsonv.Get(ev, "read"), "streaming", false))
@@ -103,9 +114,16 @@ func (e *Engine) CallTool(name string, args jsonv.Value) ToolOut {
 	if e.Hooks.Stop != nil {
 		stop = e.Hooks.Stop(c.agent)
 	}
-	out := e.execute(c.args, script.Call{Stop: stop, Locker: e})
+	out := e.executeWithSkipEdits(c, script.Call{Stop: stop, Locker: e})
 	e.endExecute(c)
 	return out
+}
+
+func (e *Engine) executeWithSkipEdits(c executeCall, sc script.Call) ToolOut {
+	prevSkip := e.commitSkipEdits
+	e.commitSkipEdits = c.skipEdits
+	defer func() { e.commitSkipEdits = prevSkip }()
+	return e.execute(c.args, sc)
 }
 
 // ExecuteWithin runs one `execute` call with the wall-clock budget (script.rs `execute_within`) under the engine
@@ -130,9 +148,18 @@ func (e *Engine) execute(args jsonv.Value, c script.Call) ToolOut {
 	}
 	was := e.Executing
 	e.Executing = true
+	prevExecAgent := e.currentExecAgent
+	e.currentExecAgent = agent
+	prevExecAdded := e.execAddedPreTop
+	execAdded := map[string]bool{}
+	e.execAddedPreTop = execAdded
 	// Cleared once the JavaScript has run, before the report validates (script.rs `bind`, `execute_shared`), and
 	// on a panic.
-	defer func() { e.Executing = was }()
+	defer func() {
+		e.Executing = was
+		e.currentExecAgent = prevExecAgent
+		e.execAddedPreTop = prevExecAdded
+	}()
 	c.Ran = func() { e.Executing = was }
 	out := script.Execute(e.Host(), args, c)
 	if out.Before == nil {
@@ -149,6 +176,12 @@ func (e *Engine) execute(args jsonv.Value, c script.Call) ToolOut {
 		e.Script.Failed[out.EditID] = out.Source
 		return ToolOut{Text: out.Text, Error: true}
 	}
+	for topID := range execAdded {
+		if e.Agent.TurnEditedPreTop == nil {
+			e.Agent.TurnEditedPreTop = map[string]bool{}
+		}
+		e.Agent.TurnEditedPreTop[topID] = true
+	}
 	if out.Repaired != "" {
 		delete(e.Script.Failed, out.Repaired)
 	}
@@ -164,6 +197,11 @@ func (e *Engine) execute(args jsonv.Value, c script.Call) ToolOut {
 		e.Script.Globals[agent] = g
 	}
 	out.Globals.Each(func(k string, v jsonv.Value) { g.Set(k, jsonv.Clone(v)) })
+	if e.Agent.Running {
+		e.DeconflictTopLevelNodes(e.Doc)
+	}
+	e.reconcilePreTurnScreenIsolation(e.Doc)
+	e.ExpandProgressiveRootSlides(e.Doc, out.Touched)
 	e.Commit(out.Before)
 	edit := Object("type", "agent_edit", "ids", Strings(out.Touched), "read", Strings(out.Read))
 	e.Script.edit = edit
@@ -180,5 +218,7 @@ func (e *Engine) execute(args jsonv.Value, c script.Call) ToolOut {
 			}
 		}
 	}
-	return e.planOutputs(out)
+	res := e.planOutputs(out)
+	res.Audit = e.CaptureAuditSnapshot()
+	return res
 }

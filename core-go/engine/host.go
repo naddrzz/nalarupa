@@ -2,6 +2,7 @@ package engine
 
 import (
 	"github.com/naddrzz/nalarupa/core-go/doc"
+	"github.com/naddrzz/nalarupa/core-go/jsonv"
 	"github.com/naddrzz/nalarupa/core-go/render"
 	"github.com/naddrzz/nalarupa/core-go/resolve"
 	"github.com/naddrzz/nalarupa/core-go/script"
@@ -19,10 +20,17 @@ var _ script.Host = host{}
 // Host is the engine as script.Host.
 func (e *Engine) Host() script.Host { return host{e} }
 
-func (h host) Doc() *doc.Doc       { return h.e.Doc }
-func (h host) Changed()            { h.e.Version++ }
-func (h host) SlideIn(id string)   { h.e.SlideIn(id) }
-func (h host) IDs() *doc.IDSource  { return h.e.ids }
+func (h host) Doc() *doc.Doc                                             { return h.e.Doc }
+func (h host) Changed()                                                  { h.e.Version++ }
+func (h host) SlideIn(id string)                                         { h.e.SlideIn(id) }
+func (h host) BeforeModify(path string)                                  { h.e.BeforeModify(path) }
+func (h host) AfterModify(oldPath, newID string)                         { h.e.AfterModify(oldPath, newID) }
+func (h host) CheckEditTarget(op, target string, reu bool) error         { return h.e.CheckEditTarget(op, target, reu) }
+func (h host) RecordEditTarget(op, target string)                        { h.e.RecordEditTarget(op, target) }
+func (h host) FilterSetVars(v jsonv.Value, r bool) (jsonv.Value, bool)   { return h.e.FilterSetVars(v, r) }
+func (h host) AfterRootInsert(id string)                                 { h.e.AfterRootInsert(id) }
+func (h host) AfterSetVars()                                             { h.e.AfterSetVars() }
+func (h host) IDs() *doc.IDSource                                        { return h.e.ids }
 func (h host) Fonts() *text.Fonts  { return h.e.Fonts }
 func (h host) Assets() *svg.Assets { return h.e.Assets }
 
@@ -43,6 +51,11 @@ func (h host) Generate(kind, target, prompt, pending string) error {
 // when "" or not found) or the whole document.
 func (e *Engine) FindEmptySpace(w, h float64, dir string, pad float64, anchor string) (float64, float64) {
 	e.Sync()
+	if anchor == "" && (dir == "" || dir == "right") {
+		if x, y, ok := e.FindScreenGridSpot(w, h, pad); ok {
+			return x, y
+		}
+	}
 	var a *render.Flat
 	if anchor != "" {
 		a = e.Renderer.Find(anchor)

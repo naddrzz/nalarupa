@@ -100,8 +100,19 @@ func (a *NalarupaApp) ensureLayersFetched() []LayerRow {
 	if a.Layers.CachedVer == a.State.Version && a.Layers.CachedAll != nil {
 		return a.Layers.CachedAll
 	}
-	all := []LayerRow{}
-	a.Bridge.TryCall("layers", nil, &all)
+	var all []LayerRow
+	if a.Window != nil {
+		got, ok := a.Bridge.TryLayersDirect()
+		if !ok {
+			if a.Layers.CachedAll != nil {
+				return a.Layers.CachedAll
+			}
+			return []LayerRow{}
+		}
+		all = got
+	} else {
+		all = a.Bridge.LayersDirect()
+	}
 	if all == nil {
 		all = []LayerRow{}
 	}
@@ -119,8 +130,19 @@ func (a *NalarupaApp) ensureFramesFetched() []Box {
 	if a.Layers.CachedFramesVer == a.State.Version && a.Layers.CachedFrames != nil {
 		return a.Layers.CachedFrames
 	}
-	all := []Box{}
-	a.Bridge.TryCall("frames", nil, &all)
+	var all []Box
+	if a.Window != nil {
+		got, ok := a.Bridge.TryFramesDirect()
+		if !ok {
+			if a.Layers.CachedFrames != nil {
+				return a.Layers.CachedFrames
+			}
+			return []Box{}
+		}
+		all = got
+	} else {
+		all = a.Bridge.FramesDirect()
+	}
 	if all == nil {
 		all = []Box{}
 	}
@@ -182,6 +204,8 @@ func (a *NalarupaApp) viewLeftPanel(c *ui.Context) {
 	panel := ui.Column(c.Key("left-panel")).
 		Width(LeftW).
 		FillHeight().
+		Shrink(0).
+		MinHeight(0).
 		Background(C.Panel).
 		BorderWidth(0, 1, 0, 0).
 		BorderColor(C.Border)
@@ -189,6 +213,7 @@ func (a *NalarupaApp) viewLeftPanel(c *ui.Context) {
 	panel.Children(func() {
 		ui.Box(c.Key("left-tabs-wrap")).
 			FillWidth().
+			Shrink(0).
 			Padding(10).
 			BorderWidth(0, 0, 1, 0).
 			BorderColor(C.Border).
@@ -213,7 +238,7 @@ func (a *NalarupaApp) viewLeftPanel(c *ui.Context) {
 func (a *NalarupaApp) viewLayersTab(c *ui.Context) {
 	all := a.ensureLayersFetched()
 	if len(all) == 0 {
-		ui.Box(c.Key("layers-empty")).Fill().Padding(16).Children(func() {
+		ui.Box(c.Key("layers-empty")).FillWidth().Grow(1).MinHeight(0).Padding(16).Children(func() {
 			ui.Text(c, "Empty canvas. Draw a frame (F) or ask the agent.").
 				FontSize(12).
 				TextColor(C.Ghost).
@@ -234,7 +259,9 @@ func (a *NalarupaApp) viewLayersTab(c *ui.Context) {
 	a.HoverLayerID = ""
 
 	treeWrap := ui.Column(c.Key("layers")).
-		Fill().
+		FillWidth().
+		Grow(1).
+		MinHeight(0).
 		Padding(6, 0).
 		Role(ui.RoleTree).
 		Label("Layers")
@@ -251,7 +278,9 @@ func (a *NalarupaApp) viewLayersTab(c *ui.Context) {
 
 	treeWrap.Children(func() {
 		ui.List(c.Key("layers-list"), &a.Layers.List, len(vis)).
-			Fill().
+			FillWidth().
+			Grow(1).
+			MinHeight(0).
 			ItemKey(func(i int) any {
 				if i >= 0 && i < len(vis) {
 					return vis[i].ID
@@ -771,11 +800,12 @@ func (a *NalarupaApp) viewSlidesTab(c *ui.Context) {
 		}
 	}
 
-	ui.Column(c.Key("slides-panel")).Fill().Children(func() {
+	ui.Column(c.Key("slides-panel")).FillWidth().Grow(1).MinHeight(0).Children(func() {
 		// Header bar
 		ui.Row(c.Key("slides-header")).
 			FillWidth().
 			Height(36).
+			Shrink(0).
 			Padding(0, 10).
 			Gap(4).
 			AlignItems(ui.Center).
@@ -802,7 +832,7 @@ func (a *NalarupaApp) viewSlidesTab(c *ui.Context) {
 			})
 
 		if len(slides) == 0 {
-			ui.Box(c.Key("slides-empty")).Fill().Padding(16).Children(func() {
+			ui.Box(c.Key("slides-empty")).FillWidth().Grow(1).MinHeight(0).Padding(16).Children(func() {
 				ui.Text(c, "No slides yet. Add top-level frames or choose the Slide deck template.").
 					FontSize(12).
 					TextColor(C.Ghost).
@@ -814,7 +844,9 @@ func (a *NalarupaApp) viewSlidesTab(c *ui.Context) {
 		// Render up to 8 uncached thumbnails per frame pass so scrolling 60+ slides stays responsive
 		renderedThisFrame := 0
 		ui.List(c.Key("slides-list"), &a.Layers.SlidesList, len(slides)).
-			Fill().
+			FillWidth().
+			Grow(1).
+			MinHeight(0).
 			Padding(8, 10).
 			ItemKey(func(i int) any {
 				if i >= 0 && i < len(slides) {
@@ -912,16 +944,5 @@ func (a *NalarupaApp) viewSlidesTab(c *ui.Context) {
 }
 
 func (a *NalarupaApp) exportDeckPDF() {
-	var files []string
-	if err := a.Bridge.Call("export", map[string]any{
-		"ids":    []string{},
-		"format": "pdf",
-		"path":   "",
-	}, &files); err != nil {
-		a.ShowToast(err.Error(), true)
-		return
-	}
-	if len(files) > 0 {
-		a.ShowToast("Exported "+files[0], false)
-	}
+	a.TriggerExport([]string{}, "pdf", "PDF", nil)
 }

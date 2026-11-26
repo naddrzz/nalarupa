@@ -18,92 +18,100 @@ const (
 	RightW      = 300
 	DefaultWinW = 1440
 	DefaultWinH = 900
-	MinWinW     = 1100
-	MinWinH     = 680
+	MinWinW     = 1024
+	MinWinH     = 640
 
-	IndicatorTickMS = 50
+	IndicatorTickMS = 250
 )
 
 var (
-	CanvasBG  = [3]uint8{0x1c, 0x1c, 0x1f}
+	CanvasBG  = [3]uint8{0xff, 0xff, 0xff}
 	PresentBG = [3]uint8{0x00, 0x00, 0x00}
 )
 
-// Palette holds Nalarupa's exact WCAG AA-verified dark UI colors.
+// Palette holds Nalarupa's exact WCAG AA-verified UI & clean white canvas colors.
 type Palette struct {
-	BG          ui.Color
-	Panel       ui.Color
-	Panel2      ui.Color
-	Raised      ui.Color
-	RaisedHover ui.Color
-	Border      ui.Color
-	Text        ui.Color
-	Muted       ui.Color
-	Ghost       ui.Color
-	Accent      ui.Color
-	AccentHover ui.Color
-	AccentPress ui.Color
-	AccentText  ui.Color
-	AccentSoft  ui.Color
-	Select      ui.Color
-	SelectBg    ui.Color
-	SelectHover ui.Color
-	SelectDrop  ui.Color
-	SelectSolid ui.Color
-	Focus       ui.Color
-	Field       ui.Color
-	Edge        ui.Color
-	Component   ui.Color
-	Danger      ui.Color
-	DangerBg    ui.Color
-	DangerEdge  ui.Color
-	OK          ui.Color
-	Warn        ui.Color
-	WarnBg      ui.Color
-	WarnEdge    ui.Color
-	CanvasFill  ui.Color
-	Snap        ui.Color
-	SnapLabel   ui.Color
-	PenBlue     ui.Color
-	Presence    ui.Color
+	BG              ui.Color
+	Panel           ui.Color
+	Panel2          ui.Color
+	Raised          ui.Color
+	RaisedHover     ui.Color
+	Border          ui.Color
+	Text            ui.Color
+	Muted           ui.Color
+	Ghost           ui.Color
+	Accent          ui.Color
+	AccentHover     ui.Color
+	AccentPress     ui.Color
+	AccentText      ui.Color
+	AccentSoft      ui.Color
+	Select          ui.Color
+	SelectBg        ui.Color
+	SelectHover     ui.Color
+	SelectDrop      ui.Color
+	SelectSolid     ui.Color
+	Focus           ui.Color
+	Field           ui.Color
+	Edge            ui.Color
+	Component       ui.Color
+	Danger          ui.Color
+	DangerBg        ui.Color
+	DangerEdge      ui.Color
+	OK              ui.Color
+	Warn            ui.Color
+	WarnBg          ui.Color
+	WarnEdge        ui.Color
+	CanvasFill      ui.Color
+	CanvasFrameEdge ui.Color
+	CanvasLabel     ui.Color
+	CanvasGenBg     ui.Color
+	CanvasGenText   ui.Color
+	Snap            ui.Color
+	SnapLabel       ui.Color
+	PenBlue         ui.Color
+	Presence        ui.Color
 }
 
 var C = Palette{
-	BG:          ui.Hex("#111113"),
-	Panel:       ui.Hex("#17171A"),
-	Panel2:      ui.Hex("#1E1E22"),
-	Raised:      ui.Hex("#26262B"),
-	RaisedHover: ui.Hex("#303036"),
-	Border:      ui.Hex("#2B2B31"),
-	Text:        ui.Hex("#ECECEF"),
-	Muted:       ui.Hex("#A1A1AA"),
-	Ghost:       ui.Hex("#8C8C96"),
-	Accent:      ui.Hex("#FF6A3D"),
-	AccentHover: ui.Hex("#FF8059"),
-	AccentPress: ui.Hex("#E85A2F"),
-	AccentText:  ui.Hex("#16110F"),
-	AccentSoft:  ui.Hex("#FF6A3D22"),
-	Select:      ui.Hex("#3B82F6"),
-	SelectBg:    ui.Hex("#3B82F633"),
-	SelectHover: ui.Hex("#3B82F644"),
-	SelectDrop:  ui.Hex("#3B82F655"),
-	SelectSolid: ui.Hex("#2563EB"),
-	Focus:       ui.Hex("#60A5FA"),
-	Field:       ui.Hex("#686870"),
-	Edge:        ui.Hex("#45454E"),
-	Component:   ui.Hex("#A78BFA"),
-	Danger:      ui.Hex("#F87171"),
-	DangerBg:    ui.Hex("#F871711A"),
-	DangerEdge:  ui.Hex("#F8717155"),
-	OK:          ui.Hex("#4ADE80"),
-	Warn:        ui.Hex("#F59E0B"),
-	WarnBg:      ui.Hex("#F59E0B1A"),
-	WarnEdge:    ui.Hex("#F59E0B66"),
-	CanvasFill:  ui.Hex("#1C1C1F"),
-	Snap:        ui.Hex("#F24518"),
-	SnapLabel:   ui.Hex("#D9380F"),
-	PenBlue:     ui.Hex("#3D99FF"),
-	Presence:    ui.Hex("#607DFF"),
+	BG:              ui.Hex("#111113"),
+	Panel:           ui.Hex("#17171A"),
+	Panel2:          ui.Hex("#1E1E22"),
+	Raised:          ui.Hex("#26262B"),
+	RaisedHover:     ui.Hex("#303036"),
+	Border:          ui.Hex("#2B2B31"),
+	Text:            ui.Hex("#ECECEF"),
+	Muted:           ui.Hex("#A1A1AA"),
+	Ghost:           ui.Hex("#8C8C96"),
+	Accent:          ui.Hex("#FF6A3D"),
+	AccentHover:     ui.Hex("#FF8059"),
+	AccentPress:     ui.Hex("#E85A2F"),
+	AccentText:      ui.Hex("#16110F"),
+	AccentSoft:      ui.Hex("#FF6A3D22"),
+	Select:          ui.Hex("#3B82F6"),
+	SelectBg:        ui.Hex("#3B82F633"),
+	SelectHover:     ui.Hex("#3B82F644"),
+	SelectDrop:      ui.Hex("#3B82F655"),
+	SelectSolid:     ui.Hex("#2563EB"),
+	Focus:           ui.Hex("#60A5FA"),
+	Field:           ui.Hex("#686870"),
+	Edge:            ui.Hex("#45454E"),
+	Component:       ui.Hex("#A78BFA"),
+	Danger:          ui.Hex("#F87171"),
+	DangerBg:        ui.Hex("#F871711A"),
+	DangerEdge:      ui.Hex("#F8717155"),
+	OK:              ui.Hex("#4ADE80"),
+	Warn:            ui.Hex("#F59E0B"),
+	WarnBg:          ui.Hex("#F59E0B1A"),
+	WarnEdge:        ui.Hex("#F59E0B66"),
+	CanvasFill:      ui.Hex("#FFFFFF"),
+	CanvasFrameEdge: ui.RGBA(15, 23, 42, 0.12),
+	CanvasLabel:     ui.Hex("#475569"),
+	CanvasGenBg:     ui.Hex("#FFFFFFF5"),
+	CanvasGenText:   ui.Hex("#0F172A"),
+	Snap:            ui.Hex("#F24518"),
+	SnapLabel:       ui.Hex("#D9380F"),
+	PenBlue:         ui.Hex("#3D99FF"),
+	Presence:        ui.Hex("#4F46E5"),
 }
 
 var (

@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/naddrzz/nalarupa/core-go/doc"
@@ -26,6 +27,7 @@ import (
 	"github.com/naddrzz/nalarupa/core-go/script"
 	"github.com/naddrzz/nalarupa/core-go/svg"
 	"github.com/naddrzz/nalarupa/core-go/text"
+	"github.com/naddrzz/nalarupa/core-go/usvg"
 )
 
 const (
@@ -60,6 +62,9 @@ type ToolOut struct {
 	Text   string
 	Images []string
 	Error  bool
+	// Audit holds a lightweight snapshot of the committed document and screen layout boxes captured under EditGate,
+	// allowing post-execute design auditing to run completely off-lock without racing concurrent MCP edits.
+	Audit *AuditSnapshot
 	// pending is what Finish still has to do.
 	pending pendingOut
 }
@@ -126,14 +131,51 @@ type Engine struct {
 	ImageBase string
 	// ClipSession marks the node clipboard this engine writes (editor.rs `session`, process-wide in Rust): drawn
 	// from the id generator on first use, "" until then.
-	ClipSession string
+	ClipSession      string
+	hasSlidesAtomic  atomic.Bool
+	versionAtomic    atomic.Uint64
+	slideReleaseSeq  atomic.Uint64
+	// ProgressiveSlides enables staggered element-by-element slide choreography for burst and nested inserts in the desktop UI.
+	ProgressiveSlides bool
+	staggerLast       time.Time
+	staggerSeq        int
+
+	pendingModifyID    string
+	pendingModifyTree  *usvg.Tree
+	pendingModifyClips []*usvg.Tree
+	pendingModifyHash  uint64
+	pendingModifyOrg   [2]float64
+	pendingModifyHasO  bool
+	commitSkipEdits   map[string]bool
+	activeStream      *Stream
+	execAddedPreTop   map[string]bool
+
+	cursorMu         sync.Mutex
+	pendingReleaseID []string
+	pendingHoldID    []string
+	currentExecAgent string
 }
+
+// HasSlidesFast reports the last synced/updated slide state atomically without acquiring the engine lock.
+func (e *Engine) HasSlidesFast() bool { return e.hasSlidesAtomic.Load() }
+
+// VersionFast reports the latest committed engine document/preview version atomically without acquiring the engine lock.
+func (e *Engine) VersionFast() uint64 { return e.versionAtomic.Load() }
+
+// SlideReleaseSeqFast reports the monotonic counter of cursor-triggered slide/edit releases without acquiring the engine lock.
+func (e *Engine) SlideReleaseSeqFast() uint64 { return e.slideReleaseSeq.Load() }
 
 // Lock takes the engine lock.
 func (e *Engine) Lock() { e.mu.Lock() }
 
-// Unlock releases the engine lock.
-func (e *Engine) Unlock() { e.mu.Unlock() }
+// TryLock attempts to take the engine lock without blocking.
+func (e *Engine) TryLock() bool { return e.mu.TryLock() }
+
+// Unlock releases the engine lock and publishes the latest Version atomically.
+func (e *Engine) Unlock() {
+	e.versionAtomic.Store(e.Version)
+	e.mu.Unlock()
+}
 
 // EditGate takes the edit gate: a user edit waits here while a script runs (the script rolls back by restoring
 // its snapshot, which would also throw away an edit made in between). Call the returned function to release it.
@@ -146,7 +188,7 @@ func (e *Engine) EditGate() func() {
 // Locked runs f under the engine lock, releasing it even when f panics.
 func (e *Engine) Locked(f func()) {
 	e.mu.Lock()
-	defer e.mu.Unlock()
+	defer e.Unlock()
 	f()
 }
 
@@ -228,6 +270,7 @@ func New(dataDir string) *Engine {
 	}
 	e.LoadTemplate("blank")
 	e.Saved = e.Version
+	e.versionAtomic.Store(e.Version)
 	return e
 }
 

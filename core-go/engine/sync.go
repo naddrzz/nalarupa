@@ -2,6 +2,7 @@ package engine
 
 import (
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/naddrzz/nalarupa/core-go/doc"
@@ -26,6 +27,11 @@ func (e *Engine) now() time.Time {
 		return e.Renderer.Now()
 	}
 	return time.Now()
+}
+
+// NeedsSync reports whether the cached render layers are behind Version (must be called under Engine.Lock).
+func (e *Engine) NeedsSync() bool {
+	return e.synced != e.Version
 }
 
 // Sync brings the cached render layers up to date with the document.
@@ -53,6 +59,7 @@ func (e *Engine) Sync() {
 	} else {
 		e.synced = e.Version
 	}
+	e.hasSlidesAtomic.Store(len(e.Renderer.Slides) > 0)
 }
 
 // SlideIn lets an agent Insert below the top level slide into place.
@@ -61,27 +68,361 @@ func (e *Engine) SlideIn(id string) {
 	if e.ReduceMotion {
 		return
 	}
+	if e.ProgressiveSlides {
+		if n := e.Doc.Find(id); n != nil {
+			if kids := progressiveChildTargets(n); len(kids) >= 2 {
+				e.slid[id] = true
+				for idx, cid := range kids {
+					if sl := e.slideSingle(cid); sl != nil {
+						sl.SetDelay(min(float64(idx)*0.03, 0.24))
+					}
+				}
+				return
+			}
+		}
+	}
+	e.slideSingle(id)
+}
+
+const (
+	progressiveHoldTimeout     = 620 * time.Millisecond
+	progressiveLiveHoldTimeout = 750 * time.Millisecond
+)
+
+func (e *Engine) progressiveHoldDur() time.Duration {
+	if e.Agent.Running || len(e.Streams) > 0 {
+		return progressiveLiveHoldTimeout
+	}
+	return progressiveHoldTimeout
+}
+
+// ShownDoc returns the currently displayed document (Preview while streaming, else Doc). Caller holds Engine.Lock.
+func (e *Engine) ShownDoc() *doc.Doc { return e.shown() }
+
+// ActiveSlideIDs returns the set of node IDs currently sliding or gated in Renderer.Slides. Caller holds Engine.Lock.
+func (e *Engine) ActiveSlideIDs() map[string]bool {
+	if len(e.Renderer.Slides) == 0 {
+		return nil
+	}
+	m := make(map[string]bool, len(e.Renderer.Slides))
+	for _, s := range e.Renderer.Slides {
+		m[s.ID] = true
+	}
+	return m
+}
+
+func rootTargetID(path string) string {
+	if idx := strings.IndexByte(path, '/'); idx >= 0 {
+		return path[:idx]
+	}
+	return path
+}
+
+func docHolds(d *doc.Doc, id, inner string) bool {
+	if d == nil || id == "" || inner == "" {
+		return false
+	}
+	n := d.Find(id)
+	if n == nil {
+		return false
+	}
+	kids := jsonv.Arr(jsonv.Get(n, "children"))
+	return kids != nil && doc.FindIn(kids.Items, inner) != nil
+}
+
+func (e *Engine) slideSingle(id string) *render.Slide {
 	// A slide is snapshotted alone, so a background blur in it would blur nothing until it settles: such a node
 	// appears in place, and so does a sliding ancestor that now holds it.
 	if e.HoldsGlass(id) {
 		e.slid[id] = true
 		e.Renderer.UnslideWith(e.Doc, id)
-		return
+		return nil
 	}
 	// Past the cap nothing more slides, so skip the parent lookup (a linear search per insert).
-	if len(e.Renderer.Slides) >= render.MaxSlides {
+	capSlides := render.MaxSlides
+	if e.ProgressiveSlides {
+		capSlides = render.ProgressiveMaxSlides
+	}
+	if len(e.Renderer.Slides) >= capSlides {
 		e.slid[id] = true
-		return
+		return nil
 	}
 	room := false
+	isTopPlaceholder := false
 	if p, _, ok := e.Doc.ParentOf(id); ok {
-		room = e.Renderer.CanSlideInto(e.Doc, p)
+		room = e.Renderer.CanSlideIntoWithCap(e.Doc, p, capSlides)
+		if p == doc.Root {
+			if n := e.Doc.Find(id); n != nil && jsonv.IsTrue(jsonv.Get(n, "placeholder")) {
+				isTopPlaceholder = true
+			}
+		}
 	}
 	fresh := !e.slid[id]
 	e.slid[id] = true
 	if fresh && room {
-		e.Renderer.Slides = append(e.Renderer.Slides, render.NewSlide(id, e.now()))
+		now := e.now()
+		sl := render.NewSlide(id, now)
+		if e.ProgressiveSlides {
+			sl.SetSmooth(true)
+			if !isTopPlaceholder {
+				sl.SetCursorHeld(now, e.progressiveHoldDur())
+			}
+		}
+		e.Renderer.Slides = append(e.Renderer.Slides, sl)
+		e.hasSlidesAtomic.Store(true)
+		return sl
 	}
+	return nil
+}
+
+// BeforeModify snapshots path's visual appearance right before Update, Replace, or Move mutates it,
+// so the canvas holds the old state until the agent cursor arrives at the edited node.
+func (e *Engine) BeforeModify(path string) {
+	e.pendingModifyID = ""
+	e.pendingModifyTree = nil
+	e.pendingModifyClips = nil
+	e.pendingModifyHash = 0
+	e.pendingModifyHasO = false
+	if !e.ProgressiveSlides || e.ReduceMotion || e.Doc == nil {
+		return
+	}
+	targetID := rootTargetID(path)
+	if targetID == "" || targetID == doc.Root || (e.activeStream == nil && e.commitSkipEdits[targetID]) {
+		return
+	}
+	n := e.Doc.Find(targetID)
+	if n == nil || jsonv.IsTrue(jsonv.Get(n, "reusable")) {
+		return
+	}
+	p, _, ok := e.Doc.ParentOf(targetID)
+	if !ok {
+		return
+	}
+	if p == doc.Root && len(jsonv.Items(jsonv.Get(n, "children"))) > 0 {
+		return
+	}
+	for _, s := range e.Renderer.Slides {
+		if s.ID == targetID || docHolds(e.Doc, s.ID, targetID) {
+			return
+		}
+	}
+	if e.HoldsGlass(targetID) {
+		return
+	}
+	cx := &render.Ctx{Doc: e.Doc, Libs: e.Libs, Fonts: e.Fonts, Assets: e.Assets}
+	if tree, clips, hash, org, ok := e.Renderer.SnapshotNodeTree(cx, targetID); ok && tree != nil {
+		e.pendingModifyID = targetID
+		e.pendingModifyTree = tree
+		e.pendingModifyClips = clips
+		e.pendingModifyHash = hash
+		e.pendingModifyOrg = org
+		e.pendingModifyHasO = true
+	}
+}
+
+// AfterModify registers a cursor-gated edit transition from BeforeModify's pre-edit snapshot to newID.
+func (e *Engine) AfterModify(oldPath, newID string) {
+	tree := e.pendingModifyTree
+	clips := e.pendingModifyClips
+	hash := e.pendingModifyHash
+	org := e.pendingModifyOrg
+	hasO := e.pendingModifyHasO
+	prevID := e.pendingModifyID
+	e.pendingModifyID = ""
+	e.pendingModifyTree = nil
+	e.pendingModifyClips = nil
+	e.pendingModifyHash = 0
+	e.pendingModifyHasO = false
+
+	if !e.ProgressiveSlides || e.ReduceMotion || e.Doc == nil {
+		return
+	}
+	if oldPath == "" {
+		e.SlideIn(newID)
+		return
+	}
+	oldTarget := rootTargetID(oldPath)
+	targetID := rootTargetID(newID)
+	if prevID == "" || prevID != oldTarget || tree == nil || targetID == "" {
+		return
+	}
+	if e.HoldsGlass(targetID) || len(e.Renderer.Slides) >= render.ProgressiveMaxSlides {
+		return
+	}
+	if oldTarget != targetID {
+		e.Renderer.Slides = slices.DeleteFunc(e.Renderer.Slides, func(s *render.Slide) bool { return s.ID == oldTarget })
+	}
+	if st := e.activeStream; st != nil {
+		if st.Edited == nil {
+			st.Edited = map[string]bool{}
+		}
+		st.Edited[targetID] = true
+	}
+	now := e.now()
+	sl := render.NewEditSlide(targetID, now, tree, clips, hash, org, hasO)
+	sl.SetCursorHeld(now, e.progressiveHoldDur())
+	e.Renderer.Slides = append(e.Renderer.Slides, sl)
+	e.hasSlidesAtomic.Store(true)
+}
+
+// QueueCursorUpdate enqueues cursor-arrived slide releases and ahead-in-queue hold extensions without taking Engine.Lock.
+func (e *Engine) QueueCursorUpdate(releaseIDs, holdIDs []string) {
+	if len(releaseIDs) == 0 && len(holdIDs) == 0 {
+		return
+	}
+	e.cursorMu.Lock()
+	if len(releaseIDs) > 0 {
+		e.pendingReleaseID = append(e.pendingReleaseID, releaseIDs...)
+	}
+	if len(holdIDs) > 0 {
+		e.pendingHoldID = append(e.pendingHoldID, holdIDs...)
+	}
+	e.cursorMu.Unlock()
+	if len(releaseIDs) > 0 {
+		e.slideReleaseSeq.Add(1)
+	}
+}
+
+func (e *Engine) drainCursorUpdatesLocked() {
+	e.cursorMu.Lock()
+	if len(e.pendingReleaseID) == 0 && len(e.pendingHoldID) == 0 {
+		e.cursorMu.Unlock()
+		return
+	}
+	rel := e.pendingReleaseID
+	hold := e.pendingHoldID
+	e.pendingReleaseID = nil
+	e.pendingHoldID = nil
+	e.cursorMu.Unlock()
+
+	if len(e.Renderer.Slides) == 0 {
+		return
+	}
+	now := e.now()
+	d := e.shown()
+	if len(hold) > 0 {
+		deadline := now.Add(e.progressiveHoldDur())
+		for _, hid := range hold {
+			if hid == "" {
+				continue
+			}
+			for _, s := range e.Renderer.Slides {
+				// Never extend a parent card slide's hold because of inner child IDs inside that card;
+				// only extend distinct sibling/future slides whose hold is still live at now.
+				if (s.ID == hid || docHolds(d, hid, s.ID)) && s.IsHeld(now) {
+					s.ExtendHold(deadline)
+				}
+			}
+		}
+	}
+	for _, rid := range rel {
+		if rid == "" {
+			continue
+		}
+		if exact, ok := strings.CutPrefix(rid, "@exact:"); ok {
+			for _, s := range e.Renderer.Slides {
+				if s.ID == exact || docHolds(d, s.ID, exact) {
+					s.ReleaseCursor(now)
+				}
+			}
+			continue
+		}
+		isTopRoot := false
+		if d != nil {
+			if p, _, ok := d.ParentOf(rid); ok && p == doc.Root {
+				isTopRoot = true
+			}
+		}
+		for _, s := range e.Renderer.Slides {
+			if s.ID == rid || docHolds(d, s.ID, rid) || (!isTopRoot && docHolds(d, rid, s.ID)) {
+				s.ReleaseCursor(now)
+			}
+		}
+	}
+}
+
+// ExpandProgressiveRootSlides schedules staggered child slides when an Insert into document carries nested children
+// (e.g. a monolithic screen literal), so the screen ground appears first and its sections/cards build progressively.
+func (e *Engine) ExpandProgressiveRootSlides(d *doc.Doc, ids []string) {
+	if !e.ProgressiveSlides || e.ReduceMotion || d == nil {
+		return
+	}
+	prev := e.Doc
+	e.Doc = d
+	defer func() { e.Doc = prev }()
+
+	for _, id := range ids {
+		p, _, ok := d.ParentOf(id)
+		if !ok || p != doc.Root {
+			continue
+		}
+		n := d.Find(id)
+		if n == nil || jsonv.IsTrue(jsonv.Get(n, "reusable")) {
+			continue
+		}
+		targets := progressiveScreenTargets(n)
+		for idx, tid := range targets {
+			if sl := e.slideSingle(tid); sl != nil {
+				sl.SetDelay(min(float64(idx)*0.03, 0.24))
+			}
+		}
+	}
+}
+
+// progressiveChildTargets decomposes a transparent layout wrapper (like a horizontal CardRow with 4 cards)
+// into its child elements so cards materialize one-by-one rather than as a single rigid block.
+func progressiveChildTargets(n jsonv.Value) []string {
+	if !jsonv.StrIs(jsonv.Get(n, "type"), "frame") && !jsonv.StrIs(jsonv.Get(n, "type"), "group") {
+		return nil
+	}
+	// If the container paints its own opaque card surface/border/shadow, keep it intact as one cohesive unit.
+	if jsonv.Get(n, "fill") != nil || jsonv.Get(n, "stroke") != nil || jsonv.Get(n, "effect") != nil {
+		return nil
+	}
+	items := jsonv.Items(jsonv.Get(n, "children"))
+	if len(items) < 2 {
+		return nil
+	}
+	var out []string
+	for _, ch := range items {
+		cid := jsonv.StrOr(jsonv.Get(ch, "id"))
+		if cid == "" {
+			continue
+		}
+		if sub := progressiveChildTargets(ch); len(sub) >= 2 {
+			out = append(out, sub...)
+		} else {
+			out = append(out, cid)
+		}
+		if len(out) >= render.ProgressiveMaxSlides {
+			break
+		}
+	}
+	return out
+}
+
+// progressiveScreenTargets collects ordered visual sections/cards inside a top-level screen frame.
+func progressiveScreenTargets(screen jsonv.Value) []string {
+	items := jsonv.Items(jsonv.Get(screen, "children"))
+	if len(items) == 0 {
+		return nil
+	}
+	var out []string
+	for _, ch := range items {
+		cid := jsonv.StrOr(jsonv.Get(ch, "id"))
+		if cid == "" {
+			continue
+		}
+		if sub := progressiveChildTargets(ch); len(sub) >= 2 {
+			out = append(out, sub...)
+		} else {
+			out = append(out, cid)
+		}
+		if len(out) >= render.ProgressiveMaxSlides {
+			break
+		}
+	}
+	return out
 }
 
 // ForgetGoneSlides: a rolled-back script took its inserted nodes with it, so their slides have nothing to
@@ -97,6 +438,7 @@ func (e *Engine) ForgetGoneSlides() {
 		}
 	}
 	e.Renderer.Slides = slices.DeleteFunc(e.Renderer.Slides, func(s *render.Slide) bool { return !live[s.ID] })
+	e.hasSlidesAtomic.Store(len(e.Renderer.Slides) > 0)
 	for id := range e.slid {
 		if !live[id] {
 			delete(e.slid, id)
@@ -147,17 +489,21 @@ func (e *Engine) unslideGlass() {
 		}
 	}
 	e.Renderer.Slides = slices.DeleteFunc(e.Renderer.Slides, func(s *render.Slide) bool { return slices.Contains(glass, s.ID) })
+	e.hasSlidesAtomic.Store(len(e.Renderer.Slides) > 0)
 }
 
 // ExpireSlides: settled slides go back into the cached view at the next sync (the document is unchanged), and
 // so does a script node whose background run finished.
 func (e *Engine) ExpireSlides() {
+	e.drainCursorUpdatesLocked()
 	scripts := script.Finished()
 	// As Rust's `expired || replace(seen) != scripts`: the count is only taken when no slide expired.
 	if e.Renderer.ExpireSlides() {
 		e.synced = 0
+		e.hasSlidesAtomic.Store(len(e.Renderer.Slides) > 0)
 		return
 	}
+	e.hasSlidesAtomic.Store(len(e.Renderer.Slides) > 0)
 	if seen := e.scriptsSeen; seen != scripts {
 		e.scriptsSeen = scripts
 		e.synced = 0
@@ -169,4 +515,28 @@ func (e *Engine) Render(w, h uint32, camX, camY, zoom float64, bg [3]uint8, solo
 	e.ExpireSlides()
 	e.Sync()
 	return e.Renderer.Render(w, h, camX, camY, zoom, bg, solo, sharp)
+}
+
+// SnapshotForRender syncs layers under the engine lock and returns an immutable SceneSnapshot so pixel
+// rasterization can execute off-lock on a dedicated render worker goroutine without stalling UI/poll/agent threads.
+func (e *Engine) SnapshotForRender(solo string) render.SceneSnapshot {
+	var snap render.SceneSnapshot
+	e.Locked(func() {
+		e.ExpireSlides()
+		e.Sync()
+		snap = e.Renderer.Snapshot(e.Version, e.now(), solo, len(e.Streams) > 0)
+	})
+	return snap
+}
+
+// TrySnapshotForRender captures an immutable SceneSnapshot without blocking when a slow script or agent holds Engine.Lock.
+func (e *Engine) TrySnapshotForRender(solo string) (render.SceneSnapshot, bool) {
+	if !e.TryLock() {
+		return render.SceneSnapshot{}, false
+	}
+	defer e.Unlock()
+	e.ExpireSlides()
+	e.Sync()
+	snap := e.Renderer.Snapshot(e.Version, e.now(), solo, len(e.Streams) > 0)
+	return snap, true
 }

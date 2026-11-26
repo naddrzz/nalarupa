@@ -2,8 +2,12 @@ package model
 
 import (
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/naddrzz/nalarupa/core-go/jsonv"
@@ -168,5 +172,44 @@ func TestAnIncompleteOrFailedResponseReadsClearly(t *testing.T) {
 	base, _ = fakeServer(t, events(`{"type": "response.output_text.delta", "output_index": 0, "delta": "Half"}`))
 	if _, err := NewResponses(base, "", true).Stream(jsonv.MustParse(empty), "", never, ignore); err == nil || !strings.Contains(err.Error(), "ended before") {
 		t.Fatal(err)
+	}
+}
+
+func TestResponsesReasoningNormalizationAnd400Fallback(t *testing.T) {
+	req := ResponsesTranslate(jsonv.MustParse(`{"model":"gpt-6.2-astra","output_config":{"effort":"max"},"messages":[]}`), true, true)
+	eq(t, at(req, "reasoning", "effort"), `"xhigh"`)
+
+	var mu sync.Mutex
+	var seen []jsonv.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		parsed, _ := jsonv.Parse(raw)
+		mu.Lock()
+		seen = append(seen, parsed)
+		n := len(seen)
+		mu.Unlock()
+		if n <= 2 {
+			w.Header().Set("content-type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			io.WriteString(w, `{"error":{"message":"Unsupported reasoning effort value"}}`)
+			return
+		}
+		w.Header().Set("content-type", "text/event-stream")
+		io.WriteString(w, events(`{"type": "response.output_text.delta", "output_index": 0, "delta": "ok"}`, `{"type": "response.completed", "response": {"status": "completed"}}`))
+	}))
+	defer srv.Close()
+	c := NewResponses(srv.URL, "k", true)
+	c.canReason = true
+	out := mustStream(t, c, `{"model":"gpt-6.2-astra","output_config":{"effort":"max"},"messages":[]}`, ignore)
+	eq(t, at(out, "content", 0, "text"), `"ok"`)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 3 {
+		t.Fatalf("expected 3 attempts (xhigh -> high -> stripped), got %d", len(seen))
+	}
+	eq(t, at(seen[0], "reasoning", "effort"), `"xhigh"`)
+	eq(t, at(seen[1], "reasoning", "effort"), `"high"`)
+	if jsonv.Obj(seen[2]).Has("reasoning") {
+		t.Fatal("final fallback should omit reasoning")
 	}
 }

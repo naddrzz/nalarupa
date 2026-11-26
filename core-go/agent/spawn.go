@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/naddrzz/nalarupa/core-go/doc"
 	"github.com/naddrzz/nalarupa/core-go/engine"
 	"github.com/naddrzz/nalarupa/core-go/jsonv"
 )
@@ -27,6 +28,7 @@ func SpawnChildren(e *engine.Engine, parent string, config jsonv.Value) engine.T
 	}
 	var plans []plan
 	var vars jsonv.Value
+	var compSummary []string
 	var total int
 	var side bool
 	// Checked, reserved and read under one lock: concurrent calls cannot both spend the same remaining slot.
@@ -51,11 +53,13 @@ func SpawnChildren(e *engine.Engine, parent string, config jsonv.Value) engine.T
 			}
 		}
 		var all [][]string
+		var allFlatIDs []string
 		for _, entry := range entries {
 			var ids []string
 			for _, v := range jsonv.Items(jsonv.Get(entry, "containerNodes")) {
-				if s, ok := jsonv.Str(v); ok {
+				if s, ok := jsonv.Str(v); ok && s != "" {
 					ids = append(ids, s)
+					allFlatIDs = append(allFlatIDs, s)
 				}
 			}
 			if len(ids) == 0 {
@@ -70,11 +74,24 @@ func SpawnChildren(e *engine.Engine, parent string, config jsonv.Value) engine.T
 			}
 			all = append(all, ids)
 		}
+		if err := e.ValidateChildScopes(allFlatIDs); err != nil {
+			refused = err
+			return
+		}
 		e.Agent.Spawned += len(entries)
 		// Only cloned here: serializing a large document would hold the engine lock against render and poll.
 		vars = e.Doc.Variables()
+		doc.Walk(e.Doc.Children(), func(ch jsonv.Value) {
+			if jsonv.IsTrue(jsonv.Get(ch, "reusable")) && len(compSummary) < 24 {
+				cid := jsonv.StrOr(jsonv.Get(ch, "id"))
+				cname := jsonv.StrOr(jsonv.Get(ch, "name"))
+				compSummary = append(compSummary, fmt.Sprintf("`%s` %q", cid, cname))
+			}
+		})
 		for _, ids := range all {
-			child := e.Agent.NewProfile(parent)
+			child := e.Agent.TakeTeamMemberForContainer(parent, ids[0])
+			e.SetAgentContainerScope(child.ID, ids)
+			e.Emit(engine.Object("type", "agent_activity", "agent", child.ID, "op", "read", "ids", engine.Strings(ids), "streaming", false))
 			var nodes []jsonv.Value
 			for _, id := range ids {
 				if n := e.Doc.Find(id); n != nil {
@@ -89,9 +106,13 @@ func SpawnChildren(e *engine.Engine, parent string, config jsonv.Value) engine.T
 		return bad(refused.Error())
 	}
 	varsText := truncate(string(jsonv.Marshal(vars)), 4000)
+	compsText := ""
+	if len(compSummary) > 0 {
+		compsText = "\nReusable components (instantiate with `{type: \"ref\", ref: id}` so chrome and surfaces match): " + strings.Join(compSummary, ", ")
+	}
 	var started []string
 	for i, pl := range plans {
-		context := truncate(string(jsonv.Marshal(jsonv.NewArray(pl.nodes...))), 12000) + "\n\nDocument variables: " + varsText
+		context := truncate(string(jsonv.Marshal(jsonv.NewArray(pl.nodes...))), 12000) + "\n\nDocument variables: " + varsText + compsText
 		task := strings.TrimSpace(jsonv.StrOr(jsonv.Get(entries[i], "prompt")))
 		prompt := childPrompt(side, len(started)+2, total, pl.ids, context, task)
 		label := pl.child.Name + " → " + strings.Join(pl.ids, ", ")

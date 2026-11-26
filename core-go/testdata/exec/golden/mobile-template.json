@@ -1,7 +1,7 @@
 {
   "steps": [
     {
-      "text": "OK\n\n## Created nodes by name\n\"Nav bar\": \"3xFPL\"\n\"Avatar\": \"NmqB8\"\n\"Hero\": \"TFgGn\"\n\"Floating\": \"bDEI0\"\n\"iPhone 16 (2)\": \"tW96s\"\n\"Hero 2\": \"EdVqs\"\n\n## Print output\n[[\"iPhone 16\",0,0,{\"x\":0,\"y\":0,\"width\":393,\"height\":852},null],[\"Nav bar\",1,0,{\"x\":0,\"y\":0,\"width\":393,\"height\":56},null],[\"Avatar\",2,0,{\"x\":16,\"y\":12,\"width\":32,\"height\":32},null],[\"Hero\",1,1,{\"x\":0,\"y\":64,\"width\":393,\"height\":240},null],[\"Floating\",1,2,{\"x\":321,\"y\":780,\"width\":56,\"height\":56},null]]\n{\"x\":899,\"y\":64}\n\n## Issues detected (fix them in the next call)\n- \"Hero\" (TFgGn): x/y are ignored inside a flex layout parent\n",
+      "text": "OK\n\n## Created nodes by name\n\"Nav bar\": \"3xFPL\"\n\"Avatar\": \"NmqB8\"\n\"Hero\": \"TFgGn\"\n\"Floating\": \"bDEI0\"\n\"iPhone 16 (2)\": \"tW96s\"\n\"Hero 2\": \"EdVqs\"\n\n## Print output\n[[\"iPhone 16\",0,0,{\"x\":0,\"y\":0,\"width\":393,\"height\":852},null],[\"Nav bar\",1,0,{\"x\":0,\"y\":0,\"width\":393,\"height\":56},null],[\"Avatar\",2,0,{\"x\":16,\"y\":12,\"width\":32,\"height\":32},null],[\"Hero\",1,1,{\"x\":0,\"y\":64,\"width\":393,\"height\":240},null],[\"Floating\",1,2,{\"x\":321,\"y\":780,\"width\":56,\"height\":56},null]]\n{\"x\":883,\"y\":0}\n\n## Issues detected (fix them in the next call)\n- \"Hero\" (TFgGn): x/y are ignored inside a flex layout parent\n",
       "error": false,
       "globals": {}
     }

@@ -395,3 +395,112 @@ func TestUIReducedMotionPreference(t *testing.T) {
 		t.Fatal("expected zero continuous animation frames pending when ReduceMotion is true after fade-in")
 	}
 }
+
+func TestUIAgentModelsEffortAndMultiSkills(t *testing.T) {
+	skillsRoot := filepath.Join(t.TempDir(), "skills")
+	for name, body := range map[string]string{
+		"ui-craft":   "---\nname: ui-craft\ndescription: Polished typography and spacing\n---\nUse tight visual hierarchy.",
+		"a11y-audit": "---\nname: a11y-audit\ndescription: WCAG contrast and keyboard checks\n---\nVerify all focus states.",
+	} {
+		dir := filepath.Join(skillsRoot, name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("NALARUPA_SKILLS_ONLY", "1")
+	t.Setenv("NALARUPA_SKILLS_DIR", skillsRoot)
+
+	app, tt := newTestApp(t, ui.TesterOptions{})
+	if err := tt.Click("New design: A 1440 desktop frame"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.Click("Agent"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+
+	// 1. Model picker includes latest Fable 5.2 and CLI aliases with valid accessibility names.
+	if err := tt.Click("Model: Default"); err != nil {
+		t.Fatalf("open model picker: %v", err)
+	}
+	if !tt.HasText("Fable 5.2") || !tt.HasText("Fable (latest)") {
+		t.Fatalf("expected latest models in picker, texts=%v", tt.Texts())
+	}
+	assertAllInteractiveControlsNamed(t, tt, "Agent model picker popover")
+	if err := tt.Click("Fable 5.2"); err != nil {
+		t.Fatalf("select Fable 5.2: %v", err)
+	}
+	if app.AgentUI.AgentModel != "claude-fable-5-2" {
+		t.Fatalf("AgentModel = %q, want claude-fable-5-2", app.AgentUI.AgentModel)
+	}
+
+	// 2. Composer Reasoning effort picker updates agent_effort setting across backends.
+	if err := tt.Click("Reasoning effort: High"); err != nil {
+		t.Fatalf("open effort picker: %v", err)
+	}
+	assertAllInteractiveControlsNamed(t, tt, "Agent effort picker popover")
+	if err := tt.Click("Extra high"); err != nil {
+		t.Fatalf("select Extra high effort: %v", err)
+	}
+	if app.AgentUI.Effort != "xhigh" {
+		t.Fatalf("Effort = %q, want xhigh", app.AgentUI.Effort)
+	}
+	var stMap map[string]any
+	if err := app.Bridge.Call("settings_get", nil, &stMap); err != nil || stMap["agent_effort"] != "xhigh" {
+		t.Fatalf("settings agent_effort = %v (err=%v), want xhigh", stMap["agent_effort"], err)
+	}
+
+	// 3. Skills popover supports toggling multiple skills and shows removable active skill chips.
+	if err := tt.Click("Agent skills"); err != nil {
+		t.Fatalf("open skills popover: %v", err)
+	}
+	assertAllInteractiveControlsNamed(t, tt, "Agent skills popover")
+	if err := tt.Click("Toggle skill ui-craft"); err != nil {
+		t.Fatalf("toggle ui-craft: %v", err)
+	}
+	if err := tt.Click("Toggle skill a11y-audit"); err != nil {
+		t.Fatalf("toggle a11y-audit: %v", err)
+	}
+	if !strings.Contains(app.AgentUI.Draft, "/ui-craft") || !strings.Contains(app.AgentUI.Draft, "/a11y-audit") {
+		t.Fatalf("expected both skills in Draft, got %q", app.AgentUI.Draft)
+	}
+	app.AgentUI.SkillsOpen = false
+	tt.Frame()
+	assertAllInteractiveControlsNamed(t, tt, "Agent composer with active multi-skill chips")
+
+	// Removing one chip leaves the other intact.
+	if err := tt.Click("Remove skill ui-craft"); err != nil {
+		t.Fatalf("remove ui-craft chip: %v", err)
+	}
+	if strings.Contains(app.AgentUI.Draft, "/ui-craft") || !strings.Contains(app.AgentUI.Draft, "/a11y-audit") {
+		t.Fatalf("unexpected Draft after removing ui-craft: %q", app.AgentUI.Draft)
+	}
+
+	// 4. Typing /prefix triggers inline slash skill autocomplete with full naming, and Escape keeps it dismissed until token changes.
+	app.AgentUI.Draft = "/ui-"
+	tt.Frame()
+	if !tt.HasText("/ui-craft") {
+		t.Fatalf("expected /ui-craft in slash autocomplete, texts=%v", tt.Texts())
+	}
+	assertAllInteractiveControlsNamed(t, tt, "Agent slash skill autocomplete")
+	app.AgentUI.InputHandle.Focus()
+	tt.Frame()
+	tt.Key(0, ui.KeyEscape)
+	tt.Frame()
+	tt.Frame()
+	if tt.HasText("Use skill ui-craft") || app.AgentUI.DismissedSlash != "/ui-" {
+		t.Fatalf("expected Escape to dismiss slash menu persistently for /ui-, got DismissedSlash=%q", app.AgentUI.DismissedSlash)
+	}
+	// Changing the token re-opens autocomplete cleanly.
+	app.AgentUI.Draft = "/ui-c"
+	tt.Frame()
+	if err := tt.Click("Use skill ui-craft"); err != nil {
+		t.Fatalf("pick slash autocomplete option after token change: %v", err)
+	}
+	if app.AgentUI.Draft != "/ui-craft " {
+		t.Fatalf("Draft after slash autocomplete = %q, want %q", app.AgentUI.Draft, "/ui-craft ")
+	}
+}

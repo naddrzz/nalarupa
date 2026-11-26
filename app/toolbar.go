@@ -27,6 +27,7 @@ func (a *NalarupaApp) viewToolbar(c *ui.Context) {
 	bar := ui.Row(c.Key("toolbar")).
 		FillWidth().
 		Height(TopH).
+		Shrink(0).
 		Padding(0, 10, 0, 8).
 		Gap(4).
 		AlignItems(ui.Center).
@@ -73,7 +74,8 @@ func (a *NalarupaApp) viewToolbar(c *ui.Context) {
 						Shrink(0).
 						Radius(3).
 						Background(C.Accent).
-						Label("Unsaved changes")
+						Label("Unsaved changes").
+						Transition(ChipTransition(EffectiveReducedMotion(c)))
 				}
 			})
 
@@ -107,21 +109,26 @@ func (a *NalarupaApp) viewToolbar(c *ui.Context) {
 		}
 
 		pct := fmt.Sprintf("%d%%", int(math.Round(a.Cam.Zoom*100)))
+		reduced := EffectiveReducedMotion(c)
 		zoomLvl := ui.ButtonBase(c.Key("zoom-level")).
 			Size(52, 28).
 			Radius(6).
 			Center().
 			Label("Zoom to fit (Shift+1): " + pct).
 			Tooltip("Zoom to fit (Shift+1)").
-			Cursor(ui.CursorPointer)
+			Cursor(ui.CursorPointer).
+			Transition(ColorHoverTransition(reduced))
 		if zoomLvl.Hovered() {
 			zoomLvl.Background(C.Raised)
 		}
 		zoomLvl.Children(func() {
-			ui.Text(c, pct).FontSize(11).FontFeatures("tnum").TextColor(C.Muted).MaxLines(1)
+			pctTxt := ui.Text(c.Key("zoom-pct-txt"), pct).FontSize(11).FontFeatures("tnum").TextColor(C.Muted).MaxLines(1)
+			if !reduced {
+				pctTxt.ContentTransition(ui.ContentTransition{Numeric: true, Animation: &NumericRollAnim})
+			}
 		})
 		if zoomLvl.Clicked() {
-			a.FitTo(nil)
+			a.FitToAnimated(nil)
 		}
 
 		zoomIn := IconBtn(c, "zoom-in", "plus", "Zoom in (+)", 28, false)
@@ -131,7 +138,7 @@ func (a *NalarupaApp) viewToolbar(c *ui.Context) {
 
 		fitBtn := IconBtn(c, "fit", "maximize", "Zoom to fit (Shift+1)", 28, false)
 		if fitBtn.Clicked() {
-			a.FitTo(nil)
+			a.FitToAnimated(nil)
 		}
 
 		toolbarDivider(c, "div-actions")

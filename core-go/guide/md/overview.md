@@ -29,8 +29,11 @@ grown from a sample brief: read one for the reasoning, then compose your own.
    need no redesign.
 3. The user may edit while you work. If a node you remember is gone or changed,
    read it again with `Get` instead of recreating it, and never revert their edits.
-4. Build in visible steps: one `execute` per section (header, hero, list...).
-   Users want to see progress quickly.
+4. Build in visible, progressive steps: one `execute` per section (header,
+   hero, list...), writing top-level `Insert` statements top-down rather than
+   one giant nested `children` literal so users watch each piece appear live.
+   Across multi-screen flows, lock variables and reusable chrome/surface motifs
+   upfront so every screen shares the same ground, grid, and craft.
 5. After each section, check it: use `Get` with a visitor to look for
    `ctx.problems` (clipped content), then run the critique pass (`designing`) on
    its screenshot.

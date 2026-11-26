@@ -251,6 +251,7 @@ func (e *Engine) resetHistory() {
 	e.undo, e.redo = nil, nil
 	e.Selection = nil
 	e.Renderer.Slides = nil
+	e.hasSlidesAtomic.Store(false)
 	e.slid = map[string]bool{}
 	e.closeLive()
 	e.Script = ScriptState{}

@@ -23,7 +23,9 @@ type Responses struct {
 	vision bool
 	// openai: OpenAI's own API, which takes the effort as `reasoning.effort`.
 	openai bool
-	stall  time.Duration
+	// canReason: non-localhost endpoints that may support OpenAI Responses reasoning parameter.
+	canReason bool
+	stall     time.Duration
 }
 
 // NewResponses is a client for base, the API root (e.g. `https://api.openai.com/v1`); a blank key sends no
@@ -32,18 +34,56 @@ func NewResponses(base, key string, vision bool) *Responses {
 	if strings.TrimSpace(key) == "" {
 		key = ""
 	}
+	isOpenAI := strings.Contains(base, "://api.openai.com")
 	return &Responses{url: Endpoint(base, "/responses"), key: key, vision: vision,
-		openai: strings.Contains(base, "://api.openai.com"), stall: stallLimit}
+		openai: isOpenAI, canReason: supportsReasoningEndpoint(base), stall: stallLimit}
 }
 
 // Stream sends one request and returns `{content, stop_reason, usage}` (and `refusal` for a refusal); beta is
 // ignored.
 func (c *Responses) Stream(body jsonv.Value, _ string, cancel func() bool, on func(Event)) (jsonv.Value, error) {
+	stall := effectiveStall(c.stall, body)
+	req := setKey(ResponsesTranslate(body, c.vision, c.openai || c.canReason), "stream", true)
+	transientRetries := 0
+	for attemptIdx := 0; attemptIdx < 5; attemptIdx++ {
+		emitted := false
+		out, err := c.attempt(jsonv.Clone(req), stall, cancel, func(ev Event) {
+			emitted = true
+			on(ev)
+		})
+		if err == nil {
+			return out, nil
+		}
+		if !emitted && shouldRetryReasoning400(err, !c.openai) {
+			if reqObj := jsonv.Obj(req); reqObj != nil && reqObj.Has("reasoning") {
+				if eff, ok := jsonv.Str(jsonv.Get(jsonv.Get(reqObj, "reasoning"), "effort")); ok && eff == "xhigh" {
+					reqObj.Set("reasoning", obj("effort", "high"))
+					continue
+				}
+				reqObj.Remove("reasoning")
+				if inc := jsonv.Items(jsonv.Get(reqObj, "include")); len(inc) == 1 && jsonv.StrIs(inc[0], "reasoning.encrypted_content") {
+					reqObj.Remove("include")
+				}
+				continue
+			}
+		}
+		if !emitted && transientRetries < 2 && isRetryablePreStreamError(err) {
+			if !sleepCancelable(retryBackoff(c.stall, transientRetries), cancel) {
+				return nil, errors.New("stopped")
+			}
+			transientRetries++
+			continue
+		}
+		return nil, err
+	}
+	return nil, errors.New("request attempts exhausted")
+}
+
+func (c *Responses) attempt(req jsonv.Value, stall time.Duration, cancel func() bool, on func(Event)) (jsonv.Value, error) {
 	headers := [][2]string{{"content-type", "application/json"}}
 	if c.key != "" {
 		headers = append(headers, [2]string{"authorization", "Bearer " + c.key})
 	}
-	req := setKey(ResponsesTranslate(body, c.vision, c.openai), "stream", true)
 	var thinking, text, refusal string
 	// Text by output index, so text written after a call stays after it when the turn is rebuilt.
 	type segment struct {
@@ -70,7 +110,7 @@ func (c *Responses) Stream(body jsonv.Value, _ string, cancel func() bool, on fu
 		}
 		return nil
 	}
-	err := post(c.url, headers, req, c.stall, "the provider", cancel, providerError, func(data string) (bool, error) {
+	err := post(c.url, headers, req, stall, "the provider", cancel, providerError, func(data string) (bool, error) {
 		ev, err := jsonv.Parse([]byte(data))
 		if err != nil {
 			return false, fmt.Errorf("bad stream event: %v", err)
@@ -277,8 +317,10 @@ func ResponsesTranslate(body jsonv.Value, vision, openai bool) jsonv.Value {
 		out.Set("max_output_tokens", jsonv.Number(fmt.Sprint(n)))
 	}
 	if effort, ok := jsonv.Str(jsonv.Get(jsonv.Get(body, "output_config"), "effort")); ok && openai && ReasoningModel(jsonv.StrOr(jsonv.Get(body, "model"))) {
-		out.Set("reasoning", obj("effort", effort))
-		reasons = true
+		if norm := normalizeOpenAIEffort(effort); norm != "" {
+			out.Set("reasoning", obj("effort", norm))
+			reasons = true
+		}
 	}
 	if reasons {
 		// Reasoning items come back encrypted (store: false), to be sent on the next turn.

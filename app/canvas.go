@@ -6,9 +6,11 @@ import (
 	"math"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/naddrzz/nalarupa/core-go/render"
 )
 
 const (
@@ -19,13 +21,28 @@ const (
 )
 
 type canvasRenderKey struct {
-	version uint64
-	pw      int
-	ph      int
-	camX    float64
-	camY    float64
-	zoom    float64
-	sharp   bool
+	version    uint64
+	releaseSeq uint64
+	pw         int
+	ph         int
+	camX       float64
+	camY       float64
+	zoom       float64
+	dpr        float64
+	sharp      bool
+}
+
+type camAnimState struct {
+	active   bool
+	mode     string // "zoom-anchor" | "camera"
+	anchorSX float64
+	anchorSY float64
+	docX     float64
+	docY     float64
+	targetX  float64
+	targetY  float64
+	targetZ  float64
+	lastAt   time.Time
 }
 
 type panGesture struct {
@@ -181,12 +198,22 @@ type penEditState struct {
 
 // CanvasState holds all persistent canvas rendering, gesture, overlay, and tool state.
 type CanvasState struct {
-	RGBA       *image.RGBA
-	Bitmap     *ui.Bitmap
-	LastKey    canvasRenderKey
-	SharpDirty bool
-	FastDirty  bool
-	SettleAt   time.Time
+	RGBA             *image.RGBA
+	Bitmap           *ui.Bitmap
+	PrevRGBA         *image.RGBA
+	PrevBitmap       *ui.Bitmap
+	PrevKey          canvasRenderKey
+	OverviewRGBA     *image.RGBA
+	OverviewBitmap   *ui.Bitmap
+	OverviewDocRect  RectD
+	OverviewVer      uint64
+	syncDet          *render.DetachedRenderer
+	LastKey          canvasRenderKey
+	lastSubmittedKey canvasRenderKey
+	SharpDirty       bool
+	FastDirty        bool
+	PanDirty         bool
+	SettleAt         time.Time
 
 	SpaceHeld bool
 	PointerSX float64
@@ -199,18 +226,19 @@ type CanvasState struct {
 	LastDownSX float64
 	LastDownSY float64
 
-	Pan     *panGesture
-	Marquee *marqueeGesture
-	 drawDrag *drawGesture
-	Move    *moveGesture
-	Resize  *resizeGesture
-	Rotate  *rotateGesture
-	Radius  *radiusGesture
+	Pan      *panGesture
+	Marquee  *marqueeGesture
+	drawDrag *drawGesture
+	Move     *moveGesture
+	Resize   *resizeGesture
+	Rotate   *rotateGesture
+	Radius   *radiusGesture
 
 	Guides       []SnapGuide
 	Measures     []MeasureLine
 	MeasureBox   *RectD
 	ActiveCursor ui.Cursor
+	lastDrawRect ui.Rect
 
 	textEdit    *inlineTextEdit
 	frameRename *inlineFrameRename
@@ -218,11 +246,44 @@ type CanvasState struct {
 
 	overlayPath ui.Path
 	LastPaintMS float64
+
+	cachedSelVer   uint64
+	cachedSelIDs   []string
+	cachedSelBoxes []Box
+	cachedLiveVer  uint64
+	cachedLive     []LiveNode
+	cachedFlashVer uint64
+	vsyncActive    atomic.Bool
+
+	hasHoverCache  bool
+	lastHoverSX    float64
+	lastHoverSY    float64
+	lastHoverVer   uint64
+	lastHoverMods  ui.Modifiers
+	lastHoverTool  string
+	lastHoverPanX  float64
+	lastHoverPanY  float64
+	lastHoverZoom  float64
+	lastHoverSel   []string
+	lastDragStepAt    time.Time
+	pendingDragEv     *ui.InputEvent
+	pendingDragSlot   ui.InputEvent
+	pendingDragArmed  bool
+	worker            *CanvasRenderWorker
+	lastRenderMS      float64
+	pendingInitialFit   bool
+	camAnim             camAnimState
+	hoverFadeID         string
+	hoverFadeStartMS    float64
+	createdPulseID      string
+	createdPulseStartMS float64
+	hadVisiblePills     bool
 }
 
 func (a *NalarupaApp) initCanvasState() {
 	a.Canvas = CanvasState{
 		SharpDirty:   true,
+		OverviewVer:  ^uint64(0),
 		ActiveCursor: ui.CursorDefault,
 	}
 }
@@ -243,17 +304,116 @@ func (a *NalarupaApp) resetCanvasForNewDoc() {
 	a.Canvas.pen = nil
 	a.Canvas.HoverID = ""
 	a.Canvas.SharpDirty = true
+	a.Canvas.PrevKey = canvasRenderKey{}
+	a.Canvas.lastSubmittedKey = canvasRenderKey{}
+	a.Canvas.OverviewDocRect = RectD{}
+	a.Canvas.OverviewVer = ^uint64(0)
+	a.Canvas.cachedSelBoxes = nil
+	a.Canvas.cachedSelIDs = nil
+	a.Canvas.cachedLive = nil
+	a.Canvas.cachedFlashVer = 0
+	a.Canvas.hasHoverCache = false
+	a.Canvas.lastDragStepAt = time.Time{}
+	a.Canvas.pendingDragEv = nil
+	a.Canvas.pendingDragArmed = false
+	a.Canvas.camAnim = camAnimState{}
+	a.Canvas.hoverFadeID = ""
+	a.Canvas.createdPulseID = ""
+	a.Canvas.hadVisiblePills = false
+	if a.Canvas.worker != nil {
+		a.Canvas.worker.ResetForNewDoc()
+	}
+}
+
+func (a *NalarupaApp) stepCameraAnim(now time.Time, reduced bool) bool {
+	ca := &a.Canvas.camAnim
+	if !ca.active {
+		return false
+	}
+	if reduced {
+		if ca.mode == "zoom-anchor" {
+			a.Cam.Zoom = ca.targetZ
+			a.Cam.X = ca.docX - ca.anchorSX/ca.targetZ
+			a.Cam.Y = ca.docY - ca.anchorSY/ca.targetZ
+		} else {
+			a.Cam = Camera{X: ca.targetX, Y: ca.targetY, Zoom: ca.targetZ}
+		}
+		*ca = camAnimState{}
+		a.Canvas.markSharpDirty()
+		a.syncViewport()
+		return false
+	}
+
+	var dt float64
+	if a.Window == nil {
+		// Deterministic step size for headless ui.Tester (whose Frame() runs a 20-pass settle loop on CPU).
+		dt = 1.0 / 240.0
+	} else {
+		dt = now.Sub(ca.lastAt).Seconds()
+		if dt < 1.0/144.0 {
+			dt = 1.0 / 144.0
+		} else if dt > 0.05 {
+			dt = 0.05
+		}
+	}
+	ca.lastAt = now
+
+	const zoomRate = 24.0
+	curLog := math.Log(max(0.02, a.Cam.Zoom))
+	tgtLog := math.Log(max(0.02, ca.targetZ))
+	nextLog := tgtLog + (curLog-tgtLog)*math.Exp(-zoomRate*dt)
+
+	if ca.mode == "zoom-anchor" {
+		if math.Abs(tgtLog-nextLog) < 0.0035 {
+			a.Cam.Zoom = ca.targetZ
+			a.Cam.X = ca.docX - ca.anchorSX/ca.targetZ
+			a.Cam.Y = ca.docY - ca.anchorSY/ca.targetZ
+			*ca = camAnimState{}
+			a.Canvas.markSharpDirty()
+			a.syncViewport()
+			return false
+		}
+		a.Cam.Zoom = math.Exp(nextLog)
+		a.Cam.X = ca.docX - ca.anchorSX/a.Cam.Zoom
+		a.Cam.Y = ca.docY - ca.anchorSY/a.Cam.Zoom
+		a.Canvas.hasHoverCache = false
+		a.syncViewportNonBlocking()
+		return true
+	}
+
+	// "camera" mode (smooth FitToAnimated)
+	k := math.Exp(-zoomRate * dt)
+	nextX := ca.targetX + (a.Cam.X-ca.targetX)*k
+	nextY := ca.targetY + (a.Cam.Y-ca.targetY)*k
+	if math.Abs(tgtLog-nextLog) < 0.0035 && math.Hypot(ca.targetX-nextX, ca.targetY-nextY)*ca.targetZ < 0.5 {
+		a.Cam = Camera{X: ca.targetX, Y: ca.targetY, Zoom: ca.targetZ}
+		*ca = camAnimState{}
+		a.Canvas.markSharpDirty()
+		a.syncViewport()
+		return false
+	}
+	a.Cam.Zoom = math.Exp(nextLog)
+	a.Cam.X = nextX
+	a.Cam.Y = nextY
+	a.Canvas.hasHoverCache = false
+	a.syncViewportNonBlocking()
+	return true
 }
 
 func (cs *CanvasState) markSharpDirty() {
 	cs.SharpDirty = true
 	cs.FastDirty = false
+	cs.PanDirty = false
 	cs.SettleAt = time.Time{}
 }
 
 func (cs *CanvasState) markFastDirty() {
 	cs.FastDirty = true
-	cs.SettleAt = time.Now().Add(200 * time.Millisecond)
+	cs.SettleAt = time.Now().Add(45 * time.Millisecond)
+}
+
+func (cs *CanvasState) markPanDirty() {
+	cs.PanDirty = true
 }
 
 func (a *NalarupaApp) screenToDoc(sx, sy float64) Pt {
@@ -274,8 +434,16 @@ func (a *NalarupaApp) docRectToScreen(r RectD) ui.Rect {
 }
 
 func (a *NalarupaApp) viewCanvas(c *ui.Context) {
+	spaceNow := !c.FocusTakesText() && a.Canvas.textEdit == nil && a.Canvas.frameRename == nil && c.KeyDown(ui.KeySpace)
+	if a.Canvas.SpaceHeld != spaceNow {
+		a.Canvas.SpaceHeld = spaceNow
+		a.syncGrabCursorNow()
+	}
+
 	vp := ui.Box(c.Key("canvas")).
-		Fill().
+		FillHeight().
+		Grow(1).
+		MinWidth(0).
 		Clip().
 		Background(C.CanvasFill).
 		Focusable().
@@ -289,13 +457,41 @@ func (a *NalarupaApp) viewCanvas(c *ui.Context) {
 		return a.handleCanvasInput(ev)
 	})
 
-	// Pre-fetch current frames, selection boxes, and live agent nodes once per frame
-	var topFrames []Box
-	a.Bridge.TryCall("frames", nil, &topFrames)
+	// Flush any coalesced pointer-drag move aligned to the VSync frame boundary (~16ms) before snapshot fetches.
+	if a.Canvas.pendingDragEv != nil && (a.Canvas.lastDragStepAt.IsZero() || time.Since(a.Canvas.lastDragStepAt) >= 14*time.Millisecond) {
+		a.flushPendingDragMove()
+	}
 
+	// Advance any smooth zoom / camera glide before building screen-projected overlays & children
+	if a.Canvas.camAnim.active {
+		if a.stepCameraAnim(time.Now(), EffectiveReducedMotion(c)) && a.Window != nil {
+			c.AnimationFrame()
+		}
+	}
+
+	// Pre-fetch current frames, selection boxes, and live agent nodes with version-keyed caches (zero JSON overhead).
+	topFrames := a.ensureFramesFetched()
+
+	if len(a.State.Selection) == 0 {
+		a.Canvas.cachedSelVer = a.State.Version
+		a.Canvas.cachedSelIDs = nil
+		a.Canvas.cachedSelBoxes = nil
+	} else if a.Canvas.cachedSelVer != a.State.Version || !slices.Equal(a.Canvas.cachedSelIDs, a.State.Selection) || a.Canvas.cachedSelBoxes == nil {
+		if a.Window != nil {
+			if got, ok := a.Bridge.TryBoxesDirect(a.State.Selection); ok {
+				a.Canvas.cachedSelBoxes = got
+				a.Canvas.cachedSelVer = a.State.Version
+				a.Canvas.cachedSelIDs = append([]string(nil), a.State.Selection...)
+			}
+		} else {
+			a.Canvas.cachedSelBoxes = a.Bridge.BoxesDirect(a.State.Selection)
+			a.Canvas.cachedSelVer = a.State.Version
+			a.Canvas.cachedSelIDs = append([]string(nil), a.State.Selection...)
+		}
+	}
 	var selBoxes []Box
-	if len(a.State.Selection) > 0 {
-		a.Bridge.TryCall("boxes", map[string]any{"ids": a.State.Selection}, &selBoxes)
+	if slices.Equal(a.Canvas.cachedSelIDs, a.State.Selection) {
+		selBoxes = a.Canvas.cachedSelBoxes
 	}
 	var selPainted []RectD
 	for _, sb := range selBoxes {
@@ -311,11 +507,26 @@ func (a *NalarupaApp) viewCanvas(c *ui.Context) {
 		singleFrame = &Box{X: selUnion.X, Y: selUnion.Y, W: selUnion.W, H: selUnion.H}
 	}
 
-	var liveNodes []LiveNode
-	a.Bridge.TryCall("live", nil, &liveNodes)
+	if a.Canvas.cachedLiveVer != a.State.Version || a.Canvas.cachedLive == nil {
+		if a.Window != nil {
+			if got, ok := a.Bridge.TryLiveDirect(); ok {
+				a.Canvas.cachedLive = got
+				a.Canvas.cachedLiveVer = a.State.Version
+			}
+		} else {
+			a.Canvas.cachedLive = a.Bridge.LiveDirect()
+			a.Canvas.cachedLiveVer = a.State.Version
+		}
+	}
+	liveNodes := a.Canvas.cachedLive
 
 	reduced := EffectiveReducedMotion(c)
-	nowMS := float64(time.Now().UnixMilli())
+	viewNow := c.Now()
+	if viewNow.IsZero() {
+		viewNow = time.Now()
+	}
+	viewNowMS := float64(viewNow.UnixNano()) / 1e6
+	a.consumeCanvasActivity(viewNowMS)
 
 	// Resolve Alt-hover distance measurement when idle in move tool
 	a.Canvas.Measures = nil
@@ -326,11 +537,25 @@ func (a *NalarupaApp) viewCanvas(c *ui.Context) {
 
 	vp.Draw(func(p *ui.Painter, r ui.Rect) {
 		if r.W > 0 && r.H > 0 {
+			a.Canvas.lastDrawRect = r
+			SyncNativeCanvasCursor(a.Window, a.nativeGrabCursorMode(), r)
 			newW, newH := float64(r.W), float64(r.H)
-			if math.Abs(newW-a.CanvasW) > 0.5 || math.Abs(newH-a.CanvasH) > 0.5 {
+			sizeChanged := math.Abs(newW-a.CanvasW) > 0.5 || math.Abs(newH-a.CanvasH) > 0.5
+			if sizeChanged {
 				a.CanvasW = newW
 				a.CanvasH = newH
 				a.syncViewport()
+				a.Store.ViewCenter = Pt{
+					a.Cam.X + (a.CanvasW/2)/max(0.02, a.Cam.Zoom),
+					a.Cam.Y + (a.CanvasH/2)/max(0.02, a.Cam.Zoom),
+				}
+				a.Store.ViewZoom = a.Cam.Zoom
+			}
+			if a.Canvas.pendingInitialFit {
+				a.Canvas.pendingInitialFit = false
+				if sizeChanged {
+					a.FitTo(nil)
+				}
 			}
 		}
 
@@ -338,56 +563,346 @@ func (a *NalarupaApp) viewCanvas(c *ui.Context) {
 		pw := max(1, int(math.Round(float64(r.W)*dpr)))
 		ph := max(1, int(math.Round(float64(r.H)*dpr)))
 
+		paintNow := p.Now()
+		if paintNow.IsZero() {
+			paintNow = time.Now()
+		}
+		nowMS := float64(paintNow.UnixNano()) / 1e6
+
 		now := time.Now()
-		if !a.Canvas.SettleAt.IsZero() && !now.Before(a.Canvas.SettleAt) {
+		if a.Canvas.pendingDragEv != nil && (a.Canvas.lastDragStepAt.IsZero() || now.Sub(a.Canvas.lastDragStepAt) >= 14*time.Millisecond) {
+			if a.Window != nil && !a.Window.IsDestroyed() {
+				a.Window.Update(func() {
+					a.flushPendingDragMove()
+				})
+			} else {
+				a.flushPendingDragMove()
+			}
+		}
+		if !a.Canvas.camAnim.active && !a.Canvas.SettleAt.IsZero() && !now.Before(a.Canvas.SettleAt) {
 			a.Canvas.SharpDirty = true
 			a.Canvas.FastDirty = false
 			a.Canvas.SettleAt = time.Time{}
 		}
 
-		sharp := !a.Canvas.FastDirty && !a.State.Animating && a.Canvas.Pan == nil
-		rk := canvasRenderKey{
-			version: a.State.Version,
-			pw:      pw,
-			ph:      ph,
-			camX:    a.Cam.X,
-			camY:    a.Cam.Y,
-			zoom:    a.Cam.Zoom,
-			sharp:   sharp,
-		}
-		if a.State.Animating || a.Canvas.Bitmap == nil || a.Canvas.SharpDirty || a.Canvas.FastDirty || a.Canvas.LastKey != rk {
-			rgba := a.Bridge.RenderInto(&a.Canvas.RGBA, pw, ph, a.Cam.X, a.Cam.Y, a.Cam.Zoom*dpr, CanvasBG, "", sharp)
-			if a.Canvas.Bitmap == nil {
-				a.Canvas.Bitmap = ui.NewBitmap(rgba)
-			} else {
-				a.Canvas.Bitmap.Update(rgba)
+		if a.Canvas.worker != nil {
+			oldKey := a.Canvas.LastKey
+			if peekKey, hasReady := a.Canvas.worker.PeekReadyKey(); hasReady &&
+				oldKey.zoom > 0 && peekKey.zoom > 0 && a.Canvas.RGBA != nil && oldKey.pw > 0 && oldKey.ph > 0 &&
+				max(peekKey.zoom/oldKey.zoom, oldKey.zoom/peekKey.zoom) > 1.06 {
+				a.Canvas.PrevRGBA, a.Canvas.RGBA = a.Canvas.RGBA, a.Canvas.PrevRGBA
+				a.Canvas.PrevKey = oldKey
+				if a.Canvas.PrevBitmap == nil {
+					a.Canvas.PrevBitmap = ui.NewBitmap(a.Canvas.PrevRGBA)
+				} else {
+					a.Canvas.PrevBitmap.Update(a.Canvas.PrevRGBA)
+				}
 			}
-			a.Canvas.LastKey = rk
+			if doneKey, ms, ok := a.Canvas.worker.TakeReady(&a.Canvas.RGBA); ok {
+				if a.Canvas.Bitmap == nil {
+					a.Canvas.Bitmap = ui.NewBitmap(a.Canvas.RGBA)
+				} else {
+					a.Canvas.Bitmap.Update(a.Canvas.RGBA)
+				}
+				a.Canvas.LastKey = doneKey
+				a.Canvas.lastRenderMS = ms
+			}
+			if ovRect, ovVer, hasImg, ok := a.Canvas.worker.TakeOverviewReady(&a.Canvas.OverviewRGBA); ok {
+				if hasImg && a.Canvas.OverviewRGBA != nil {
+					if a.Canvas.OverviewBitmap == nil {
+						a.Canvas.OverviewBitmap = ui.NewBitmap(a.Canvas.OverviewRGBA)
+					} else {
+						a.Canvas.OverviewBitmap.Update(a.Canvas.OverviewRGBA)
+					}
+					a.Canvas.OverviewDocRect = ovRect
+				} else {
+					a.Canvas.OverviewDocRect = RectD{}
+				}
+				a.Canvas.OverviewVer = ovVer
+			}
+		}
+
+		engVer := max(a.State.Version, a.Bridge.VersionDirect())
+		curFrames := topFrames
+		if a.Layers.CachedFramesVer != engVer {
+			if got, ok := a.Bridge.TryFramesDirect(); ok {
+				a.Layers.CachedFrames = got
+				a.Layers.CachedFramesVer = engVer
+				curFrames = got
+			}
+		} else if a.Layers.CachedFrames != nil {
+			curFrames = a.Layers.CachedFrames
+		}
+		curLive := liveNodes
+		if a.Canvas.cachedLiveVer != engVer {
+			if got, ok := a.Bridge.TryLiveDirect(); ok {
+				a.Canvas.cachedLive = got
+				a.Canvas.cachedLiveVer = engVer
+				curLive = got
+			}
+		} else if a.Canvas.cachedLive != nil {
+			curLive = a.Canvas.cachedLive
+		}
+
+		// Step cursor physics & release any newly-arrived slide/edit targets BEFORE snapshotting the canvas scene!
+		prevPaintMS := a.stepAgentChoreography(nowMS, reduced, curLive)
+
+		hasSlides := a.Bridge.HasSlidesDirect()
+		camMoving := a.Canvas.camAnim.active || a.Canvas.Pan != nil
+		interactiveDrag := a.Canvas.Move != nil || a.Canvas.Resize != nil || a.Canvas.Rotate != nil || a.Canvas.Radius != nil
+		agentBusy := a.State.AgentRunning || a.State.Executing || a.State.PenDrawing
+		sharp := !a.Canvas.FastDirty && !hasSlides && !camMoving && !interactiveDrag && !agentBusy
+
+		// Overscan margin around the visible viewport:
+		// 28% per side while idle/navigating so pan & zoom-out immediately show crisp surrounding pixels;
+		// 10% while slides/agent stream actively so per-frame raster stays ultra-lightweight (<8ms).
+		padRatio := 0.28
+		if hasSlides || agentBusy || interactiveDrag {
+			padRatio = 0.10
+		}
+		padX := int(math.Round(float64(pw) * padRatio))
+		padY := int(math.Round(float64(ph) * padRatio))
+		maxSide := min(8192, max(4096, max(pw, ph)))
+		rw := min(maxSide, max(pw, pw+2*padX))
+		rh := min(maxSide, max(ph, ph+2*padY))
+		effPadX := max(0.0, float64(rw-pw)*0.5)
+		effPadY := max(0.0, float64(rh-ph)*0.5)
+		// Pre-rasterize ahead along smooth zoom animations while bounding per-step scale ratio so both
+		// zoom-in and zoom-out stay crisp at every intermediate frame and land at 100% native sharpness.
+		renderCam := a.Cam
+		if ca := a.Canvas.camAnim; ca.active {
+			endZ := max(0.02, ca.targetZ)
+			endX, endY := ca.targetX, ca.targetY
+			if ca.mode == "zoom-anchor" {
+				endX = ca.docX - ca.anchorSX/endZ
+				endY = ca.docY - ca.anchorSY/endZ
+			}
+			curZ := max(0.02, a.Cam.Zoom)
+			switch {
+			case endZ < curZ && curZ/endZ > 1.35:
+				// Step down smoothly during deep zoom-outs so we never stretch a tiny final bitmap 3x-5x while still zoomed in.
+				stepZ := max(endZ, curZ/1.30)
+				if ca.mode == "zoom-anchor" {
+					renderCam = Camera{X: ca.docX - ca.anchorSX/stepZ, Y: ca.docY - ca.anchorSY/stepZ, Zoom: stepZ}
+				} else {
+					renderCam = Camera{X: a.Cam.X, Y: a.Cam.Y, Zoom: stepZ}
+				}
+			case endZ/curZ <= 2.4:
+				renderCam = Camera{X: endX, Y: endY, Zoom: endZ}
+			default:
+				// On huge multi-octave zoom-ins (e.g. 15% -> 135%), step crisp intermediate bands on the way in.
+				baseZ := max(curZ, a.Canvas.LastKey.zoom)
+				stepZ := min(endZ, max(0.02, baseZ*1.75))
+				if ca.mode == "zoom-anchor" {
+					renderCam = Camera{X: ca.docX - ca.anchorSX/stepZ, Y: ca.docY - ca.anchorSY/stepZ, Zoom: stepZ}
+				} else {
+					renderCam = Camera{X: a.Cam.X, Y: a.Cam.Y, Zoom: stepZ}
+				}
+			}
+		}
+
+		devZoom := max(0.01, renderCam.Zoom*dpr)
+		rcamX := renderCam.X - effPadX/devZoom
+		rcamY := renderCam.Y - effPadY/devZoom
+
+		curRelSeq := a.Bridge.SlideReleaseSeqDirect()
+		rk := canvasRenderKey{
+			version:    engVer,
+			releaseSeq: curRelSeq,
+			pw:         rw,
+			ph:         rh,
+			camX:       rcamX,
+			camY:       rcamY,
+			zoom:       renderCam.Zoom,
+			dpr:        dpr,
+			sharp:      sharp,
+		}
+		wantOverview := !interactiveDrag && !hasSlides && a.Canvas.OverviewVer != engVer
+
+		lk := a.Canvas.LastKey
+		workerFree := a.Canvas.worker == nil || !a.Canvas.worker.Busy()
+		zoomChanged := lk.zoom <= 0 || math.Abs(lk.zoom-rk.zoom)/max(0.01, rk.zoom) > 0.004
+		needRender := false
+		switch {
+		case a.Canvas.Bitmap == nil || lk.version != engVer || lk.releaseSeq != curRelSeq:
+			needRender = true
+		case zoomChanged:
+			// Always enqueue the latest target zoom immediately (single-slot coalesced on worker) so zoom-in
+			// and zoom-out stay crisp under every condition — even while slides or parallel agents are active!
+			needRender = a.Window == nil || workerFree || a.Canvas.lastSubmittedKey != rk
+		case hasSlides:
+			// Submit next slide frame only when worker has capacity so we never pile up redundant rasters.
+			needRender = workerFree
+		case a.Canvas.camAnim.active:
+			panShiftPx := math.Hypot(lk.camX-rk.camX, lk.camY-rk.camY) * devZoom
+			needRender = panShiftPx > float64(pw)*0.16 && workerFree
+		case a.Canvas.Pan != nil:
+			// During interactive pan, re-center the overscan window when the viewport nears its inner 55% margin.
+			lkDPR := lk.dpr
+			if lkDPR <= 0 {
+				lkDPR = dpr
+			}
+			lkDocW := float64(lk.pw) / max(0.01, lk.zoom*lkDPR)
+			lkDocH := float64(lk.ph) / max(0.01, lk.zoom*lkDPR)
+			vpDocW := float64(pw) / max(0.01, a.Cam.Zoom*dpr)
+			vpDocH := float64(ph) / max(0.01, a.Cam.Zoom*dpr)
+			guardX := max(0, (lkDocW-vpDocW)*0.22)
+			guardY := max(0, (lkDocH-vpDocH)*0.22)
+			outsideGuard := a.Cam.X < lk.camX+guardX || a.Cam.Y < lk.camY+guardY ||
+				a.Cam.X+vpDocW > lk.camX+lkDocW-guardX || a.Cam.Y+vpDocH > lk.camY+lkDocH-guardY
+			needRender = (outsideGuard || math.Abs(lk.zoom-a.Cam.Zoom) > 1e-6) && rk != a.Canvas.lastSubmittedKey
+		default:
+			needRender = a.Canvas.SharpDirty || a.Canvas.FastDirty || a.Canvas.PanDirty || lk != rk || wantOverview
+		}
+
+		if needRender {
+			if a.Window != nil && a.Canvas.Bitmap != nil && a.Canvas.worker != nil {
+				a.Canvas.lastSubmittedKey = rk
+				a.Canvas.worker.Submit(canvasRenderJob{
+					key:          rk,
+					w:            rw,
+					h:            rh,
+					camX:         rcamX,
+					camY:         rcamY,
+					zoom:         devZoom,
+					bg:           CanvasBG,
+					sharp:        sharp,
+					wantOverview: wantOverview,
+				})
+			} else {
+				t0 := time.Now()
+				if a.Canvas.syncDet == nil {
+					a.Canvas.syncDet = render.NewDetachedRenderer()
+				}
+				ovRect, ovVer, ovOK := a.Bridge.RenderDetachedWithOverview(
+					a.Canvas.syncDet, &a.Canvas.RGBA, rw, rh, rcamX, rcamY, devZoom,
+					CanvasBG, "", sharp, wantOverview, &a.Canvas.OverviewRGBA, 1664,
+				)
+				if a.Canvas.Bitmap == nil {
+					a.Canvas.Bitmap = ui.NewBitmap(a.Canvas.RGBA)
+				} else {
+					a.Canvas.Bitmap.Update(a.Canvas.RGBA)
+				}
+				if wantOverview && !hasSlides {
+					if ovOK && a.Canvas.OverviewRGBA != nil {
+						if a.Canvas.OverviewBitmap == nil {
+							a.Canvas.OverviewBitmap = ui.NewBitmap(a.Canvas.OverviewRGBA)
+						} else {
+							a.Canvas.OverviewBitmap.Update(a.Canvas.OverviewRGBA)
+						}
+						a.Canvas.OverviewDocRect = ovRect
+					} else {
+						a.Canvas.OverviewDocRect = RectD{}
+					}
+					a.Canvas.OverviewVer = ovVer
+				}
+				a.Canvas.LastKey = rk
+				a.Canvas.lastSubmittedKey = rk
+				a.Canvas.lastRenderMS = float64(time.Since(t0).Microseconds()) / 1000.0
+			}
 			a.Canvas.SharpDirty = false
 			a.Canvas.FastDirty = false
+			a.Canvas.PanDirty = false
 		}
-		p.Image(a.Canvas.Bitmap, r, ui.FillBox)
+		if a.Canvas.Bitmap != nil || a.Canvas.PrevBitmap != nil || a.Canvas.OverviewBitmap != nil {
+			lk = a.Canvas.LastKey
+			lkDPR := lk.dpr
+			if lkDPR <= 0 {
+				lkDPR = dpr
+			}
+			p.Clip(r, 0, func() {
+				p.Fill(r, ui.RGB(CanvasBG[0], CanvasBG[1], CanvasBG[2]), 0)
+				// 1. Whole-document overview backdrop (prevents any blank border pop-in during extreme zoom-out / fast pan)
+				if a.Canvas.OverviewBitmap != nil && a.Canvas.OverviewVer == engVer && a.Canvas.OverviewDocRect.W > 0 && a.Canvas.OverviewDocRect.H > 0 {
+					ov := a.Canvas.OverviewDocRect
+					ovDst := ui.Rect{
+						X: r.X + float32((ov.X-a.Cam.X)*a.Cam.Zoom),
+						Y: r.Y + float32((ov.Y-a.Cam.Y)*a.Cam.Zoom),
+						W: float32(ov.W * a.Cam.Zoom),
+						H: float32(ov.H * a.Cam.Zoom),
+					}
+					p.Image(a.Canvas.OverviewBitmap, ovDst, ui.FillBox)
+				}
+				// 2. Previous-zoom viewport layer (bridges wide outer periphery seamlessly while target-zoom bitmap glides in)
+				pk := a.Canvas.PrevKey
+				if a.Canvas.PrevBitmap != nil && pk.version == lk.version && pk.zoom > 0 && pk.pw > 0 && pk.ph > 0 && math.Abs(pk.zoom-lk.zoom) > 1e-6 {
+					pkDPR := pk.dpr
+					if pkDPR <= 0 {
+						pkDPR = dpr
+					}
+					pScale := a.Cam.Zoom / pk.zoom
+					pbw := float32(float64(pk.pw)/pkDPR) * float32(pScale)
+					pbh := float32(float64(pk.ph)/pkDPR) * float32(pScale)
+					pDst := ui.Rect{
+						X: r.X + float32((pk.camX-a.Cam.X)*a.Cam.Zoom),
+						Y: r.Y + float32((pk.camY-a.Cam.Y)*a.Cam.Zoom),
+						W: pbw,
+						H: pbh,
+					}
+					p.Image(a.Canvas.PrevBitmap, pDst, ui.FillBox)
+				}
+				// 3. Overscanned crisp native-zoom viewport detail layer
+				if a.Canvas.Bitmap != nil && lk.zoom > 0 && lk.pw > 0 && lk.ph > 0 {
+					scale := a.Cam.Zoom / lk.zoom
+					bw := float32(float64(lk.pw)/lkDPR) * float32(scale)
+					bh := float32(float64(lk.ph)/lkDPR) * float32(scale)
+					dstRect := ui.Rect{
+						X: r.X + float32((lk.camX-a.Cam.X)*a.Cam.Zoom),
+						Y: r.Y + float32((lk.camY-a.Cam.Y)*a.Cam.Zoom),
+						W: bw,
+						H: bh,
+					}
+					p.Image(a.Canvas.Bitmap, dstRect, ui.FillBox)
+				}
+			})
+		}
 
-		if !a.Canvas.SettleAt.IsZero() {
+		wantOverlayVSync := false
+		wantAgentVSync := false
+		p.Clip(r, 0, func() {
+			wantOverlayVSync = a.drawCanvasOverlays(p, r, curFrames, selBoxes, singleFrame, reduced, nowMS)
+			wantAgentVSync = a.drawAgentLayer(p, r, curLive, reduced, nowMS, prevPaintMS, engVer)
+		})
+
+		workerPendingZoom := a.Canvas.worker != nil && (a.Canvas.worker.Busy() || a.Canvas.worker.HasReady() ||
+			math.Abs(a.Canvas.LastKey.zoom-a.Cam.Zoom)/max(0.01, a.Cam.Zoom) > 0.004)
+		wantVSync := a.Canvas.camAnim.active || a.Canvas.pendingDragEv != nil || hasSlides || wantOverlayVSync || wantAgentVSync || workerPendingZoom
+		a.Canvas.vsyncActive.Store(wantVSync)
+		if wantVSync {
+			p.AnimationFrame()
+		} else if a.Canvas.pendingDragEv != nil {
+			p.After(16 * time.Millisecond)
+		}
+		if !a.Canvas.camAnim.active && !a.Canvas.SettleAt.IsZero() {
 			p.After(time.Until(a.Canvas.SettleAt) + 5*time.Millisecond)
 		}
-		if a.State.Animating {
-			p.AnimationFrame()
-		}
-
-		p.Clip(r, 0, func() {
-			a.drawCanvasOverlays(p, r, topFrames, selBoxes, singleFrame)
-			a.drawAgentLayer(p, r, liveNodes, reduced, nowMS)
-		})
 	})
 
 	vp.Children(func() {
-		a.buildCanvasChildren(c, topFrames, selBoxes, singleFrame, liveNodes, nowMS)
+		a.buildCanvasChildren(c, topFrames, selBoxes, singleFrame, liveNodes, viewNowMS)
 	})
 }
 
 func (cs *CanvasState) isDraggingAny() bool {
 	return cs.Pan != nil || cs.Marquee != nil || cs.drawDrag != nil || cs.Move != nil || cs.Resize != nil || cs.Rotate != nil || cs.Radius != nil || (cs.pen != nil && cs.pen.drag != nil)
+}
+
+func (a *NalarupaApp) nativeGrabCursorMode() int {
+	if a.Canvas.Pan != nil || a.Canvas.Rotate != nil {
+		return 2
+	}
+	if a.Tool == "hand" || a.Canvas.SpaceHeld {
+		return 1
+	}
+	return 0
+}
+
+func (a *NalarupaApp) syncGrabCursorNow() {
+	if a.Screen != "editor" {
+		SyncNativeCanvasCursor(a.Window, 0, a.Canvas.lastDrawRect)
+		return
+	}
+	SyncNativeCanvasCursor(a.Window, a.nativeGrabCursorMode(), a.Canvas.lastDrawRect)
 }
 
 func (a *NalarupaApp) computeCanvasCursor() ui.Cursor {
@@ -417,8 +932,7 @@ func (a *NalarupaApp) computeCanvasCursor() ui.Cursor {
 
 func (a *NalarupaApp) computeAltMeasures(selUnion RectD) {
 	docPt := a.screenToDoc(a.Canvas.PointerSX, a.Canvas.PointerSY)
-	var hitChain []string
-	a.Bridge.TryCall("hit", map[string]any{"x": docPt[0], "y": docPt[1]}, &hitChain)
+	hitChain := a.Bridge.HitDirect(docPt[0], docPt[1])
 	targetID := ""
 	for i := len(hitChain) - 1; i >= 0; i-- {
 		cand := hitChain[i]
@@ -428,16 +942,15 @@ func (a *NalarupaApp) computeAltMeasures(selUnion RectD) {
 		}
 	}
 	if targetID == "" && len(a.State.Selection) > 0 {
-		var nd NodeDetail
-		if a.Bridge.TryCall("node", map[string]any{"id": a.State.Selection[0]}, &nd) && nd.Exists && nd.Parent != "" && nd.Parent != "document" {
-			targetID = nd.Parent
+		if parent := a.Bridge.NodeParentDirect(a.State.Selection[0]); parent != "" && parent != "document" {
+			targetID = parent
 		}
 	}
 	if targetID == "" {
 		return
 	}
-	var tbs []Box
-	if !a.Bridge.TryCall("boxes", map[string]any{"ids": []string{targetID}}, &tbs) || len(tbs) == 0 {
+	tbs := a.Bridge.BoxesDirect([]string{targetID})
+	if len(tbs) == 0 {
 		return
 	}
 	tb := Painted(tbs[0])
@@ -447,7 +960,8 @@ func (a *NalarupaApp) computeAltMeasures(selUnion RectD) {
 	}
 }
 
-func (a *NalarupaApp) drawCanvasOverlays(p *ui.Painter, vpRect ui.Rect, topFrames, selBoxes []Box, singleFrame *Box) {
+func (a *NalarupaApp) drawCanvasOverlays(p *ui.Painter, vpRect ui.Rect, topFrames, selBoxes []Box, singleFrame *Box, reduced bool, nowMS float64) bool {
+	needOverlayAnim := false
 	ox, oy := vpRect.X, vpRect.Y
 	toWin := func(dx, dy float64) (float32, float32) {
 		sx, sy := a.docToScreen(dx, dy)
@@ -476,18 +990,53 @@ func (a *NalarupaApp) drawCanvasOverlays(p *ui.Painter, vpRect ui.Rect, topFrame
 		}
 	}
 
-	// 1. Canvas hover outline (when idle and not already selected)
-	if a.Canvas.HoverID != "" && !a.Canvas.isDraggingAny() && !slices.Contains(a.State.Selection, a.Canvas.HoverID) {
-		var hbs []Box
-		if a.Bridge.TryCall("boxes", map[string]any{"ids": []string{a.Canvas.HoverID}}, &hbs) && len(hbs) > 0 {
-			drawBoxOutline(hbs[0], C.Select, 1)
+	// 0. Crisp studio hairline boundary around unselected top-level frames so white artboards stay distinct on clean white canvas
+	for _, tf := range topFrames {
+		if tf.Type != "frame" || tf.Placeholder || slices.Contains(a.State.Selection, tf.ID) || tf.ID == a.Canvas.HoverID || tf.ID == a.HoverLayerID {
+			continue
 		}
+		pb := Painted(tf)
+		sr := a.docRectToScreen(pb)
+		if sr.X+sr.W < -2 || sr.X > vpRect.W+2 || sr.Y+sr.H < -2 || sr.Y > vpRect.H+2 {
+			continue
+		}
+		drawBoxOutline(tf, C.CanvasFrameEdge, 1)
+	}
+
+	// 1. Canvas hover outline (120ms EaseOutQuart fade-in when sweeping onto a new node)
+	if a.Canvas.HoverID != "" && !a.Canvas.isDraggingAny() && !slices.Contains(a.State.Selection, a.Canvas.HoverID) {
+		if a.Canvas.hoverFadeID != a.Canvas.HoverID {
+			a.Canvas.hoverFadeID = a.Canvas.HoverID
+			a.Canvas.hoverFadeStartMS = nowMS
+		}
+		hoverAlpha := float32(1.0)
+		if !reduced {
+			el := nowMS - a.Canvas.hoverFadeStartMS
+			if el >= 0 && el < 120.0 {
+				hoverAlpha = float32(0.30 + 0.70*EaseOutQuart64(el/120.0))
+				needOverlayAnim = true
+			}
+		}
+		hoverCol := C.Select
+		hoverCol.A = uint8(math.Round(float64(hoverCol.A) * float64(hoverAlpha)))
+		if a.Window != nil {
+			if hbs, ok := a.Bridge.TryBoxesDirect([]string{a.Canvas.HoverID}); ok && len(hbs) > 0 {
+				drawBoxOutline(hbs[0], hoverCol, 1)
+			}
+		} else if hbs := a.Bridge.BoxesDirect([]string{a.Canvas.HoverID}); len(hbs) > 0 {
+			drawBoxOutline(hbs[0], hoverCol, 1)
+		}
+	} else {
+		a.Canvas.hoverFadeID = ""
 	}
 
 	// 2. Layers-panel hover outline
 	if a.HoverLayerID != "" {
-		var lbs []Box
-		if a.Bridge.TryCall("boxes", map[string]any{"ids": []string{a.HoverLayerID}}, &lbs) && len(lbs) > 0 {
+		if a.Window != nil {
+			if lbs, ok := a.Bridge.TryBoxesDirect([]string{a.HoverLayerID}); ok && len(lbs) > 0 {
+				drawBoxOutline(lbs[0], C.Select, 2)
+			}
+		} else if lbs := a.Bridge.BoxesDirect([]string{a.HoverLayerID}); len(lbs) > 0 {
 			drawBoxOutline(lbs[0], C.Select, 2)
 		}
 	}
@@ -611,27 +1160,69 @@ func (a *NalarupaApp) drawCanvasOverlays(p *ui.Painter, vpRect ui.Rect, topFrame
 		p.Stroke(wr, C.Select, 0, 1)
 	}
 
-	// 8. Draw creation ghost
+	// 8. Draw creation ghost (with spatially-continuous corner handles + live W x H pill)
 	if dg := a.Canvas.drawDrag; dg != nil {
+		docW := math.Abs(dg.curDoc[0] - dg.startDoc[0])
+		docH := math.Abs(dg.curDoc[1] - dg.startDoc[1])
 		r := RectD{
 			X: min(dg.startDoc[0], dg.curDoc[0]),
 			Y: min(dg.startDoc[1], dg.curDoc[1]),
-			W: math.Abs(dg.curDoc[0] - dg.startDoc[0]),
-			H: math.Abs(dg.curDoc[1] - dg.startDoc[1]),
+			W: docW,
+			H: docH,
 		}
 		wr := toWinRect(r)
 		rad := float32(0)
 		if dg.tool == "ellipse" {
 			rad = min(wr.W, wr.H) / 2
 		}
-		p.Fill(wr, ui.Hex("#3B82F622"), rad)
-		p.Stroke(wr, C.Select, rad, 1)
+		p.Fill(wr, ui.Hex("#3B82F61E"), rad)
+		p.Stroke(wr, C.Select, rad, 1.5)
+		if wr.W >= 8 || wr.H >= 8 {
+			for _, pt := range [4][2]float32{
+				{wr.X, wr.Y},
+				{wr.X + wr.W, wr.Y},
+				{wr.X + wr.W, wr.Y + wr.H},
+				{wr.X, wr.Y + wr.H},
+			} {
+				hr := ui.Rect{X: pt[0] - 3.5, Y: pt[1] - 3.5, W: 7, H: 7}
+				p.Fill(hr, ui.Hex("#FFFFFF"), 1)
+				p.Stroke(hr, C.Select, 1, 1)
+			}
+			sizeStr := fmt.Sprintf("%s × %s", formatNum(math.Round(docW)), formatNum(math.Round(docH)))
+			pillW := float32(len(sizeStr)*6 + 14)
+			pill := ui.Rect{X: wr.X + wr.W/2 - pillW/2, Y: wr.Y + wr.H + 6, W: pillW, H: 18}
+			p.Fill(pill, C.SelectSolid, 4)
+			p.Text(pill.X+7, pill.Y+3, sizeStr, 10, ui.Hex("#FFFFFF"))
+		}
+	}
+
+	// 8b. Newly-created shape 180ms EaseOutQuint settle ring (tactile confirmation on mouse release, driven by VSync nowMS)
+	if !reduced && a.Canvas.createdPulseID != "" {
+		if a.Canvas.createdPulseStartMS <= 0 {
+			a.Canvas.createdPulseStartMS = nowMS
+		}
+		elMS := nowMS - a.Canvas.createdPulseStartMS
+		if elMS >= 0 && elMS < 180.0 {
+			needOverlayAnim = true
+			if singleFrame != nil && len(a.State.Selection) == 1 && a.State.Selection[0] == a.Canvas.createdPulseID {
+				u := elMS / 180.0
+				e := EaseOutQuint64(u)
+				pad := float32((1.0 - e) * 6.0)
+				sr := toWinRect(Painted(*singleFrame))
+				pr := ui.Rect{X: sr.X - pad, Y: sr.Y - pad, W: sr.W + pad*2, H: sr.H + pad*2}
+				p.Stroke(pr, ui.RGBA(59, 130, 246, float32((1.0-u)*0.65)), 2, 1.5)
+			}
+		} else {
+			a.Canvas.createdPulseID = ""
+			a.Canvas.createdPulseStartMS = 0
+		}
 	}
 
 	// 9. Vector Pen contour & handle overlay
 	if ps := a.Canvas.pen; ps != nil {
 		a.drawPenOverlay(p, ox, oy, ps)
 	}
+	return needOverlayAnim
 }
 
 func (a *NalarupaApp) drawPenOverlay(p *ui.Painter, ox, oy float32, ps *penEditState) {
@@ -659,7 +1250,7 @@ func (a *NalarupaApp) drawPenOverlay(p *ui.Painter, ox, oy float32, ps *penEditS
 			}
 		}
 	}
-	p.StrokePath(&a.Canvas.overlayPath, 1, ui.Hex("#AAAAAA"))
+	p.StrokePath(&a.Canvas.overlayPath, 1, C.CanvasLabel)
 
 	// Rubber-band preview in draw submode
 	if ps.sub == "draw" && ps.activeEnd != nil && ps.hasHover && ps.drag == nil {
@@ -742,9 +1333,9 @@ func (a *NalarupaApp) buildCanvasChildren(c *ui.Context, topFrames, selBoxes []B
 			continue
 		}
 		isSel := slices.Contains(a.State.Selection, f.ID)
-		lblCol := C.Muted
+		lblCol := C.CanvasLabel
 		if isSel {
-			lblCol = C.Select
+			lblCol = C.SelectSolid
 		}
 		maxW := max(float32(40), sw)
 		ui.Box(c.Key("frame-label-" + f.ID)).
@@ -755,7 +1346,7 @@ func (a *NalarupaApp) buildCanvasChildren(c *ui.Context, topFrames, selBoxes []B
 			Height(16).
 			IgnoreInput(true).
 			Children(func() {
-				ui.Text(c, f.Name).FontSize(11).TextColor(lblCol).MaxLines(1)
+				ui.Text(c, f.Name).FontSize(11).FontWeight(500).TextColor(lblCol).MaxLines(1)
 			})
 	}
 
@@ -768,9 +1359,9 @@ func (a *NalarupaApp) buildCanvasChildren(c *ui.Context, topFrames, selBoxes []B
 			Width(fr.sw).
 			Height(20).
 			Radius(4).
-			Background(C.Panel2).
-			Border(1, C.Select).
-			TextColor(C.Text).
+			Background(ui.Hex("#FFFFFF")).
+			Border(1.5, C.Select).
+			TextColor(ui.Hex("#0F172A")).
 			FontSize(11).
 			Label("Frame name").
 			Bind(&fr.handle)
@@ -983,21 +1574,7 @@ func (a *NalarupaApp) resizeHandleScreenPoints(b Box) []handlePoint {
 }
 
 func (a *NalarupaApp) nodeCornerRadii(id string) ([4]float64, bool) {
-	var nd NodeDetail
-	if !a.Bridge.TryCall("node", map[string]any{"id": id}, &nd) || !nd.Exists {
-		return [4]float64{}, true
-	}
-	raw, ok := nd.Node["cornerRadius"]
-	if !ok || raw == nil {
-		return [4]float64{}, true
-	}
-	if arr, ok := raw.([]any); ok && len(arr) == 4 {
-		r := [4]float64{asFloat(arr[0]), asFloat(arr[1]), asFloat(arr[2]), asFloat(arr[3])}
-		allEq := r[0] == r[1] && r[1] == r[2] && r[2] == r[3]
-		return r, allEq
-	}
-	v := max(0.0, asFloat(raw))
-	return [4]float64{v, v, v, v}, true
+	return a.Bridge.NodeCornerRadiiDirect(id)
 }
 
 func (a *NalarupaApp) radiusHandleScreenPoints(b Box, radii [4]float64) [4][2]float32 {
@@ -1073,8 +1650,7 @@ func (a *NalarupaApp) hitResizeOrRotate(b Box, sx, sy float64, allowRotate bool)
 }
 
 func (a *NalarupaApp) frameLabelAt(sx, sy float64) *Box {
-	var topFrames []Box
-	a.Bridge.TryCall("frames", nil, &topFrames)
+	topFrames := a.ensureFramesFetched()
 	for i := len(topFrames) - 1; i >= 0; i-- {
 		f := topFrames[i]
 		if f.Type != "frame" || f.Placeholder {
@@ -1097,10 +1673,16 @@ func (a *NalarupaApp) handleCanvasInput(ev ui.InputEvent) bool {
 	case ui.InputScroll:
 		sx, sy := float64(ev.X), float64(ev.Y)
 		if (ev.Mods&ui.Ctrl != 0) || (ev.Mods&ui.Cmd != 0) {
-			factor := math.Exp(float64(-ev.DY) * 0.0025)
-			a.ZoomAt(sx, sy, a.Cam.Zoom*factor, false)
+			baseZ := a.Cam.Zoom
+			if a.Canvas.camAnim.active && a.Canvas.camAnim.mode == "zoom-anchor" &&
+				math.Hypot(sx-a.Canvas.camAnim.anchorSX, sy-a.Canvas.camAnim.anchorSY) <= 8.0 {
+				baseZ = a.Canvas.camAnim.targetZ
+			}
+			factor := math.Exp(float64(-ev.DY) * 0.0032)
+			a.ZoomAt(sx, sy, baseZ*factor, false)
 			return true
 		}
+		a.Canvas.camAnim = camAnimState{}
 		z := max(0.02, a.Cam.Zoom)
 		if (ev.Mods&ui.Shift != 0) && ev.DX == 0 {
 			a.Cam.X += float64(ev.DY) / z
@@ -1108,17 +1690,20 @@ func (a *NalarupaApp) handleCanvasInput(ev ui.InputEvent) bool {
 			a.Cam.X += float64(ev.DX) / z
 			a.Cam.Y += float64(ev.DY) / z
 		}
-		a.Canvas.markFastDirty()
+		a.Canvas.markPanDirty()
+		a.Canvas.hasHoverCache = false
 		a.syncViewport()
 		return true
 
 	case ui.InputZoom:
-		a.ZoomAt(float64(ev.X), float64(ev.Y), a.Cam.Zoom*float64(ev.Scale), false)
+		// Trackpad pinch gestures already arrive at 60Hz+ per-frame deltas: apply smoothly with anchor
+		a.ZoomAtImmediate(float64(ev.X), float64(ev.Y), a.Cam.Zoom*float64(ev.Scale), false)
 		return true
 
 	case ui.InputKeyDown:
 		if ev.Key == ui.KeySpace && a.Canvas.textEdit == nil && a.Canvas.frameRename == nil {
 			a.Canvas.SpaceHeld = true
+			a.syncGrabCursorNow()
 			return true
 		}
 		if a.Canvas.textEdit == nil && a.Canvas.frameRename == nil {
@@ -1129,6 +1714,7 @@ func (a *NalarupaApp) handleCanvasInput(ev ui.InputEvent) bool {
 	case ui.InputKeyUp:
 		if ev.Key == ui.KeySpace {
 			a.Canvas.SpaceHeld = false
+			a.syncGrabCursorNow()
 			return true
 		}
 		return false
@@ -1172,6 +1758,7 @@ func (a *NalarupaApp) handleCanvasInput(ev ui.InputEvent) bool {
 }
 
 func (a *NalarupaApp) onCanvasPointerDown(ev ui.InputEvent) bool {
+	a.Canvas.camAnim = camAnimState{}
 	sx, sy := float64(ev.X), float64(ev.Y)
 	a.Canvas.PointerSX = sx
 	a.Canvas.PointerSY = sy
@@ -1202,6 +1789,7 @@ func (a *NalarupaApp) onCanvasPointerDown(ev ui.InputEvent) bool {
 			startCX: a.Cam.X,
 			startCY: a.Cam.Y,
 		}
+		a.syncGrabCursorNow()
 		return true
 	}
 	if ev.Button != 0 {
@@ -1378,18 +1966,8 @@ func (a *NalarupaApp) pickHitTarget(chain []string, deep, doubleClick bool) stri
 	}
 	// If only a top-level frame is hit, check whether it's an artboard (has children and layout == "none")
 	if len(chain) == 1 {
-		var nd NodeDetail
-		if a.Bridge.TryCall("node", map[string]any{"id": chain[0]}, &nd) && nd.Exists {
-			ntype, _ := nd.Node["type"].(string)
-			layout, _ := nd.Node["layout"].(string)
-			var kids []Box
-			a.Bridge.TryCall("children_boxes", map[string]any{"id": chain[0]}, &kids)
-			if ntype == "frame" && len(kids) > 0 && (layout == "" || layout == "none") {
-				// Clicking empty interior of a freeform artboard starts marquee unless already selected
-				if !slices.Contains(a.State.Selection, chain[0]) {
-					return ""
-				}
-			}
+		if a.Bridge.IsFreeformArtboardDirect(chain[0]) && !slices.Contains(a.State.Selection, chain[0]) {
+			return ""
 		}
 		return chain[0]
 	}
@@ -1408,11 +1986,8 @@ func (a *NalarupaApp) pickHitTarget(chain []string, deep, doubleClick bool) stri
 		}
 	}
 	// Default: if chain[0] is a top-level frame, select its direct child chain[1]
-	var rootND NodeDetail
-	if a.Bridge.TryCall("node", map[string]any{"id": chain[0]}, &rootND) && rootND.Exists {
-		if t, _ := rootND.Node["type"].(string); t == "frame" && len(chain) >= 2 {
-			return chain[1]
-		}
+	if len(chain) >= 2 && a.Bridge.NodeTypeDirect(chain[0]) == "frame" {
+		return chain[1]
 	}
 	return chain[0]
 }
@@ -1580,25 +2155,28 @@ func (a *NalarupaApp) startRotateGesture(b Box, docPt Pt) {
 	}
 }
 
-func (a *NalarupaApp) onCanvasPointerMove(ev ui.InputEvent) bool {
+func (a *NalarupaApp) flushPendingDragMove() {
+	if ev := a.Canvas.pendingDragEv; ev != nil {
+		evVal := *ev
+		a.Canvas.pendingDragEv = nil
+		a.Canvas.pendingDragArmed = false
+		a.Canvas.lastDragStepAt = time.Now()
+		a.applyCanvasDragMove(evVal)
+	}
+}
+
+func (a *NalarupaApp) applyCanvasDragMove(ev ui.InputEvent) bool {
 	sx, sy := float64(ev.X), float64(ev.Y)
-	a.Canvas.PointerSX = sx
-	a.Canvas.PointerSY = sy
-	a.Canvas.Inside = true
-	a.Canvas.Mods = ev.Mods
 	docPt := a.screenToDoc(sx, sy)
 
 	if pg := a.Canvas.Pan; pg != nil {
 		z := max(0.02, a.Cam.Zoom)
 		a.Cam.X = pg.startCX - (sx-pg.startSX)/z
 		a.Cam.Y = pg.startCY - (sy-pg.startSY)/z
-		a.Canvas.markFastDirty()
-		a.syncViewport()
+		a.Canvas.markPanDirty()
+		a.Canvas.hasHoverCache = false
+		a.syncViewportNonBlocking()
 		return true
-	}
-
-	if a.Tool == "pen" || a.Canvas.pen != nil {
-		return a.onPenPointerMove(docPt, ev.Mods)
 	}
 
 	if dg := a.Canvas.drawDrag; dg != nil {
@@ -1622,14 +2200,7 @@ func (a *NalarupaApp) onCanvasPointerMove(ev ui.InputEvent) bool {
 			W: math.Abs(mq.curDoc[0] - mq.startDoc[0]),
 			H: math.Abs(mq.curDoc[1] - mq.startDoc[1]),
 		}
-		var hits []string
-		a.Bridge.TryCall("nodes_in_rect", map[string]any{
-			"x":    r.X,
-			"y":    r.Y,
-			"w":    r.W,
-			"h":    r.H,
-			"deep": mq.deep,
-		}, &hits)
+		hits := a.Bridge.NodesInRectDirect(r.X, r.Y, r.W, r.H, mq.deep)
 		if mq.shift {
 			combined := append([]string{}, mq.baseSel...)
 			for _, id := range hits {
@@ -1658,21 +2229,105 @@ func (a *NalarupaApp) onCanvasPointerMove(ev ui.InputEvent) bool {
 	if mv := a.Canvas.Move; mv != nil {
 		return a.updateMoveGesture(mv, sx, sy, docPt, ev.Mods)
 	}
+	return false
+}
 
-	// Idle hover update (cursor + hovered node)
+func (a *NalarupaApp) onCanvasPointerMove(ev ui.InputEvent) bool {
+	sx, sy := float64(ev.X), float64(ev.Y)
+	a.Canvas.PointerSX = sx
+	a.Canvas.PointerSY = sy
+	a.Canvas.Inside = true
+	a.Canvas.Mods = ev.Mods
+	docPt := a.screenToDoc(sx, sy)
+
+	if a.Canvas.Pan == nil && (a.Tool == "pen" || a.Canvas.pen != nil) {
+		return a.onPenPointerMove(docPt, ev.Mods)
+	}
+
+	// Decouple high-frequency pointer motion (500Hz-1000Hz) from rendering: coalescePan/Draw/Marquee/Move/Resize/Rotate/Radius
+	// to VSync cadence (~16ms) with zero heap allocations for intermediate events.
+	if a.Canvas.Pan != nil || a.Canvas.drawDrag != nil || a.Canvas.Marquee != nil ||
+		a.Canvas.Radius != nil || a.Canvas.Rotate != nil || a.Canvas.Resize != nil || a.Canvas.Move != nil {
+		now := time.Now()
+		if !a.Canvas.lastDragStepAt.IsZero() && now.Sub(a.Canvas.lastDragStepAt) < 15*time.Millisecond {
+			a.Canvas.pendingDragSlot = ev
+			a.Canvas.pendingDragEv = &a.Canvas.pendingDragSlot
+			if !a.Canvas.pendingDragArmed {
+				a.Canvas.pendingDragArmed = true
+				return true
+			}
+			return false
+		}
+		a.Canvas.pendingDragEv = nil
+		a.Canvas.pendingDragArmed = false
+		a.Canvas.lastDragStepAt = now
+		return a.applyCanvasDragMove(ev)
+	}
+
+	// Idle hover update: only request a UI frame when hovered node, cursor, or Alt-measurement actually changes.
+	prevHover := a.Canvas.HoverID
+	prevCursor := a.Canvas.ActiveCursor
 	a.updateIdleHover(sx, sy, docPt)
+	if a.Canvas.HoverID != prevHover || a.Canvas.ActiveCursor != prevCursor {
+		return true
+	}
+	if (ev.Mods&ui.Alt != 0) && len(a.State.Selection) > 0 {
+		now := time.Now()
+		if a.Canvas.lastDragStepAt.IsZero() || now.Sub(a.Canvas.lastDragStepAt) >= 16*time.Millisecond {
+			a.Canvas.lastDragStepAt = now
+			return true
+		}
+	}
 	return false
 }
 
 func (a *NalarupaApp) updateIdleHover(sx, sy float64, docPt Pt) {
-	a.Canvas.ActiveCursor = ui.CursorDefault
 	if a.Tool != "move" {
+		a.Canvas.ActiveCursor = ui.CursorDefault
 		a.Canvas.HoverID = ""
+		a.Canvas.hasHoverCache = false
 		return
 	}
+	if a.Canvas.hasHoverCache &&
+		math.Abs(a.Canvas.lastHoverSX-sx) < 0.25 &&
+		math.Abs(a.Canvas.lastHoverSY-sy) < 0.25 &&
+		a.Canvas.lastHoverVer == a.State.Version &&
+		a.Canvas.lastHoverMods == a.Canvas.Mods &&
+		a.Canvas.lastHoverTool == a.Tool &&
+		a.Canvas.lastHoverPanX == a.Cam.X &&
+		a.Canvas.lastHoverPanY == a.Cam.Y &&
+		a.Canvas.lastHoverZoom == a.Cam.Zoom &&
+		slices.Equal(a.Canvas.lastHoverSel, a.State.Selection) {
+		return
+	}
+	a.Canvas.hasHoverCache = false
+	a.Canvas.ActiveCursor = ui.CursorDefault
 	var selBoxes []Box
+	selBoxesOK := true
 	if len(a.State.Selection) > 0 {
-		a.Bridge.TryCall("boxes", map[string]any{"ids": a.State.Selection}, &selBoxes)
+		if a.Canvas.cachedSelVer == a.State.Version && slices.Equal(a.Canvas.cachedSelIDs, a.State.Selection) && a.Canvas.cachedSelBoxes != nil {
+			selBoxes = a.Canvas.cachedSelBoxes
+		} else if a.Window != nil {
+			if got, ok := a.Bridge.TryBoxesDirect(a.State.Selection); ok {
+				selBoxes = got
+			} else {
+				selBoxesOK = false
+			}
+		} else {
+			selBoxes = a.Bridge.BoxesDirect(a.State.Selection)
+		}
+	}
+	if selBoxesOK {
+		a.Canvas.hasHoverCache = true
+		a.Canvas.lastHoverSX = sx
+		a.Canvas.lastHoverSY = sy
+		a.Canvas.lastHoverVer = a.State.Version
+		a.Canvas.lastHoverMods = a.Canvas.Mods
+		a.Canvas.lastHoverTool = a.Tool
+		a.Canvas.lastHoverPanX = a.Cam.X
+		a.Canvas.lastHoverPanY = a.Cam.Y
+		a.Canvas.lastHoverZoom = a.Cam.Zoom
+		a.Canvas.lastHoverSel = append(a.Canvas.lastHoverSel[:0], a.State.Selection...)
 	}
 	if len(selBoxes) == 1 {
 		if ci, _, _ := a.hitRadiusHandle(selBoxes[0], sx, sy); ci >= 0 {
@@ -1707,8 +2362,7 @@ func (a *NalarupaApp) updateIdleHover(sx, sy float64, docPt Pt) {
 		a.Canvas.HoverID = lbl.ID
 		return
 	}
-	var chain []string
-	a.Bridge.TryCall("hit", map[string]any{"x": docPt[0], "y": docPt[1]}, &chain)
+	chain := a.Bridge.HitDirect(docPt[0], docPt[1])
 	a.Canvas.HoverID = a.pickHitTarget(chain, (a.Canvas.Mods&ui.Cmd != 0)||(a.Canvas.Mods&ui.Ctrl != 0), false)
 }
 
@@ -2021,20 +2675,20 @@ func (a *NalarupaApp) updateMoveGesture(mv *moveGesture, sx, sy float64, docPt P
 		return true
 	}
 
-	// Freeform move: apply delta in each item's parent coordinate space
+	// Freeform move: apply delta in each item's parent coordinate space in one zero-JSON batch
+	var batchIDs []string
+	var batchXs, batchYs []float64
 	for _, it := range mv.items {
 		if it.parentLayout == "horizontal" || it.parentLayout == "vertical" {
 			continue
 		}
 		lp := InParent(it.parentM, dx, dy)
-		var st CoreState
-		if err := a.Bridge.Call("update", map[string]any{
-			"ids": []string{it.id},
-			"props": map[string]any{
-				"x": math.Round((it.origX+lp[0])*100) / 100,
-				"y": math.Round((it.origY+lp[1])*100) / 100,
-			},
-		}, &st); err == nil {
+		batchIDs = append(batchIDs, it.id)
+		batchXs = append(batchXs, math.Round((it.origX+lp[0])*100)/100)
+		batchYs = append(batchYs, math.Round((it.origY+lp[1])*100)/100)
+	}
+	if len(batchIDs) > 0 {
+		if st, ok := a.Bridge.UpdateXYBatchDirect(batchIDs, batchXs, batchYs); ok {
 			a.State = st
 		}
 	}
@@ -2061,9 +2715,20 @@ func (a *NalarupaApp) updateMoveGesture(mv *moveGesture, sx, sy float64, docPt P
 }
 
 func (a *NalarupaApp) onCanvasPointerUp(ev ui.InputEvent) bool {
+	defer func() {
+		a.Canvas.lastDragStepAt = time.Time{}
+		a.Canvas.pendingDragEv = nil
+		a.Canvas.pendingDragArmed = false
+		a.Canvas.hasHoverCache = false
+	}()
+	if !ev.Canceled {
+		a.flushPendingDragMove()
+	}
 	if a.Canvas.Pan != nil {
 		a.Canvas.Pan = nil
+		a.syncGrabCursorNow()
 		a.Canvas.markSharpDirty()
+		a.syncViewport()
 		return true
 	}
 	if a.Tool == "pen" || a.Canvas.pen != nil {
@@ -2150,6 +2815,8 @@ func (a *NalarupaApp) onCanvasPointerUp(ev ui.InputEvent) bool {
 
 func (cs *CanvasState) cancelDrawDrag() {
 	cs.drawDrag = nil
+	cs.pendingDragEv = nil
+	cs.pendingDragArmed = false
 }
 
 func (cs *CanvasState) finishDrawDrag(a *NalarupaApp) {
@@ -2239,6 +2906,8 @@ func (cs *CanvasState) finishDrawDrag(a *NalarupaApp) {
 	a.State = res.State
 	a.syncWindowTitle()
 	a.onSelectionChanged(a.State.Selection)
+	cs.createdPulseID = res.ID
+	cs.createdPulseStartMS = 0
 	if dg.tool == "text" {
 		cs.startInlineTextEdit(a, res.ID)
 	}

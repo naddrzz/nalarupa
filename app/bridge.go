@@ -158,6 +158,7 @@ func NewBridge(dataDir string) *Bridge {
 		dataDir = engine.DataDir()
 	}
 	eng := engine.New(dataDir)
+	eng.ProgressiveSlides = true
 	agent.Attach(eng)
 	return &Bridge{eng: eng}
 }

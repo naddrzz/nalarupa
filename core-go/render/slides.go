@@ -29,6 +29,8 @@ const (
 	// MaxSlides: every slide is snapshotted on each sync (and checked against all the others), so a bulk
 	// insert animates only its first few nodes; the rest appear in place.
 	MaxSlides = 32
+	// ProgressiveMaxSlides is the slide cap when desktop cursor-coupled progressive drawing is enabled.
+	ProgressiveMaxSlides = 64
 )
 
 type slideClip struct {
@@ -59,6 +61,20 @@ type Slide struct {
 	// rest is how long after start the offset decay restarts from `from`: a fading node a reflow moved
 	// glides on from where it shows, while its fade keeps its own clock.
 	rest float64
+	// delay holds back a progressive slide's reveal (in seconds after start) so burst/nested inserts materialize sequentially.
+	delay float64
+	// smooth uses a crisp EaseOutQuint glide + sub-pixel compositing for interactive progressive reveals.
+	smooth bool
+	// cursorHeld keeps this slide unrevealed (or holding beforeTree for edits) until the agent cursor arrives at it.
+	cursorHeld   bool
+	holdDeadline time.Time
+	isEdit       bool
+	beforeTree   *usvg.Tree
+	beforeClips  []*usvg.Tree
+	beforeHash   uint64
+	beforeOrigin [2]float64
+	hasBeforeOrg bool
+	beforeCache  *slideCache
 	// tree is the node alone in absolute doc coordinates, without descendants that slide themselves.
 	tree *usvg.Tree
 	// lin is the linear part of the ancestors' painted matrix: it carries the offset into the parent's frame.
@@ -68,13 +84,97 @@ type Slide struct {
 	// clips are the clip shapes of the clipping ancestors, each with the ids whose slide moves it.
 	clips []slideClip
 	// over is what its own top-level frame stacks above it, repainted over it.
-	over  *usvg.Tree
-	cache *slideCache
+	over     *usvg.Tree
+	treeHash uint64
+	cache    *slideCache
 }
 
 // NewSlide is a slide of node id inserted at now.
 func NewSlide(id string, now time.Time) *Slide {
 	return &Slide{ID: id, added: now, from: [2]float64{0, slideOffset}, fade: true, fresh: true, lin: [4]float64{1, 0, 0, 1}}
+}
+
+// NewEditSlide creates a cursor-coupled visual edit transition from beforeTree to the updated node id.
+func NewEditSlide(id string, now time.Time, beforeTree *usvg.Tree, beforeClips []*usvg.Tree, beforeHash uint64, beforeOrigin [2]float64, hasBeforeOrg bool) *Slide {
+	return &Slide{
+		ID:           id,
+		added:        now,
+		from:         [2]float64{0, 0},
+		fade:         true,
+		fresh:        false,
+		smooth:       true,
+		isEdit:       true,
+		beforeTree:   beforeTree,
+		beforeClips:  beforeClips,
+		beforeHash:   beforeHash,
+		beforeOrigin: beforeOrigin,
+		hasBeforeOrg: hasBeforeOrg,
+		lin:          [4]float64{1, 0, 0, 1},
+	}
+}
+
+const (
+	smoothSlideDur = 0.18
+	editMorphDur   = 0.17
+)
+
+// SetDelay sets a pre-reveal stagger delay (seconds) before this slide begins fading and gliding into place.
+func (s *Slide) SetDelay(sec float64) {
+	if sec > 0 {
+		s.delay = sec
+	} else {
+		s.delay = 0
+	}
+}
+
+// SetSmooth enables 180ms EaseOutQuint progressive reveal with sub-pixel compositing.
+func (s *Slide) SetSmooth(on bool) {
+	s.smooth = on
+	if on && !s.isEdit && s.fade && s.from == ([2]float64{0, slideOffset}) {
+		s.from = [2]float64{0, 10.0}
+	}
+}
+
+// SetCursorHeld gates this slide's reveal/edit transition until ReleaseCursor is called (or maxHold elapses).
+// Any pre-configured stagger delay is preserved for safety-timeout fallbacks and cleared by ReleaseCursor on arrival.
+func (s *Slide) SetCursorHeld(now time.Time, maxHold time.Duration) {
+	s.cursorHeld = true
+	if maxHold > 0 {
+		s.holdDeadline = now.Add(maxHold)
+	} else {
+		s.holdDeadline = time.Time{}
+	}
+	if s.smooth && !s.isEdit && s.fade {
+		s.from = [2]float64{0, 10.0}
+	}
+}
+
+// ExtendHold extends the safety hold deadline while an active cursor still has this node queued ahead.
+func (s *Slide) ExtendHold(deadline time.Time) {
+	if s.cursorHeld && deadline.After(s.holdDeadline) {
+		s.holdDeadline = deadline
+	}
+}
+
+// ReleaseCursor triggers this slide's reveal or edit morph immediately at now.
+func (s *Slide) ReleaseCursor(now time.Time) {
+	if s.cursorHeld {
+		s.cursorHeld = false
+		s.delay = 0
+		s.start = now
+		s.started = true
+	}
+}
+
+// IsHeld reports whether this slide is still waiting for the agent cursor to arrive at now.
+func (s *Slide) IsHeld(now time.Time) bool {
+	if !s.cursorHeld {
+		return false
+	}
+	if !s.holdDeadline.IsZero() && !now.Before(s.holdDeadline) {
+		return false
+	}
+	return true
 }
 
 // since is `now.duration_since(t)`: saturating at zero.
@@ -89,7 +189,39 @@ func (s *Slide) elapsed(now time.Time) float64 {
 
 // State is (offset x, offset y, opacity) at now.
 func (s *Slide) State(now time.Time) (float64, float64, float64) {
+	if s.IsHeld(now) {
+		if s.fade {
+			return s.from[0], s.from[1], 0
+		}
+		return s.from[0], s.from[1], 1
+	}
 	t := s.elapsed(now)
+	if s.delay > 0 {
+		if t < s.delay {
+			if s.fade {
+				return s.from[0], s.from[1], 0
+			}
+			return s.from[0], s.from[1], 1
+		}
+		t -= s.delay
+	}
+	if s.smooth && s.rest == 0 {
+		dur := smoothSlideDur
+		if s.isEdit {
+			dur = editMorphDur
+		}
+		u := fmin(fmax(t/dur, 0), 1)
+		inv := 1 - u
+		inv2 := inv * inv
+		// EaseOutQuint (1 - (1-u)^5): fast initial snap for instant feedback, silky settle over final pixels.
+		ease := 1 - inv2*inv2*inv
+		k := 1 - ease
+		a := 1.0
+		if s.fade {
+			a = ease
+		}
+		return s.from[0] * k, s.from[1] * k, a
+	}
 	k := math.Exp(-slideDecay * (t - s.rest))
 	a := 1.0
 	if s.fade {
@@ -98,12 +230,41 @@ func (s *Slide) State(now time.Time) (float64, float64, float64) {
 	return s.from[0] * k, s.from[1] * k, a
 }
 
+// BeforeAlpha returns the pre-edit layer weight during an edit transition (1.0 while held, 1-afterAlpha once released).
+func (s *Slide) BeforeAlpha(now time.Time) float64 {
+	if s.beforeTree == nil {
+		return 0
+	}
+	if s.IsHeld(now) {
+		return 1.0
+	}
+	_, _, afterAlpha := s.State(now)
+	if afterAlpha <= 0 {
+		return 1.0
+	}
+	if afterAlpha >= 1 {
+		return 0
+	}
+	return fmax(0, 1.0-afterAlpha)
+}
+
 // duration is how long after start the slide is done: its fade, and its offset decayed from `from`,
 // however far a reflow moved it, below 0.5.
 func (s *Slide) duration() time.Duration {
+	if s.smooth && s.rest == 0 {
+		dur := smoothSlideDur
+		if s.isEdit {
+			dur = editMorphDur
+		}
+		return time.Duration(math.Round((s.delay + dur) * 1e9))
+	}
 	far := fmax(math.Abs(s.from[0]), math.Abs(s.from[1]))
-	settle := s.rest + fmax(math.Log(far/0.5), 0)/slideDecay
-	return max(slideTime, time.Duration(math.Round(settle*1e9)))
+	settle := s.delay + s.rest + fmax(math.Log(far/0.5), 0)/slideDecay
+	minDur := slideTime
+	if s.delay > 0 {
+		minDur += time.Duration(math.Round(s.delay * 1e9))
+	}
+	return max(minDur, time.Duration(math.Round(settle*1e9)))
 }
 
 // ShiftSiblings is the layout change animation on insert: children of the new node's ancestors that the
@@ -216,7 +377,12 @@ func holds(d *doc.Doc, id, inner string) bool {
 // its ancestors are opaque, and no inserted node already sliding holds parent (its snapshot carries the
 // new node along).
 func (r *Renderer) CanSlideInto(d *doc.Doc, parent string) bool {
-	if len(r.Slides) >= MaxSlides || dimmed(d, parent) {
+	return r.CanSlideIntoWithCap(d, parent, MaxSlides)
+}
+
+// CanSlideIntoWithCap is CanSlideInto with a caller-specified slide capacity.
+func (r *Renderer) CanSlideIntoWithCap(d *doc.Doc, parent string, capSlides int) bool {
+	if len(r.Slides) >= capSlides || dimmed(d, parent) {
 		return false
 	}
 	for _, s := range r.Slides {
@@ -227,13 +393,83 @@ func (r *Renderer) CanSlideInto(d *doc.Doc, parent string) bool {
 	return true
 }
 
+// SnapshotNodeTree builds an isolated pre-edit usvg.Tree, static ancestor clip masks, and doc-space origin
+// for node id before a script mutates it.
+func (r *Renderer) SnapshotNodeTree(cx *Ctx, id string) (*usvg.Tree, []*usvg.Tree, uint64, [2]float64, bool) {
+	top := cx.Doc.TopIndex(id)
+	if top < 0 {
+		return nil, nil, 0, [2]float64{}, false
+	}
+	root := cx.LaidOutLive(top)
+	if root == nil {
+		return nil, nil, 0, [2]float64{}, false
+	}
+	node := root.Find(id)
+	if node == nil || svg.Blends(node) {
+		return nil, nil, 0, [2]float64{}, false
+	}
+	var chain []*resolve.RNode
+	ancestorsOf(root, id, &chain)
+	var m *[6]float64
+	alpha := 1.0
+	for _, n := range chain {
+		if svg.IsTurned(n) {
+			c := Compose(m, svg.OwnMatrix(n))
+			m = &c
+		}
+		op, ok := n.F("opacity")
+		if !ok {
+			op = 1
+		}
+		alpha *= fmin(op, 1)
+	}
+	if alpha <= 0 {
+		return nil, nil, 0, [2]float64{}, false
+	}
+	var clips []*usvg.Tree
+	var clipHash uint64
+	var turned *[6]float64
+	for _, a := range chain {
+		if svg.IsTurned(a) {
+			c := Compose(turned, svg.OwnMatrix(a))
+			turned = &c
+		}
+		if clipMarkup, ok := svg.ClipSVG(a, turned); ok {
+			if ct := cx.parse(clipMarkup); ct != nil {
+				clips = append(clips, ct)
+				clipHash = rotl(clipHash, 13) ^ svg.FxHash(clipMarkup)
+			}
+		}
+	}
+	skip := make(map[string]bool, len(r.Slides))
+	for _, s := range r.Slides {
+		if s.ID != id {
+			skip[s.ID] = true
+		}
+	}
+	e := cx.emitter()
+	e.Skip = skip
+	e.Node(node)
+	e.Wrap(m, alpha)
+	markup := e.Finish(nil)
+	t := cx.parse(markup)
+	if t == nil {
+		return nil, nil, 0, [2]float64{}, false
+	}
+	return t, clips, svg.FxHash(markup) ^ clipHash, [2]float64{node.X - node.BX, node.Y - node.BY}, true
+}
+
 // SettleCovered settles the slides a node that does not slide stacks above and overlaps: slides paint
 // over the finished view, so they would hide it until they end. Latest first, so a settled slide's own
 // content counts against the slides below it. True if any settled; the caller syncs again.
 func (r *Renderer) SettleCovered() bool {
 	sliding := map[string]bool{}
+	protected := map[string]bool{}
 	for _, s := range r.Slides {
 		sliding[s.ID] = true
+		if s.cursorHeld || s.isEdit {
+			protected[s.ID] = true
+		}
 	}
 	gone := map[string]bool{}
 	for _, id := range r.Order {
@@ -244,7 +480,7 @@ func (r *Renderer) SettleCovered() bool {
 		flat := layer.Flat
 		var mine []int
 		for i := range flat {
-			if sliding[flat[i].ID] {
+			if sliding[flat[i].ID] && !protected[flat[i].ID] {
 				mine = append(mine, i)
 			}
 		}
@@ -449,23 +685,25 @@ func (r *Renderer) RefreshSlides(cx *Ctx, rebuilt []string, roots map[int]*resol
 			s.tree = nil
 			continue
 		}
+		if s.isEdit && s.hasBeforeOrg {
+			dx := s.beforeOrigin[0] - (node.X - node.BX)
+			dy := s.beforeOrigin[1] - (node.Y - node.BY)
+			if math.Abs(dx) >= 0.5 || math.Abs(dy) >= 0.5 {
+				s.from = [2]float64{dx, dy}
+			} else {
+				s.from = [2]float64{0, 0}
+			}
+		}
 		e := cx.emitter()
 		e.Skip = others(s.ID)
 		e.Node(node)
 		e.Wrap(m, alpha)
-		s.tree = cx.parse(e.Finish(nil))
-		// Skipped for a top-level node, or when nothing follows it or its ancestors.
-		path := append(append([]*resolve.RNode(nil), chain...), node)
-		s.over = nil
-		for w := 0; w+1 < len(path); w++ {
-			kids := path[w].Kids
-			if len(kids) > 0 && kids[len(kids)-1].ID != path[w+1].ID {
-				e := cx.emitter()
-				e.Skip = others(s.ID)
-				e.Above(root, s.ID)
-				s.over = cx.parse(e.Finish(nil))
-				break
-			}
+		markup := e.Finish(nil)
+		mHash := svg.FxHash(markup)
+		if s.tree == nil || s.treeHash != mHash {
+			s.tree = cx.parse(markup)
+			s.treeHash = mHash
+			s.cache = nil
 		}
 		s.ancestors = nil
 		for _, a := range ids {
@@ -476,10 +714,110 @@ func (r *Renderer) RefreshSlides(cx *Ctx, rebuilt []string, roots map[int]*resol
 				s.ancestors = append(s.ancestors, a)
 			}
 		}
-		s.cache = nil
+		// Skipped for a top-level node, when nothing follows it or its ancestors, or when no subsequent non-sliding
+		// node's painted reach overlaps this slide's trajectory box (avoids O(slides * page) full-frame SVG parses).
+		path := append(append([]*resolve.RNode(nil), chain...), node)
+		s.over = nil
+		hasFollowing := false
+		for w := 0; w+1 < len(path); w++ {
+			kids := path[w].Kids
+			if len(kids) > 0 && kids[len(kids)-1].ID != path[w+1].ID {
+				hasFollowing = true
+				break
+			}
+		}
+		if hasFollowing && s.tree != nil && r.hasOverlappingFollower(topID, s, ids) {
+			e := cx.emitter()
+			e.Skip = others(s.ID)
+			e.Above(root, s.ID)
+			s.over = cx.parse(e.Finish(nil))
+		}
 	}
 	r.Slides = slices.DeleteFunc(r.Slides, func(s *Slide) bool { return slices.Contains(blended, s.ID) })
 	return len(blended) > 0
+}
+
+// hasOverlappingFollower reports whether any non-sliding node painted after s in layer topID can overlap
+// s's full slide trajectory box. When false, s.over would paint zero pixels inside s's cover rect.
+func (r *Renderer) hasOverlappingFollower(topID string, s *Slide, slidingIDs []string) bool {
+	layer, ok := r.Layers[topID]
+	if !ok || s.tree == nil {
+		return true
+	}
+	bb, ok := s.tree.Root().AbsLayerBoundingBox()
+	if !ok {
+		return false
+	}
+	span := math.Hypot(s.from[0], s.from[1]) + 2*slideOffset
+	for _, ancID := range s.ancestors {
+		for _, other := range r.Slides {
+			if other.ID == ancID {
+				span += math.Hypot(other.from[0], other.from[1])
+			}
+		}
+	}
+	traj := Rect{
+		X: float64(bb.X()) - span,
+		Y: float64(bb.Y()) - span,
+		W: float64(bb.Width()) + 2*span,
+		H: float64(bb.Height()) + 2*span,
+	}
+	if s.beforeTree != nil {
+		if bb0, ok0 := s.beforeTree.Root().AbsLayerBoundingBox(); ok0 {
+			traj = union(traj, Rect{
+				X: float64(bb0.X()) - span,
+				Y: float64(bb0.Y()) - span,
+				W: float64(bb0.Width()) + 2*span,
+				H: float64(bb0.Height()) + 2*span,
+			})
+		}
+	}
+
+	sliding := make(map[string]bool, len(slidingIDs))
+	for _, id := range slidingIDs {
+		sliding[id] = true
+	}
+	flat := layer.Flat
+	idx := -1
+	for i := range flat {
+		if flat[i].ID == s.ID {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		// Wait: sliding nodes are hidden when Sync builds layer.Flat! Let's check if flat contains sliding nodes!
+		return true
+	}
+	end := idx + 1
+	for end < len(flat) && flat[end].Depth > flat[idx].Depth {
+		end++
+	}
+	skipDepth := -1
+	for j := end; j < len(flat); j++ {
+		f := &flat[j]
+		if skipDepth >= 0 && f.Depth > skipDepth {
+			continue
+		}
+		skipDepth = -1
+		if sliding[f.ID] {
+			skipDepth = f.Depth
+			continue
+		}
+		if f.Type == "group" {
+			continue
+		}
+		if math.IsInf(f.reach, 0) {
+			return true
+		}
+		cb := canvasBox(f)
+		reach := fmax(f.reach, 4)
+		fb := Rect{X: cb.X - reach, Y: cb.Y - reach, W: cb.W + 2*reach, H: cb.H + 2*reach}
+		if overlaps(traj, fb) {
+			return true
+		}
+	}
+	return false
 }
 
 // ExpireSlides drops slides that have settled (or were never shown); true if any ended.
@@ -487,6 +825,17 @@ func (r *Renderer) ExpireSlides() bool {
 	now := r.now()
 	before := len(r.Slides)
 	r.Slides = slices.DeleteFunc(r.Slides, func(s *Slide) bool {
+		if s.IsHeld(now) {
+			return false
+		}
+		if s.cursorHeld {
+			s.cursorHeld = false
+			startAt := now
+			if !s.holdDeadline.IsZero() && s.holdDeadline.Before(now) {
+				startAt = s.holdDeadline
+			}
+			s.start, s.started = startAt, true
+		}
 		if s.started {
 			return since(now, s.start) >= s.duration()
 		}
@@ -509,6 +858,104 @@ func (r *Renderer) layerOf(id string) int {
 	return -1
 }
 
+func applyStaticClipTrees(pm *skia.Pixmap, clips []*usvg.Tree, zoom float64, x0, y0 int32) {
+	if pm == nil || len(clips) == 0 {
+		return
+	}
+	tf := skia.TransformFromRow(float32(zoom), 0, 0, float32(zoom), float32(-x0), float32(-y0))
+	for _, ct := range clips {
+		if ct == nil {
+			continue
+		}
+		shape, ok := skia.NewPixmap(pm.Width(), pm.Height())
+		if !ok {
+			continue
+		}
+		resvg.Render(ct, tf, shape.AsMut())
+		pm.ApplyMask(skia.MaskFromPixmap(shape.AsRef(), skia.MaskTypeAlpha))
+	}
+}
+
+// blendEditPixmaps cross-dissolves pre-edit bpm and post-edit pm in an isolated premultiplied RGBA buffer
+// before compositing onto out, keeping shared opaque pixels at alpha=255 (zero background bleed) while
+// smoothly fading any shrunk or expanded regions.
+func blendEditPixmaps(
+	out skia.PixmapMut, w, h uint32,
+	bpx, bpy int32, bpm *skia.Pixmap,
+	px, py int32, pm *skia.Pixmap,
+	drawTF skia.Transform, subpixel bool,
+	alpha float64,
+) (int32, int32, int32, int32, bool) {
+	bx1, by1 := bpx+int32(bpm.Width()), bpy+int32(bpm.Height())
+	ax0, ay0 := px, py
+	ax1, ay1 := px+int32(pm.Width()), py+int32(pm.Height())
+	if subpixel {
+		ax0--
+		ay0--
+		ax1++
+		ay1++
+	}
+	ux0 := max(min(bpx, ax0), 0)
+	uy0 := max(min(bpy, ay0), 0)
+	ux1 := min(max(bx1, ax1), int32(w))
+	uy1 := min(max(by1, ay1), int32(h))
+	if ux1 <= ux0 || uy1 <= uy0 {
+		return 0, 0, 0, 0, false
+	}
+	uw, uh := uint32(ux1-ux0), uint32(uy1-uy0)
+	stage, ok := skia.NewPixmap(uw, uh)
+	if !ok {
+		return 0, 0, 0, 0, false
+	}
+	apaint := skia.DefaultPixmapPaint()
+	if subpixel {
+		apaint.Quality = skia.FilterQualityBilinear
+	}
+	stage.AsMut().DrawPixmap(px-ux0, py-uy0, pm.AsRef(), &apaint, drawTF, nil)
+
+	p := uint32(math.Round(fmin(fmax(alpha, 0), 1) * 255))
+	invP := 255 - p
+	sData := stage.DataMut()
+	bData := bpm.Data()
+	bw, bh := int32(bpm.Width()), int32(bpm.Height())
+	sStride := int(uw) * 4
+	bStride := int(bw) * 4
+
+	for ry := int32(0); ry < int32(uh); ry++ {
+		by := uy0 + ry - bpy
+		sRow := int(ry) * sStride
+		if by < 0 || by >= bh {
+			for rx := int32(0); rx < int32(uw); rx++ {
+				so := sRow + int(rx)*4
+				sData[so+0] = uint8((p*uint32(sData[so+0]) + 127) / 255)
+				sData[so+1] = uint8((p*uint32(sData[so+1]) + 127) / 255)
+				sData[so+2] = uint8((p*uint32(sData[so+2]) + 127) / 255)
+				sData[so+3] = uint8((p*uint32(sData[so+3]) + 127) / 255)
+			}
+			continue
+		}
+		bRow := int(by) * bStride
+		for rx := int32(0); rx < int32(uw); rx++ {
+			bx := ux0 + rx - bpx
+			so := sRow + int(rx)*4
+			var br, bg, bb, ba uint32
+			if bx >= 0 && bx < bw {
+				bo := bRow + int(bx)*4
+				br = uint32(bData[bo+0])
+				bg = uint32(bData[bo+1])
+				bb = uint32(bData[bo+2])
+				ba = uint32(bData[bo+3])
+			}
+			sData[so+0] = uint8((invP*br + p*uint32(sData[so+0]) + 127) / 255)
+			sData[so+1] = uint8((invP*bg + p*uint32(sData[so+1]) + 127) / 255)
+			sData[so+2] = uint8((invP*bb + p*uint32(sData[so+2]) + 127) / 255)
+			sData[so+3] = uint8((invP*ba + p*uint32(sData[so+3]) + 127) / 255)
+		}
+	}
+	dp := skia.DefaultPixmapPaint()
+	out.DrawPixmap(ux0, uy0, stage.AsRef(), &dp, skia.Identity(), nil)
+	return ux0, uy0, ux1, uy1, true
+}
 // compositeSlides paints the sliding nodes over the w×h frame in r.Pixels (device origin = camera·zoom).
 // With solo only the nodes inside that top-level frame paint; the cached view leaves every sliding node
 // out, so skipping them would blank the presented slide.
@@ -523,10 +970,15 @@ func (r *Renderer) compositeSlides(w, h uint32, camX, camY, zoom float64, solo s
 			}
 		}
 	}
-	// A slide in another frame keeps waiting: its clock starts when it is first on screen.
+	// A slide in another frame (or still held waiting for the agent cursor) keeps waiting.
 	for _, s := range r.Slides {
-		if (shown == nil || shown[s.ID]) && !s.started {
-			s.start, s.started = now, true
+		if (shown == nil || shown[s.ID]) && !s.IsHeld(now) && !s.started {
+			startAt := now
+			if s.cursorHeld && !s.holdDeadline.IsZero() && s.holdDeadline.Before(now) {
+				startAt = s.holdDeadline
+			}
+			s.cursorHeld = false
+			s.start, s.started = startAt, true
 		}
 	}
 	// Offsets are in the parent's frame: turn them with its rotation and flips.
@@ -561,62 +1013,124 @@ func (r *Renderer) compositeSlides(w, h uint32, camX, camY, zoom float64, solo s
 				alpha *= as.alpha
 			}
 		}
-		// Slides paint away from where they lie: content just outside the viewport can show (the margin
-		// covers the start offset plus a sliding parent's).
-		m := fmax(math.Abs(s.from[0]), math.Abs(s.from[1])) + 2*slideOffset
-		view := Rect{X: camX - m, Y: camY - m, W: float64(w)/zoom + 2*m, H: float64(h)/zoom + 2*m}
-		bb, _ := s.tree.Root().AbsLayerBoundingBox()
-		b := Rect{X: float64(bb.X()), Y: float64(bb.Y()), W: float64(bb.Width()), H: float64(bb.Height())}
-		if !overlaps(b, view) {
+		waiting := s.IsHeld(now) || (s.delay > 0 && s.elapsed(now) < s.delay)
+		beforeAlpha := s.BeforeAlpha(now)
+		if waiting && beforeAlpha <= 1e-3 {
 			continue
 		}
-		x0, y0 := i32(math.Floor(fmax(b.X, view.X)*zoom)), i32(math.Floor(fmax(b.Y, view.Y)*zoom))
-		x1 := i32(math.Ceil(fmin(b.X+b.W, view.X+view.W) * zoom))
-		y1 := i32(math.Ceil(fmin(b.Y+b.H, view.Y+view.H) * zoom))
-		key := [4]int64{int64(x0), int64(y0), int64(max(x1-x0, 1)), int64(max(y1-y0, 1))}
-		if s.cache == nil || s.cache.zoom != zoom || s.cache.key != key {
-			pm, ok := skia.NewPixmap(uint32(key[2]), uint32(key[3]))
-			if !ok {
-				continue
-			}
-			resvg.Render(s.tree, skia.TransformFromRow(float32(zoom), 0, 0, float32(zoom), float32(-x0), float32(-y0)), pm.AsMut())
-			s.cache = &slideCache{zoom, key, pm}
-		}
-		pm := s.cache.pm
-		paint := skia.DefaultPixmapPaint()
-		paint.Opacity = float32(fmin(fmax(alpha, 0), 1))
-		rx, ry := i32(math.Round(dx*zoom)), i32(math.Round(dy*zoom))
-		px, py := x0-vx+rx, y0-vy+ry
-		// The clipping ancestors cut the moving node where they stand (sliding ones move theirs).
-		if len(s.clips) > 0 {
-			cut, _ := skia.PixmapFromVec(append([]byte(nil), pm.Data()...), pm.Size())
-			for _, c := range s.clips {
-				cdx, cdy := 0.0, 0.0
-				for _, o := range c.owners {
-					if os, ok := states[o]; ok {
-						cdx, cdy = cdx+os.dx, cdy+os.dy
+		m := fmax(math.Abs(s.from[0]), math.Abs(s.from[1])) + 2*slideOffset
+		view := Rect{X: camX - m, Y: camY - m, W: float64(w)/zoom + 2*m, H: float64(h)/zoom + 2*m}
+
+		var coverMinX, coverMinY, coverMaxX, coverMaxY int32
+		hasPainted := false
+		var bpx, bpy int32
+		var readyBPM *skia.Pixmap
+
+		if s.beforeTree != nil && beforeAlpha > 1e-3 {
+			bb0, _ := s.beforeTree.Root().AbsLayerBoundingBox()
+			b0 := Rect{X: float64(bb0.X()), Y: float64(bb0.Y()), W: float64(bb0.Width()), H: float64(bb0.Height())}
+			if overlaps(b0, view) {
+				bx0, by0 := i32(math.Floor(fmax(b0.X, view.X)*zoom)), i32(math.Floor(fmax(b0.Y, view.Y)*zoom))
+				bx1 := i32(math.Ceil(fmin(b0.X+b0.W, view.X+view.W) * zoom))
+				by1 := i32(math.Ceil(fmin(b0.Y+b0.H, view.Y+view.H) * zoom))
+				bkey := [4]int64{int64(bx0), int64(by0), int64(max(bx1-bx0, 1)), int64(max(by1-by0, 1))}
+				if s.beforeCache == nil || s.beforeCache.zoom != zoom || s.beforeCache.key != bkey {
+					if bpm, ok := skia.NewPixmap(uint32(bkey[2]), uint32(bkey[3])); ok {
+						resvg.Render(s.beforeTree, skia.TransformFromRow(float32(zoom), 0, 0, float32(zoom), float32(-bx0), float32(-by0)), bpm.AsMut())
+						applyStaticClipTrees(bpm, s.beforeClips, zoom, bx0, by0)
+						s.beforeCache = &slideCache{zoom, bkey, bpm}
 					}
 				}
-				shape, ok := skia.NewPixmap(cut.Width(), cut.Height())
-				if !ok {
-					continue
+				if s.beforeCache != nil && s.beforeCache.pm != nil {
+					readyBPM = s.beforeCache.pm
+					bpx, bpy = bx0-vx, by0-vy
 				}
-				tf := skia.TransformFromRow(float32(zoom), 0, 0, float32(zoom),
-					float32(-x0-rx)+float32(math.Round(cdx*zoom)), float32(-y0-ry)+float32(math.Round(cdy*zoom)))
-				resvg.Render(c.tree, tf, shape.AsMut())
-				cut.ApplyMask(skia.MaskFromPixmap(shape.AsRef(), skia.MaskTypeAlpha))
 			}
-			pm = cut
 		}
-		out.DrawPixmap(px, py, pm.AsRef(), &paint, skia.Identity(), nil)
-		// What stacks above the slide (in its frame, then the frames above) covers it, as it does once it
-		// settles.
+
+		var px, py int32
+		var readyPM *skia.Pixmap
+		if !waiting && (s.beforeTree == nil || alpha > 1e-3) {
+			bb, _ := s.tree.Root().AbsLayerBoundingBox()
+			b := Rect{X: float64(bb.X()), Y: float64(bb.Y()), W: float64(bb.Width()), H: float64(bb.Height())}
+			if overlaps(b, view) {
+				x0, y0 := i32(math.Floor(fmax(b.X, view.X)*zoom)), i32(math.Floor(fmax(b.Y, view.Y)*zoom))
+				x1 := i32(math.Ceil(fmin(b.X+b.W, view.X+view.W) * zoom))
+				y1 := i32(math.Ceil(fmin(b.Y+b.H, view.Y+view.H) * zoom))
+				key := [4]int64{int64(x0), int64(y0), int64(max(x1-x0, 1)), int64(max(y1-y0, 1))}
+				if s.cache == nil || s.cache.zoom != zoom || s.cache.key != key {
+					pm, ok := skia.NewPixmap(uint32(key[2]), uint32(key[3]))
+					if ok {
+						resvg.Render(s.tree, skia.TransformFromRow(float32(zoom), 0, 0, float32(zoom), float32(-x0), float32(-y0)), pm.AsMut())
+						s.cache = &slideCache{zoom, key, pm}
+					}
+				}
+				if s.cache != nil && s.cache.pm != nil {
+					pm := s.cache.pm
+					rx, ry := i32(math.Round(dx*zoom)), i32(math.Round(dy*zoom))
+					px, py = x0-vx+rx, y0-vy+ry
+					if len(s.clips) > 0 {
+						cut, _ := skia.PixmapFromVec(append([]byte(nil), pm.Data()...), pm.Size())
+						for _, c := range s.clips {
+							cdx, cdy := 0.0, 0.0
+							for _, o := range c.owners {
+								if os, ok := states[o]; ok {
+									cdx, cdy = cdx+os.dx, cdy+os.dy
+								}
+							}
+							shape, ok := skia.NewPixmap(cut.Width(), cut.Height())
+							if !ok {
+								continue
+							}
+							tf := skia.TransformFromRow(float32(zoom), 0, 0, float32(zoom),
+								float32(-x0-rx)+float32(math.Round(cdx*zoom)), float32(-y0-ry)+float32(math.Round(cdy*zoom)))
+							resvg.Render(c.tree, tf, shape.AsMut())
+							cut.ApplyMask(skia.MaskFromPixmap(shape.AsRef(), skia.MaskTypeAlpha))
+						}
+						pm = cut
+					}
+					readyPM = pm
+				}
+			}
+		}
+
+		if readyBPM != nil && readyPM != nil && alpha > 1e-3 && alpha < 0.999 {
+			if ux0, uy0, ux1, uy1, ok := blendEditPixmaps(out, w, h, bpx, bpy, readyBPM, px, py, readyPM, skia.Identity(), false, alpha); ok {
+				coverMinX, coverMinY, coverMaxX, coverMaxY = ux0, uy0, ux1, uy1
+				hasPainted = true
+			}
+		} else {
+			if readyBPM != nil && (readyPM == nil || alpha <= 1e-3) {
+				bpaint := skia.DefaultPixmapPaint()
+				bpaint.Opacity = float32(fmin(fmax(beforeAlpha, 0), 1))
+				out.DrawPixmap(bpx, bpy, readyBPM.AsRef(), &bpaint, skia.Identity(), nil)
+				coverMinX, coverMinY = bpx, bpy
+				coverMaxX, coverMaxY = bpx+int32(readyBPM.Width()), bpy+int32(readyBPM.Height())
+				hasPainted = true
+			}
+			if readyPM != nil {
+				paint := skia.DefaultPixmapPaint()
+				paint.Opacity = float32(fmin(fmax(alpha, 0), 1))
+				out.DrawPixmap(px, py, readyPM.AsRef(), &paint, skia.Identity(), nil)
+				if !hasPainted {
+					coverMinX, coverMinY = px, py
+					coverMaxX, coverMaxY = px+int32(readyPM.Width()), py+int32(readyPM.Height())
+					hasPainted = true
+				} else {
+					coverMinX, coverMinY = min(coverMinX, px), min(coverMinY, py)
+					coverMaxX, coverMaxY = max(coverMaxX, px+int32(readyPM.Width())), max(coverMaxY, py+int32(readyPM.Height()))
+				}
+			}
+		}
+
+		if !hasPainted {
+			continue
+		}
 		var above []string
 		if own := r.layerOf(s.ID); own >= 0 {
 			above = r.Order[own+1:]
 		}
-		cw, ch := int32(pm.Width()), int32(pm.Height())
-		cx0, cy0, cx1, cy1 := max(px, 0), max(py, 0), min(px+cw, int32(w)), min(py+ch, int32(h))
+		cx0, cy0, cx1, cy1 := max(coverMinX, 0), max(coverMinY, 0), min(coverMaxX, int32(w)), min(coverMaxY, int32(h))
 		if cx1 <= cx0 || cy1 <= cy0 {
 			continue
 		}

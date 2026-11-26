@@ -13,12 +13,27 @@ import (
 	"github.com/naddrzz/nalarupa/core-go/resolve"
 )
 
-// level is one open container: whether it is rotated/flipped, and the ids it painted so far (the backdrop
+// paintedItem is a previously emitted sibling/fill in an open container for SVG export backdrop approximation.
+type paintedItem struct {
+	id     string
+	bounds Rect
+	weight int // conservative upper bound on expanded usvg nodes produced by <use xlink:href="#id"/>
+}
+
+// level is one open container: whether it is rotated/flipped, and the items it painted so far (the backdrop
 // for background blur).
 type level struct {
 	turned bool
-	ids    []string
+	items  []paintedItem
 }
+
+const (
+	// baseNodesPerElement conservatively bounds the XML/usvg nodes emitted for one RNode.
+	baseNodesPerElement = 8
+	// maxBackdropUseNodes caps total expanded usvg nodes added by <use> elements inside
+	// background_blur filters during non-native SVG emission (well below usvg's 1,000,000 hard limit).
+	maxBackdropUseNodes = 100_000
+)
 
 // Svg emits nodes into one SVG document. It is not safe for concurrent use.
 type Svg struct {
@@ -32,14 +47,24 @@ type Svg struct {
 	// InlineEmbedded replaces them later.
 	Embed    bool
 	Embedded Embedded
+	// NativeBackdrop omits <use>-based backdrop duplication inside `nrbb:` groups when targeting
+	// Nalarupa's native resvg renderer, which blurs the live canvas pixmap directly in O(1).
+	NativeBackdrop bool
+	// AutoNativeBackdrop enables NativeBackdrop automatically when a top-level tree has more than
+	// nativeBackdropThreshold background blurs, keeping parity on tiny fixtures while avoiding
+	// expensive <use> duplication on full liquid-glass designs.
+	AutoNativeBackdrop bool
 	// Shader paints shader fills; without one they draw the error hatch.
 	Shader ShaderPainter
 
 	defs, out strings.Builder
 	uid       int
 	painted   []level
-	// tag gives nodes ids, only needed when the tree has a background blur.
+	// tag gives nodes ids, only needed when the tree has a background blur and NativeBackdrop is false.
 	tag bool
+	// expandedNodes and backdropUses bound expanded <use> node counts during non-native SVG emission.
+	expandedNodes int
+	backdropUses  int
 	// outline is the shape whose fills are being emitted, for shader fills' `@sdf`.
 	outline *Outline
 	// pad is how far the paints being built reach outside the node box (a stroke's outer half): image
@@ -96,10 +121,62 @@ func (s *Svg) id(prefix string) string {
 	return prefix + itoa(s.uid)
 }
 
+const nativeBackdropThreshold = 4
+
+func countBackdropBlurs(n *resolve.RNode, limit int) int {
+	if limit <= 0 {
+		return 0
+	}
+	count := 0
+	v, ok := n.P.Get("effect")
+	if blursBackdrop(v, ok) {
+		count++
+		if count >= limit {
+			return count
+		}
+	}
+	for _, k := range n.Kids {
+		count += countBackdropBlurs(k, limit-count)
+		if count >= limit {
+			return count
+		}
+	}
+	return count
+}
+
+func nodeBaseWeight(n *resolve.RNode, fx Effects) int {
+	w := baseNodesPerElement
+	if fv, ok := n.P.Get("fill"); ok && fv != nil {
+		w += max(len(Fills(fv)), 1) * 6
+	}
+	if sv, ok := n.P.Get("strokeWidth"); ok && sv != nil {
+		w += 6
+	}
+	if len(fx.shadows) > 0 {
+		w += 4 + len(fx.shadows)*8
+	}
+	if fx.Blur > 0 {
+		w += 4
+	}
+	if fx.Backdrop > 0 {
+		w += 5
+	}
+	if n.B("clip") {
+		w += 3
+	}
+	if len(n.Lines) > 0 {
+		w += len(n.Lines) * 8
+	}
+	return w
+}
+
 // Node emits n and its subtree.
 func (s *Svg) Node(n *resolve.RNode) {
 	if len(s.painted) == 0 {
-		s.tag = hasBackdropBlur(n)
+		if s.AutoNativeBackdrop && !s.NativeBackdrop && countBackdropBlurs(n, nativeBackdropThreshold+1) > nativeBackdropThreshold {
+			s.NativeBackdrop = true
+		}
+		s.tag = !s.NativeBackdrop && hasBackdropBlur(n)
 	}
 	opacity := fOr(n, "opacity", 1)
 	if opacity <= 0 || s.Skip[n.ID] {
@@ -107,6 +184,7 @@ func (s *Svg) Node(n *resolve.RNode) {
 	}
 	tf := transform(n)
 	fx := EffectsOf(n)
+	ownWeight := nodeBaseWeight(n, fx)
 	// The backdrop is blurred inside the node's opacity layer, which starts out empty: below full
 	// opacity nothing shows.
 	backdrop := fx.Backdrop > 0 && opacity >= 1
@@ -118,6 +196,8 @@ func (s *Svg) Node(n *resolve.RNode) {
 	if backdrop {
 		s.backdropBlur(n, tf, fx.Backdrop, outline)
 	}
+	startExpanded := s.expandedNodes
+	s.expandedNodes += ownWeight
 	gid := s.id("n")
 	g := ""
 	if s.tag {
@@ -161,7 +241,11 @@ func (s *Svg) Node(n *resolve.RNode) {
 	s.out.WriteString("</g>")
 	if s.tag && len(s.painted) > 0 {
 		l := &s.painted[len(s.painted)-1]
-		l.ids = append(l.ids, gid)
+		l.items = append(l.items, paintedItem{
+			id:     gid,
+			bounds: VisualBounds(n),
+			weight: max(ownWeight, s.expandedNodes-startExpanded),
+		})
 	}
 }
 
@@ -215,8 +299,11 @@ func (s *Svg) Above(n *resolve.RNode, id string) {
 	s.out.WriteString("<g" + g + ">")
 	blur := s.openBlur(n, EffectsOf(n))
 	if len(s.painted) == 0 {
-		// Siblings with a background blur reference what was painted before them.
-		s.tag = hasBackdropBlur(n)
+		if s.AutoNativeBackdrop && !s.NativeBackdrop && countBackdropBlurs(n, nativeBackdropThreshold+1) > nativeBackdropThreshold {
+			s.NativeBackdrop = true
+		}
+		// Siblings with a background blur reference what was painted before them (unless NativeBackdrop).
+		s.tag = !s.NativeBackdrop && hasBackdropBlur(n)
 	}
 	s.painted = append(s.painted, level{turned: tf != ""})
 	if clip != nil {
@@ -507,7 +594,7 @@ func (s *Svg) children(n *resolve.RNode, fillsID string, clip *Geo) {
 	}
 	l := level{turned: transform(n) != ""}
 	if fillsID != "" {
-		l.ids = []string{fillsID}
+		l.items = []paintedItem{{id: fillsID, bounds: box(n), weight: baseNodesPerElement}}
 	}
 	s.painted = append(s.painted, l)
 	if clip != nil {
@@ -599,18 +686,13 @@ func (s *Svg) innerShadows(fx Effects, m string, b Rect, outline *roundRect) {
 	}
 }
 
-// backdropBlur is the background blur through the node's outline m. The canvas renderer draws it from the
-// `nrbb:{uid}:{sigma}` tag; in an export the group's content approximates the backdrop with what this
-// top-level node already painted.
+// backdropBlur is the background blur through the node's outline m. When NativeBackdrop is true
+// (canvas renderer and raster exports/screenshots), it emits a lightweight `nrbb:{uid}:{sigma}`
+// marker that resvg blurs directly from the live pixmap in O(1). In standalone SVG exports it
+// approximates the backdrop with spatially overlapping, non-recursive `<use>` references bounded
+// safely below usvg's node limit.
 func (s *Svg) backdropBlur(n *resolve.RNode, tf string, sigma float64, m string) {
-	var items []string
-	for i := len(s.painted) - 1; i >= 0; i-- {
-		items = append(append([]string(nil), s.painted[i].ids...), items...)
-		if s.painted[i].turned {
-			break
-		}
-	}
-	b, fid := s.id("b"), s.id("f")
+	b := s.id("b")
 	l := localAABB(n)
 	px, py := n.X-n.BX, n.Y-n.BY
 	aabb := Rect{px + l[0], py + l[1], l[2] - l[0], l[3] - l[1]}
@@ -627,18 +709,47 @@ func (s *Svg) backdropBlur(n *resolve.RNode, tf string, sigma float64, m string)
 		reach += layout.StyleOf(n).Size
 	}
 	mr := inflate(area, reach+1)
-	fr := inflate(mr, 3*sigma)
 	t := ""
 	if tf != "" {
 		t = ` transform="` + tf + `"`
 	}
-	s.defs.WriteString(`<mask id="` + b + `" mask-type="alpha" maskUnits="userSpaceOnUse"` + region(mr) + `><use xlink:href="#` + m + `"` + t + `/></mask><filter id="` + fid +
-		`" filterUnits="userSpaceOnUse"` + region(fr) + ` color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="` + f(sigma) + `"/></filter>`)
+	s.defs.WriteString(`<mask id="` + b + `" mask-type="alpha" maskUnits="userSpaceOnUse"` + region(mr) + `><use xlink:href="#` + m + `"` + t + `/></mask>`)
+	if s.NativeBackdrop {
+		s.out.WriteString(`<g id="nrbb:` + b + `:` + f(sigma) + `" mask="url(#` + b + `)"><rect` + region(mr) + ` fill="#000" fill-opacity="0"/></g>`)
+		return
+	}
+
+	fr := inflate(mr, 3*sigma)
+	var items []paintedItem
+	for i := len(s.painted) - 1; i >= 0; i-- {
+		items = append(append([]paintedItem(nil), s.painted[i].items...), items...)
+		if s.painted[i].turned {
+			break
+		}
+	}
+	fid := s.id("f")
+	s.defs.WriteString(`<filter id="` + fid + `" filterUnits="userSpaceOnUse"` + region(fr) + ` color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="` + f(sigma) + `"/></filter>`)
 	var uses strings.Builder
-	for _, i := range items {
-		uses.WriteString(`<use xlink:href="#` + i + `"/>`)
+	for _, it := range items {
+		// Cull painted items whose visual bounds cannot reach this blur's filter region, and cap
+		// recursive <use> expansion so standalone SVG exports stay safely below usvg's 1M node limit.
+		if !rectsOverlap(it.bounds, fr) {
+			continue
+		}
+		if s.backdropUses+it.weight > maxBackdropUseNodes {
+			continue
+		}
+		s.backdropUses += it.weight
+		s.expandedNodes += it.weight
+		uses.WriteString(`<use xlink:href="#` + it.id + `"/>`)
 	}
 	s.out.WriteString(`<g id="nrbb:` + b + `:` + f(sigma) + `" mask="url(#` + b + `)"><g filter="url(#` + fid + `)">` + uses.String() + `</g></g>`)
+}
+
+func rectsOverlap(a, b Rect) bool {
+	return (a.W > 0 || a.H > 0) && (b.W > 0 || b.H > 0) &&
+		a.X <= b.X+b.W && a.X+a.W >= b.X &&
+		a.Y <= b.Y+b.H && a.Y+a.H >= b.Y
 }
 
 func (s *Svg) strokeOf(n *resolve.RNode, geo Geo) *stroke {

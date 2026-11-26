@@ -6,6 +6,7 @@ import (
 	"math"
 	"math/rand/v2"
 	"strings"
+	"time"
 )
 
 const (
@@ -48,12 +49,14 @@ type TodoItem struct {
 
 // UsageStats holds token/turn/cost statistics for a completed agent run.
 type UsageStats struct {
-	Input      int     `json:"input,omitempty"`
-	Output     int     `json:"output,omitempty"`
-	CacheRead  int     `json:"cacheRead,omitempty"`
-	CacheWrite int     `json:"cacheWrite,omitempty"`
-	Turns      int     `json:"turns,omitempty"`
-	CostUSD    float64 `json:"costUsd,omitempty"`
+	Input        int     `json:"input,omitempty"`
+	Output       int     `json:"output,omitempty"`
+	CacheRead    int     `json:"cacheRead,omitempty"`
+	CacheWrite   int     `json:"cacheWrite,omitempty"`
+	Turns        int     `json:"turns,omitempty"`
+	CostUSD      float64 `json:"costUsd,omitempty"`
+	ContextUsed  int     `json:"contextUsed,omitempty"`
+	ContextLimit int     `json:"contextLimit,omitempty"`
 }
 
 // ClaudeAuth holds Claude Code CLI authentication status.
@@ -112,17 +115,44 @@ type ChatItem struct {
 	PermInput map[string]any
 }
 
+// CursorWaypoint is one target box queued along an agent cursor's sequential creation path.
+type CursorWaypoint struct {
+	X          float64
+	Y          float64
+	BoxID      string
+	ReleaseIDs []string
+	Box        Box
+	HasBox     bool
+	Op         string
+	HoldMS     float64
+}
+
 // CursorState tracks an agent's animated canvas cursor.
 type CursorState struct {
-	Profile      AgentProfile
-	X            float64
-	Y            float64
-	TX           float64
-	TY           float64
-	AppearAt     float64
-	LastActivity float64
-	Wobble       float64
-	Phase        float64
+	Profile        AgentProfile
+	X              float64
+	Y              float64
+	VX             float64
+	VY             float64
+	TX             float64
+	TY             float64
+	AnchorX        float64
+	AnchorY        float64
+	HasAnchor      bool
+	AppearAt       float64
+	LastActivity   float64
+	Wobble         float64
+	Phase          float64
+	ActiveWP       CursorWaypoint
+	HasActiveWP    bool
+	ActiveTouched  bool
+	ActiveReleased bool
+	Waypoints      []CursorWaypoint
+	DwellUntil     float64
+	NextWaypointAt float64
+	PlacePulseAt   float64
+	Trail          [7][2]float64
+	TrailLen       int
 }
 
 // PenCursorState tracks an active AI Pen nib on a frame.
@@ -136,11 +166,17 @@ type PenCursorState struct {
 
 // NodeFlash represents a highlight ring + scan band on a canvas node touched by an agent.
 type NodeFlash struct {
-	ID      string
-	Color   string
-	Op      string
-	StartAt float64
-	HoldMS  float64
+	ID            string
+	AgentID       string
+	Box           Box
+	HasBox        bool
+	Color         string
+	Op            string
+	StartAt       float64
+	PaintStartAt  float64
+	HoldMS        float64
+	MinVer        uint64
+	MinReleaseSeq uint64
 }
 
 // ActivityReq is an unconsumed agent_activity event awaiting box resolution on Canvas.
@@ -173,10 +209,15 @@ type AgentStore struct {
 	Pills          map[string]PillEntry
 	Activity       []ActivityReq
 	ViewCenter     Pt
-	ClaudeAuth     *ClaudeAuth
-	ClaudeAuthAt   int
-	ProviderTest   *ProviderTestEvent
-	ProviderTestAt int
+	ViewZoom       float64
+	ClaudeAuth         *ClaudeAuth
+	ClaudeAuthAt       int
+	ProviderTest       *ProviderTestEvent
+	ProviderTestAt     int
+	ContextUsed        int
+	ContextLimit       int
+	ContextStreamExtra int
+	contextStreamBytes int
 }
 
 // NewAgentStore constructs an initialized AgentStore.
@@ -236,7 +277,7 @@ func (s *AgentStore) NeedsFrame(now float64, reduced bool, liveCount int, painte
 			return true
 		}
 		for _, c := range s.Cursors {
-			if s.Running[c.Profile.ID] || now-c.LastActivity < GoneMS {
+			if s.Running[c.Profile.ID] || c.HasActiveWP || len(c.Waypoints) > 0 || now-c.LastActivity < GoneMS {
 				return true
 			}
 		}
@@ -256,6 +297,53 @@ func (s *AgentStore) NeedsFrame(now float64, reduced bool, liveCount int, painte
 	return false
 }
 
+// FrameSchedule locks all active cursor motion (including pre-design scouting, waypoint traversal, and fade-out),
+// live node glows/shimmers, AI pens, and node flashes to hardware VSync (Painter.AnimationFrame, which repaints
+// the GPU canvas layer without rebuilding View(c)) for zero timer-beat stutter.
+func (s *AgentStore) FrameSchedule(now float64, reduced bool, liveCount int, painted float64, chatOpen bool) (animFrame bool, after time.Duration) {
+	if reduced {
+		if s.NeedsFrame(now, true, liveCount, painted, chatOpen) {
+			return false, 33 * time.Millisecond
+		}
+		return false, 0
+	}
+	if len(s.Flashes) > 0 || len(s.Activity) > 0 || liveCount > 0 || len(s.Pens) > 0 {
+		return true, 0
+	}
+	for _, c := range s.Cursors {
+		if s.Running[c.Profile.ID] || c.HasActiveWP || len(c.Waypoints) > 0 || now-c.LastActivity < GoneMS {
+			return true, 0
+		}
+	}
+	hasPillAnim := false
+	hasActivePill := false
+	nextWakeMS := 80.0
+	for id, p := range s.Pills {
+		if !s.PillShown(id, chatOpen) {
+			continue
+		}
+		elapsed := min(now, painted) - p.At
+		if elapsed < PillMS {
+			hasActivePill = true
+			if elapsed < FadeInMS || elapsed > PillMS-FadeDurMS {
+				hasPillAnim = true
+				break
+			}
+			toFade := (PillMS - FadeDurMS) - elapsed
+			if toFade > 0 && toFade < nextWakeMS {
+				nextWakeMS = toFade
+			}
+		}
+	}
+	if hasPillAnim {
+		return true, 0
+	}
+	if hasActivePill {
+		return false, time.Duration(max(5.0, min(80.0, nextWakeMS+2.0))) * time.Millisecond
+	}
+	return false, 0
+}
+
 // EaseOutCubic evaluates 1 - (1 - t)^3 clamped to [0, 1].
 func EaseOutCubic(t float64) float64 {
 	t = max(0, min(1, t))
@@ -265,7 +353,13 @@ func EaseOutCubic(t float64) float64 {
 
 // CursorFaded reports whether agent's cursor has completed its idle fade-out.
 func (s *AgentStore) CursorFaded(agentID string, c *CursorState, now float64) bool {
-	return c == nil || (!s.Running[agentID] && now-c.LastActivity > GoneMS)
+	if c == nil {
+		return true
+	}
+	if s.Running[agentID] || c.HasActiveWP || len(c.Waypoints) > 0 {
+		return false
+	}
+	return now-c.LastActivity > GoneMS
 }
 
 // CursorOpacity computes c's current opacity in [0, 1].
@@ -275,7 +369,7 @@ func CursorOpacity(c *CursorState, now float64, running bool) float64 {
 	}
 	sa := now - c.AppearAt
 	si := 0.0
-	if !running {
+	if !running && !c.HasActiveWP && len(c.Waypoints) == 0 {
 		si = now - c.LastActivity
 	}
 	if sa < FadeInMS {
@@ -296,24 +390,69 @@ func (s *AgentStore) WakeCursor(agentID string, c *CursorState, now float64) {
 	c.LastActivity = now
 }
 
-// Poke wakes or spawns an agent cursor near ViewCenter.
+// Poke wakes or spawns an agent cursor near ViewCenter with a smooth diagonal entrance glide.
 func (s *AgentStore) Poke(p AgentProfile, now float64) {
 	if c, ok := s.Cursors[p.ID]; ok {
 		s.WakeCursor(p.ID, c, now)
 		c.Profile = p
 		return
 	}
-	x := s.ViewCenter[0] + (rand.Float64()-0.5)*1000
-	y := s.ViewCenter[1] + (rand.Float64()-0.5)*1000
+	phase := rand.Float64() * math.Pi * 2
+	ax := s.ViewCenter[0] + math.Cos(phase)*44.0
+	ay := s.ViewCenter[1] + math.Sin(phase)*28.0
 	s.Cursors[p.ID] = &CursorState{
 		Profile:      p,
-		X:            x,
-		Y:            y,
-		TX:           x,
-		TY:           y,
+		X:            ax - 96.0,
+		Y:            ay + 64.0,
+		TX:           ax,
+		TY:           ay,
+		AnchorX:      ax,
+		AnchorY:      ay,
+		HasAnchor:    true,
 		AppearAt:     now,
 		LastActivity: now,
-		Phase:        rand.Float64() * math.Pi * 2,
+		Phase:        phase,
+	}
+}
+
+// PokeFormation spawns or wakes member idx of a parallel team in a clean horizontal formation around ViewCenter.
+func (s *AgentStore) PokeFormation(p AgentProfile, idx, total int, now float64) {
+	total = max(1, total)
+	z := s.ViewZoom
+	if z <= 0 {
+		z = 0.5
+	}
+	effZ := max(0.04, z)
+	spacing := max(320.0, 140.0/effZ)
+	rowShift := max(36.0, 28.0/effZ)
+	offsetX := (float64(idx) - float64(total-1)*0.5) * spacing
+	offsetY := float64((idx%2)*2-1) * rowShift
+	phase := float64(idx) * (math.Pi * 0.55)
+	ax := s.ViewCenter[0] + offsetX
+	ay := s.ViewCenter[1] + offsetY
+	if c, ok := s.Cursors[p.ID]; ok {
+		s.WakeCursor(p.ID, c, now)
+		c.Profile = p
+		c.AnchorX = ax
+		c.AnchorY = ay
+		c.HasAnchor = true
+		c.TX = ax
+		c.TY = ay
+		c.Phase = phase
+		return
+	}
+	s.Cursors[p.ID] = &CursorState{
+		Profile:      p,
+		X:            ax - max(72.0, 56.0/effZ),
+		Y:            ay + max(54.0, 42.0/effZ),
+		TX:           ax,
+		TY:           ay,
+		AnchorX:      ax,
+		AnchorY:      ay,
+		HasAnchor:    true,
+		AppearAt:     now,
+		LastActivity: now,
+		Phase:        phase,
 	}
 }
 
@@ -400,6 +539,35 @@ func (s *AgentStore) ApplyEvents(events []map[string]any, now float64) bool {
 	for _, ev := range events {
 		evType, _ := ev["type"].(string)
 		switch evType {
+		case "agent_team":
+			if rawMembers, ok := ev["members"].([]any); ok && len(rawMembers) > 0 {
+				members := make([]AgentProfile, 0, len(rawMembers))
+				for _, rm := range rawMembers {
+					var mp AgentProfile
+					redecode(rm, &mp)
+					if mp.ID != "" {
+						s.putProfile(mp)
+						members = append(members, mp)
+					}
+				}
+				for idx, mp := range members {
+					s.Running[mp.ID] = true
+					s.PokeFormation(mp, idx, len(members), now)
+				}
+				changed = true
+			}
+			continue
+		case "agent_context":
+			if u := int(asFloat(ev["used"])); u >= 0 {
+				s.ContextUsed = u
+				s.ContextStreamExtra = 0
+				s.contextStreamBytes = 0
+			}
+			if l := int(asFloat(ev["limit"])); l > 0 {
+				s.ContextLimit = l
+			}
+			changed = true
+			continue
 		case "agent_activity":
 			s.pruneStaleActivity(now)
 			aid, _ := ev["agent"].(string)
@@ -499,6 +667,10 @@ func (s *AgentStore) ApplyEvents(events []map[string]any, now float64) bool {
 			}
 		case "text_delta":
 			txt, _ := ev["text"].(string)
+			if pVal.Parent == "" && len(txt) > 0 {
+				s.contextStreamBytes += len(txt)
+				s.ContextStreamExtra = max(1, int(math.Ceil(float64(s.contextStreamBytes)/3.6)))
+			}
 			last := s.lastOf(aid, "assistant", "thinking", "tool")
 			if last != nil && last.Kind == "assistant" && last.Streaming {
 				last.Text += txt
@@ -526,6 +698,10 @@ func (s *AgentStore) ApplyEvents(events []map[string]any, now float64) bool {
 			}
 		case "thinking_delta":
 			txt, _ := ev["text"].(string)
+			if pVal.Parent == "" && len(txt) > 0 {
+				s.contextStreamBytes += len(txt)
+				s.ContextStreamExtra = max(1, int(math.Ceil(float64(s.contextStreamBytes)/3.6)))
+			}
 			last := s.lastOf(aid, "thinking", "assistant", "tool")
 			if last != nil && last.Kind == "thinking" && last.EndedAt == nil {
 				last.Text += txt
@@ -639,6 +815,15 @@ func (s *AgentStore) ApplyEvents(events []map[string]any, now float64) bool {
 					}
 				}
 			}
+		case "context":
+			if u := int(asFloat(ev["used"])); u >= 0 {
+				s.ContextUsed = u
+				s.ContextStreamExtra = 0
+				s.contextStreamBytes = 0
+			}
+			if l := int(asFloat(ev["limit"])); l > 0 {
+				s.ContextLimit = l
+			}
 		case "message_end":
 			s.endStreaming(aid, now)
 		case "todos":
@@ -723,6 +908,16 @@ func (s *AgentStore) ApplyEvents(events []map[string]any, now float64) bool {
 			if u, ok := ev["usage"]; ok {
 				redecode(u, &usage)
 			}
+			if pVal.Parent == "" {
+				if usage.ContextUsed > 0 {
+					s.ContextUsed = usage.ContextUsed
+				}
+				s.ContextStreamExtra = 0
+				s.contextStreamBytes = 0
+				if usage.ContextLimit > 0 {
+					s.ContextLimit = usage.ContextLimit
+				}
+			}
 			dur := int64(asFloat(ev["durationMs"]))
 			s.Items = append(s.Items, ChatItem{
 				Kind:       "usage",
@@ -738,6 +933,13 @@ func (s *AgentStore) ApplyEvents(events []map[string]any, now float64) bool {
 				c.LastActivity = now
 			}
 			delete(s.Pills, aid)
+		case "all_done":
+			for id := range s.Running {
+				delete(s.Running, id)
+				if c, ok := s.Cursors[id]; ok {
+					c.LastActivity = now
+				}
+			}
 		}
 	}
 	return changed
@@ -785,6 +987,10 @@ func (s *AgentStore) ResetChat() {
 	s.ProfileOrder = nil
 	s.Running = map[string]bool{}
 	s.Authors = map[string]ReplyAuthor{}
+	s.ContextUsed = 0
+	s.ContextLimit = 0
+	s.ContextStreamExtra = 0
+	s.contextStreamBytes = 0
 	s.ClearPresence()
 }
 

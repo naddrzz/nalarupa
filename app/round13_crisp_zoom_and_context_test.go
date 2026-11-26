@@ -1,0 +1,311 @@
+package main
+
+import (
+	"image"
+	"net/http"
+	"net/http/httptest"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/egoist/mygo/ui"
+)
+
+func TestRound13_ZoomInAndZoomOutStayCrispEvenWhileAgentHoldsEngineLock(t *testing.T) {
+	app := NewNalarupaApp(t.TempDir())
+	app.Init()
+	defer app.Close()
+	app.StartTemplate("empty", false)
+
+	// Build a crisp dark pricing card matching the user's screenshot ($100 / mo + crisp 1px border).
+	if _, err := app.Bridge.ExecuteJS(`
+		screen = Insert(document, {
+			type: "frame", name: "Pricing — Control Deck", x: 0, y: 0, width: 1440, height: 900,
+			fill: "#090D16", layout: "vertical", padding: 80, gap: 24
+		});
+		card = Insert(screen, {
+			type: "frame", name: "FirmCard", width: 420, height: 520, cornerRadius: 16,
+			fill: "#111622", stroke: "#2E3A52", strokeWidth: 2, padding: 32, layout: "vertical", gap: 16
+		});
+		Insert(card, { type: "text", content: "$100", fontSize: 56, fontWeight: "700", fill: "#F8FAFC" });
+		Insert(card, { type: "text", content: "Everything in Studio, plus:", fontSize: 15, fill: "#CBD5E1" });
+	`); err != nil {
+		t.Fatalf("setup card: %v", err)
+	}
+
+	// Settle initial slides so FirmCard (#111622) and Pricing — Control Deck (#090D16) are crisp in cachedSnap.
+	settledAt := time.Now().Add(4 * time.Second)
+	app.Bridge.eng.Renderer.Now = func() time.Time { return settledAt }
+
+	readyCh := make(chan struct{}, 8)
+	worker := NewCanvasRenderWorker(app.Bridge, func() {
+		select {
+		case readyCh <- struct{}{}:
+		default:
+		}
+	})
+	defer worker.Close()
+
+	// Step 1: Prime worker at zoomed-out 15% (0.15) — exact starting state before zooming in to 135%!
+	ver := app.Bridge.VersionDirect()
+	worker.Submit(canvasRenderJob{
+		key:          canvasRenderKey{version: ver, pw: 1280, ph: 800, camX: -200, camY: -100, zoom: 0.15, dpr: 1.0},
+		w:            1280,
+		h:            800,
+		camX:         -200,
+		camY:         -100,
+		zoom:         0.15,
+		bg:           CanvasBG,
+		sharp:        true,
+		wantOverview: true,
+	})
+	select {
+	case <-readyCh:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out priming 15%% render")
+	}
+	var imgOut *image.RGBA
+	doneKey15, _, ok := worker.TakeReady(&imgOut)
+	if !ok || doneKey15.zoom != 0.15 {
+		t.Fatalf("expected initial 0.15 ready frame, got %+v", doneKey15)
+	}
+
+	// Step 2: Simulate "1/5 agents running" holding Engine.Lock() for 700ms while the user zooms 9x in to 135% (1.35)
+	// AND then zooms out to 35% (0.35)! Worker MUST re-rasterize the cached immutable vector SceneSnapshot lock-free
+	// in < 180ms without waiting 700ms for Engine.Lock()!
+	lockHeld := make(chan struct{})
+	releaseLock := make(chan struct{})
+	go func() {
+		app.Bridge.eng.Locked(func() {
+			close(lockHeld)
+			<-releaseLock
+		})
+	}()
+	<-lockHeld
+	defer func() {
+		select {
+		case <-releaseLock:
+		default:
+			close(releaseLock)
+		}
+	}()
+
+	tZoomIn := time.Now()
+	worker.Submit(canvasRenderJob{
+		key:          canvasRenderKey{version: ver, pw: 1280, ph: 800, camX: 60, camY: 60, zoom: 1.35, dpr: 1.0},
+		w:            1280,
+		h:            800,
+		camX:         60,
+		camY:         60,
+		zoom:         1.35,
+		bg:           CanvasBG,
+		sharp:        true,
+		wantOverview: false,
+	})
+	select {
+	case <-readyCh:
+	case <-time.After(450 * time.Millisecond):
+		t.Fatalf("zoom-in to 135%% blocked on Engine.Lock() held by running agent! (causes blurry upscale wait)")
+	}
+	zoomInElapsed := time.Since(tZoomIn)
+	doneKey135, _, ok := worker.TakeReady(&imgOut)
+	if !ok || doneKey135.zoom != 1.35 {
+		t.Fatalf("expected crisp 1.35 ready frame, got ok=%v key=%+v", ok, doneKey135)
+	}
+	if zoomInElapsed > 400*time.Millisecond {
+		t.Fatalf("expected fast lock-free 135%% vector raster, took %v", zoomInElapsed)
+	}
+	// Verify rendered 135% pixels: doc (420, 500) is inside FirmCard (#111622 = 17, 22, 34),
+	// doc (700, 500) is on screen background (#090D16 = 9, 13, 22), AND FirmCard's 2px stroke at doc x=80..82
+	// (screen px x=27..29 at camX=60, zoom=1.35) has sharp target-zoom edge contrast (#2E3A52 = 46, 58, 82)
+	// that a 9x upscaled 15% raster would smear across >10px into dark background!
+	pxCard135 := imgOut.RGBAAt(int((420-60)*1.35), int((500-60)*1.35))
+	pxScreen135 := imgOut.RGBAAt(int((700-60)*1.35), int((500-60)*1.35))
+	if colorDistRGB(pxCard135, 17, 22, 34) > 8 || colorDistRGB(pxScreen135, 9, 13, 22) > 8 {
+		t.Fatalf("135%% raster pixel mismatch: card=%+v (want #111622), screen=%+v (want #090D16)", pxCard135, pxScreen135)
+	}
+	borderY := int((300 - 60) * 1.35)
+	maxBorderB := uint8(0)
+	for sx := 25; sx <= 31; sx++ {
+		if c := imgOut.RGBAAt(sx, borderY); c.B > maxBorderB {
+			maxBorderB = c.B
+		}
+	}
+	pxJustOutsideBorder := imgOut.RGBAAt(23, borderY) // doc x ~ 77.0 (3px outside card's left stroke)
+	pxJustInsideBorder := imgOut.RGBAAt(33, borderY)  // doc x ~ 84.4 (2.4px inside card's left stroke)
+	if maxBorderB < 65 || pxJustOutsideBorder.B > 30 || pxJustInsideBorder.B > 42 {
+		t.Fatalf("expected razor-sharp 2px stroke transition at 135%% zoom (peak B>=65 with clean edges), got peakB=%d outside=%+v inside=%+v",
+			maxBorderB, pxJustOutsideBorder, pxJustInsideBorder)
+	}
+
+	// Step 3: Zoom OUT from 135% -> 35% while Engine.Lock() is STILL held!
+	worker.Submit(canvasRenderJob{
+		key:          canvasRenderKey{version: ver, pw: 1280, ph: 800, camX: -100, camY: -60, zoom: 0.35, dpr: 1.0},
+		w:            1280,
+		h:            800,
+		camX:         -100,
+		camY:         -60,
+		zoom:         0.35,
+		bg:           CanvasBG,
+		sharp:        true,
+		wantOverview: false,
+	})
+	select {
+	case <-readyCh:
+	case <-time.After(450 * time.Millisecond):
+		t.Fatalf("zoom-out to 35%% blocked on Engine.Lock()!")
+	}
+	doneKey35, _, ok := worker.TakeReady(&imgOut)
+	if !ok || doneKey35.zoom != 0.35 {
+		t.Fatalf("expected crisp 0.35 ready frame on zoom-out, got ok=%v key=%+v", ok, doneKey35)
+	}
+	pxCard35 := imgOut.RGBAAt(int((420 - (-100))*0.35), int((500 - (-60))*0.35))
+	pxScreen35 := imgOut.RGBAAt(int((900 - (-100))*0.35), int((500 - (-60))*0.35))
+	if colorDistRGB(pxCard35, 17, 22, 34) > 8 || colorDistRGB(pxScreen35, 9, 13, 22) > 8 {
+		t.Fatalf("35%% raster pixel mismatch: card=%+v (want #111622), screen=%+v (want #090D16)", pxCard35, pxScreen35)
+	}
+	close(releaseLock)
+
+	// Step 4: Verify viewCanvas immediately pre-renders targetZoom during smooth ZoomAt!
+	app.Screen = "editor"
+	app.Cam = Camera{X: 0, Y: 0, Zoom: 1.0}
+	tt := ui.NewTester(app.View, 1280, 800)
+	tt.Frame()
+	app.ZoomAt(400, 300, 1.35, false)
+	tt.Frame()
+	if app.Canvas.LastKey.zoom != 1.35 {
+		t.Fatalf("expected viewCanvas to pre-rasterize directly at target zoom 1.35 on first zoom frame, got %.3f", app.Canvas.LastKey.zoom)
+	}
+}
+
+func TestRound13_CustomProviderContextWindowAndLiveChatContextRemainingUI(t *testing.T) {
+	app := NewNalarupaApp(t.TempDir())
+	app.Init()
+	defer app.Close()
+
+	var savedID string
+	if err := app.Bridge.Call("provider_save", map[string]any{
+		"provider": map[string]any{
+			"name":           "Qwen Studio",
+			"format":         "chat",
+			"base_url":       "http://127.0.0.1:11434/v1",
+			"api_key":        "sk-qwen",
+			"models":         []string{"qwen4-max"},
+			"vision":         true,
+			"context_window": 96000,
+		},
+	}, &savedID); err != nil {
+		t.Fatalf("provider_save: %v", err)
+	}
+	app.setSetting("agent_backend", "provider")
+	app.setSetting("agent_provider", savedID)
+	app.setSetting("provider_model", "qwen4-max")
+
+	if gotLim := app.effectiveContextLimit(); gotLim != 96000 {
+		t.Fatalf("effectiveContextLimit() = %d, want custom provider 96000", gotLim)
+	}
+
+	// Simulate live context usage reported during an agent turn: 24,000 used of 96,000 -> 72,000 remaining!
+	app.Store.ApplyEvents([]map[string]any{
+		{
+			"type":      "agent_context",
+			"used":      float64(24000),
+			"limit":     float64(96000),
+			"remaining": float64(72000),
+		},
+	}, 1000.0)
+
+	used, lim, rem, ratio := app.effectiveContextStats()
+	if used != 24000 || lim != 96000 || rem != 72000 || ratio < 0.24 || ratio > 0.26 {
+		t.Fatalf("effectiveContextStats() = (used=%d, lim=%d, rem=%d, ratio=%.3f), want (24000, 96000, 72000, 0.25)", used, lim, rem, ratio)
+	}
+
+	app.Screen = "editor"
+	app.RightTab = "agent"
+	app.AgentUI.SettingsOpen = true
+	ap := app.activeProvider()
+	if ap == nil {
+		t.Fatalf("expected active custom provider")
+	}
+	cp := *ap
+	app.AgentUI.EditingProv = &cp
+	app.AgentUI.ProvContextDraft = "96000"
+
+	tt := ui.NewTester(app.View, 1360, 860)
+	tt.Frame()
+
+	// Audit accessibility across all new context meter & custom provider context window controls!
+	assertAllInteractiveControlsNamed(t, tt, "Round 13 context window & custom provider settings")
+}
+
+func TestRound13_ModelFetchSessionIsolationAndEditedBaseURLGuard(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"qwen4-coder"},{"id":"qwen4-max"}]}`))
+	}))
+	defer srv.Close()
+
+	app := NewNalarupaApp(t.TempDir())
+	app.Init()
+	defer app.Close()
+
+	var savedID string
+	if err := app.Bridge.Call("provider_save", map[string]any{
+		"provider": map[string]any{
+			"name":     "Trusted Gateway",
+			"format":   "chat",
+			"base_url": srv.URL + "/v1",
+			"api_key":  "sk-secret-saved",
+			"models":   []string{},
+			"vision":   true,
+		},
+	}, &savedID); err != nil {
+		t.Fatalf("provider_save: %v", err)
+	}
+	app.setSetting("agent_backend", "provider")
+	app.setSetting("agent_provider", savedID)
+
+	// 1. Editing BaseURL to a different host without entering a new API key must NOT leak the saved API key!
+	err := app.Bridge.Call("models_fetch", map[string]any{
+		"target":   "provider",
+		"id":       savedID,
+		"format":   "chat",
+		"base_url": "http://127.0.0.1:9/v1",
+	}, nil)
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "api key") {
+		t.Fatalf("expected models_fetch with edited base_url and blank api_key to be blocked, got: %v", err)
+	}
+
+	// 2. Fetching models from the composer picker (persist=true) persists them into activeProvider().Models!
+	app.requestFetchModels("provider", savedID, "chat", srv.URL+"/v1", "", true, 0)
+	deadline := time.Now().Add(3 * time.Second)
+	for app.AgentUI.FetchingModels && time.Now().Before(deadline) {
+		app.PollNow(1000)
+		time.Sleep(10 * time.Millisecond)
+	}
+	ap := app.activeProvider()
+	if ap == nil || !slices.Equal(ap.Models, []string{"qwen4-coder", "qwen4-max"}) {
+		t.Fatalf("expected persisted picker models [qwen4-coder qwen4-max], got ap=%+v", ap)
+	}
+
+	// 3. Stale editor-session response after canceling/reopening EditingProv must NOT clobber the new editor draft!
+	app.AgentUI.ProvEditSeq = 10
+	app.AgentUI.ActiveFetchReqID = "mf_old"
+	app.AgentUI.ActiveFetchEditSeq = 10
+	app.AgentUI.ActiveFetchProvID = savedID
+	// User cancels and opens a fresh "Add provider" draft (ProvEditSeq advances to 11):
+	app.AgentUI.ProvEditSeq = 11
+	app.AgentUI.EditingProv = &ProviderConfig{Format: "chat", Vision: true}
+	app.AgentUI.ProvModelsCSV = "my-draft-model"
+	app.AgentUI.ActiveFetchReqID = "mf_old"
+	app.onModelsFetched(map[string]any{
+		"ok":     true,
+		"req_id": "mf_old",
+		"target": "provider",
+		"models": []any{"stale-model"},
+	})
+	if app.AgentUI.ProvModelsCSV != "my-draft-model" {
+		t.Fatalf("stale models_fetched clobbered fresh editor draft: got %q", app.AgentUI.ProvModelsCSV)
+	}
+}

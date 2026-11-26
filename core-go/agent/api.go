@@ -44,7 +44,7 @@ const editorStateNote = "\n\nThe result of `get_editor_state` (fresh; call it ag
 
 // runAPI runs p's turn over a model API: the streamed reply, its tool calls and their results, until the model
 // ends its turn.
-func runAPI(e *engine.Engine, p engine.Profile, prompt string, child bool, name string, client model.Provider) (*jsonv.Object, error) {
+func runAPI(e *engine.Engine, p engine.Profile, prompt string, child bool, name string, client model.Provider, contextLimit int) (*jsonv.Object, error) {
 	var effort, state string
 	var fast bool
 	var cancel *engine.Flag
@@ -57,6 +57,9 @@ func runAPI(e *engine.Engine, p engine.Profile, prompt string, child bool, name 
 		if effort, ok = e.Setting("agent_effort"); !ok {
 			effort = "high"
 		}
+		if contextLimit <= 0 {
+			contextLimit = e.ContextWindowLimit(e.Backend(), name)
+		}
 		fast = fastFor(name, jsonv.IsTrue(jsonv.Get(e.Settings, "agent_fast")))
 		cancel, state = e.Agent.Cancel, e.EditorState()
 		if !child {
@@ -64,17 +67,25 @@ func runAPI(e *engine.Engine, p engine.Profile, prompt string, child bool, name 
 		}
 	})
 	user := prompt
+	userMsg := engine.Object("role", "user", "content", jsonv.NewArray(engine.Object("type", "text", "text", user)))
 	if !child {
 		user = prompt + editorStateNote + state
+		userMsg = engine.Object(
+			"role", "user",
+			"content", jsonv.NewArray(engine.Object("type", "text", "text", user)),
+			"__prompt_len", jsonv.Int(int64(len(prompt))),
+		)
 	}
-	messages = append(messages, engine.Object("role", "user", "content", jsonv.NewArray(engine.Object("type", "text", "text", user))))
+	messages = append(messages, userMsg)
 
 	modern := false
-	for _, m := range []string{"claude-opus-5-5", "claude-fable-5", "claude-sonnet-5-5"} {
+	for _, m := range []string{"claude-opus-5", "claude-opus-6", "claude-fable-", "claude-sonnet-5", "claude-sonnet-6", "claude-haiku-5", "claude-haiku-6"} {
 		modern = modern || strings.HasPrefix(name, m)
 	}
-	system := jsonv.NewArray(engine.Object("type", "text", "text", Instructions("api"), "cache_control", engine.Object("type", "ephemeral")))
+	sysText := Instructions("api")
+	system := jsonv.NewArray(engine.Object("type", "text", "text", sysText, "cache_control", engine.Object("type", "ephemeral")))
 	tools := apiTools(e, child)
+	baseOverhead := EstimateBaseOverheadTokens(sysText, tools)
 	usage := engine.Object("input", jsonv.Int(0), "output", jsonv.Int(0), "cacheRead", jsonv.Int(0), "cacheWrite", jsonv.Int(0), "turns", jsonv.Int(0))
 	save := func() {
 		if !child {
@@ -83,12 +94,28 @@ func runAPI(e *engine.Engine, p engine.Profile, prompt string, child bool, name 
 		}
 	}
 
+	notifiedCompaction := false
 	for turn := 0; turn < maxTurns; turn++ {
 		if cancel.IsSet() {
 			break
 		}
-		body := engine.Object("model", name, "max_tokens", jsonv.Int(32000), "system", system, "tools", tools,
-			"messages", jsonv.NewArray(messages...), "output_config", engine.Object("effort", effort))
+		var compacted bool
+		var dropped int
+		messages, compacted, dropped = EnforceContextWindow(messages, baseOverhead, contextLimit)
+		if compacted && !notifiedCompaction && dropped > 0 {
+			notifiedCompaction = true
+			emit(e, p, "note", engine.Object("text", fmt.Sprintf("Context window limit (%dk tokens): %d earlier message(s) compacted cleanly.", contextLimit/1000, dropped)))
+		}
+		estInput := EstimateContextTokens(baseOverhead, messages)
+		if turn == 0 {
+			emitContextUsage(e, p, child, estInput, contextLimit)
+		}
+		maxOut := ClampMaxOutputTokens(contextLimit, estInput)
+		if contextLimit > 0 && (maxOut < 64 || estInput >= contextLimit) {
+			return usage, fmt.Errorf("prompt exceeds configured context window (%d estimated input tokens, limit %d); shorten the prompt or increase the context window limit in Agent settings", estInput, contextLimit)
+		}
+		body := engine.Object("model", name, "max_tokens", jsonv.Int(int64(maxOut)), "system", system, "tools", tools,
+			"messages", apiWireMessages(messages), "output_config", engine.Object("effort", effort))
 		var betas []string
 		if modern {
 			body.Set("fallbacks", "default")
@@ -133,15 +160,37 @@ func runAPI(e *engine.Engine, p engine.Profile, prompt string, child bool, name 
 			if err.Error() == "stopped" {
 				break
 			}
-			return nil, err
+			if turn > 0 {
+				save()
+			}
+			return usage, err
 		}
+		respUsage := jsonv.Get(resp, "usage")
 		for _, k := range [][2]string{{"input", "input_tokens"}, {"output", "output_tokens"}, {"cacheRead", "cache_read_input_tokens"}, {"cacheWrite", "cache_creation_input_tokens"}} {
-			usage.Set(k[0], u64(asU64(jsonv.Get(usage, k[0]))+asU64(jsonv.Get(jsonv.Get(resp, "usage"), k[1]))))
+			usage.Set(k[0], u64(asU64(jsonv.Get(usage, k[0]))+asU64(jsonv.Get(respUsage, k[1]))))
 		}
 		usage.Set("turns", u64(asU64(jsonv.Get(usage, "turns"))+1))
 		stop := jsonv.StrOr(jsonv.Get(resp, "stop_reason"))
 		content := jsonv.Clone(jsonv.Get(resp, "content"))
 		blocks := jsonv.Items(content)
+		hasIn := hasNumericField(respUsage, "input_tokens") ||
+			hasNumericField(respUsage, "cache_read_input_tokens") ||
+			hasNumericField(respUsage, "cache_creation_input_tokens")
+		hasOut := hasNumericField(respUsage, "output_tokens")
+		stepIn := asU64(jsonv.Get(respUsage, "input_tokens")) +
+			asU64(jsonv.Get(respUsage, "cache_read_input_tokens")) +
+			asU64(jsonv.Get(respUsage, "cache_creation_input_tokens"))
+		stepOut := asU64(jsonv.Get(respUsage, "output_tokens"))
+		usedIn := int(stepIn)
+		if !hasIn {
+			usedIn = estInput
+		}
+		usedOut := int(stepOut)
+		if !hasOut {
+			usedOut = estimateMessageTokens(engine.Object("role", "assistant", "content", content))
+		}
+		curCtxUsed := usedIn + usedOut
+		emitContextUsage(e, p, child, curCtxUsed, contextLimit)
 		emit(e, p, "message_end", engine.Object("t", u64(engine.NowMs())))
 		if stop == "refusal" {
 			text := "Claude declined this request."
@@ -171,6 +220,13 @@ func runAPI(e *engine.Engine, p engine.Profile, prompt string, child bool, name 
 		if len(calls) == 0 || !(stop == "tool_use" || stop == "max_tokens") {
 			break
 		}
+		hasSpawnInBatch := false
+		for _, b := range calls {
+			if jsonv.StrIs(jsonv.Get(b, "name"), "spawn_agents") {
+				hasSpawnInBatch = true
+				break
+			}
+		}
 		results := jsonv.NewArray()
 		for _, b := range calls {
 			id, tool := jsonv.StrOr(jsonv.Get(b, "id")), jsonv.StrOr(jsonv.Get(b, "name"))
@@ -189,7 +245,18 @@ func runAPI(e *engine.Engine, p engine.Profile, prompt string, child bool, name 
 				out = e.CallTool(tool, args)
 			}
 			// Outside the engine lock: screenshots rasterize here.
+			auditSnap := out.Audit
 			out = out.Finish(e)
+			out.Text = AppendDesignAuditWithSnapshot(e, auditSnap, tool, out.Text, out.Error)
+			if !child && tool == "execute" && !out.Error && !hasSpawnInBatch {
+				needSpawnHint := false
+				e.Locked(func() {
+					needSpawnHint = e.Agent.Parallel > 1 && e.Agent.Spawned == 0 && len(e.Agent.TurnScreenTeam) >= 2
+				})
+				if needSpawnHint {
+					out.Text += "\n\n[Parallel team ready] Multiple screen frames exist and 0 designers have been spawned yet — call `spawn_agents` now to delegate the extra screen frame(s) to your parallel designers."
+				}
+			}
 			emit(e, p, "tool_done", toolDoneEvent(id, tool, input, out.Text, out.Images, out.Error))
 			parts := jsonv.NewArray(engine.Object("type", "text", "text", out.Text))
 			for _, img := range out.Images {
@@ -216,6 +283,29 @@ func setKey(v jsonv.Value, k string, x jsonv.Value) jsonv.Value {
 	}
 	o.Set(k, x)
 	return o
+}
+
+func hasNumericField(v jsonv.Value, key string) bool {
+	_, ok := jsonv.F64(jsonv.Get(v, key))
+	return ok
+}
+
+func apiWireMessages(messages []jsonv.Value) *jsonv.Array {
+	items := make([]jsonv.Value, len(messages))
+	for i, m := range messages {
+		if obj := jsonv.Obj(m); obj != nil && obj.Has("__prompt_len") {
+			clean := jsonv.NewObject()
+			obj.Each(func(k string, val jsonv.Value) {
+				if !strings.HasPrefix(k, "__") {
+					clean.Set(k, val)
+				}
+			})
+			items[i] = clean
+			continue
+		}
+		items[i] = m
+	}
+	return jsonv.NewArray(items...)
 }
 
 func u64(v uint64) jsonv.Number { return jsonv.Number(fmt.Sprint(v)) }

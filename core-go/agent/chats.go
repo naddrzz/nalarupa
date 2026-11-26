@@ -101,6 +101,12 @@ func snapshotChat(e *engine.Engine) (*chatSave, error) {
 	// ponytail: rewrites the whole file at every message end; switch to an append-only log if long chats get slow.
 	d := engine.Object("version", jsonv.Int(1), "id", a.Chat.ID, "title", a.Chat.Title, "updatedAt", jsonv.Int(int64(engine.NowMs())), "agent", main,
 		"events", cloneArray(a.Chat.Events), "messages", cloneArray(a.Messages), "session", session)
+	if a.ContextUsed > 0 {
+		d.Set("contextUsed", jsonv.Int(int64(a.ContextUsed)))
+	}
+	if a.ContextLimit > 0 {
+		d.Set("contextLimit", jsonv.Int(int64(a.ContextLimit)))
+	}
 	return &chatSave{e: e, dataDir: e.DataDir, path: path, doc: d}, nil
 }
 
@@ -307,6 +313,18 @@ func LoadChat(e *engine.Engine, id string) (jsonv.Value, error) {
 		return nil, err
 	}
 	e.Agent.Restore(id, saved)
+	if e.Agent.ContextUsed > 0 {
+		lim := e.Agent.ContextLimit
+		if lim <= 0 {
+			lim = e.EffectiveContextWindow()
+		}
+		e.Emit(engine.Object(
+			"type", "agent_context",
+			"used", jsonv.Int(int64(e.Agent.ContextUsed)),
+			"limit", jsonv.Int(int64(lim)),
+			"remaining", jsonv.Int(int64(max(0, lim-e.Agent.ContextUsed))),
+		))
+	}
 	return engine.Object("id", id, "title", jsonv.Clone(jsonv.Get(saved, "title")), "events", jsonv.Clone(jsonv.Get(saved, "events"))), nil
 }
 

@@ -107,7 +107,11 @@ func (c *Ctx) TreeOptions() usvg.Options {
 	return opt
 }
 
-func (c *Ctx) emitter() *svg.Svg { return svg.New(c.Fonts, c.Assets, c.Doc.Dir()) }
+func (c *Ctx) emitter() *svg.Svg {
+	s := svg.New(c.Fonts, c.Assets, c.Doc.Dir())
+	s.AutoNativeBackdrop = true
+	return s
+}
 
 // parse is usvg's parse with base (TreeOptions) and a fresh image resolver; nil on error. fontLock
 // serialises the parses that reach the font database (text, and images that may hold text), whose caches
@@ -503,6 +507,16 @@ func (r *Renderer) Live() []LiveNode {
 		}
 		return [4]float64{a, b, c, d}
 	}
+	now := r.now()
+	var heldUnrevealed map[string]bool
+	for _, s := range r.Slides {
+		if s.beforeTree == nil && s.IsHeld(now) {
+			if heldUnrevealed == nil {
+				heldUnrevealed = map[string]bool{}
+			}
+			heldUnrevealed[s.ID] = true
+		}
+	}
 	var out []LiveNode
 	for _, id := range r.Order {
 		layer, ok := r.Layers[id]
@@ -515,7 +529,20 @@ func (r *Renderer) Live() []LiveNode {
 			if len(path) > f.Depth {
 				path = path[:f.Depth]
 			}
-			if (f.Placeholder || f.Pending) && !f.Faded {
+			hiddenByHeldSlide := false
+			if heldUnrevealed != nil {
+				if heldUnrevealed[f.ID] {
+					hiddenByHeldSlide = true
+				} else {
+					for _, p := range path {
+						if heldUnrevealed[layer.Flat[p].ID] {
+							hiddenByHeldSlide = true
+							break
+						}
+					}
+				}
+			}
+			if (f.Placeholder || f.Pending) && !f.Faded && !hiddenByHeldSlide {
 				var frames []*Flat
 				for _, p := range path {
 					if layer.Flat[p].Clip {

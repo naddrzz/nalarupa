@@ -23,6 +23,10 @@ type Stream struct {
 	Seed uint64
 	// Touched is how many ids the stream has reported in `agent_activity` events.
 	Touched int
+	// Edited tracks node ids that already spawned an edit slide during streaming so final execute commit doesn't replay them.
+	Edited map[string]bool
+	// EditedPreTop tracks pre-turn top-level screens intentionally edited by this live stream.
+	EditedPreTop map[string]bool
 }
 
 // StreamUpdate: the model streamed more of an `execute` call. Its newly completed statements run once, in the
@@ -45,13 +49,23 @@ func (e *Engine) StreamUpdate(key, agent, source string) {
 		s := e.Streams[i]
 		var touched []string
 		ok := false
+		prevStream := e.activeStream
+		e.activeStream = s
 		e.onPreview(func() { touched, ok = e.streamStep(key, agent, prefix, s.Seed) })
+		e.activeStream = prevStream
 		if ok {
-			e.redraw(clean)
 			seen := s.Touched
 			s.Touched = len(touched)
+			if e.Agent.Running {
+				e.DeconflictTopLevelNodes(e.Preview)
+			}
+			e.reconcilePreTurnScreenIsolation(e.Preview)
 			if len(touched) > seen {
-				e.Emit(streamWrite(s.Agent, touched[seen:]))
+				e.ExpandProgressiveRootSlides(e.Preview, touched[seen:])
+			}
+			e.redraw(clean)
+			if len(touched) > seen {
+				e.EmitWriteActivityWithTeam(s.Agent, e.Preview, touched[seen:], true)
 			}
 			return
 		}
@@ -117,7 +131,12 @@ func (e *Engine) streamStep(key, agent, source string, seed uint64) ([]string, b
 		defer e.ids.SetState(state)
 	}
 	e.Executing = true
-	defer func() { e.Executing = was }()
+	prevExecAgent := e.currentExecAgent
+	e.currentExecAgent = agent
+	defer func() {
+		e.Executing = was
+		e.currentExecAgent = prevExecAgent
+	}()
 	if e.Script.live == nil {
 		e.Script.live = map[string]*script.Live{}
 	}
@@ -183,18 +202,35 @@ func (e *Engine) rebuildPreview() {
 		return
 	}
 	e.Preview = &doc.Doc{Root: cloneRoot(e.Doc.Root), Path: e.Doc.Path, IDs: e.ids}
-	var activity []jsonv.Value
+	type pendingStreamAct struct {
+		agent string
+		ids   []string
+	}
+	var activity []pendingStreamAct
 	e.onPreview(func() {
+		prevStream := e.activeStream
+		defer func() { e.activeStream = prevStream }()
 		for _, s := range append([]*Stream(nil), e.Streams...) {
+			e.activeStream = s
 			touched, _ := e.streamStep(s.Key, s.Agent, s.Source, s.Seed)
 			if len(touched) > s.Touched {
-				activity = append(activity, streamWrite(s.Agent, touched[s.Touched:]))
+				activity = append(activity, pendingStreamAct{
+					agent: s.Agent,
+					ids:   append([]string(nil), touched[s.Touched:]...),
+				})
 			}
 			s.Touched = len(touched)
 		}
 	})
+	if e.Agent.Running {
+		e.DeconflictTopLevelNodes(e.Preview)
+	}
+	e.reconcilePreTurnScreenIsolation(e.Preview)
+	for _, act := range activity {
+		e.ExpandProgressiveRootSlides(e.Preview, act.ids)
+	}
 	e.redraw(clean)
-	for _, a := range activity {
-		e.Emit(a)
+	for _, act := range activity {
+		e.EmitWriteActivityWithTeam(act.agent, e.Preview, act.ids, true)
 	}
 }

@@ -132,16 +132,21 @@ func runClaudeCode(e *engine.Engine, p engine.Profile, prompt string, child bool
 		return nil, err
 	}
 	defer doc.RemoveFile(cfg)
-	var session, state string
+	var session, state, effort string
 	var cancel *engine.Flag
 	var auto, fast bool
+	var skillDirs []string
 	e.Locked(func() {
 		if !child {
 			state, session = e.EditorState(), e.Agent.Session
 		}
+		skillDirs = append([]string(nil), e.Agent.ActiveSkillDirs...)
 		cancel = e.Agent.Cancel
 		fast = fastFor(name, jsonv.IsTrue(jsonv.Get(e.Settings, "agent_fast")))
 		auto = jsonv.IsTrue(jsonv.Get(e.Settings, "agent_auto_permissions"))
+		if eff, ok := jsonv.Str(jsonv.Get(e.Settings, "agent_effort")); ok {
+			effort = strings.ToLower(strings.TrimSpace(eff))
+		}
 	})
 	full := prompt
 	if !child {
@@ -150,9 +155,9 @@ func runClaudeCode(e *engine.Engine, p engine.Profile, prompt string, child bool
 	// The prompt goes in on stdin: as an argument a long message or selection overflows the OS limit.
 	args := []string{"-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--strict-mcp-config",
 		"--mcp-config", cfg,
-		// Pre-allowed set: the canvas tools plus web search/fetch. Every other tool asks the user through the MCP
-		// permission tool (a permission card).
-		"--allowedTools", "mcp__nalarupa,WebSearch,WebFetch",
+		// Pre-allowed set: the canvas tools, web search/fetch, and Claude Skills. Every other tool asks the user
+		// through the MCP permission tool (a permission card).
+		"--allowedTools", "mcp__nalarupa,WebSearch,WebFetch,Skill",
 		"--disallowedTools", "Task,Agent,AskUserQuestion",
 		"--permission-prompt-tool", "mcp__nalarupa__" + PermissionTool,
 		"--append-system-prompt", Instructions("claude-code")}
@@ -168,6 +173,15 @@ func runClaudeCode(e *engine.Engine, p engine.Profile, prompt string, child bool
 	}
 	if fast {
 		args = append(args, "--settings", `{"fastMode":true}`)
+	}
+	switch effort {
+	case "low", "medium", "high", "xhigh", "max":
+		args = append(args, "--effort", effort)
+	}
+	for _, dir := range skillDirs {
+		if dir != "" {
+			args = append(args, "--add-dir", dir)
+		}
 	}
 	cmd := command(claudeProgram, args...)
 	stdin, err := cmd.StdinPipe()
@@ -234,6 +248,7 @@ func runClaudeCode(e *engine.Engine, p engine.Profile, prompt string, child bool
 	inputs := map[string]ccInput{}
 	lastPreview := map[string]time.Time{}
 	usage := jsonv.NewObject()
+	var turnCtx claudeTurnCtx
 	reported, textless, stale := false, false, false
 	// Split on bytes: a line that is not UTF-8 must not end the reply and leave the CLI on a closed pipe.
 	r := bufio.NewReader(stdout)
@@ -242,7 +257,7 @@ func runClaudeCode(e *engine.Engine, p engine.Profile, prompt string, child bool
 		if len(line) > 0 || rerr == nil {
 			line = []byte(strings.TrimSuffix(string(line), "\n"))
 			if ev, err := jsonv.Parse([]byte(model.Lossy(line))); err == nil {
-				usage, reported, textless, stale = claudeEvent(e, p, child, session, ev, tools, inputs, lastPreview, usage, reported, textless, stale)
+				usage, reported, textless, stale = claudeEvent(e, p, child, session, ev, tools, inputs, lastPreview, usage, &turnCtx, reported, textless, stale)
 			}
 		}
 		if rerr != nil {
@@ -253,9 +268,15 @@ func runClaudeCode(e *engine.Engine, p engine.Profile, prompt string, child bool
 	watcher.Wait()
 	stderrText := <-errText
 	waitErr := cmd.Wait()
+	measuredUsage := func() *jsonv.Object {
+		if usage != nil && usage.Len() > 0 {
+			return usage
+		}
+		return nil
+	}
 	var exitErr *exec.ExitError
 	if waitErr != nil && !errors.As(waitErr, &exitErr) {
-		return nil, errors.New(doc.IOError(waitErr))
+		return measuredUsage(), errors.New(doc.IOError(waitErr))
 	}
 	// The CLI no longer knows the saved session (another working folder, a cleaned `~/.claude`): the id would fail
 	// every later message too, so forget it and run this prompt again as a fresh session.
@@ -268,11 +289,11 @@ func runClaudeCode(e *engine.Engine, p engine.Profile, prompt string, child bool
 	}
 	sendErr := <-sent
 	if !cancel.IsSet() && !cmd.ProcessState.Success() {
-		return nil, errors.New(exitError(exitStatus(cmd.ProcessState), stderrText, reported))
+		return measuredUsage(), errors.New(exitError(exitStatus(cmd.ProcessState), stderrText, reported))
 	}
 	// A clean exit after a cut-off prompt would otherwise pass as a finished run.
 	if sendErr != nil && !cancel.IsSet() {
-		return nil, fmt.Errorf("could not send the prompt to the `claude` CLI (%s)", doc.IOError(sendErr))
+		return measuredUsage(), fmt.Errorf("could not send the prompt to the `claude` CLI (%s)", doc.IOError(sendErr))
 	}
 	if textless && !cancel.IsSet() {
 		emit(e, p, "error", engine.Object("text", "Claude Code reported an error"))
@@ -280,9 +301,14 @@ func runClaudeCode(e *engine.Engine, p engine.Profile, prompt string, child bool
 	return usage, nil
 }
 
+type claudeTurnCtx struct {
+	lastInput  int
+	lastOutput int
+}
+
 // claudeEvent handles one line of the CLI's stream-json output.
 func claudeEvent(e *engine.Engine, p engine.Profile, child bool, session string, ev jsonv.Value, tools map[uint64]*ccTool, inputs map[string]ccInput,
-	lastPreview map[string]time.Time, usage *jsonv.Object, reported, textless, stale bool) (*jsonv.Object, bool, bool, bool) {
+	lastPreview map[string]time.Time, usage *jsonv.Object, turnCtx *claudeTurnCtx, reported, textless, stale bool) (*jsonv.Object, bool, bool, bool) {
 	if !child {
 		if id, ok := jsonv.Str(jsonv.Get(ev, "session_id")); ok {
 			e.Locked(func() { e.Agent.Session = id })
@@ -295,6 +321,30 @@ func claudeEvent(e *engine.Engine, p engine.Profile, child bool, session string,
 		switch jsonv.StrOr(jsonv.Get(se, "type")) {
 		case "message_start":
 			clear(tools)
+			if !child {
+				mu := jsonv.Get(jsonv.Get(se, "message"), "usage")
+				inTok := int(asU64(jsonv.Get(mu, "input_tokens")) + asU64(jsonv.Get(mu, "cache_read_input_tokens")) + asU64(jsonv.Get(mu, "cache_creation_input_tokens")))
+				outTok := int(asU64(jsonv.Get(mu, "output_tokens")))
+				if inTok > 0 {
+					if turnCtx != nil {
+						turnCtx.lastInput = inTok
+						turnCtx.lastOutput = outTok
+					}
+					var lim int
+					e.Locked(func() { lim = e.EffectiveContextWindow() })
+					emitContextUsage(e, p, false, inTok+outTok, lim)
+				}
+			}
+		case "message_delta":
+			if !child && turnCtx != nil && turnCtx.lastInput > 0 {
+				du := jsonv.Get(se, "usage")
+				if outTok := int(asU64(jsonv.Get(du, "output_tokens"))); outTok > 0 {
+					turnCtx.lastOutput = outTok
+					var lim int
+					e.Locked(func() { lim = e.EffectiveContextWindow() })
+					emitContextUsage(e, p, false, turnCtx.lastInput+turnCtx.lastOutput, lim)
+				}
+			}
 		case "content_block_start":
 			block := jsonv.Get(se, "content_block")
 			if jsonv.StrIs(jsonv.Get(block, "type"), "tool_use") {
@@ -357,6 +407,23 @@ func claudeEvent(e *engine.Engine, p engine.Profile, child bool, session string,
 		c := func(v jsonv.Value, k string) jsonv.Value { return jsonv.Clone(jsonv.Get(v, k)) }
 		usage = engine.Object("input", c(u, "input_tokens"), "output", c(u, "output_tokens"), "cacheRead", c(u, "cache_read_input_tokens"),
 			"cacheWrite", c(u, "cache_creation_input_tokens"), "turns", c(ev, "num_turns"), "costUsd", c(ev, "total_cost_usd"))
+		if !child {
+			ctxUsed := 0
+			if turnCtx != nil && turnCtx.lastInput > 0 {
+				outTok := turnCtx.lastOutput
+				if outTok == 0 && asU64(jsonv.Get(ev, "num_turns")) <= 1 {
+					outTok = int(asU64(jsonv.Get(u, "output_tokens")))
+				}
+				ctxUsed = turnCtx.lastInput + outTok
+			} else if asU64(jsonv.Get(ev, "num_turns")) <= 1 {
+				ctxUsed = int(asU64(jsonv.Get(u, "input_tokens")) + asU64(jsonv.Get(u, "cache_read_input_tokens")) + asU64(jsonv.Get(u, "cache_creation_input_tokens")) + asU64(jsonv.Get(u, "output_tokens")))
+			}
+			if ctxUsed > 0 {
+				var lim int
+				e.Locked(func() { lim = e.EffectiveContextWindow() })
+				emitContextUsage(e, p, false, ctxUsed, lim)
+			}
+		}
 		if jsonv.IsTrue(jsonv.Get(ev, "is_error")) {
 			// Without text the card would hide the real cause; leave that to the exit error (stderr).
 			text, ok := errorCause(ev)

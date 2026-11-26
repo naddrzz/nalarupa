@@ -267,7 +267,7 @@ func (e *Engine) Tool(name string, args jsonv.Value) ToolOut {
 			return bad("Another execute call is still running.")
 		}
 		c := e.beginExecute(args)
-		out := e.execute(c.args, script.Call{})
+		out := e.executeWithSkipEdits(c, script.Call{})
 		e.endExecute(c)
 		return out
 	case "get_editor_state":

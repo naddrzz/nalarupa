@@ -27,11 +27,19 @@ for later calls. The response lists which globals carried over.
 
 The canvas runs your snippet while you are still writing it: every complete
 top-level statement executes as soon as it is streamed, and the user watches
-the design build up (your cursor flies to each node you touch). The final call
-commits everything as one undo step, or rolls everything back on error.
+the design build up smoothly (your cursor glides to each node as it appears).
+The final call commits everything as one undo step, or rolls everything back on
+error.
 
-- Write top-down: create the container, then its children, then details, so
-  the build-up reads naturally.
+- Write incremental top-level `Insert` statements top-down: create the screen
+  frame, then its surface/header, then the section container, then each card or
+  control group as its own top-level statement (`card1 = Insert(row, ...)`).
+- Never pack a whole screen or a multi-card section into one giant nested
+  `children: [...]` literal or a single 80-line `for` block: unclosed brackets
+  hold back live streaming until the closing token, making the canvas look
+  frozen and then dump everything at once. Small inline leaf children (an icon +
+  label inside one button or badge) are fine; structural containers and cards
+  each get their own top-level statement.
 - Keep one statement per line (or end statements with `;`).
 - Mark top-level frames `placeholder: true` while you build them (they glow
   "Generating") and set it back to `false` in the call that finishes them.
