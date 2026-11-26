@@ -185,8 +185,6 @@ func (s *Svg) Node(n *resolve.RNode) {
 	tf := transform(n)
 	fx := EffectsOf(n)
 	ownWeight := nodeBaseWeight(n, fx)
-	startExpanded := s.expandedNodes
-	s.expandedNodes += ownWeight
 	// The backdrop is blurred inside the node's opacity layer, which starts out empty: below full
 	// opacity nothing shows.
 	backdrop := fx.Backdrop > 0 && opacity >= 1
@@ -198,6 +196,8 @@ func (s *Svg) Node(n *resolve.RNode) {
 	if backdrop {
 		s.backdropBlur(n, tf, fx.Backdrop, outline)
 	}
+	startExpanded := s.expandedNodes
+	s.expandedNodes += ownWeight
 	gid := s.id("n")
 	g := ""
 	if s.tag {

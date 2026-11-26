@@ -130,6 +130,7 @@ type AgentState struct {
 	IsVariationTurn  bool
 	PreTurnTopIDs    map[string]bool
 	PreTurnVars      *jsonv.Object
+	PreTurnThemes    *jsonv.Object
 	ProtectedVars    map[string]jsonv.Value
 	TurnEditedPreTop map[string]bool
 	TurnNewTopIDs    []string
@@ -227,6 +228,7 @@ func (a *AgentState) EndTurnIsolation() {
 	a.IsVariationTurn = false
 	a.PreTurnTopIDs = nil
 	a.PreTurnVars = nil
+	a.PreTurnThemes = nil
 	a.ProtectedVars = nil
 	a.TurnEditedPreTop = nil
 	a.TurnNewTopIDs = nil
@@ -399,14 +401,9 @@ func (a *AgentState) TakeTeamMemberForContainer(parent, containerID string) Prof
 			return bindParent(p)
 		}
 	}
-	for _, p := range a.Team {
-		if !a.teamClaimed[p.ID] {
-			a.teamClaimed[p.ID] = true
-			a.TeamConsumed++
-			return bindParent(p)
-		}
-	}
-	return a.NewProfile(parent)
+	np := a.NewProfile(parent)
+	a.teamClaimed[np.ID] = true
+	return np
 }
 
 // TakeTeamMember pops the next pre-allocated team profile for spawn_agents, or creates a fresh one if none left.

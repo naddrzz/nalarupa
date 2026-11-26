@@ -17,16 +17,63 @@ import (
 // Upstream threads a render::Context holding `max_bbox` through every call. The Nalarupa patches in
 // render_group replaced its only use, so the port leaves it out.
 
+type isolatedState struct {
+	w, h uint32
+	// rho stores per-pixel ancestor transmittance ratio in [0..255] (nil means all 255):
+	// remaining ancestor transmittance through this layer is t = (rho * (255 - sub.a) + 127) / 255.
+	rho []uint8
+}
+
+func (st *isolatedState) ensureRho() []uint8 {
+	if st == nil {
+		return nil
+	}
+	if st.rho == nil {
+		n := int(st.w) * int(st.h)
+		st.rho = make([]uint8, n)
+		for i := range st.rho {
+			st.rho[i] = 255
+		}
+	}
+	return st.rho
+}
+
+func (st *isolatedState) transmittanceAt(pxIdx int, subAlpha uint32) uint32 {
+	if subAlpha >= 255 {
+		return 0
+	}
+	invSub := 255 - subAlpha
+	if st == nil || st.rho == nil || pxIdx < 0 || pxIdx >= len(st.rho) {
+		return invSub
+	}
+	return (uint32(st.rho[pxIdx])*invSub + 127) / 255
+}
+
 type backdropLayer struct {
 	data       []byte
 	w, h       uint32
 	offX, offY int32
+	state      *isolatedState
+}
+
+func isLayerBlurFilters(fs []*usvg.Filter) bool {
+	for _, f := range fs {
+		p := f.Primitives()
+		if len(p) != 1 {
+			return false
+		}
+		b, ok := p[0].Kind().(*usvg.FeGaussianBlur)
+		if !ok || b.Input() != (usvg.FilterInput{Kind: usvg.FilterInputSourceGraphic}) {
+			return false
+		}
+	}
+	return true
 }
 
 // Render paints tree onto pixmap; transform is the root transform (it can position the SVG inside the
 // pixmap). The result is in the sRGB color space.
 func Render(tree *usvg.Tree, transform skia.Transform, pixmap skia.PixmapMut) {
-	renderNodesWithBackdrop(tree.Root(), transform, pixmap, nil)
+	renderNodesWithBackdrop(tree.Root(), transform, pixmap, nil, nil)
 }
 
 // RenderNode paints node onto pixmap, shifted so its abs layer bounding box starts at the pixmap origin;
@@ -42,44 +89,44 @@ func RenderNode(node usvg.Node, transform skia.Transform, pixmap skia.PixmapMut)
 	if ok {
 		transform = transform.PreTranslate(-bbox.X(), -bbox.Y())
 	}
-	renderNode(node, transform, pixmap, nil)
+	renderNode(node, transform, pixmap, nil, nil)
 	return true
 }
 
 func renderNodes(parent *usvg.Group, transform skia.Transform, pixmap skia.PixmapMut) {
-	renderNodesWithBackdrop(parent, transform, pixmap, nil)
+	renderNodesWithBackdrop(parent, transform, pixmap, nil, nil)
 }
 
-func renderNodesWithBackdrop(parent *usvg.Group, transform skia.Transform, pixmap skia.PixmapMut, bgStack []backdropLayer) {
+func renderNodesWithBackdrop(parent *usvg.Group, transform skia.Transform, pixmap skia.PixmapMut, bgStack []backdropLayer, curState *isolatedState) {
 	for _, node := range parent.Children() {
-		renderNode(node, transform, pixmap, bgStack)
+		renderNode(node, transform, pixmap, bgStack, curState)
 	}
 }
 
-func renderNode(node usvg.Node, transform skia.Transform, pixmap skia.PixmapMut, bgStack []backdropLayer) {
+func renderNode(node usvg.Node, transform skia.Transform, pixmap skia.PixmapMut, bgStack []backdropLayer, curState *isolatedState) {
 	switch n := node.(type) {
 	case *usvg.Group:
-		renderGroup(n, transform, pixmap, bgStack)
+		renderGroup(n, transform, pixmap, bgStack, curState)
 	case *usvg.Path:
 		renderPath(n, skia.BlendModeSourceOver, transform, pixmap)
 	case *usvg.Image:
 		renderImage(n, transform, pixmap)
 	case *usvg.Text:
-		renderGroup(n.Flattened(), transform, pixmap, bgStack)
+		renderGroup(n.Flattened(), transform, pixmap, bgStack, curState)
 	}
 }
 
-func renderGroup(group *usvg.Group, transform skia.Transform, pixmap skia.PixmapMut, bgStack []backdropLayer) {
+func renderGroup(group *usvg.Group, transform skia.Transform, pixmap skia.PixmapMut, bgStack []backdropLayer, curState *isolatedState) {
 	transform = transform.PreConcat(group.Transform())
 
 	if rest, ok := strings.CutPrefix(group.ID(), "nrbb:"); ok &&
 		group.ClipPath() == nil && group.BlendMode() == usvg.BlendModeNormal && isNativeBackdropGroup(group) {
-		renderBackdropBlur(group, rest, transform, pixmap, bgStack)
+		renderBackdropBlur(group, rest, transform, pixmap, bgStack, curState)
 		return
 	}
 
 	if !group.ShouldIsolate() {
-		renderNodesWithBackdrop(group, transform, pixmap, bgStack)
+		renderNodesWithBackdrop(group, transform, pixmap, bgStack, curState)
 		return
 	}
 
@@ -143,36 +190,72 @@ func renderGroup(group *usvg.Group, transform skia.Transform, pixmap skia.Pixmap
 	}
 
 	var childBg []backdropLayer
-	if len(group.Filters()) == 0 && group.BlendMode() == usvg.BlendModeNormal {
+	var subState *isolatedState
+	if group.BlendMode() == usvg.BlendModeNormal && isLayerBlurFilters(group.Filters()) {
+		subState = &isolatedState{w: ibbox.Width(), h: ibbox.Height()}
 		childBg = make([]backdropLayer, len(bgStack)+1)
 		for i, l := range bgStack {
 			childBg[i] = backdropLayer{
-				data: l.data,
-				w:    l.w,
-				h:    l.h,
-				offX: l.offX + ibbox.X(),
-				offY: l.offY + ibbox.Y(),
+				data:  l.data,
+				w:     l.w,
+				h:     l.h,
+				offX:  l.offX + ibbox.X(),
+				offY:  l.offY + ibbox.Y(),
+				state: l.state,
 			}
 		}
 		childBg[len(bgStack)] = backdropLayer{
-			data: pixmap.DataMut(),
-			w:    pixmap.Width(),
-			h:    pixmap.Height(),
-			offX: ibbox.X(),
-			offY: ibbox.Y(),
+			data:  pixmap.DataMut(),
+			w:     pixmap.Width(),
+			h:     pixmap.Height(),
+			offX:  ibbox.X(),
+			offY:  ibbox.Y(),
+			state: curState,
 		}
 	}
 
-	renderNodesWithBackdrop(group, transform, sub.AsMut(), childBg)
+	renderNodesWithBackdrop(group, transform, sub.AsMut(), childBg, subState)
+
+	var koPM *skia.Pixmap
+	if subState != nil && subState.rho != nil {
+		if kp, ok := skia.NewPixmap(ibbox.Width(), ibbox.Height()); ok {
+			koPM = kp
+			subData := sub.Data()
+			koData := koPM.DataMut()
+			nPx := int(ibbox.Width()) * int(ibbox.Height())
+			for i := 0; i < nPx; i++ {
+				t := subState.transmittanceAt(i, uint32(subData[i*4+3]))
+				k := uint8(255 - min(t, 255))
+				koData[i*4+0] = k
+				koData[i*4+1] = k
+				koData[i*4+2] = k
+				koData[i*4+3] = k
+			}
+		}
+	}
 
 	for _, filter := range group.Filters() {
 		applyFilter(filter, transform, sub)
+		if koPM != nil {
+			applyFilter(filter, transform, koPM)
+		}
 	}
 	if clip := group.ClipPath(); clip != nil {
 		applyClip(clip, transform, sub)
+		if koPM != nil {
+			applyClip(clip, transform, koPM)
+		}
 	}
 	if mask := group.Mask(); mask != nil {
 		applyMask(mask, transform, sub)
+		if koPM != nil {
+			applyMask(mask, transform, koPM)
+		}
+	}
+
+	if koPM != nil {
+		compositeBackdropReplacedLayer(ibbox.X(), ibbox.Y(), sub, koPM, group.Opacity(), pixmap, curState)
+		return
 	}
 
 	paint := skia.PixmapPaint{

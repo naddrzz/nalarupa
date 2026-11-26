@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/naddrzz/nalarupa/core-go/resvg"
+	"github.com/naddrzz/nalarupa/core-go/skia"
 	"github.com/naddrzz/nalarupa/core-go/svg"
 	"github.com/naddrzz/nalarupa/core-go/usvg"
 )
@@ -119,28 +121,92 @@ func TestNativeBackdropBlurBlursUnderlyingPixels(t *testing.T) {
 }
 
 func TestNativeBackdropBlurInsideClippedFrameBlursParentBackground(t *testing.T) {
-	// Root frame has clip: true and fill #ff0000 (painted onto root pixmap BEFORE the isolated clip child group).
-	// Right half is a child rectangle #0000ff inside the isolated clip group.
-	// Glass card at the seam must composite the isolated sub-pixmap over the parent backdrop and blur red + blue.
-	js := `{"version":"2.19","children":[{"type":"frame","id":"root","x":0,"y":0,"width":200,"height":200,"layout":"none","clip":true,"fill":"#ff0000","children":[
-		{"type":"rectangle","id":"right","x":100,"y":0,"width":100,"height":200,"fill":"#0000ff"},
-		{"type":"frame","id":"glass","x":40,"y":40,"width":120,"height":120,"cornerRadius":16,"fill":"#ffffff20","effect":{"type":"background_blur","radius":16}},
-		{"type":"rectangle","id":"b1","x":170,"y":10,"width":16,"height":16,"fill":"#ffffff20","effect":{"type":"background_blur","radius":4}},
-		{"type":"rectangle","id":"b2","x":170,"y":34,"width":16,"height":16,"fill":"#ffffff20","effect":{"type":"background_blur","radius":4}},
-		{"type":"rectangle","id":"b3","x":170,"y":58,"width":16,"height":16,"fill":"#ffffff20","effect":{"type":"background_blur","radius":4}},
-		{"type":"rectangle","id":"b4","x":170,"y":82,"width":16,"height":16,"fill":"#ffffff20","effect":{"type":"background_blur","radius":4}}
-	]}]}`
+	// Red (#ff0000) and blue (#0000ff) boundary is painted on an earlier top-level background layer
+	// (completely outside the isolated clip:true frame!). Inside the clipped frame, a glass card sits across
+	// the seam at x=100 with #ffffff20 fill (alpha=32, which alone could add at most ~32 to the blue channel).
+	// Sampling on the red side (x=94, y=100) must show substantial blue (>60) from ancestor backdrop blur.
+	js := `{"version":"2.19","children":[
+		{"type":"frame","id":"bg","x":0,"y":0,"width":200,"height":200,"layout":"none","fill":"#ff0000","children":[
+			{"type":"rectangle","id":"bgRight","x":100,"y":0,"width":100,"height":200,"fill":"#0000ff"}
+		]},
+		{"type":"frame","id":"clipped","x":0,"y":0,"width":200,"height":200,"layout":"none","clip":true,"children":[
+			{"type":"frame","id":"glass","x":40,"y":40,"width":120,"height":120,"cornerRadius":16,"fill":"#ffffff20","effect":{"type":"background_blur","radius":16}},
+			{"type":"rectangle","id":"b1","x":170,"y":10,"width":16,"height":16,"fill":"#ffffff20","effect":{"type":"background_blur","radius":4}},
+			{"type":"rectangle","id":"b2","x":170,"y":34,"width":16,"height":16,"fill":"#ffffff20","effect":{"type":"background_blur","radius":4}},
+			{"type":"rectangle","id":"b3","x":170,"y":58,"width":16,"height":16,"fill":"#ffffff20","effect":{"type":"background_blur","radius":4}},
+			{"type":"rectangle","id":"b4","x":170,"y":82,"width":16,"height":16,"fill":"#ffffff20","effect":{"type":"background_blur","radius":4}}
+		]}
+	]}`
 	d := openJSON(t, js)
 	cx := offline(t, d)
 	r := &Renderer{}
 	r.Sync(cx)
 	pix := r.Render(200, 200, 0, 0, 1, [3]uint8{255, 255, 255}, "", true)
 
-	off := (100*200 + 96) * 4
+	off := (100*200 + 94) * 4
 	red, blue := pix[off], pix[off+2]
 	if red < 80 || blue < 60 {
-		t.Fatalf("expected clipped-frame native backdrop blur to mix parent red and child blue at (96,100), got RGBA=(%d,%d,%d,%d)",
+		t.Fatalf("expected clipped-frame native backdrop blur to sample parent red-blue boundary at (94,100), got RGBA=(%d,%d,%d,%d)",
 			pix[off], pix[off+1], pix[off+2], pix[off+3])
+	}
+}
+
+func TestNativeBackdropBlurInsideLayerBlurGroupAndTranslucentTarget(t *testing.T) {
+	// 1) Glass cards inside an untransformed group with a layer blur and no fill must still sample the
+	//    red-blue background painted before the group, and then apply the group's layer blur.
+	js := `{"version":"2.19","children":[
+		{"type":"frame","id":"bg","x":0,"y":0,"width":200,"height":200,"layout":"none","fill":"#ff0000","children":[
+			{"type":"rectangle","id":"bgRight","x":100,"y":0,"width":100,"height":200,"fill":"#0000ff"}
+		]},
+		{"type":"group","id":"blurredGrp","effect":{"type":"blur","radius":2},"children":[
+			{"type":"frame","id":"glass","x":40,"y":40,"width":120,"height":120,"cornerRadius":16,"fill":"#ffffff20","effect":{"type":"background_blur","radius":16}},
+			{"type":"rectangle","id":"b1","x":170,"y":10,"width":16,"height":16,"fill":"#ffffff20","effect":{"type":"background_blur","radius":4}},
+			{"type":"rectangle","id":"b2","x":170,"y":34,"width":16,"height":16,"fill":"#ffffff20","effect":{"type":"background_blur","radius":4}},
+			{"type":"rectangle","id":"b3","x":170,"y":58,"width":16,"height":16,"fill":"#ffffff20","effect":{"type":"background_blur","radius":4}},
+			{"type":"rectangle","id":"b4","x":170,"y":82,"width":16,"height":16,"fill":"#ffffff20","effect":{"type":"background_blur","radius":4}}
+		]}
+	]}`
+	d := openJSON(t, js)
+	cx := offline(t, d)
+	r := &Renderer{}
+	r.Sync(cx)
+	pix := r.Render(200, 200, 0, 0, 1, [3]uint8{255, 255, 255}, "", true)
+	off := (100*200 + 94) * 4
+	if pix[off] < 80 || pix[off+2] < 60 {
+		t.Fatalf("expected glass inside layer-blur group to sample ancestor red-blue backdrop at (94,100), got RGBA=(%d,%d,%d,%d)",
+			pix[off], pix[off+1], pix[off+2], pix[off+3])
+	}
+
+	// 2) Transparent target regression: uniform 50%-opaque red (#ff000080 -> alpha=128) behind a native
+	//    nrbb: marker inside a clipped frame must preserve alpha ~128 instead of double-compositing to ~192.
+	transJS := `{"version":"2.19","children":[{"type":"frame","id":"root","x":0,"y":0,"width":200,"height":200,"layout":"none","fill":"#ff000080","clip":true,"children":[
+		{"type":"frame","id":"glass","x":40,"y":40,"width":120,"height":120,"effect":{"type":"background_blur","radius":12}},
+		{"type":"rectangle","id":"b1","x":170,"y":10,"width":12,"height":12,"effect":{"type":"background_blur","radius":4}},
+		{"type":"rectangle","id":"b2","x":170,"y":30,"width":12,"height":12,"effect":{"type":"background_blur","radius":4}},
+		{"type":"rectangle","id":"b3","x":170,"y":50,"width":12,"height":12,"effect":{"type":"background_blur","radius":4}},
+		{"type":"rectangle","id":"b4","x":170,"y":70,"width":12,"height":12,"effect":{"type":"background_blur","radius":4}}
+	]}]}`
+	td := openJSON(t, transJS)
+	tcx := offline(t, td)
+	tr := &Renderer{}
+	tr.Sync(tcx)
+	tree := tr.Layers["root"].tree
+	if tree == nil {
+		t.Fatal("expected parsed usvg tree for translucent root")
+	}
+	pm, ok := skia.NewPixmap(200, 200)
+	if !ok {
+		t.Fatal("skia.NewPixmap failed")
+	}
+	resvg.Render(tree, skia.Identity(), pm.AsMut())
+	pmData := pm.Data()
+	centerOff := (100*200 + 100) * 4
+	outsideOff := (10*200 + 10) * 4
+	gotA := int(pmData[centerOff+3])
+	wantA := int(pmData[outsideOff+3])
+	if gotA < wantA-3 || gotA > wantA+3 {
+		t.Fatalf("expected uniform translucent backdrop blur alpha ~%d on transparent target, got RGBA=(%d,%d,%d,%d)",
+			wantA, pmData[centerOff], pmData[centerOff+1], pmData[centerOff+2], gotA)
 	}
 }
 

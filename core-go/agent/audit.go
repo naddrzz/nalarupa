@@ -297,7 +297,10 @@ func checkScreenOverflows(topRaw jsonv.Value, flats []render.Flat, existingRepor
 			childAlsoOverflows := false
 			for j := i + 1; j < len(flats) && flats[j].Depth > f.Depth; j++ {
 				cf := flats[j]
-				if (cf.X+cf.W)-rx1 > 1.0 || rx0-cf.X > 1.0 || ry0-cf.Y > 1.0 || (cf.Y+cf.H)-ry1 > 1.0 {
+				if cf.Faded || cf.W < 1 || cf.H < 1 || cf.Type == "group" || isIntentionalBleedDecor(rawByID[cf.ID], cf, root) {
+					continue
+				}
+				if (cf.X+cf.W)-rx1 > 1.0 || rx0-cf.X > 1.0 || ry0-cf.Y > 1.0 || (cf.Y+cf.H)-ry1 > 2.0 {
 					childAlsoOverflows = true
 					break
 				}

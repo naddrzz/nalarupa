@@ -148,9 +148,9 @@ func stripStaleImagesAndEditorState(messages []jsonv.Value) ([]jsonv.Value, bool
 		}
 		for bi, b := range blocks.Items {
 			ty := jsonv.StrOr(jsonv.Get(b, "type"))
-			if ty == "text" && i != lastHumanIdx && jsonv.StrIs(jsonv.Get(mc, "role"), "user") {
+			if ty == "text" && bi == 0 && i != lastHumanIdx && jsonv.StrIs(jsonv.Get(mc, "role"), "user") {
 				txt := jsonv.StrOr(jsonv.Get(b, "text"))
-				if idx := strings.Index(txt, editorStateNote); idx >= 0 {
+				if idx := editorStateNoteIndex(mc, txt); idx >= 0 {
 					trimmed := txt[:idx] + "\n\n[Earlier editor_state snapshot omitted; see latest turn for current state.]"
 					if obj := jsonv.Obj(b); obj != nil {
 						obj.Set("text", trimmed)
@@ -272,7 +272,7 @@ func compactOversizedTurnBlocks(messages []jsonv.Value, baseOverhead, maxInput i
 		if blocks == nil {
 			continue
 		}
-		for _, b := range blocks.Items {
+		for bi, b := range blocks.Items {
 			ty := jsonv.StrOr(jsonv.Get(b, "type"))
 			if ty == "tool_result" {
 				if trContent := jsonv.Arr(jsonv.Get(b, "content")); trContent != nil {
@@ -291,9 +291,9 @@ func compactOversizedTurnBlocks(messages []jsonv.Value, baseOverhead, maxInput i
 						trContent.Items = kept
 					}
 				}
-			} else if ty == "text" && jsonv.StrIs(jsonv.Get(out[i], "role"), "user") {
+			} else if ty == "text" && bi == 0 && jsonv.StrIs(jsonv.Get(out[i], "role"), "user") {
 				txt := jsonv.StrOr(jsonv.Get(b, "text"))
-				if idx := strings.Index(txt, editorStateNote); idx >= 0 {
+				if idx := editorStateNoteIndex(out[i], txt); idx >= 0 {
 					statePart := txt[idx+len(editorStateNote):]
 					if len(statePart) > 1200 {
 						trimmed := txt[:idx+len(editorStateNote)] + truncate(statePart, 1200) + "\n[editor_state truncated to fit context window.]"
@@ -307,6 +307,8 @@ func compactOversizedTurnBlocks(messages []jsonv.Value, baseOverhead, maxInput i
 		}
 	}
 	// Step 4b: Truncate oversized tool_result text blocks so a huge Get(document) output cannot exceed maxInput.
+	const truncNotice = "\n[tool_result truncated to fit context window.]"
+	noticeToks := estimateStringTokens(truncNotice)
 	for i := range out {
 		excess := EstimateContextTokens(baseOverhead, out) - maxInput
 		if excess <= 0 {
@@ -330,10 +332,10 @@ func compactOversizedTurnBlocks(messages []jsonv.Value, baseOverhead, maxInput i
 				if curToks <= 256 {
 					return
 				}
-				keepToks := max(128, curToks-excess-64)
+				keepToks := max(128, curToks-excess-noticeToks-8)
 				keepBytes := max(384, int(float64(keepToks)*approxCharsPerToken))
-				if keepBytes < len(s) {
-					obj.Set(key, truncate(s, keepBytes)+"\n[tool_result truncated to fit context window.]")
+				if keepBytes+len(truncNotice) < len(s) {
+					obj.Set(key, truncate(s, keepBytes)+truncNotice)
 					changed = true
 				}
 			}
@@ -342,6 +344,10 @@ func compactOversizedTurnBlocks(messages []jsonv.Value, baseOverhead, maxInput i
 					trimTextBlock(bObj, "content")
 				} else if trArr := jsonv.Arr(jsonv.Get(bObj, "content")); trArr != nil {
 					for _, sub := range trArr.Items {
+						excess = EstimateContextTokens(baseOverhead, out) - maxInput
+						if excess <= 0 {
+							break
+						}
 						if sObj := jsonv.Obj(sub); sObj != nil && jsonv.StrIs(jsonv.Get(sObj, "type"), "text") {
 							trimTextBlock(sObj, "text")
 						}
@@ -350,7 +356,60 @@ func compactOversizedTurnBlocks(messages []jsonv.Value, baseOverhead, maxInput i
 			}
 		}
 	}
+	// Step 4c: If a batch of many small tool_result items still exceeds maxInput in aggregate, compact
+	// individual result bodies down to a minimal stub while keeping every tool_result and its tool_use_id intact.
+	const compactStub = "[truncated]"
+	for i := range out {
+		if EstimateContextTokens(baseOverhead, out) <= maxInput {
+			break
+		}
+		blocks := jsonv.Arr(jsonv.Get(out[i], "content"))
+		if blocks == nil {
+			continue
+		}
+		for _, b := range blocks.Items {
+			if EstimateContextTokens(baseOverhead, out) <= maxInput {
+				break
+			}
+			if !jsonv.StrIs(jsonv.Get(b, "type"), "tool_result") {
+				continue
+			}
+			bObj := jsonv.Obj(b)
+			if bObj == nil {
+				continue
+			}
+			if s, isStr := jsonv.Str(jsonv.Get(bObj, "content")); isStr {
+				if s != compactStub && len(s) > len(compactStub) {
+					bObj.Set("content", compactStub)
+					changed = true
+				}
+				continue
+			}
+			if trArr := jsonv.Arr(jsonv.Get(bObj, "content")); trArr != nil {
+				if len(trArr.Items) == 1 {
+					if sObj := jsonv.Obj(trArr.Items[0]); sObj != nil &&
+						jsonv.StrIs(jsonv.Get(sObj, "type"), "text") &&
+						jsonv.StrIs(jsonv.Get(sObj, "text"), compactStub) {
+						continue
+					}
+				}
+				trArr.Items = []jsonv.Value{engine.Object("type", "text", "text", compactStub)}
+				changed = true
+			}
+		}
+	}
 	return out, changed
+}
+
+func editorStateNoteIndex(msg jsonv.Value, txt string) int {
+	if pLenF, ok := jsonv.F64(jsonv.Get(msg, "__prompt_len")); ok {
+		pLen := int(pLenF)
+		if pLen >= 0 && pLen+len(editorStateNote) <= len(txt) && txt[pLen:pLen+len(editorStateNote)] == editorStateNote {
+			return pLen
+		}
+		return -1
+	}
+	return strings.LastIndex(txt, editorStateNote)
 }
 
 func emitContextUsage(e *engine.Engine, _ engine.Profile, child bool, used, limit int) {

@@ -148,6 +148,7 @@ type Engine struct {
 	pendingModifyHasO  bool
 	commitSkipEdits   map[string]bool
 	activeStream      *Stream
+	execAddedPreTop   map[string]bool
 
 	cursorMu         sync.Mutex
 	pendingReleaseID []string

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"image"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +12,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 	"github.com/naddrzz/nalarupa/core-go/agent"
+	"github.com/naddrzz/nalarupa/core-go/engine"
 	"github.com/naddrzz/nalarupa/core-go/jsonv"
 )
 
@@ -265,5 +268,134 @@ func TestRound10_ComponentsAndScreensNeverOverlapWhenAgentBuilds(t *testing.T) {
 					frames[j].Name, frames[j].X, frames[j].Y, frames[j].W, frames[j].H)
 			}
 		}
+	}
+}
+
+func TestRound10_SharedComponentOverrideAndThemedAliasAndChildVariationGuard(t *testing.T) {
+	app := NewNalarupaApp(t.TempDir())
+	app.Init()
+	defer app.Close()
+
+	// Pre-turn: define themed array $palette + alias $surface -> $palette + $accent = red (#EF4444),
+	// shared Button component on $accent, and dark-themed Screen 1 instantiating Button.
+	app.Bridge.eng.Locked(func() {
+		app.Bridge.eng.Doc.Root.Set("themes", jsonv.MustParse(`{"Mode":["Light","Dark"]}`))
+	})
+	_, err := app.Bridge.ExecuteJS(`
+		SetVariables({
+			palette: {
+				type: "color",
+				value: [
+					{ value: "#F8FAFC", theme: { Mode: "Light" } },
+					{ value: "#0F172A", theme: { Mode: "Dark" } }
+				]
+			},
+			surface: { type: "color", value: "$palette" },
+			accent: { type: "color", value: "#EF4444" }
+		});
+		btn = Insert(document, {
+			type: "frame", name: "Button", reusable: true,
+			x: 0, y: -300, width: 160, height: 48, fill: "$accent",
+			children: [{ type: "text", content: "Action", fill: "#FFFFFF" }]
+		});
+		s1 = Insert(document, {
+			type: "frame", name: "Screen 1",
+			x: 0, y: 0, width: 400, height: 300, theme: { Mode: "Dark" }, fill: "$surface",
+			children: [{ type: "ref", ref: btn }]
+		});
+	`)
+	if err != nil {
+		t.Fatalf("setup pre-turn: %v", err)
+	}
+	var btnID, oldScreenID string
+	for _, fr := range app.Bridge.FramesDirect() {
+		switch fr.Name {
+		case "Button":
+			btnID = fr.ID
+		case "Screen 1":
+			oldScreenID = fr.ID
+		}
+	}
+	if btnID == "" || oldScreenID == "" {
+		t.Fatalf("expected Button and Screen 1 IDs, got btn=%q screen1=%q", btnID, oldScreenID)
+	}
+
+	// Start variation turn: child designer assigned to pre-turn screen must STILL be blocked by variation guard!
+	app.Bridge.eng.Locked(func() {
+		app.Bridge.eng.Agent.Running = true
+		app.Bridge.eng.Agent.IsVariationTurn = true
+		app.Bridge.eng.BeginTurnSnapshot()
+		app.Bridge.eng.SetAgentContainerScope("child_1", []string{oldScreenID})
+	})
+	badChildOut := app.Bridge.eng.CallTool("execute", engine.Object(
+		"__agent", "child_1",
+		"input", fmt.Sprintf("Update(%q, { name: \"Mutated\" });", oldScreenID),
+	))
+	badChildOut = badChildOut.Finish(app.Bridge.eng)
+	if !badChildOut.Error || !strings.Contains(badChildOut.Text, "earlier finished screens") {
+		t.Fatalf("expected child designer edit on pre-turn screen during variation turn to be rejected, got err=%v text=%q", badChildOut.Error, badChildOut.Text)
+	}
+
+	// Main agent updates Dark entry of $palette AND changes $accent to blue (#3B82F6), creating Screen 2 that also instantiates sharedBtn!
+	goodOut := app.Bridge.eng.CallTool("execute", engine.Object(
+		"__agent", "main_1",
+		"input", fmt.Sprintf(`SetVariables({ palette: { type: "color", value: [{ value: "#F8FAFC", theme: { Mode: "Light" } }, { value: "#1E1B4B", theme: { Mode: "Dark" } }] }, accent: { type: "color", value: "#3B82F6" } }); s2 = Insert(document, { type: "frame", name: "Screen 2", x: 600, y: 0, width: 400, height: 300, theme: { Mode: "Dark" }, fill: "$surface", children: [{ type: "ref", ref: %q }] });`, btnID),
+	))
+	goodOut = goodOut.Finish(app.Bridge.eng)
+	app.Bridge.eng.Locked(func() {
+		app.Bridge.eng.Agent.Running = false
+		app.Bridge.eng.Agent.EndTurnIsolation()
+	})
+	if goodOut.Error {
+		t.Fatalf("new variation screen execute failed: %s", goodOut.Text)
+	}
+
+	// Verify sharedBtn itself STILL references "$accent" (not rewritten to preserved_accent),
+	// AND oldScreen renders old Dark surface (#0F172A) + red Button (#EF4444),
+	// WHILE newScreen renders new Dark surface (#1E1B4B) + blue Button (#3B82F6)!
+	var sharedBtnFill string
+	app.Bridge.eng.Locked(func() {
+		btnNode := app.Bridge.eng.Doc.Find(btnID)
+		sharedBtnFill = jsonv.StrOr(jsonv.Get(btnNode, "fill"))
+	})
+	if sharedBtnFill != "$accent" {
+		t.Fatalf("sharedBtn fill = %q, want unchanged \"$accent\"", sharedBtnFill)
+	}
+
+	var newScreenID string
+	var newScreenX, newScreenY float64
+	for _, fr := range app.Bridge.FramesDirect() {
+		if fr.Name == "Screen 2" {
+			newScreenID = fr.ID
+			newScreenX, newScreenY = fr.X, fr.Y
+		}
+	}
+	if newScreenID == "" {
+		t.Fatal("Screen 2 not found")
+	}
+	settled := time.Now().Add(4 * time.Second)
+	app.Bridge.eng.Locked(func() {
+		app.Bridge.eng.Renderer.Now = func() time.Time { return settled }
+		app.Bridge.eng.ExpireSlides()
+	})
+	var img *image.RGBA
+	app.Bridge.RenderInto(&img, 400, 300, 0, 0, 1.0, CanvasBG, oldScreenID, true)
+	oldBtnPx := img.RGBAAt(20, 20)  // inside oldBtnInst -> #EF4444 (239, 68, 68)
+	oldBgPx := img.RGBAAt(300, 200) // inside oldDarkScreen -> #0F172A (15, 23, 42)
+	if oldBtnPx.R < 200 || oldBtnPx.B > 100 {
+		t.Fatalf("oldBtnInst lost its red #EF4444 fill: got %+v", oldBtnPx)
+	}
+	if colorDistRGB(oldBgPx, 15, 23, 42) > 10 {
+		t.Fatalf("oldDarkScreen lost its aliased dark #0F172A fill: got %+v", oldBgPx)
+	}
+
+	app.Bridge.RenderInto(&img, 400, 300, newScreenX, newScreenY, 1.0, CanvasBG, newScreenID, true)
+	newBtnPx := img.RGBAAt(20, 20)  // inside newBtnInst -> #3B82F6 (59, 130, 246)
+	newBgPx := img.RGBAAt(300, 200) // inside newDarkScreen -> #1E1B4B (30, 27, 75)
+	if newBtnPx.B < 200 || newBtnPx.R > 100 {
+		t.Fatalf("newBtnInst should render updated blue #3B82F6 from sharedBtn, got %+v", newBtnPx)
+	}
+	if colorDistRGB(newBgPx, 30, 27, 75) > 10 {
+		t.Fatalf("newDarkScreen should render updated dark #1E1B4B, got %+v", newBgPx)
 	}
 }

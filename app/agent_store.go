@@ -819,6 +819,7 @@ func (s *AgentStore) ApplyEvents(events []map[string]any, now float64) bool {
 			if u := int(asFloat(ev["used"])); u >= 0 {
 				s.ContextUsed = u
 				s.ContextStreamExtra = 0
+				s.contextStreamBytes = 0
 			}
 			if l := int(asFloat(ev["limit"])); l > 0 {
 				s.ContextLimit = l
@@ -910,8 +911,9 @@ func (s *AgentStore) ApplyEvents(events []map[string]any, now float64) bool {
 			if pVal.Parent == "" {
 				if usage.ContextUsed > 0 {
 					s.ContextUsed = usage.ContextUsed
-					s.ContextStreamExtra = 0
 				}
+				s.ContextStreamExtra = 0
+				s.contextStreamBytes = 0
 				if usage.ContextLimit > 0 {
 					s.ContextLimit = usage.ContextLimit
 				}

@@ -67,10 +67,16 @@ func runAPI(e *engine.Engine, p engine.Profile, prompt string, child bool, name 
 		}
 	})
 	user := prompt
+	userMsg := engine.Object("role", "user", "content", jsonv.NewArray(engine.Object("type", "text", "text", user)))
 	if !child {
 		user = prompt + editorStateNote + state
+		userMsg = engine.Object(
+			"role", "user",
+			"content", jsonv.NewArray(engine.Object("type", "text", "text", user)),
+			"__prompt_len", jsonv.Int(int64(len(prompt))),
+		)
 	}
-	messages = append(messages, engine.Object("role", "user", "content", jsonv.NewArray(engine.Object("type", "text", "text", user))))
+	messages = append(messages, userMsg)
 
 	modern := false
 	for _, m := range []string{"claude-opus-5", "claude-opus-6", "claude-fable-", "claude-sonnet-5", "claude-sonnet-6", "claude-haiku-5", "claude-haiku-6"} {
@@ -106,13 +112,10 @@ func runAPI(e *engine.Engine, p engine.Profile, prompt string, child bool, name 
 		}
 		maxOut := ClampMaxOutputTokens(contextLimit, estInput)
 		if contextLimit > 0 && (maxOut < 64 || estInput >= contextLimit) {
-			if turn > 0 {
-				save()
-			}
 			return usage, fmt.Errorf("prompt exceeds configured context window (%d estimated input tokens, limit %d); shorten the prompt or increase the context window limit in Agent settings", estInput, contextLimit)
 		}
 		body := engine.Object("model", name, "max_tokens", jsonv.Int(int64(maxOut)), "system", system, "tools", tools,
-			"messages", jsonv.NewArray(messages...), "output_config", engine.Object("effort", effort))
+			"messages", apiWireMessages(messages), "output_config", engine.Object("effort", effort))
 		var betas []string
 		if modern {
 			body.Set("fallbacks", "default")
@@ -170,14 +173,23 @@ func runAPI(e *engine.Engine, p engine.Profile, prompt string, child bool, name 
 		stop := jsonv.StrOr(jsonv.Get(resp, "stop_reason"))
 		content := jsonv.Clone(jsonv.Get(resp, "content"))
 		blocks := jsonv.Items(content)
+		hasIn := hasNumericField(respUsage, "input_tokens") ||
+			hasNumericField(respUsage, "cache_read_input_tokens") ||
+			hasNumericField(respUsage, "cache_creation_input_tokens")
+		hasOut := hasNumericField(respUsage, "output_tokens")
 		stepIn := asU64(jsonv.Get(respUsage, "input_tokens")) +
 			asU64(jsonv.Get(respUsage, "cache_read_input_tokens")) +
 			asU64(jsonv.Get(respUsage, "cache_creation_input_tokens"))
 		stepOut := asU64(jsonv.Get(respUsage, "output_tokens"))
-		curCtxUsed := int(stepIn + stepOut)
-		if curCtxUsed <= 0 {
-			curCtxUsed = estInput + estimateMessageTokens(engine.Object("role", "assistant", "content", content))
+		usedIn := int(stepIn)
+		if !hasIn {
+			usedIn = estInput
 		}
+		usedOut := int(stepOut)
+		if !hasOut {
+			usedOut = estimateMessageTokens(engine.Object("role", "assistant", "content", content))
+		}
+		curCtxUsed := usedIn + usedOut
 		emitContextUsage(e, p, child, curCtxUsed, contextLimit)
 		emit(e, p, "message_end", engine.Object("t", u64(engine.NowMs())))
 		if stop == "refusal" {
@@ -271,6 +283,29 @@ func setKey(v jsonv.Value, k string, x jsonv.Value) jsonv.Value {
 	}
 	o.Set(k, x)
 	return o
+}
+
+func hasNumericField(v jsonv.Value, key string) bool {
+	_, ok := jsonv.F64(jsonv.Get(v, key))
+	return ok
+}
+
+func apiWireMessages(messages []jsonv.Value) *jsonv.Array {
+	items := make([]jsonv.Value, len(messages))
+	for i, m := range messages {
+		if obj := jsonv.Obj(m); obj != nil && obj.Has("__prompt_len") {
+			clean := jsonv.NewObject()
+			obj.Each(func(k string, val jsonv.Value) {
+				if !strings.HasPrefix(k, "__") {
+					clean.Set(k, val)
+				}
+			})
+			items[i] = clean
+			continue
+		}
+		items[i] = m
+	}
+	return jsonv.NewArray(items...)
 }
 
 func u64(v uint64) jsonv.Number { return jsonv.Number(fmt.Sprint(v)) }

@@ -45,7 +45,10 @@ func (c *Chat) Stream(body jsonv.Value, _ string, cancel func() bool, on func(Ev
 	// before the stream (nothing shown yet), never an error in the middle of one, so no reply is repeated.
 	usageOpt := true
 	transientRetries := 0
-	idemKey := fmt.Sprintf("nr-%x-%x", time.Now().UnixNano(), doc.RandomU64())
+	newIdemKey := func() string {
+		return fmt.Sprintf("nr-%x-%x", time.Now().UnixNano(), doc.RandomU64())
+	}
+	idemKey := newIdemKey()
 	for attemptIdx := 0; attemptIdx < 6; attemptIdx++ {
 		emitted := false
 		out, err := c.attempt(jsonv.Clone(req), usageOpt, idemKey, stall, cancel, func(ev Event) {
@@ -57,15 +60,18 @@ func (c *Chat) Stream(body jsonv.Value, _ string, cancel func() bool, on func(Ev
 		}
 		if !emitted && usageOpt && strings.HasPrefix(err.Error(), "Provider error 400:") && strings.Contains(err.Error(), "stream_options") {
 			usageOpt = false
+			idemKey = newIdemKey()
 			continue
 		}
 		if !emitted && shouldRetryReasoning400(err, !c.openai) {
 			if obj := jsonv.Obj(req); obj != nil && obj.Has("reasoning_effort") {
 				if cur, ok := jsonv.Str(jsonv.Get(obj, "reasoning_effort")); ok && cur == "xhigh" {
 					obj.Set("reasoning_effort", "high")
+					idemKey = newIdemKey()
 					continue
 				}
 				obj.Remove("reasoning_effort")
+				idemKey = newIdemKey()
 				continue
 			}
 		}

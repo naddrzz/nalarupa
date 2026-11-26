@@ -189,3 +189,44 @@ func TestCustomProviderContextWindowAndLiveContextEvents(t *testing.T) {
 		t.Fatalf("expected clamped max_tokens <= 16000 (25%% of 64k window), got %d", mt)
 	}
 }
+
+func TestContextCompactionHandlesSmallToolResultBatchesAndQuotedEditorState(t *testing.T) {
+	// 1) Quoted editorStateNote inside human prompt must NOT truncate instructions after the quote!
+	humanPrompt := "Please inspect how " + editorStateNote + " is formatted, then " + strings.Repeat("keep_important_instruction ", 80)
+	fullUser := humanPrompt + editorStateNote + strings.Repeat("snapshot_node_entry ", 300)
+	uMsg := engine.Object(
+		"role", "user",
+		"content", jsonv.NewArray(engine.Object("type", "text", "text", fullUser)),
+		"__prompt_len", jsonv.Int(int64(len(humanPrompt))),
+	)
+	var toolUses, toolResults []jsonv.Value
+	smallOut := strings.Repeat("node_ok_info ", 45) // ~160 tokens each (< 256 token per-item threshold!)
+	for i := 0; i < 24; i++ {
+		id := fmt.Sprintf("tu_%d", i)
+		toolUses = append(toolUses, engine.Object("type", "tool_use", "id", id, "name", "execute", "input", engine.Object("input", "x")))
+		toolResults = append(toolResults, engine.Object("type", "tool_result", "tool_use_id", id, "content", jsonv.NewArray(
+			engine.Object("type", "text", "text", smallOut),
+		)))
+	}
+	msgs := []jsonv.Value{
+		uMsg,
+		engine.Object("role", "assistant", "content", jsonv.NewArray(toolUses...)),
+		engine.Object("role", "user", "content", jsonv.NewArray(toolResults...)),
+	}
+	compacted, didCompact, _ := EnforceContextWindow(msgs, 500, 4096)
+	if !didCompact {
+		t.Fatal("expected compaction for batch of 24 small tool_results in 4k window")
+	}
+	est := EstimateContextTokens(500, compacted)
+	if est >= 4096 {
+		t.Fatalf("expected compacted batch to fit < 4096 tokens, got %d", est)
+	}
+	gotUserText := jsonv.StrOr(jsonv.Get(jsonv.Items(jsonv.Get(compacted[0], "content"))[0], "text"))
+	if !strings.HasPrefix(gotUserText, humanPrompt) {
+		t.Fatalf("compaction corrupted quoted editorStateNote inside human prompt! got prefix: %q", gotUserText[:min(len(gotUserText), 200)])
+	}
+	resItems := jsonv.Items(jsonv.Get(compacted[2], "content"))
+	if len(resItems) != 24 {
+		t.Fatalf("expected all 24 tool_result items preserved for tool_use_id pairing, got %d", len(resItems))
+	}
+}

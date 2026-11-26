@@ -2300,6 +2300,7 @@ func (a *NalarupaApp) updateIdleHover(sx, sy float64, docPt Pt) {
 		slices.Equal(a.Canvas.lastHoverSel, a.State.Selection) {
 		return
 	}
+	a.Canvas.hasHoverCache = false
 	a.Canvas.ActiveCursor = ui.CursorDefault
 	var selBoxes []Box
 	selBoxesOK := true

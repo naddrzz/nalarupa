@@ -6,7 +6,6 @@ package engine
 // back, keeps it clean if it was, and stores the snippet under the editId the agent repairs it with.
 
 import (
-	"maps"
 	"time"
 
 	"github.com/naddrzz/nalarupa/core-go/export"
@@ -151,21 +150,23 @@ func (e *Engine) execute(args jsonv.Value, c script.Call) ToolOut {
 	e.Executing = true
 	prevExecAgent := e.currentExecAgent
 	e.currentExecAgent = agent
+	prevExecAdded := e.execAddedPreTop
+	execAdded := map[string]bool{}
+	e.execAddedPreTop = execAdded
 	// Cleared once the JavaScript has run, before the report validates (script.rs `bind`, `execute_shared`), and
 	// on a panic.
 	defer func() {
 		e.Executing = was
 		e.currentExecAgent = prevExecAgent
+		e.execAddedPreTop = prevExecAdded
 	}()
 	c.Ran = func() { e.Executing = was }
-	marks := maps.Clone(e.Agent.TurnEditedPreTop)
 	out := script.Execute(e.Host(), args, c)
 	if out.Before == nil {
 		// Refused before anything ran.
 		return ToolOut{Text: out.Text, Error: out.Error}
 	}
 	if out.Error {
-		e.Agent.TurnEditedPreTop = marks
 		e.ForgetGoneSlides()
 		e.Touch()
 		e.KeepClean(wasClean)
@@ -174,6 +175,12 @@ func (e *Engine) execute(args jsonv.Value, c script.Call) ToolOut {
 		}
 		e.Script.Failed[out.EditID] = out.Source
 		return ToolOut{Text: out.Text, Error: true}
+	}
+	for topID := range execAdded {
+		if e.Agent.TurnEditedPreTop == nil {
+			e.Agent.TurnEditedPreTop = map[string]bool{}
+		}
+		e.Agent.TurnEditedPreTop[topID] = true
 	}
 	if out.Repaired != "" {
 		delete(e.Script.Failed, out.Repaired)

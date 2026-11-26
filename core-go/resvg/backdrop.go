@@ -29,8 +29,8 @@ func isNativeBackdropGroup(group *usvg.Group) bool {
 
 // renderBackdropBlur paints a native `nrbb:{uid}:{sigma}` background-blur marker directly from
 // the already-rasterized pixels in pixmap (and any enclosing clip/isolation layers in bgStack),
-// avoiding O(2^N) SVG `<use>` expansion.
-func renderBackdropBlur(group *usvg.Group, rest string, transform skia.Transform, pixmap skia.PixmapMut, bgStack []backdropLayer) {
+// avoiding O(2^N) SVG `<use>` expansion while preserving exact backdrop replacement over translucent ancestors.
+func renderBackdropBlur(group *usvg.Group, rest string, transform skia.Transform, pixmap skia.PixmapMut, bgStack []backdropLayer, curState *isolatedState) {
 	mask := group.Mask()
 	if mask == nil || !mask.Root().HasChildren() {
 		return
@@ -125,22 +125,25 @@ func renderBackdropBlur(group *usvg.Group, rest string, transform skia.Transform
 			}
 		}
 	} else {
-		// Isolated group (e.g. clip: true frame): composite current sub-pixmap over ancestor backdrop layers
-		// so parent frame fills and outer layers beneath transparent sub-pixmap pixels blur accurately.
+		// Isolated group (e.g. clip: true frame or layer_blur group): composite current sub-pixmap over ancestor
+		// backdrop layers using remaining ancestor transmittance so translucent backdrops are never double-composited.
 		for by := int32(0); by < int32(blurH); by++ {
 			rawY := y0 - padY + by
 			dstRowOff := int(by) * blurStride
 			for bx := int32(0); bx < int32(blurW); bx++ {
 				rawX := x0 - padX + bx
 				var r, g, b, a uint32
+				remTrans := uint32(255)
 				if rawX >= 0 && rawX < pw && rawY >= 0 && rawY < ph {
-					so := int(rawY)*dstStride + int(rawX)*4
+					pxIdx := int(rawY)*int(pw) + int(rawX)
+					so := pxIdx * 4
 					r = uint32(dstData[so+0])
 					g = uint32(dstData[so+1])
 					b = uint32(dstData[so+2])
 					a = uint32(dstData[so+3])
+					remTrans = curState.transmittanceAt(pxIdx, a)
 				}
-				for li := len(bgStack) - 1; li >= 0 && a < 255; li-- {
+				for li := len(bgStack) - 1; li >= 0 && remTrans > 0; li-- {
 					l := bgStack[li]
 					if l.w == 0 || l.h == 0 {
 						continue
@@ -153,20 +156,22 @@ func renderBackdropBlur(group *usvg.Group, rest string, transform skia.Transform
 					} else if lx < 0 || lx >= int32(l.w) || ly < 0 || ly >= int32(l.h) {
 						continue
 					}
-					lo := (int(ly)*int(l.w) + int(lx)) * 4
+					lIdx := int(ly)*int(l.w) + int(lx)
+					lo := lIdx * 4
 					lr := uint32(l.data[lo+0])
 					lg := uint32(l.data[lo+1])
 					lb := uint32(l.data[lo+2])
 					la := uint32(l.data[lo+3])
-					if a == 0 {
+					if remTrans == 255 && r == 0 && g == 0 && b == 0 && a == 0 {
 						r, g, b, a = lr, lg, lb, la
 					} else if la > 0 {
-						invA := 255 - a
-						r += (lr*invA + 127) / 255
-						g += (lg*invA + 127) / 255
-						b += (lb*invA + 127) / 255
-						a += (la*invA + 127) / 255
+						r += (lr*remTrans + 127) / 255
+						g += (lg*remTrans + 127) / 255
+						b += (lb*remTrans + 127) / 255
+						a += (la*remTrans + 127) / 255
 					}
+					lTrans := l.state.transmittanceAt(lIdx, la)
+					remTrans = (remTrans*lTrans + 127) / 255
 				}
 				o := dstRowOff + int(bx)*4
 				blurData[o+0] = uint8(min(r, 255))
@@ -206,11 +211,17 @@ func renderBackdropBlur(group *usvg.Group, rest string, transform skia.Transform
 	}
 	useOpacity := opacity < 0.9999
 
+	var rho []uint8
+	if len(bgStack) > 0 && curState != nil {
+		rho = curState.ensureRho()
+	}
+
 	// Exact premultiplied lerp: dst = blur * m + dst * (1 - m)
 	for y := uint32(0); y < rh; y++ {
 		dstRow := int(uint32(y0)+y)*dstStride + int(x0)*4
 		blurRow := int(uint32(padY)+y)*blurStride + int(padX)*4
 		maskRow := int(y) * maskStride
+		rowPxBase := (int(y0)+int(y))*int(pw) + int(x0)
 		for x := uint32(0); x < rw; x++ {
 			xo := int(x) * 4
 			m := uint32(maskData[maskRow+xo+3])
@@ -225,18 +236,123 @@ func renderBackdropBlur(group *usvg.Group, rest string, transform skia.Transform
 			}
 			do := dstRow + xo
 			bo := blurRow + xo
+			pxIdx := rowPxBase + int(x)
+			var t0 uint32
+			if rho != nil {
+				t0 = curState.transmittanceAt(pxIdx, uint32(dstData[do+3]))
+			}
 			if m == 255 {
 				dstData[do+0] = blurData[bo+0]
 				dstData[do+1] = blurData[bo+1]
 				dstData[do+2] = blurData[bo+2]
 				dstData[do+3] = blurData[bo+3]
+			} else {
+				inv := 255 - m
+				dstData[do+0] = uint8((uint32(blurData[bo+0])*m + uint32(dstData[do+0])*inv + 127) / 255)
+				dstData[do+1] = uint8((uint32(blurData[bo+1])*m + uint32(dstData[do+1])*inv + 127) / 255)
+				dstData[do+2] = uint8((uint32(blurData[bo+2])*m + uint32(dstData[do+2])*inv + 127) / 255)
+				dstData[do+3] = uint8((uint32(blurData[bo+3])*m + uint32(dstData[do+3])*inv + 127) / 255)
+			}
+			if rho != nil {
+				t1 := (t0*(255-m) + 127) / 255
+				invNewA := 255 - uint32(dstData[do+3])
+				if invNewA == 0 || t1 == 0 {
+					rho[pxIdx] = 0
+				} else if t1 >= invNewA {
+					rho[pxIdx] = 255
+				} else {
+					rho[pxIdx] = uint8((t1*255 + invNewA/2) / invNewA)
+				}
+			}
+		}
+	}
+}
+
+func compositeBackdropReplacedLayer(
+	offX, offY int32,
+	sub, koPM *skia.Pixmap,
+	opacity float32,
+	dst skia.PixmapMut,
+	parentState *isolatedState,
+) {
+	op := float64(opacity)
+	if op <= 0 {
+		return
+	}
+	useOp := op < 0.9999
+	sw, sh := int32(sub.Width()), int32(sub.Height())
+	dw, dh := int32(dst.Width()), int32(dst.Height())
+	subData := sub.Data()
+	koData := koPM.Data()
+	dstData := dst.DataMut()
+	var parentRho []uint8
+	if parentState != nil {
+		parentRho = parentState.ensureRho()
+	}
+
+	sy0 := max(-offY, 0)
+	sy1 := min(dh-offY, sh)
+	sx0 := max(-offX, 0)
+	sx1 := min(dw-offX, sw)
+	if sx1 <= sx0 || sy1 <= sy0 {
+		return
+	}
+
+	for sy := sy0; sy < sy1; sy++ {
+		dy := sy + offY
+		sRow := int(sy) * int(sw)
+		dRow := int(dy) * int(dw)
+		for sx := sx0; sx < sx1; sx++ {
+			dx := sx + offX
+			sIdx := sRow + int(sx)
+			so := sIdx * 4
+			sr := uint32(subData[so+0])
+			sg := uint32(subData[so+1])
+			sb := uint32(subData[so+2])
+			sa := uint32(subData[so+3])
+			ka := uint32(koData[so+3])
+			if useOp {
+				sr = uint32(math.Round(float64(sr) * op))
+				sg = uint32(math.Round(float64(sg) * op))
+				sb = uint32(math.Round(float64(sb) * op))
+				sa = uint32(math.Round(float64(sa) * op))
+				ka = uint32(math.Round(float64(ka) * op))
+			}
+			if ka < sa {
+				ka = sa
+			}
+			if ka == 0 && sa == 0 {
 				continue
 			}
-			inv := 255 - m
-			dstData[do+0] = uint8((uint32(blurData[bo+0])*m + uint32(dstData[do+0])*inv + 127) / 255)
-			dstData[do+1] = uint8((uint32(blurData[bo+1])*m + uint32(dstData[do+1])*inv + 127) / 255)
-			dstData[do+2] = uint8((uint32(blurData[bo+2])*m + uint32(dstData[do+2])*inv + 127) / 255)
-			dstData[do+3] = uint8((uint32(blurData[bo+3])*m + uint32(dstData[do+3])*inv + 127) / 255)
+			dIdx := dRow + int(dx)
+			do := dIdx * 4
+			var pt0 uint32
+			if parentRho != nil {
+				pt0 = parentState.transmittanceAt(dIdx, uint32(dstData[do+3]))
+			}
+			if ka >= 255 {
+				dstData[do+0] = uint8(min(sr, 255))
+				dstData[do+1] = uint8(min(sg, 255))
+				dstData[do+2] = uint8(min(sb, 255))
+				dstData[do+3] = uint8(min(sa, 255))
+			} else {
+				invK := 255 - ka
+				dstData[do+0] = uint8(min(sr+(uint32(dstData[do+0])*invK+127)/255, 255))
+				dstData[do+1] = uint8(min(sg+(uint32(dstData[do+1])*invK+127)/255, 255))
+				dstData[do+2] = uint8(min(sb+(uint32(dstData[do+2])*invK+127)/255, 255))
+				dstData[do+3] = uint8(min(sa+(uint32(dstData[do+3])*invK+127)/255, 255))
+			}
+			if parentRho != nil {
+				pt1 := (pt0*(255-min(ka, 255)) + 127) / 255
+				invDstA := 255 - uint32(dstData[do+3])
+				if invDstA == 0 || pt1 == 0 {
+					parentRho[dIdx] = 0
+				} else if pt1 >= invDstA {
+					parentRho[dIdx] = 255
+				} else {
+					parentRho[dIdx] = uint8((pt1*255 + invDstA/2) / invDstA)
+				}
+			}
 		}
 	}
 }

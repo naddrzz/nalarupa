@@ -56,7 +56,25 @@ func FetchModelsContext(ctx context.Context, format, baseURL, apiKey string) ([]
 		return nil, fmt.Errorf("unknown format %q", format)
 	}
 
-	client := &http.Client{Timeout: modelsTimeout}
+	parsedBase, err := url.Parse(baseEndpoint)
+	if err != nil {
+		return nil, err
+	}
+	originScheme := strings.ToLower(parsedBase.Scheme)
+	originHost := strings.ToLower(parsedBase.Host)
+
+	client := &http.Client{
+		Timeout: modelsTimeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return errors.New("stopped after 10 redirects")
+			}
+			if key != "" && (strings.ToLower(req.URL.Scheme) != originScheme || strings.ToLower(req.URL.Host) != originHost) {
+				return errors.New("refusing cross-origin redirect during authenticated model discovery")
+			}
+			return nil
+		},
+	}
 	seen := map[string]struct{}{}
 	var out []string
 	add := func(id string) {
@@ -76,11 +94,11 @@ func FetchModelsContext(ctx context.Context, format, baseURL, apiKey string) ([]
 	for page := 0; page < maxPages; page++ {
 		pageURL := baseEndpoint
 		if isAnthropic && afterID != "" {
-			sep := "?"
-			if strings.Contains(pageURL, "?") {
-				sep = "&"
-			}
-			pageURL += sep + "after_id=" + url.QueryEscape(afterID)
+			u := *parsedBase
+			q := u.Query()
+			q.Set("after_id", afterID)
+			u.RawQuery = q.Encode()
+			pageURL = u.String()
 		}
 
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, nil)
@@ -158,6 +176,9 @@ func FetchModelsContext(ctx context.Context, format, baseURL, apiKey string) ([]
 		}
 		if !isAnthropic || !parsed.HasMore || nextCursor == "" || nextCursor == afterID {
 			break
+		}
+		if page == maxPages-1 {
+			return nil, fmt.Errorf("model catalog exceeded %d pages; narrow the endpoint or enter the model ID manually", maxPages)
 		}
 		afterID = nextCursor
 	}

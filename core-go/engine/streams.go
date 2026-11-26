@@ -25,6 +25,8 @@ type Stream struct {
 	Touched int
 	// Edited tracks node ids that already spawned an edit slide during streaming so final execute commit doesn't replay them.
 	Edited map[string]bool
+	// EditedPreTop tracks pre-turn top-level screens intentionally edited by this live stream.
+	EditedPreTop map[string]bool
 }
 
 // StreamUpdate: the model streamed more of an `execute` call. Its newly completed statements run once, in the

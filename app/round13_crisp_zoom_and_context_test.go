@@ -117,11 +117,26 @@ func TestRound13_ZoomInAndZoomOutStayCrispEvenWhileAgentHoldsEngineLock(t *testi
 		t.Fatalf("expected fast lock-free 135%% vector raster, took %v", zoomInElapsed)
 	}
 	// Verify rendered 135% pixels: doc (420, 500) is inside FirmCard (#111622 = 17, 22, 34),
-	// doc (700, 500) is on screen background (#090D16 = 9, 13, 22).
+	// doc (700, 500) is on screen background (#090D16 = 9, 13, 22), AND FirmCard's 2px stroke at doc x=80..82
+	// (screen px x=27..29 at camX=60, zoom=1.35) has sharp target-zoom edge contrast (#2E3A52 = 46, 58, 82)
+	// that a 9x upscaled 15% raster would smear across >10px into dark background!
 	pxCard135 := imgOut.RGBAAt(int((420-60)*1.35), int((500-60)*1.35))
 	pxScreen135 := imgOut.RGBAAt(int((700-60)*1.35), int((500-60)*1.35))
 	if colorDistRGB(pxCard135, 17, 22, 34) > 8 || colorDistRGB(pxScreen135, 9, 13, 22) > 8 {
 		t.Fatalf("135%% raster pixel mismatch: card=%+v (want #111622), screen=%+v (want #090D16)", pxCard135, pxScreen135)
+	}
+	borderY := int((300 - 60) * 1.35)
+	maxBorderB := uint8(0)
+	for sx := 25; sx <= 31; sx++ {
+		if c := imgOut.RGBAAt(sx, borderY); c.B > maxBorderB {
+			maxBorderB = c.B
+		}
+	}
+	pxJustOutsideBorder := imgOut.RGBAAt(23, borderY) // doc x ~ 77.0 (3px outside card's left stroke)
+	pxJustInsideBorder := imgOut.RGBAAt(33, borderY)  // doc x ~ 84.4 (2.4px inside card's left stroke)
+	if maxBorderB < 65 || pxJustOutsideBorder.B > 30 || pxJustInsideBorder.B > 42 {
+		t.Fatalf("expected razor-sharp 2px stroke transition at 135%% zoom (peak B>=65 with clean edges), got peakB=%d outside=%+v inside=%+v",
+			maxBorderB, pxJustOutsideBorder, pxJustInsideBorder)
 	}
 
 	// Step 3: Zoom OUT from 135% -> 35% while Engine.Lock() is STILL held!

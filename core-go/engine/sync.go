@@ -72,8 +72,10 @@ func (e *Engine) SlideIn(id string) {
 		if n := e.Doc.Find(id); n != nil {
 			if kids := progressiveChildTargets(n); len(kids) >= 2 {
 				e.slid[id] = true
-				for _, cid := range kids {
-					e.slideSingle(cid)
+				for idx, cid := range kids {
+					if sl := e.slideSingle(cid); sl != nil {
+						sl.SetDelay(min(float64(idx)*0.03, 0.24))
+					}
 				}
 				return
 			}
