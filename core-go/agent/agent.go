@@ -160,9 +160,17 @@ func SendWithAttachments(e *engine.Engine, prompt string, contexts []engine.Canv
 	if len(images) > MaxAttachedImages {
 		return fmt.Errorf("At most %d images can be attached per message.", MaxAttachedImages)
 	}
+	ctxsCopy := make([]engine.CanvasContextRef, len(contexts))
+	for i, c := range contexts {
+		if c.Viewport != nil {
+			vp := *c.Viewport
+			c.Viewport = &vp
+		}
+		ctxsCopy[i] = c
+	}
 	entry := engine.QueueEntry{
 		Prompt:   prompt,
-		Contexts: append([]engine.CanvasContextRef(nil), contexts...),
+		Contexts: ctxsCopy,
 		Images:   append([]engine.AttachmentImage(nil), images...),
 	}
 	queued := false
@@ -238,17 +246,17 @@ func begin(e *engine.Engine, entry engine.QueueEntry, o engine.QueueOpts, checkC
 
 	var resolvedContexts []engine.CanvasContextRef
 	if len(entry.Contexts) > 0 {
-		validated := e.CaptureCanvasContexts(entry.Contexts, false)
-		if len(validated.Missing) > 0 {
-			msg := fmt.Sprintf("Skipped deleted canvas node(s): %s", strings.Join(validated.Missing, ", "))
-			if len(validated.Missing) == 1 {
-				msg = fmt.Sprintf("Skipped deleted canvas node `%s`.", validated.Missing[0])
+		var missing []string
+		resolvedContexts, missing = e.ValidateCanvasContexts(entry.Contexts)
+		if len(missing) > 0 {
+			msg := fmt.Sprintf("Skipped deleted canvas node(s): %s", strings.Join(missing, ", "))
+			if len(missing) == 1 {
+				msg = fmt.Sprintf("Skipped deleted canvas node `%s`.", missing[0])
 			}
 			e.Locked(func() {
 				e.Emit(engine.Object("type", "toast", "text", msg))
 			})
 		}
-		resolvedContexts = validated.Contexts
 		if strings.TrimSpace(expanded) == "" && len(resolvedContexts) == 0 && len(entry.Images) == 0 {
 			// All pinned nodes were deleted and nothing else was attached: abort cleanly without starting an empty turn.
 			var queued engine.QueueEntry
@@ -258,6 +266,9 @@ func begin(e *engine.Engine, entry engine.QueueEntry, o engine.QueueOpts, checkC
 				var ok bool
 				queued, opts, ok = takeQueueEntry(e)
 				if !ok {
+					if fromQueue {
+						e.Emit(engine.Object("type", "agent", "kind", "dequeued"))
+					}
 					e.Agent.Running = false
 					e.Agent.EndTurnIsolation()
 					return
@@ -525,7 +536,7 @@ func run(e *engine.Engine, p engine.Profile, prompt string, contexts []engine.Ca
 			}
 		}
 		if client != nil {
-			return runAPI(e, p, fullPrompt, modelImages, child, name, client, contextLimit)
+			return runAPI(e, p, fullPrompt, modelImages, supportsVision, child, name, client, contextLimit)
 		}
 		return runClaudeCode(e, p, fullPrompt, modelImages, child, name)
 	})

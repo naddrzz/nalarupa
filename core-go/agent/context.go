@@ -189,6 +189,7 @@ func stripStaleImagesAndEditorState(messages []jsonv.Value) ([]jsonv.Value, bool
 		if omittedUserImg {
 			keptBlocks = append(keptBlocks, engine.Object("type", "text", "text", "[Earlier attached image(s) omitted to fit context window.]"))
 			blocks.Items = keptBlocks
+			rewriteOmittedVisualSnapshotLines(mc, blocks)
 		}
 		out[i] = mc
 	}
@@ -344,6 +345,7 @@ func compactOversizedTurnBlocks(messages []jsonv.Value, baseOverhead, maxInput i
 		if omitted {
 			kept = append(kept, engine.Object("type", "text", "text", "[Attached image(s) omitted to fit context window.]"))
 			blocks.Items = kept
+			rewriteOmittedVisualSnapshotLines(out[i], blocks)
 		}
 	}
 	// Step 4b: Truncate oversized tool_result text blocks so a huge Get(document) output cannot exceed maxInput.
@@ -439,6 +441,58 @@ func compactOversizedTurnBlocks(messages []jsonv.Value, baseOverhead, maxInput i
 		}
 	}
 	return out, changed
+}
+
+const (
+	visualSnapshotLinePrefix = "- Visual snapshot: attached as image #"
+	visualSnapshotOmitted    = "- Visual snapshot: [omitted to fit context window]"
+)
+
+func rewriteOmittedVisualSnapshotLines(msg jsonv.Value, blocks *jsonv.Array) {
+	if blocks == nil || len(blocks.Items) == 0 {
+		return
+	}
+	b0Obj := jsonv.Obj(blocks.Items[0])
+	if b0Obj == nil || !jsonv.StrIs(jsonv.Get(b0Obj, "type"), "text") {
+		return
+	}
+	txt := jsonv.StrOr(jsonv.Get(b0Obj, "text"))
+	if !strings.Contains(txt, visualSnapshotLinePrefix) {
+		return
+	}
+	prefixEnd := len(txt)
+	adjustPLen := false
+	if pLenF, ok := jsonv.F64(jsonv.Get(msg, "__prompt_len")); ok {
+		pLen := int(pLenF)
+		if pLen >= 0 && pLen <= len(txt) {
+			prefixEnd = pLen
+			adjustPLen = true
+		}
+	} else if idx := strings.LastIndex(txt, editorStateNote); idx >= 0 {
+		prefixEnd = idx
+	}
+	prefix := txt[:prefixEnd]
+	if !strings.Contains(prefix, visualSnapshotLinePrefix) {
+		return
+	}
+	parts := strings.Split(prefix, "\n")
+	changed := false
+	for i, line := range parts {
+		if strings.HasPrefix(line, visualSnapshotLinePrefix) {
+			parts[i] = visualSnapshotOmitted
+			changed = true
+		}
+	}
+	if !changed {
+		return
+	}
+	newPrefix := strings.Join(parts, "\n")
+	b0Obj.Set("text", newPrefix+txt[prefixEnd:])
+	if adjustPLen {
+		if msgObj := jsonv.Obj(msg); msgObj != nil {
+			msgObj.Set("__prompt_len", jsonv.Int(int64(len(newPrefix))))
+		}
+	}
 }
 
 func editorStateNoteIndex(msg jsonv.Value, txt string) int {

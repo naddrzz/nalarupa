@@ -260,13 +260,14 @@ type CanvasState struct {
 	cachedFlashVer uint64
 	vsyncActive    atomic.Bool
 
-	hasHoverCache  bool
-	lastHoverSX    float64
-	lastHoverSY    float64
-	lastHoverVer   uint64
-	lastHoverMods  ui.Modifiers
-	lastHoverTool  string
-	lastHoverPanX  float64
+	hasHoverCache    bool
+	lastHoverSX      float64
+	lastHoverSY      float64
+	lastHoverVer     uint64
+	lastHoverMods    ui.Modifiers
+	lastHoverTool    string
+	lastHoverPicking bool
+	lastHoverPanX    float64
 	lastHoverPanY  float64
 	lastHoverZoom  float64
 	lastHoverSel   []string
@@ -1541,6 +1542,44 @@ func (a *NalarupaApp) buildCanvasChildren(c *ui.Context, topFrames, selBoxes []B
 	a.buildAgentLayerChildren(c, liveNodes, nowMS)
 }
 
+func rectsOverlapF32(ax, ay, aw, ah, bx, by, bw, bh float32) bool {
+	return ax < bx+bw && ax+aw > bx && ay < by+bh && ay+ah > by
+}
+
+// computeChatPillPos places the floating "+ Chat" pill above the selection's frame-label band or below its
+// size-label band without overlapping the selection, frame-label, or size-label. Returns ok=false when neither
+// position fits inside the canvas bounds cleanly.
+func computeChatPillPos(sr ui.Rect, canvasW, canvasH, pillW, pillH float32) (px, py float32, ok bool) {
+	if canvasW < pillW+16 || canvasH < pillH+16 {
+		return 0, 0, false
+	}
+	maxX := canvasW - pillW - 8
+	px = min(max(float32(8), sr.X+sr.W-pillW), maxX)
+	fits := func(y float32) bool {
+		if y < 8 || y > canvasH-pillH-8 {
+			return false
+		}
+		if rectsOverlapF32(px, y, pillW, pillH, sr.X, sr.Y, sr.W, sr.H) {
+			return false
+		}
+		// Frame label sits in [sr.Y-20, sr.Y] and size label sits in [sr.Y+sr.H, sr.Y+sr.H+26].
+		if y < sr.Y && y+pillH > sr.Y-20 {
+			return false
+		}
+		if y < sr.Y+sr.H+26 && y+pillH > sr.Y+sr.H {
+			return false
+		}
+		return true
+	}
+	if yAbove := sr.Y - pillH - 22; fits(yAbove) {
+		return px, yAbove, true
+	}
+	if yBelow := sr.Y + sr.H + 30; fits(yBelow) {
+		return px, yBelow, true
+	}
+	return 0, 0, false
+}
+
 // buildCanvasActionOverlays renders interactive floating overlays as siblings of the canvas element so
 // clicking them never bubbles into vp.HandleInput (onCanvasPointerDown).
 func (a *NalarupaApp) buildCanvasActionOverlays(c *ui.Context, selBoxes []Box, singleFrame *Box) {
@@ -1550,42 +1589,34 @@ func (a *NalarupaApp) buildCanvasActionOverlays(c *ui.Context, selBoxes []Box, s
 		if sr.X+sr.W > 0 && sr.X < float32(a.CanvasW) && sr.Y+sr.H > 0 && sr.Y < float32(a.CanvasH) {
 			const chatPillW float32 = 68
 			const chatPillH float32 = 24
-			px := sr.X + sr.W - chatPillW
-			py := sr.Y - chatPillH - 22
-			if py < 8 {
-				py = sr.Y + sr.H + 30
-			}
-			maxX := max(float32(8), float32(a.CanvasW)-chatPillW-8)
-			maxY := max(float32(8), float32(a.CanvasH)-chatPillH-8)
-			px = min(max(float32(8), px), maxX)
-			py = min(max(float32(8), py), maxY)
-
-			chatPill := ui.ButtonBase(c.Key("canvas-add-chat")).
-				Absolute().
-				Left(px).
-				Top(py).
-				Height(chatPillH).
-				Padding(0, 8).
-				Radius(12).
-				Row().
-				Gap(4).
-				AlignItems(ui.Center).
-				Background(C.Panel2).
-				Border(1, C.Accent).
-				Shadow(0, 2, 8, 0, ui.Hex("#00000040")).
-				ZIndex(40).
-				Label("Attach selection to Agent Chat").
-				Tooltip("Attach selection to Agent Chat (" + attachShortcutHint() + ")").
-				Cursor(ui.CursorPointer)
-			if chatPill.Hovered() {
-				chatPill.Background(C.Raised)
-			}
-			chatPill.Children(func() {
-				ui.Icon(c, IconSVG("sparkles")).FontSize(11).TextColor(C.Accent).Shrink(0)
-				ui.Text(c, "+ Chat").FontSize(11).FontWeight(600).TextColor(C.Text).MaxLines(1)
-			})
-			if chatPill.Clicked() {
-				a.AttachSelectionToAgentChat()
+			if px, py, ok := computeChatPillPos(sr, float32(a.CanvasW), float32(a.CanvasH), chatPillW, chatPillH); ok {
+				chatPill := ui.ButtonBase(c.Key("canvas-add-chat")).
+					Absolute().
+					Left(px).
+					Top(py).
+					Height(chatPillH).
+					Padding(0, 8).
+					Radius(12).
+					Row().
+					Gap(4).
+					AlignItems(ui.Center).
+					Background(C.Panel2).
+					Border(1, C.Accent).
+					Shadow(0, 2, 8, 0, ui.Hex("#00000040")).
+					ZIndex(40).
+					Label("Attach selection to Agent Chat").
+					Tooltip("Attach selection to Agent Chat (" + attachShortcutHint() + ")").
+					Cursor(ui.CursorPointer)
+				if chatPill.Hovered() {
+					chatPill.Background(C.Raised)
+				}
+				chatPill.Children(func() {
+					ui.Icon(c, IconSVG("sparkles")).FontSize(11).TextColor(C.Accent).Shrink(0)
+					ui.Text(c, "+ Chat").FontSize(11).FontWeight(600).TextColor(C.Text).MaxLines(1)
+				})
+				if chatPill.Clicked() {
+					a.AttachSelectionToAgentChat()
+				}
 			}
 		}
 	}
@@ -2496,6 +2527,7 @@ func (a *NalarupaApp) updateIdleHover(sx, sy float64, docPt Pt) {
 		a.Canvas.lastHoverVer == a.State.Version &&
 		a.Canvas.lastHoverMods == a.Canvas.Mods &&
 		a.Canvas.lastHoverTool == a.Tool &&
+		a.Canvas.lastHoverPicking == a.AgentUI.PickingCanvasCtx &&
 		a.Canvas.lastHoverPanX == a.Cam.X &&
 		a.Canvas.lastHoverPanY == a.Cam.Y &&
 		a.Canvas.lastHoverZoom == a.Cam.Zoom &&
@@ -2526,37 +2558,40 @@ func (a *NalarupaApp) updateIdleHover(sx, sy float64, docPt Pt) {
 		a.Canvas.lastHoverVer = a.State.Version
 		a.Canvas.lastHoverMods = a.Canvas.Mods
 		a.Canvas.lastHoverTool = a.Tool
+		a.Canvas.lastHoverPicking = a.AgentUI.PickingCanvasCtx
 		a.Canvas.lastHoverPanX = a.Cam.X
 		a.Canvas.lastHoverPanY = a.Cam.Y
 		a.Canvas.lastHoverZoom = a.Cam.Zoom
 		a.Canvas.lastHoverSel = append(a.Canvas.lastHoverSel[:0], a.State.Selection...)
 	}
-	if len(selBoxes) == 1 {
-		if ci, _, _ := a.hitRadiusHandle(selBoxes[0], sx, sy); ci >= 0 {
-			a.Canvas.ActiveCursor = ui.CursorPointer
-			a.Canvas.HoverID = ""
-			return
-		}
-		allowRot := !strings.Contains(selBoxes[0].ID, "/")
-		if h, isRot := a.hitResizeOrRotate(selBoxes[0], sx, sy, allowRot); h != "" {
-			if isRot {
-				a.Canvas.ActiveCursor = ui.CursorGrab
-			} else {
-				a.Canvas.ActiveCursor = ResizeUICursor(h, selBoxes[0].M)
-			}
-			a.Canvas.HoverID = ""
-			return
-		}
-	} else if len(selBoxes) > 1 {
-		var rects []RectD
-		for _, sb := range selBoxes {
-			rects = append(rects, Painted(sb))
-		}
-		if u := UnionRects(rects); u != nil {
-			if h, _ := a.hitResizeOrRotate(Box{X: u.X, Y: u.Y, W: u.W, H: u.H}, sx, sy, false); h != "" {
-				a.Canvas.ActiveCursor = ResizeUICursor(h, nil)
+	if !a.AgentUI.PickingCanvasCtx {
+		if len(selBoxes) == 1 {
+			if ci, _, _ := a.hitRadiusHandle(selBoxes[0], sx, sy); ci >= 0 {
+				a.Canvas.ActiveCursor = ui.CursorPointer
 				a.Canvas.HoverID = ""
 				return
+			}
+			allowRot := !strings.Contains(selBoxes[0].ID, "/")
+			if h, isRot := a.hitResizeOrRotate(selBoxes[0], sx, sy, allowRot); h != "" {
+				if isRot {
+					a.Canvas.ActiveCursor = ui.CursorGrab
+				} else {
+					a.Canvas.ActiveCursor = ResizeUICursor(h, selBoxes[0].M)
+				}
+				a.Canvas.HoverID = ""
+				return
+			}
+		} else if len(selBoxes) > 1 {
+			var rects []RectD
+			for _, sb := range selBoxes {
+				rects = append(rects, Painted(sb))
+			}
+			if u := UnionRects(rects); u != nil {
+				if h, _ := a.hitResizeOrRotate(Box{X: u.X, Y: u.Y, W: u.W, H: u.H}, sx, sy, false); h != "" {
+					a.Canvas.ActiveCursor = ResizeUICursor(h, nil)
+					a.Canvas.HoverID = ""
+					return
+				}
 			}
 		}
 	}
@@ -2565,7 +2600,12 @@ func (a *NalarupaApp) updateIdleHover(sx, sy float64, docPt Pt) {
 		return
 	}
 	chain := a.Bridge.HitDirect(docPt[0], docPt[1])
-	a.Canvas.HoverID = a.pickHitTarget(chain, (a.Canvas.Mods&ui.Cmd != 0)||(a.Canvas.Mods&ui.Ctrl != 0), false)
+	deep := (a.Canvas.Mods&ui.Cmd != 0) || (a.Canvas.Mods&ui.Ctrl != 0)
+	if a.AgentUI.PickingCanvasCtx {
+		a.Canvas.HoverID = a.pickContextTarget(chain, deep, false)
+	} else {
+		a.Canvas.HoverID = a.pickHitTarget(chain, deep, false)
+	}
 }
 
 func (a *NalarupaApp) updateRadiusGesture(rg *radiusGesture, sx, sy float64, mods ui.Modifiers) bool {

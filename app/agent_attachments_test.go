@@ -2,7 +2,11 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
+	"encoding/binary"
+	"encoding/json"
 	"fmt"
+	"hash/crc32"
 	"image"
 	"image/color"
 	"image/gif"
@@ -734,5 +738,207 @@ func TestComposerBottomStaysSingleRowWithAttachmentsTray(t *testing.T) {
 		if math.Abs(float64(y-modelY)) > 2.0 {
 			t.Fatalf("composer-bottom control %q wrapped onto another row with attachments tray: modelY=%.1f %sY=%.1f", name, modelY, name, y)
 		}
+	}
+}
+
+func makeSyntheticPNGHeaderOnly(w, h uint32) []byte {
+	var buf bytes.Buffer
+	buf.Write([]byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'})
+	ihdr := make([]byte, 13)
+	binary.BigEndian.PutUint32(ihdr[0:4], w)
+	binary.BigEndian.PutUint32(ihdr[4:8], h)
+	ihdr[8] = 8 // bit depth
+	ihdr[9] = 6 // RGBA
+	writeChunk := func(typ string, data []byte) {
+		var lenBuf [4]byte
+		binary.BigEndian.PutUint32(lenBuf[:], uint32(len(data)))
+		buf.Write(lenBuf[:])
+		buf.WriteString(typ)
+		buf.Write(data)
+		h := crc32.NewIEEE()
+		h.Write([]byte(typ))
+		h.Write(data)
+		var crcBuf [4]byte
+		binary.BigEndian.PutUint32(crcBuf[:], h.Sum32())
+		buf.Write(crcBuf[:])
+	}
+	writeChunk("IHDR", ihdr)
+	writeChunk("IEND", nil)
+	return buf.Bytes()
+}
+
+func TestProviderConfigUnmarshalDefaultsVisionTrue(t *testing.T) {
+	var legacy ProviderConfig
+	if err := json.Unmarshal([]byte(`{"id":"p1","name":"Legacy","format":"chat","base_url":"https://example.com/v1","models":["m1"]}`), &legacy); err != nil {
+		t.Fatalf("unmarshal legacy provider: %v", err)
+	}
+	if !legacy.Vision {
+		t.Fatal("expected omitted vision field to default to true")
+	}
+
+	var explicitFalse ProviderConfig
+	if err := json.Unmarshal([]byte(`{"id":"p2","name":"Blind","format":"chat","base_url":"https://example.com/v1","models":["m1"],"vision":false}`), &explicitFalse); err != nil {
+		t.Fatalf("unmarshal explicit false provider: %v", err)
+	}
+	if explicitFalse.Vision {
+		t.Fatal("expected explicit vision:false to stay false")
+	}
+
+	var explicitTrue ProviderConfig
+	if err := json.Unmarshal([]byte(`{"id":"p3","name":"Eye","format":"chat","base_url":"https://example.com/v1","models":["m1"],"vision":true}`), &explicitTrue); err != nil {
+		t.Fatalf("unmarshal explicit true provider: %v", err)
+	}
+	if !explicitTrue.Vision {
+		t.Fatal("expected explicit vision:true to stay true")
+	}
+}
+
+func TestDecodeImageFilesBoundedReadSlotCapAndPixelBombGuard(t *testing.T) {
+	dir := t.TempDir()
+
+	// 1. Oversized file (>25 MB) is rejected via Stat/LimitReader before reading full file
+	hugePath := filepath.Join(dir, "huge.png")
+	f, err := os.Create(hugePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(maxRawImageFileBytes + 4096); err != nil {
+		_ = f.Close()
+		t.Fatal(err)
+	}
+	_ = f.Close()
+	if _, err := readBoundedImageFile(hugePath); err == nil || !strings.Contains(err.Error(), "25 MB") {
+		t.Fatalf("expected 25 MB limit error on oversized file, got %v", err)
+	}
+
+	// 2. Slot cap stops decoding/retaining payloads past remaining slots, ignores invalids for slots, and counts valid overflow
+	bad1 := filepath.Join(dir, "bad1.txt")
+	bad2 := filepath.Join(dir, "bad2.txt")
+	_ = os.WriteFile(bad1, []byte("not an image"), 0o644)
+	_ = os.WriteFile(bad2, []byte("still not an image"), 0o644)
+	var batch []string
+	batch = append(batch, bad1)
+	for i := 1; i <= 6; i++ {
+		p, _ := makeTestImageFile(t, dir, fmt.Sprintf("v%d.png", i), "png", 16, 16, color.RGBA{uint8(i * 30), 100, 150, 255})
+		batch = append(batch, p)
+	}
+	batch = append(batch, bad2)
+	pExtra, _ := makeTestImageFile(t, dir, "v7.png", "png", 16, 16, color.RGBA{10, 200, 30, 255})
+	batch = append(batch, pExtra)
+
+	res := decodeImageAttachmentFiles(batch, 3)
+	if len(res.Items) != 3 || res.InvalidCount != 2 || res.OverLimitCount != 4 {
+		t.Fatalf("expected 3 decoded items, 2 invalid, 4 over-limit; got items=%d invalid=%d over=%d",
+			len(res.Items), res.InvalidCount, res.OverLimitCount)
+	}
+
+	// Verify applyAttachBatchResult surfaces accurate OverLimitCount in toast
+	app, _ := newTestApp(t, ui.TesterOptions{})
+	app.applyAttachBatchResult(res)
+	if len(app.AgentUI.PendingImages) != 3 {
+		t.Fatalf("expected 3 pending images attached, got %d", len(app.AgentUI.PendingImages))
+	}
+	if app.Toast == nil || !strings.Contains(app.Toast.Text, "Skipped 4 image(s) over the 10-image limit") {
+		t.Fatalf("expected over-limit toast mentioning 4 skipped images, got %+v", app.Toast)
+	}
+
+	// 3. Pixel-bomb guard rejects extreme dimensions before allocating source pixels in both composer & chat bitmap decode
+	bombPNG := makeSyntheticPNGHeaderOnly(15000, 15000)
+	if _, err := decodeImageAttachmentBytes("bomb.png", bombPNG); err == nil || !strings.Contains(err.Error(), "exceed maximum supported size") {
+		t.Fatalf("expected pixel-bomb rejection in decodeImageAttachmentBytes, got %v", err)
+	}
+	bombB64 := base64.StdEncoding.EncodeToString(bombPNG)
+	if _, err := decodeChatImageBitmap(bombB64, 112); err == nil || !strings.Contains(err.Error(), "exceed maximum supported size") {
+		t.Fatalf("expected pixel-bomb rejection in decodeChatImageBitmap, got %v", err)
+	}
+}
+
+func TestComposerBlocksSubmitWhileAttachLoadingAndPillOverlapAndPickHover(t *testing.T) {
+	app, tt := newTestApp(t, ui.TesterOptions{})
+	app.StartTemplate("empty", true)
+	if _, err := app.Bridge.ExecuteJS(`
+		fb = Insert(document, {type:"frame", name:"FreeArtboard", x:80, y:80, width:240, height:160, fill:"#1E293B"});
+		Insert(fb, {type:"rectangle", name:"CornerBadge", x:10, y:10, width:30, height:20, fill:"#38BDF8"});
+		Insert(document, {type:"frame", name:"FullHeight", x:400, y:10, width:300, height:1200, fill:"#334155"});
+	`); err != nil {
+		t.Fatal(err)
+	}
+	app.RefreshState()
+	tt.Frame()
+	app.Cam = Camera{X: 0, Y: 0, Zoom: 1}
+	tt.Frame()
+
+	frames := app.Bridge.FramesDirect()
+	var freeBoard, fullHeight Box
+	for _, f := range frames {
+		switch f.Name {
+		case "FreeArtboard":
+			freeBoard = f
+		case "FullHeight":
+			fullHeight = f
+		}
+	}
+
+	// 1. Composer blocks Enter & Send while attachLoading() is true, keeping draft intact
+	app.RightTab = "agent"
+	app.AgentUI.Draft = "Wait until images load"
+	app.AgentUI.attachMu.Lock()
+	app.AgentUI.attachPending = 1
+	app.AgentUI.attachMu.Unlock()
+	tt.Frame()
+
+	if sendAcc, ok := tt.Access("Send"); !ok || !sendAcc.Disabled {
+		t.Fatalf("expected Send button disabled while attachLoading(), got ok=%v disabled=%v", ok, sendAcc.Disabled)
+	}
+	if app.submitAgentPrompt(app.AgentUI.Draft, false) {
+		t.Fatal("submitAgentPrompt must return false while attachLoading()")
+	}
+	if err := tt.Click("Message the design agent"); err != nil {
+		t.Fatalf("focus composer: %v", err)
+	}
+	tt.Key(0, ui.KeyEnter)
+	if app.AgentUI.Draft != "Wait until images load" {
+		t.Fatalf("Enter while attachLoading() should preserve draft, got %q", app.AgentUI.Draft)
+	}
+	app.AgentUI.attachMu.Lock()
+	app.AgentUI.attachPending = 0
+	app.AgentUI.attachMu.Unlock()
+	tt.Frame()
+	if sendAcc, ok := tt.Access("Send"); !ok || sendAcc.Disabled {
+		t.Fatalf("expected Send button re-enabled after loading finishes, got ok=%v disabled=%v", ok, sendAcc.Disabled)
+	}
+
+	// 2. Floating "+ Chat" pill hides when neither above nor below fits without overlapping selection/labels
+	app.Select([]string{fullHeight.ID})
+	tt.Frame()
+	if _, ok := tt.Access("Attach selection to Agent Chat"); ok {
+		t.Fatal("expected floating '+ Chat' pill hidden when full-height selection leaves no non-overlapping slot")
+	}
+	// Unit check computeChatPillPos directly for above, below, and hidden cases
+	if _, py, ok := computeChatPillPos(ui.Rect{X: 100, Y: 120, W: 200, H: 150}, 800, 600, 68, 24); !ok || py != 74 {
+		t.Fatalf("expected above position py=74, got py=%.1f ok=%v", py, ok)
+	}
+	if _, py, ok := computeChatPillPos(ui.Rect{X: 100, Y: 20, W: 200, H: 150}, 800, 600, 68, 24); !ok || py != 200 {
+		t.Fatalf("expected below position py=200 when top is tight, got py=%.1f ok=%v", py, ok)
+	}
+	if _, _, ok := computeChatPillPos(ui.Rect{X: 100, Y: 10, W: 200, H: 580}, 800, 600, 68, 24); ok {
+		t.Fatal("expected computeChatPillPos to return ok=false when neither above nor below fits")
+	}
+
+	// 3. updateIdleHover highlights unselected freeform artboard interiors during PickingCanvasCtx mode
+	app.Select(nil)
+	app.SetTool("move", false)
+	app.AgentUI.PickingCanvasCtx = false
+	tt.Frame()
+	emptySX := freeBoard.X + freeBoard.W - 24
+	emptySY := freeBoard.Y + freeBoard.H - 24
+	app.updateIdleHover(emptySX, emptySY, Pt{emptySX, emptySY})
+	if app.Canvas.HoverID != "" {
+		t.Fatalf("outside pick mode, unselected freeform artboard interior should keep HoverID empty, got %q", app.Canvas.HoverID)
+	}
+	app.AgentUI.PickingCanvasCtx = true
+	app.updateIdleHover(emptySX, emptySY, Pt{emptySX, emptySY})
+	if app.Canvas.HoverID != freeBoard.ID {
+		t.Fatalf("in pick mode, hovering freeform artboard interior should set HoverID=%s, got %q", freeBoard.ID, app.Canvas.HoverID)
 	}
 }

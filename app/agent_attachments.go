@@ -9,6 +9,7 @@ import (
 	"image/gif"
 	"image/jpeg"
 	"image/png"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -27,6 +28,8 @@ const (
 	maxImageLongSide     = 1568
 	maxRawImageFileBytes = 25 << 20
 	maxEncodedImageBytes = 4 << 20
+	maxSourceImageDim    = 12000
+	maxSourceImagePixels = 36_000_000
 	thumbBitmapMaxSide   = 112
 )
 
@@ -62,9 +65,10 @@ type decodedAttachmentItem struct {
 }
 
 type attachBatchResult struct {
-	Items        []decodedAttachmentItem
-	InvalidCount int
-	FirstErr     string
+	Items          []decodedAttachmentItem
+	InvalidCount   int
+	OverLimitCount int
+	FirstErr       string
 }
 
 func (a *NalarupaApp) activeModelSupportsVision() bool {
@@ -278,6 +282,17 @@ func (a *NalarupaApp) TriggerCanvasAttachShortcut() {
 	a.AttachViewportToAgentChat()
 }
 
+func (a *NalarupaApp) remainingImageSlots() int {
+	rem := maxComposerImages - len(a.AgentUI.PendingImages)
+	if rem < 0 {
+		return 0
+	}
+	if rem > maxComposerImages {
+		return maxComposerImages
+	}
+	return rem
+}
+
 // TriggerAttachImagesDialog opens the native multi-select image picker off the main UI thread.
 // It intentionally does not join a.bgWG across blocking mygo.Dialog.Open so quitting while the dialog is open
 // never deadlocks Close().
@@ -292,6 +307,7 @@ func (a *NalarupaApp) TriggerAttachImagesDialog() {
 		return
 	}
 	win := a.Window
+	maxSlots := a.remainingImageSlots()
 	go func() {
 		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
 			Parent:   win,
@@ -305,7 +321,7 @@ func (a *NalarupaApp) TriggerAttachImagesDialog() {
 			return
 		}
 		a.beginAttachWork(win)
-		res := decodeImageAttachmentFiles(paths)
+		res := decodeImageAttachmentFiles(paths, maxSlots)
 		a.finishAttachWork(win, res)
 	}()
 }
@@ -321,8 +337,9 @@ func (a *NalarupaApp) AttachImageFiles(paths []string) {
 	if len(clean) == 0 {
 		return
 	}
+	maxSlots := a.remainingImageSlots()
 	if a.Window == nil {
-		a.applyAttachBatchResult(decodeImageAttachmentFiles(clean))
+		a.applyAttachBatchResult(decodeImageAttachmentFiles(clean, maxSlots))
 		return
 	}
 	win := a.Window
@@ -330,7 +347,7 @@ func (a *NalarupaApp) AttachImageFiles(paths []string) {
 	a.bgWG.Add(1)
 	go func() {
 		defer a.bgWG.Done()
-		res := decodeImageAttachmentFiles(clean)
+		res := decodeImageAttachmentFiles(clean, maxSlots)
 		a.finishAttachWork(win, res)
 	}()
 }
@@ -401,7 +418,7 @@ func (a *NalarupaApp) drainAttachDone() {
 
 func (a *NalarupaApp) applyAttachBatchResult(res attachBatchResult) {
 	added := 0
-	overLimit := 0
+	overLimit := res.OverLimitCount
 	for _, item := range res.Items {
 		if len(a.AgentUI.PendingImages) >= maxComposerImages {
 			overLimit++
@@ -451,10 +468,87 @@ func (a *NalarupaApp) applyAttachBatchResult(res attachBatchResult) {
 	}
 }
 
-func decodeImageAttachmentFiles(paths []string) attachBatchResult {
+func readBoundedImageFile(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	if info, err := f.Stat(); err == nil {
+		if info.IsDir() {
+			return nil, errors.New("path is a directory")
+		}
+		if info.Size() > maxRawImageFileBytes {
+			return nil, errors.New("image exceeds 25 MB limit")
+		}
+	}
+	raw, err := io.ReadAll(io.LimitReader(f, maxRawImageFileBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > maxRawImageFileBytes {
+		return nil, errors.New("image exceeds 25 MB limit")
+	}
+	return raw, nil
+}
+
+func validateImageFileForOverflow(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if info, err := f.Stat(); err == nil {
+		if info.IsDir() {
+			return errors.New("path is a directory")
+		}
+		if info.Size() == 0 {
+			return errors.New("image file is empty")
+		}
+		if info.Size() > maxRawImageFileBytes {
+			return errors.New("image exceeds 25 MB limit")
+		}
+	}
+	var hdr [16]byte
+	n, err := io.ReadFull(f, hdr[:])
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return err
+	}
+	if n == 0 {
+		return errors.New("image file is empty")
+	}
+	mediaType, ok := sniffImageFormat(hdr[:n])
+	if !ok {
+		return errors.New("unsupported image format (use PNG, JPEG, WebP, or GIF)")
+	}
+	r := io.LimitReader(io.MultiReader(bytes.NewReader(hdr[:n]), f), maxRawImageFileBytes+1)
+	if _, err := decodeImageConfigByMediaType(mediaType, r); err != nil {
+		return fmt.Errorf("invalid image: %w", err)
+	}
+	return nil
+}
+
+func decodeImageAttachmentFiles(paths []string, maxSlots int) attachBatchResult {
+	if maxSlots < 0 {
+		maxSlots = 0
+	}
+	if maxSlots > maxComposerImages {
+		maxSlots = maxComposerImages
+	}
 	var res attachBatchResult
 	for _, p := range paths {
-		raw, err := os.ReadFile(p)
+		if len(res.Items) >= maxSlots {
+			if err := validateImageFileForOverflow(p); err != nil {
+				res.InvalidCount++
+				if res.FirstErr == "" {
+					res.FirstErr = fmt.Sprintf("%s: %v", filepath.Base(p), err)
+				}
+			} else {
+				res.OverLimitCount++
+			}
+			continue
+		}
+		raw, err := readBoundedImageFile(p)
 		if err != nil {
 			res.InvalidCount++
 			if res.FirstErr == "" {
@@ -499,7 +593,46 @@ func sniffImageFormat(raw []byte) (string, bool) {
 	return "", false
 }
 
+func checkSourceImageDimensions(w, h int) error {
+	if w <= 0 || h <= 0 {
+		return errors.New("image has zero dimensions")
+	}
+	if w > maxSourceImageDim || h > maxSourceImageDim || int64(w)*int64(h) > maxSourceImagePixels {
+		return fmt.Errorf("image dimensions %dx%d exceed maximum supported size", w, h)
+	}
+	return nil
+}
+
+func decodeImageConfigByMediaType(mediaType string, r io.Reader) (image.Config, error) {
+	var (
+		cfg image.Config
+		err error
+	)
+	switch mediaType {
+	case "image/png":
+		cfg, err = png.DecodeConfig(r)
+	case "image/jpeg":
+		cfg, err = jpeg.DecodeConfig(r)
+	case "image/gif":
+		cfg, err = gif.DecodeConfig(r)
+	case "image/webp":
+		cfg, err = webp.DecodeConfig(r)
+	default:
+		return image.Config{}, errors.New("unsupported image format (use PNG, JPEG, WebP, or GIF)")
+	}
+	if err != nil {
+		return image.Config{}, err
+	}
+	if err := checkSourceImageDimensions(cfg.Width, cfg.Height); err != nil {
+		return image.Config{}, err
+	}
+	return cfg, nil
+}
+
 func decodeImageByMediaType(mediaType string, raw []byte) (image.Image, error) {
+	if _, err := decodeImageConfigByMediaType(mediaType, bytes.NewReader(raw)); err != nil {
+		return nil, err
+	}
 	r := bytes.NewReader(raw)
 	switch mediaType {
 	case "image/png":
@@ -641,6 +774,13 @@ func decodeChatImageBitmap(b64 string, maxSide int) (*ui.Bitmap, error) {
 	if err != nil {
 		return nil, err
 	}
+	mt, ok := sniffImageFormat(raw)
+	if !ok {
+		return nil, errors.New("unsupported image format")
+	}
+	if _, err := decodeImageConfigByMediaType(mt, bytes.NewReader(raw)); err != nil {
+		return nil, err
+	}
 	if maxSide > 0 {
 		if bmp, err := ui.DecodeBitmapScaled(raw, maxSide); err == nil && bmp != nil {
 			return bmp, nil
@@ -649,10 +789,6 @@ func decodeChatImageBitmap(b64 string, maxSide int) (*ui.Bitmap, error) {
 		if bmp, err := ui.DecodeBitmap(raw); err == nil && bmp != nil {
 			return bmp, nil
 		}
-	}
-	mt, ok := sniffImageFormat(raw)
-	if !ok {
-		return nil, errors.New("unsupported image format")
 	}
 	img, err := decodeImageByMediaType(mt, raw)
 	if err != nil {

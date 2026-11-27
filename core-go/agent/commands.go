@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -400,10 +401,17 @@ func init() {
 }
 
 func parseCanvasContexts(raw jsonv.Value) ([]engine.CanvasContextRef, error) {
-	items := jsonv.Items(raw)
-	if len(items) == 0 {
+	if raw == nil {
 		return nil, nil
 	}
+	arr, ok := raw.(*jsonv.Array)
+	if !ok {
+		return nil, errors.New("contexts must be an array")
+	}
+	if arr == nil || len(arr.Items) == 0 {
+		return nil, nil
+	}
+	items := arr.Items
 	seen := map[string]bool{}
 	out := make([]engine.CanvasContextRef, 0, len(items))
 	for _, it := range items {
@@ -472,26 +480,39 @@ func parseCanvasContexts(raw jsonv.Value) ([]engine.CanvasContextRef, error) {
 	return out, nil
 }
 
-func sniffImageMediaType(b64 string) string {
-	switch {
-	case strings.HasPrefix(b64, "/9j/"):
-		return "image/jpeg"
-	case strings.HasPrefix(b64, "UklGR"):
-		return "image/webp"
-	case strings.HasPrefix(b64, "R0lGOD"):
-		return "image/gif"
-	default:
-		return "image/png"
+func sniffImageBytesMediaType(raw []byte) (string, bool) {
+	if len(raw) >= 8 && bytes.Equal(raw[:8], []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}) {
+		return "image/png", true
 	}
+	if len(raw) >= 3 && raw[0] == 0xff && raw[1] == 0xd8 && raw[2] == 0xff {
+		return "image/jpeg", true
+	}
+	if len(raw) >= 6 && (string(raw[:6]) == "GIF87a" || string(raw[:6]) == "GIF89a") {
+		return "image/gif", true
+	}
+	if len(raw) >= 12 && string(raw[:4]) == "RIFF" && string(raw[8:12]) == "WEBP" {
+		return "image/webp", true
+	}
+	return "", false
 }
 
-func normalizeImageMediaType(mt, b64 string) (string, bool) {
+func sniffImageMediaType(b64 string) string {
+	sample := b64
+	if len(sample) > 16 {
+		sample = sample[:16]
+	}
+	if raw, err := base64.StdEncoding.DecodeString(sample); err == nil {
+		if mt, ok := sniffImageBytesMediaType(raw); ok {
+			return mt
+		}
+	}
+	return "image/png"
+}
+
+func normalizeExplicitImageMediaType(mt string) (string, bool) {
 	mt = strings.ToLower(strings.TrimSpace(mt))
 	if mt == "image/jpg" {
 		mt = "image/jpeg"
-	}
-	if mt == "" {
-		return sniffImageMediaType(b64), true
 	}
 	switch mt {
 	case "image/png", "image/jpeg", "image/webp", "image/gif":
@@ -502,10 +523,17 @@ func normalizeImageMediaType(mt, b64 string) (string, bool) {
 }
 
 func parseAttachmentImages(raw jsonv.Value) ([]engine.AttachmentImage, error) {
-	items := jsonv.Items(raw)
-	if len(items) == 0 {
+	if raw == nil {
 		return nil, nil
 	}
+	arr, ok := raw.(*jsonv.Array)
+	if !ok {
+		return nil, errors.New("images must be an array")
+	}
+	if arr == nil || len(arr.Items) == 0 {
+		return nil, nil
+	}
+	items := arr.Items
 	if len(items) > MaxAttachedImages {
 		return nil, fmt.Errorf("At most %d images can be attached per message.", MaxAttachedImages)
 	}
@@ -529,30 +557,48 @@ func parseAttachmentImages(raw jsonv.Value) ([]engine.AttachmentImage, error) {
 				h = int(hf)
 			}
 		}
+		var dataURLMT string
 		if strings.HasPrefix(data, "data:") {
 			if semi := strings.Index(data, ";base64,"); semi > 5 {
-				if mt == "" {
-					mt = data[5:semi]
-				}
+				dataURLMT = strings.TrimSpace(data[5:semi])
 				data = strings.TrimSpace(data[semi+len(";base64,"):])
 			}
 		}
 		if data == "" {
 			return nil, fmt.Errorf("Attached image #%d is empty.", i+1)
 		}
-		if _, err := base64.StdEncoding.DecodeString(data); err != nil {
+		rawBytes, err := base64.StdEncoding.DecodeString(data)
+		if err != nil {
 			return nil, fmt.Errorf("Attached image #%d is not valid base64.", i+1)
 		}
-		normMT, ok := normalizeImageMediaType(mt, data)
+		detectedMT, ok := sniffImageBytesMediaType(rawBytes)
 		if !ok {
-			return nil, fmt.Errorf("Attached image #%d has unsupported media type %q (use PNG, JPEG, WebP, or GIF).", i+1, mt)
+			return nil, fmt.Errorf("Attached image #%d is not a supported image format (use PNG, JPEG, WebP, or GIF).", i+1)
+		}
+		if mt != "" {
+			normMT, ok := normalizeExplicitImageMediaType(mt)
+			if !ok {
+				return nil, fmt.Errorf("Attached image #%d has unsupported media type %q (use PNG, JPEG, WebP, or GIF).", i+1, mt)
+			}
+			if normMT != detectedMT {
+				return nil, fmt.Errorf("Attached image #%d media type %q does not match detected image format %q.", i+1, normMT, detectedMT)
+			}
+		}
+		if dataURLMT != "" {
+			normURLMT, ok := normalizeExplicitImageMediaType(dataURLMT)
+			if !ok {
+				return nil, fmt.Errorf("Attached image #%d has unsupported media type %q (use PNG, JPEG, WebP, or GIF).", i+1, dataURLMT)
+			}
+			if normURLMT != detectedMT {
+				return nil, fmt.Errorf("Attached image #%d media type %q does not match detected image format %q.", i+1, normURLMT, detectedMT)
+			}
 		}
 		if name == "" {
 			name = fmt.Sprintf("image-%d", i+1)
 		}
 		out = append(out, engine.AttachmentImage{
 			Name:      name,
-			MediaType: normMT,
+			MediaType: detectedMT,
 			Data:      data,
 			Width:     w,
 			Height:    h,

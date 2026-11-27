@@ -283,8 +283,115 @@ const (
 	maxContextTotalTextBytes = 14000
 	maxContextNodeDepth      = 3
 	maxContextNodeChildren   = 12
+	maxContextObjectKeys     = 32
 	maxContextViewportSide   = 1280
 )
+
+// ValidateCanvasContexts checks pinned canvas context references under a single short Engine.Lock,
+// returning deduplicated metadata (id/name/type/w/h/viewport) and missing node IDs without cloning
+// subtrees, serializing JSON, or rendering snapshots. Call without holding Engine.Lock.
+func (e *Engine) ValidateCanvasContexts(refs []CanvasContextRef) (resolved []CanvasContextRef, missing []string) {
+	if len(refs) == 0 {
+		return nil, nil
+	}
+	seen := map[string]bool{}
+	e.Locked(func() {
+		e.Sync()
+		var res *resolve.Resolver
+		getRes := func() *resolve.Resolver {
+			if res == nil {
+				res = resolve.New(e.Doc.Root, e.Libs)
+			}
+			return res
+		}
+		for _, ref := range refs {
+			kind := strings.ToLower(strings.TrimSpace(ref.Kind))
+			if kind == "" && ref.ID != "" {
+				kind = "node"
+			}
+			switch kind {
+			case "viewport":
+				if seen["viewport"] {
+					continue
+				}
+				seen["viewport"] = true
+				var vp [4]float64
+				switch {
+				case ref.Viewport != nil && ref.Viewport[2] > 0 && ref.Viewport[3] > 0:
+					vp = *ref.Viewport
+				case e.Viewport != nil && e.Viewport[2] > 0 && e.Viewport[3] > 0:
+					vp = *e.Viewport
+				default:
+					if b, ok := e.Renderer.Bounds(); ok && b.W > 0 && b.H > 0 {
+						vp = [4]float64{b.X, b.Y, b.W, b.H}
+					} else {
+						vp = [4]float64{0, 0, 1280, 800}
+					}
+				}
+				vpCopy := vp
+				name := strings.TrimSpace(ref.Name)
+				if name == "" {
+					name = "Canvas viewport"
+				}
+				resolved = append(resolved, CanvasContextRef{
+					Kind:     "viewport",
+					Name:     name,
+					NodeType: "viewport",
+					W:        math.Round(vp[2]),
+					H:        math.Round(vp[3]),
+					Viewport: &vpCopy,
+				})
+			case "node":
+				id := strings.TrimSpace(ref.ID)
+				if id == "" || seen["node:"+id] {
+					continue
+				}
+				seen["node:"+id] = true
+				raw := e.Doc.Find(id)
+				f := e.Renderer.Find(id)
+				if raw == nil && f == nil && !getRes().HasPath(id) {
+					missing = append(missing, id)
+					continue
+				}
+				var nodeName, nodeType string
+				var w, h float64
+				if raw != nil {
+					nodeName = jsonv.StrOr(jsonv.Get(raw, "name"))
+					nodeType = jsonv.StrOr(jsonv.Get(raw, "type"))
+				}
+				if f != nil {
+					w, h = f.W, f.H
+					if nodeName == "" {
+						nodeName = f.Name
+					}
+					if nodeType == "" {
+						nodeType = f.Type
+					}
+				} else {
+					w, h = ref.W, ref.H
+				}
+				if nodeName == "" {
+					nodeName = strings.TrimSpace(ref.Name)
+				}
+				if nodeType == "" {
+					nodeType = strings.TrimSpace(ref.NodeType)
+				}
+				if nodeName == "" {
+					nodeName = id
+				}
+				resolved = append(resolved, CanvasContextRef{
+					Kind:     "node",
+					ID:       id,
+					Name:     nodeName,
+					NodeType: nodeType,
+					W:        math.Round(w),
+					H:        math.Round(h),
+				})
+			}
+		}
+	})
+	return resolved, missing
+}
 
 // CaptureCanvasContexts resolves pinned canvas node and viewport context references without holding Engine.Lock
 // across JSON serialization, SVG rasterization, or PNG encoding. Call without holding Engine.Lock.
@@ -296,7 +403,7 @@ func (e *Engine) CaptureCanvasContexts(refs []CanvasContextRef, includePNG bool)
 	seen := map[string]bool{}
 	type ctxSection struct {
 		header string
-		json   string
+		node   *jsonv.Object
 	}
 	var built []ctxSection
 	r := func(v float64) string { return RustF64(math.Round(v)) }
@@ -324,7 +431,7 @@ func (e *Engine) CaptureCanvasContexts(refs []CanvasContextRef, includePNG bool)
 				continue
 			}
 			seen["node:"+id] = true
-			resolved, header, rawJSON, snapImg, found := e.captureNodeContext(ref, id, includePNG, len(res.Snapshots)+1, r)
+			resolved, header, compactObj, snapImg, found := e.captureNodeContext(ref, id, includePNG, len(res.Snapshots)+1, r)
 			if !found {
 				res.Missing = append(res.Missing, id)
 				continue
@@ -333,13 +440,13 @@ func (e *Engine) CaptureCanvasContexts(refs []CanvasContextRef, includePNG bool)
 			if snapImg != nil {
 				res.Snapshots = append(res.Snapshots, *snapImg)
 			}
-			built = append(built, ctxSection{header: header, json: rawJSON})
+			built = append(built, ctxSection{header: header, node: compactObj})
 		}
 	}
 
 	if len(built) > 0 {
 		// Always keep every resolved context's metadata header and Visual snapshot index line so
-		// `image #N` stays 1:1 aligned with res.Snapshots; only trim/omit JSON payloads under budget.
+		// `image #N` stays 1:1 aligned with res.Snapshots; only prune/omit JSON payloads under budget.
 		headerBytes := 0
 		for _, b := range built {
 			headerBytes += len(b.header) + 2
@@ -348,17 +455,13 @@ func (e *Engine) CaptureCanvasContexts(refs []CanvasContextRef, includePNG bool)
 		sections := make([]string, 0, len(built))
 		for _, b := range built {
 			sec := b.header
-			if b.json != "" {
+			if b.node != nil {
 				const fenceOverhead = len("\n```json\n\n```")
-				switch {
-				case len(b.json)+fenceOverhead <= jsonBudget:
-					sec += "\n```json\n" + b.json + "\n```"
-					jsonBudget -= len(b.json) + fenceOverhead
-				case jsonBudget >= 256+fenceOverhead:
-					avail := jsonBudget - fenceOverhead
-					sec += "\n```json\n" + truncateUTF8(b.json, avail) + "\n```"
-					jsonBudget = 0
-				default:
+				avail := min(maxContextNodeJSONBytes, jsonBudget-fenceOverhead)
+				if rawJSON := marshalBoundedNodeJSON(b.node, avail); rawJSON != "" {
+					sec += "\n```json\n" + rawJSON + "\n```"
+					jsonBudget -= len(rawJSON) + fenceOverhead
+				} else {
 					sec += "\n- Node JSON omitted to stay within context budget."
 				}
 			}
@@ -440,15 +543,17 @@ func (e *Engine) captureViewportContext(ref CanvasContextRef, includePNG bool, n
 	var snapImg *AttachmentImage
 	if includePNG {
 		longSide := max(vp[2], vp[3])
-		scale := 1.0
+		zoom := 1.0
 		if longSide > maxContextViewportSide {
-			scale = float64(maxContextViewportSide) / longSide
+			zoom = float64(maxContextViewportSide) / longSide
 		} else if longSide > 0 && longSide < 320 {
-			scale = min(2.0, 640.0/longSide)
+			zoom = min(2.0, 640.0/longSide)
 		}
-		pw := max(1, min(maxContextViewportSide, int(math.Round(vp[2]*scale))))
-		ph := max(1, min(maxContextViewportSide, int(math.Round(vp[3]*scale))))
-		zoom := min(float64(pw)/max(vp[2], 1), float64(ph)/max(vp[3], 1))
+		pw := max(1, min(maxContextViewportSide, int(math.Round(vp[2]*zoom))))
+		ph := max(1, min(maxContextViewportSide, int(math.Round(vp[3]*zoom))))
+		if float64(pw)/zoom > vp[2] || float64(ph)/zoom > vp[3] {
+			zoom = max(float64(pw)/max(vp[2], 1e-6), float64(ph)/max(vp[3], 1e-6))
+		}
 		det := render.NewDetachedRenderer()
 		px := det.Render(snap, uint32(pw), uint32(ph), vp[0], vp[1], zoom, [3]uint8{0xff, 0xff, 0xff}, "", true)
 		if len(px) >= pw*ph*4 {
@@ -493,7 +598,7 @@ func rnodeToContextJSON(rn *resolve.RNode, depth int) *jsonv.Object {
 			if k == "id" || k == "type" || k == "children" {
 				return
 			}
-			out.Set(k, jsonv.Clone(v))
+			out.Set(k, compactPropValueForContext(k, v, depth+1))
 		})
 	}
 	if len(rn.Kids) > 0 {
@@ -514,10 +619,10 @@ func rnodeToContextJSON(rn *resolve.RNode, depth int) *jsonv.Object {
 	return out
 }
 
-func (e *Engine) captureNodeContext(ref CanvasContextRef, id string, includePNG bool, nextImageIdx int, r func(float64) string) (CanvasContextRef, string, string, *AttachmentImage, bool) {
+func (e *Engine) captureNodeContext(ref CanvasContextRef, id string, includePNG bool, nextImageIdx int, r func(float64) string) (CanvasContextRef, string, *jsonv.Object, *AttachmentImage, bool) {
 	var (
 		found        bool
-		rawClone     jsonv.Value
+		compactObj   *jsonv.Object
 		parentID     string
 		nodeName     string
 		nodeType     string
@@ -543,14 +648,13 @@ func (e *Engine) captureNodeContext(ref CanvasContextRef, id string, includePNG 
 		}
 		found = true
 		if raw != nil {
-			rawClone = jsonv.Clone(raw)
+			// Build a bounded compact copy directly under the lock rather than cloning an unbounded subtree.
+			compactObj = jsonv.Obj(compactNodeForContext(raw, 0))
 			nodeName = jsonv.StrOr(jsonv.Get(raw, "name"))
 			nodeType = jsonv.StrOr(jsonv.Get(raw, "type"))
-			if nodeType == "ref" {
+			if nodeType == "ref" && compactObj != nil {
 				if inh := getRes().Inherited(raw); inh != nil {
-					if obj := jsonv.Obj(rawClone); obj != nil {
-						obj.Set("_inherited", jsonv.Clone(inh))
-					}
+					compactObj.Set("_inherited", compactNodeForContext(inh, 1))
 				}
 			}
 		} else if strings.Contains(id, "/") {
@@ -558,7 +662,7 @@ func (e *Engine) captureNodeContext(ref CanvasContextRef, id string, includePNG 
 			if rootRaw := getRes().Node(segs[0]); rootRaw != nil {
 				if rn := getRes().Resolve(rootRaw); rn != nil {
 					if desc := rn.Find(id); desc != nil {
-						rawClone = rnodeToContextJSON(desc, 0)
+						compactObj = rnodeToContextJSON(desc, 0)
 						nodeName, _ = desc.S("name")
 						nodeType = desc.Type
 					}
@@ -583,7 +687,7 @@ func (e *Engine) captureNodeContext(ref CanvasContextRef, id string, includePNG 
 		}
 	})
 	if !found {
-		return CanvasContextRef{}, "", "", nil, false
+		return CanvasContextRef{}, "", nil, nil, false
 	}
 
 	if nodeName == "" {
@@ -653,18 +757,34 @@ func (e *Engine) captureNodeContext(ref CanvasContextRef, id string, includePNG 
 	if snapImg != nil {
 		fmt.Fprintf(&sb, "- Visual snapshot: attached as image #%d (%dx%d PNG)\n", nextImageIdx, snapImg.Width, snapImg.Height)
 	}
-	rawJSON := ""
-	if rawClone != nil {
-		compact := compactNodeForContext(rawClone, 0)
-		rawJSON = truncateUTF8(string(jsonv.Marshal(compact)), maxContextNodeJSONBytes)
+	return resolved, strings.TrimRight(sb.String(), "\n"), compactObj, snapImg, true
+}
+
+func compactPropValueForContext(k string, val jsonv.Value, depth int) jsonv.Value {
+	if s, ok := val.(string); ok {
+		if (k == "url" || k == "src") && strings.HasPrefix(s, "data:") && len(s) > 120 {
+			return "[data-uri omitted]"
+		}
+		if k == "geometry" && len(s) > 240 {
+			return truncateUTF8(s, 240)
+		}
+		if len(s) > 600 {
+			return truncateUTF8(s, 600)
+		}
+		return s
 	}
-	return resolved, strings.TrimRight(sb.String(), "\n"), rawJSON, snapImg, true
+	return compactNodeForContext(val, depth)
 }
 
 func compactNodeForContext(v jsonv.Value, depth int) jsonv.Value {
 	switch x := v.(type) {
 	case *jsonv.Object:
+		if depth > maxContextNodeDepth+2 {
+			return Object("_omitted", true)
+		}
 		out := jsonv.NewObject()
+		keptKeys := 0
+		omittedKeys := 0
 		x.Each(func(k string, val jsonv.Value) {
 			if k == "children" {
 				arr := jsonv.Arr(val)
@@ -686,24 +806,21 @@ func compactNodeForContext(v jsonv.Value, depth int) jsonv.Value {
 				out.Set(k, kids)
 				return
 			}
-			if s, ok := val.(string); ok {
-				if (k == "url" || k == "src") && strings.HasPrefix(s, "data:") && len(s) > 120 {
-					out.Set(k, "[data-uri omitted]")
-					return
-				}
-				if k == "geometry" && len(s) > 240 {
-					out.Set(k, truncateUTF8(s, 240))
-					return
-				}
-				if len(s) > 600 {
-					out.Set(k, truncateUTF8(s, 600))
-					return
-				}
+			if depth > 0 && keptKeys >= maxContextObjectKeys {
+				omittedKeys++
+				return
 			}
-			out.Set(k, compactNodeForContext(val, depth+1))
+			keptKeys++
+			out.Set(k, compactPropValueForContext(k, val, depth+1))
 		})
+		if omittedKeys > 0 {
+			out.Set("_omittedKeys", jsonv.Int(int64(omittedKeys)))
+		}
 		return out
 	case *jsonv.Array:
+		if depth > maxContextNodeDepth+2 {
+			return Object("_omittedItems", jsonv.Int(int64(len(x.Items))))
+		}
 		out := jsonv.NewArray()
 		limit := min(len(x.Items), maxContextNodeChildren)
 		for i := 0; i < limit; i++ {
@@ -716,6 +833,130 @@ func compactNodeForContext(v jsonv.Value, depth int) jsonv.Value {
 	default:
 		return jsonv.Clone(v)
 	}
+}
+
+// marshalBoundedNodeJSON serializes compact into valid JSON of at most budget bytes, progressively pruning
+// children, inherited metadata, and non-essential properties (marking "_truncated": true) rather than slicing raw JSON.
+// Returns "" when budget < 32 or even a minimal valid JSON summary cannot fit.
+func marshalBoundedNodeJSON(compact *jsonv.Object, budget int) string {
+	if compact == nil || budget < 32 {
+		return ""
+	}
+	tryMarshal := func(obj *jsonv.Object) (string, bool) {
+		s := string(jsonv.Marshal(obj))
+		return s, len(s) <= budget
+	}
+	if s, ok := tryMarshal(compact); ok {
+		return s
+	}
+
+	cur := jsonv.Obj(jsonv.Clone(compact))
+	if cur == nil {
+		return ""
+	}
+	cur.Set("_truncated", true)
+
+	// Stage 1: Progressively prune children (collapse grandchildren first, then trim tail, then replace with count).
+	if kids := jsonv.Arr(jsonv.Get(cur, "children")); kids != nil {
+		baseOmitted := int64(0)
+		realKids := kids.Items
+		if n := len(realKids); n > 0 {
+			if om, ok := jsonv.F64(jsonv.Get(realKids[n-1], "_omittedChildren")); ok {
+				baseOmitted = int64(om)
+				realKids = realKids[:n-1]
+			}
+		}
+		totalKids := int64(len(realKids)) + baseOmitted
+
+		collapsed := false
+		for _, ch := range realKids {
+			if chObj := jsonv.Obj(ch); chObj != nil {
+				if gc := jsonv.Arr(jsonv.Get(chObj, "children")); gc != nil {
+					chObj.Remove("children")
+					chObj.Set("_childrenCount", jsonv.Int(int64(len(gc.Items))))
+					collapsed = true
+				}
+			}
+		}
+		if collapsed {
+			if s, ok := tryMarshal(cur); ok {
+				return s
+			}
+		}
+		for keep := len(realKids) - 1; keep >= 1; keep-- {
+			trimmed := make([]jsonv.Value, 0, keep+1)
+			trimmed = append(trimmed, realKids[:keep]...)
+			trimmed = append(trimmed, Object("_omittedChildren", jsonv.Int(totalKids-int64(keep))))
+			cur.Set("children", jsonv.NewArray(trimmed...))
+			if s, ok := tryMarshal(cur); ok {
+				return s
+			}
+		}
+		cur.Remove("children")
+		cur.Set("_childrenCount", jsonv.Int(totalKids))
+		if s, ok := tryMarshal(cur); ok {
+			return s
+		}
+	}
+
+	// Stage 2: Drop heavy component metadata if present.
+	for _, heavyKey := range []string{"descendants", "_inherited"} {
+		if cur.Has(heavyKey) {
+			cur.Remove(heavyKey)
+			if s, ok := tryMarshal(cur); ok {
+				return s
+			}
+		}
+	}
+
+	// Stage 3: Drop non-essential properties (largest serialized values first).
+	essential := map[string]bool{
+		"id": true, "type": true, "name": true,
+		"x": true, "y": true, "width": true, "height": true,
+		"ref": true, "_truncated": true,
+	}
+	type propCost struct {
+		key  string
+		size int
+	}
+	var extras []propCost
+	cur.Each(func(k string, v jsonv.Value) {
+		if !essential[k] {
+			extras = append(extras, propCost{key: k, size: len(jsonv.Marshal(v))})
+		}
+	})
+	slices.SortFunc(extras, func(a, b propCost) int {
+		if b.size != a.size {
+			return b.size - a.size
+		}
+		return strings.Compare(a.key, b.key)
+	})
+	for _, ex := range extras {
+		cur.Remove(ex.key)
+		if s, ok := tryMarshal(cur); ok {
+			return s
+		}
+	}
+
+	// Stage 4: Drop remaining fields down to minimal {"id":...,"_truncated":true}.
+	for _, k := range []string{"name", "ref", "x", "y", "width", "height", "type"} {
+		if cur.Has(k) {
+			cur.Remove(k)
+			if s, ok := tryMarshal(cur); ok {
+				return s
+			}
+		}
+	}
+
+	minObj := jsonv.NewObject()
+	if id, ok := jsonv.Str(jsonv.Get(compact, "id")); ok && id != "" {
+		minObj.Set("id", id)
+	}
+	minObj.Set("_truncated", true)
+	if s, ok := tryMarshal(minObj); ok {
+		return s
+	}
+	return ""
 }
 
 func truncateUTF8(s string, maxBytes int) string {

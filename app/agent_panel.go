@@ -64,6 +64,17 @@ type ProviderConfig struct {
 	ContextWindow int      `json:"context_window,omitempty"`
 }
 
+// UnmarshalJSON defaults Vision to true when the "vision" key is omitted, matching core-go's !jsonv.IsFalse behavior.
+func (p *ProviderConfig) UnmarshalJSON(data []byte) error {
+	type alias ProviderConfig
+	aux := alias{Vision: true}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	*p = ProviderConfig(aux)
+	return nil
+}
+
 // ChatSummary represents a saved chat entry returned by "chat_list".
 type ChatSummary struct {
 	ID        string `json:"id"`
@@ -529,6 +540,9 @@ func (a *NalarupaApp) activeProvider() *ProviderConfig {
 }
 
 func (a *NalarupaApp) submitAgentPrompt(prompt string, returnFocusToCanvas bool) bool {
+	if a.attachLoading() {
+		return false
+	}
 	trimmed := strings.TrimSpace(prompt)
 	if trimmed == "" && !a.hasPendingAttachments() {
 		return false
@@ -2729,6 +2743,9 @@ func (a *NalarupaApp) viewAgentComposer(c *ui.Context, dragOver bool) {
 					return false
 				}
 				if k.Key == ui.KeyEnter && (k.Mods&ui.Shift == 0) {
+					if a.attachLoading() {
+						return true
+					}
 					txt := k.Text()
 					if a.submitAgentPrompt(txt, true) {
 						k.SetText("")
@@ -2914,7 +2931,7 @@ func (a *NalarupaApp) viewAgentComposer(c *ui.Context, dragOver bool) {
 					}
 				}
 
-				sendDisabled := strings.TrimSpace(a.AgentUI.Draft) == "" && !a.hasPendingAttachments()
+				sendDisabled := a.attachLoading() || (strings.TrimSpace(a.AgentUI.Draft) == "" && !a.hasPendingAttachments())
 				sendBtn := AccentIconBtn(c, "agent-send", "send", "Send", 26, sendDisabled)
 				if sendBtn.Clicked() && !sendDisabled {
 					a.submitAgentPrompt(a.AgentUI.Draft, true)

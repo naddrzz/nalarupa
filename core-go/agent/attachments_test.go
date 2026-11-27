@@ -5,10 +5,13 @@ import (
 	"encoding/base64"
 	"image"
 	"image/color"
+	"image/gif"
+	"image/jpeg"
 	"image/png"
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/naddrzz/nalarupa/core-go/engine"
@@ -320,6 +323,8 @@ func TestClaudeCodeMultimodalStreamJSONAndPlainText(t *testing.T) {
 
 func TestQueuedAttachmentsCoalesceAndStopDiscards(t *testing.T) {
 	gate := make(chan struct{})
+	releaseGate := sync.OnceFunc(func() { close(gate) })
+	defer releaseGate()
 	api, url := newFakeAPI(t, func(n int, w http.ResponseWriter, r *http.Request) string {
 		if n == 0 {
 			<-gate
@@ -359,7 +364,7 @@ func TestQueuedAttachmentsCoalesceAndStopDiscards(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	close(gate)
+	releaseGate()
 	waitIdle(t, e)
 
 	reqs := api.requests()
@@ -726,5 +731,287 @@ func TestVisionFalseProviderHygieneAnthropicAndOpenAI(t *testing.T) {
 				}
 			})
 		})
+	}
+}
+
+func TestSendWithAttachmentsDeepCopiesViewportAndEmitsDequeuedOnEmptyQueuedDiscard(t *testing.T) {
+	gate := make(chan struct{})
+	releaseGate := sync.OnceFunc(func() { close(gate) })
+	defer releaseGate()
+	api, url := newFakeAPI(t, func(n int, w http.ResponseWriter, r *http.Request) string {
+		if n == 0 {
+			<-gate
+			return textReply("Turn 1 done.", "end_turn")
+		}
+		return textReply("Turn 2 done.", "end_turn")
+	})
+	e := apiEngine(t, url)
+
+	// 1. Start turn 1, queue a viewport context, then mutate caller's viewport array before turn 2 runs.
+	if err := Send(e, "First turn", 1, "split", 1, "layout"); err != nil {
+		t.Fatal(err)
+	}
+	api.wait(t)
+
+	vp := [4]float64{10, 20, 400, 300}
+	if err := SendWithAttachments(e, "Inspect pinned viewport", []engine.CanvasContextRef{{
+		Kind:     "viewport",
+		Viewport: &vp,
+	}}, nil, 1, "split", 1, "layout"); err != nil {
+		t.Fatal(err)
+	}
+	// Mutate caller's array after queuing!
+	vp[0], vp[1], vp[2], vp[3] = 9999, 8888, 777, 666
+	releaseGate()
+	waitIdle(t, e)
+
+	reqs := api.requests()
+	if len(reqs) != 2 {
+		t.Fatalf("expected 2 requests, got %d", len(reqs))
+	}
+	msgs := jsonv.Items(jsonv.Get(reqs[1].body, "messages"))
+	txt := jsonv.StrOr(jsonv.Get(jsonv.Items(jsonv.Get(msgs[len(msgs)-1], "content"))[0], "text"))
+	if !strings.Contains(txt, "(x 10, y 20, 400×300)") || strings.Contains(txt, "9999") {
+		t.Fatalf("expected deep-copied original viewport bounds (10,20,400x300), got: %s", txt)
+	}
+
+	// 2. Empty queued turn whose only pinned node was deleted before dequeue must emit "dequeued" and not call model.
+	gate2 := make(chan struct{})
+	releaseGate2 := sync.OnceFunc(func() { close(gate2) })
+	defer releaseGate2()
+	api2, url2 := newFakeAPI(t, func(n int, w http.ResponseWriter, r *http.Request) string {
+		if n == 0 {
+			<-gate2
+			return textReply("Active turn done.", "end_turn")
+		}
+		return textReply("Should not run.", "end_turn")
+	})
+	e2 := apiEngine(t, url2)
+	if err := Send(e2, "Turn A", 1, "split", 1, "layout"); err != nil {
+		t.Fatal(err)
+	}
+	api2.wait(t)
+	if err := SendWithAttachments(e2, "", []engine.CanvasContextRef{{Kind: "node", ID: "deleted_queued_node"}}, nil, 1, "split", 1, "layout"); err != nil {
+		t.Fatal(err)
+	}
+	releaseGate2()
+	waitIdle(t, e2)
+
+	if len(api2.requests()) != 1 {
+		t.Fatalf("expected deleted-only queued turn to abort without second API call, got %d requests", len(api2.requests()))
+	}
+	evs := agentEvents(e2)
+	if lastOf(evs, "dequeued") == nil {
+		t.Fatalf("expected dequeued event when empty deleted-only queued turn is discarded; events=%s", jsonv.Marshal(jsonv.NewArray(evs...)))
+	}
+}
+
+func TestContextCompactionRewritesVisualSnapshotLinesAndAdjustsPromptLen(t *testing.T) {
+	img := strings.Repeat("A", 1200)
+	u1Prompt := "Fix Hero\n\n[Attached canvas context]\n### Node `n1` \"Hero\"\n- Visual snapshot: attached as image #1 (320x180 PNG)\n[/Attached canvas context]"
+	u1 := engine.Object(
+		"role", "user",
+		"content", jsonv.NewArray(
+			engine.Object("type", "text", "text", u1Prompt+editorStateNote+"old state"),
+			engine.Object("type", "image", "source", engine.Object("type", "base64", "media_type", "image/png", "data", img)),
+			engine.Object("type", "image", "source", engine.Object("type", "base64", "media_type", "image/png", "data", img)),
+		),
+		"__prompt_len", jsonv.Int(int64(len(u1Prompt))),
+	)
+	a1 := engine.Object("role", "assistant", "content", jsonv.NewArray(
+		engine.Object("type", "text", "text", "Updated."),
+	))
+	u2Prompt := "Now tweak footer"
+	u2 := engine.Object(
+		"role", "user",
+		"content", jsonv.NewArray(
+			engine.Object("type", "text", "text", u2Prompt+editorStateNote+"fresh state"),
+			engine.Object("type", "image", "source", engine.Object("type", "base64", "media_type", "image/png", "data", img)),
+		),
+		"__prompt_len", jsonv.Int(int64(len(u2Prompt))),
+	)
+
+	// Pass 1 strips u1's older images and rewrites u1's visual snapshot reference line
+	trimmed, compacted, dropped := EnforceContextWindow([]jsonv.Value{u1, a1, u2}, 2000, 6000)
+	if !compacted || dropped != 0 {
+		t.Fatalf("expected Pass 1 compaction, got compacted=%v dropped=%d", compacted, dropped)
+	}
+	u1Txt := jsonv.StrOr(jsonv.Get(jsonv.Items(jsonv.Get(trimmed[0], "content"))[0], "text"))
+	if strings.Contains(u1Txt, "attached as image #1") || !strings.Contains(u1Txt, "- Visual snapshot: [omitted to fit context window]") {
+		t.Fatalf("Pass 1 did not rewrite stale Visual snapshot line: %s", u1Txt)
+	}
+	if pLen, ok := jsonv.F64(jsonv.Get(trimmed[0], "__prompt_len")); !ok || !strings.HasPrefix(u1Txt[int(pLen):], "\n\n[Earlier editor_state") {
+		t.Fatalf("Pass 1 __prompt_len=%v no longer aligns with trimmed prompt boundary: %q", pLen, u1Txt)
+	}
+
+	// Pass 4a2 strips single-turn user images, rewrites Visual snapshot line, and preserves exact editorStateNoteIndex!
+	sPrompt := "Inspect card\n\n[Attached canvas context]\n### Node `n2` \"Card\"\n- Visual snapshot: attached as image #1 (640x480 PNG)\n[/Attached canvas context]"
+	blocks := []jsonv.Value{engine.Object("type", "text", "text", sPrompt+editorStateNote+"live editor state")}
+	for range 4 {
+		blocks = append(blocks, engine.Object("type", "image", "source", engine.Object("type", "base64", "media_type", "image/png", "data", img)))
+	}
+	single := []jsonv.Value{engine.Object("role", "user", "content", jsonv.NewArray(blocks...), "__prompt_len", jsonv.Int(int64(len(sPrompt))))}
+	trimmed4, compacted4, _ := EnforceContextWindow(single, 1000, 4096)
+	if !compacted4 {
+		t.Fatal("expected Pass 4a2 compaction")
+	}
+	sTxt := jsonv.StrOr(jsonv.Get(jsonv.Items(jsonv.Get(trimmed4[0], "content"))[0], "text"))
+	if strings.Contains(sTxt, "attached as image #1") || !strings.Contains(sTxt, "- Visual snapshot: [omitted to fit context window]") {
+		t.Fatalf("Pass 4a2 did not rewrite Visual snapshot line: %s", sTxt)
+	}
+	idx := editorStateNoteIndex(trimmed4[0], sTxt)
+	if idx < 0 || !strings.HasPrefix(sTxt[idx:], editorStateNote) {
+		t.Fatalf("Pass 4a2 broke editorStateNoteIndex (got %d, __prompt_len=%v) for text=%q", idx, jsonv.Get(trimmed4[0], "__prompt_len"), sTxt)
+	}
+}
+
+func TestParseAttachmentsValidatesArrayShapeAndImageMagicBytes(t *testing.T) {
+	// Non-array values must error; nil and empty array succeed.
+	if _, err := parseCanvasContexts(nil); err != nil {
+		t.Fatalf("nil contexts should succeed: %v", err)
+	}
+	if _, err := parseCanvasContexts(jsonv.NewArray()); err != nil {
+		t.Fatalf("empty contexts array should succeed: %v", err)
+	}
+	if _, err := parseCanvasContexts(engine.Object("kind", "node", "id", "n1")); err == nil {
+		t.Fatal("expected error for object contexts")
+	}
+	if _, err := parseCanvasContexts("n1"); err == nil {
+		t.Fatal("expected error for string contexts")
+	}
+	if _, err := parseAttachmentImages(nil); err != nil {
+		t.Fatalf("nil images should succeed: %v", err)
+	}
+	if _, err := parseAttachmentImages(jsonv.NewArray()); err != nil {
+		t.Fatalf("empty images array should succeed: %v", err)
+	}
+	if _, err := parseAttachmentImages(engine.Object("data", "abc")); err == nil {
+		t.Fatal("expected error for object images")
+	}
+	if _, err := parseAttachmentImages("abc"); err == nil {
+		t.Fatal("expected error for string images")
+	}
+
+	pngB64 := tinyPNGBase64(t, 10, 20, 30)
+	var jpgBuf bytes.Buffer
+	if err := jpeg.Encode(&jpgBuf, image.NewRGBA(image.Rect(0, 0, 4, 4)), nil); err != nil {
+		t.Fatal(err)
+	}
+	jpgB64 := base64.StdEncoding.EncodeToString(jpgBuf.Bytes())
+	var gifBuf bytes.Buffer
+	if err := gif.Encode(&gifBuf, image.NewRGBA(image.Rect(0, 0, 4, 4)), nil); err != nil {
+		t.Fatal(err)
+	}
+	gifB64 := base64.StdEncoding.EncodeToString(gifBuf.Bytes())
+
+	// Valid PNG, JPEG (including image/jpg alias), GIF, and omitted mediaType
+	imgs, err := parseAttachmentImages(jsonv.NewArray(
+		engine.Object("data", pngB64),
+		engine.Object("mediaType", "image/jpg", "data", jpgB64),
+		engine.Object("data", "data:image/gif;base64,"+gifB64),
+	))
+	if err != nil || len(imgs) != 3 || imgs[0].MediaType != "image/png" || imgs[1].MediaType != "image/jpeg" || imgs[2].MediaType != "image/gif" {
+		t.Fatalf("expected 3 valid sniffed images, got err=%v imgs=%+v", err, imgs)
+	}
+
+	// Reject unknown binary formats: BMP, plain text, and RIFF/WAVE (not WEBP!)
+	bmpB64 := base64.StdEncoding.EncodeToString([]byte("BM\x00\x00\x00\x00\x00\x00\x00\x00\x36\x00\x00\x00"))
+	wavB64 := base64.StdEncoding.EncodeToString([]byte("RIFF\x24\x00\x00\x00WAVEfmt "))
+	txtB64 := base64.StdEncoding.EncodeToString([]byte("not an image at all"))
+	for _, bad := range []struct {
+		label string
+		val   jsonv.Value
+	}{
+		{"bmp", engine.Object("mediaType", "image/png", "data", bmpB64)},
+		{"wav-riff", engine.Object("data", wavB64)},
+		{"plain-bytes", engine.Object("data", txtB64)},
+		{"explicit-mismatch", engine.Object("mediaType", "image/jpeg", "data", pngB64)},
+		{"data-url-mismatch", engine.Object("data", "data:image/jpeg;base64,"+pngB64)},
+	} {
+		if _, err := parseAttachmentImages(jsonv.NewArray(bad.val)); err == nil {
+			t.Fatalf("expected parseAttachmentImages to reject %s", bad.label)
+		}
+	}
+}
+
+func TestCaptureViewportBoundsNoLeakAndValidBoundedNodeJSON(t *testing.T) {
+	e := newEngine(t)
+	// Place a bright red frame strictly outside vp=[0,0,100.8,1600] starting at x=101.
+	// Math.Round(100.8*0.8)=81; without exact zoom adjustment, 81/0.8=101.25 would leak red pixels!
+	out := e.CallTool("execute", engine.Object("input", `
+		Insert(document, {type:"frame", name:"Inside", x:0, y:0, width:100, height:1600, fill:"#00FF00"});
+		Insert(document, {type:"frame", name:"OutsideRed", x:101, y:0, width:200, height:1600, fill:"#FF0000"});
+	`)).Finish(e)
+	if out.Error {
+		t.Fatalf("execute: %s", out.Text)
+	}
+	vp := [4]float64{0, 0, 100.8, 1600}
+	capVP := e.CaptureCanvasContexts([]engine.CanvasContextRef{{Kind: "viewport", Viewport: &vp}}, true)
+	if len(capVP.Snapshots) != 1 {
+		t.Fatalf("expected 1 viewport snapshot, got %d", len(capVP.Snapshots))
+	}
+	pngBytes, err := base64.StdEncoding.DecodeString(capVP.Snapshots[0].Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := png.Decode(bytes.NewReader(pngBytes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := img.Bounds()
+	for y := b.Min.Y; y < b.Max.Y; y += 16 {
+		r, g, _, _ := img.At(b.Max.X-1, y).RGBA()
+		if r > 0x8000 && g < 0x4000 {
+			t.Fatalf("red outside-viewport frame leaked onto right edge pixel (%d,%d): r=%x g=%x", b.Max.X-1, y, r, g)
+		}
+	}
+
+	// ValidateCanvasContexts checks existence/metadata cleanly without cloning subtrees.
+	insideID := nodeID(e, "Inside")
+	resolved, missing := e.ValidateCanvasContexts([]engine.CanvasContextRef{
+		{Kind: "node", ID: insideID},
+		{Kind: "node", ID: insideID}, // duplicate
+		{Kind: "node", ID: "missing_xyz"},
+		{Kind: "viewport", Viewport: &vp},
+	})
+	if len(resolved) != 2 || len(missing) != 1 || missing[0] != "missing_xyz" {
+		t.Fatalf("unexpected ValidateCanvasContexts result: resolved=%+v missing=%+v", resolved, missing)
+	}
+
+	// Every ```json fence across 6 oversized chunky nodes must parse as 100% valid JSON!
+	var refs []engine.CanvasContextRef
+	for i := 1; i <= 6; i++ {
+		name := "HugeNode" + string(rune('0'+i))
+		js := `f = Insert(document, {type:"frame", name:"` + name + `", x:` + string(rune('0'+i)) + `00, y:2000, width:240, height:120, fill:"#222222"});`
+		for range 12 {
+			js += `Insert(f, {type:"text", name:"Item", content:"` + strings.Repeat("json-budget ", 45) + `", fontSize:12, fill:"#ffffff"});`
+		}
+		if res := e.CallTool("execute", engine.Object("input", js)).Finish(e); res.Error {
+			t.Fatal(res.Text)
+		}
+		refs = append(refs, engine.CanvasContextRef{Kind: "node", ID: nodeID(e, name)})
+	}
+	capHuge := e.CaptureCanvasContexts(refs, false)
+	rest := capHuge.Text
+	fenceCount := 0
+	for {
+		start := strings.Index(rest, "```json\n")
+		if start < 0 {
+			break
+		}
+		rest = rest[start+len("```json\n"):]
+		end := strings.Index(rest, "\n```")
+		if end < 0 {
+			t.Fatalf("unterminated ```json fence in captured context text")
+		}
+		rawBlock := rest[:end]
+		rest = rest[end+len("\n```"):]
+		fenceCount++
+		if _, err := jsonv.Parse([]byte(rawBlock)); err != nil {
+			t.Fatalf("invalid JSON in fence #%d: %v\nblock=%s", fenceCount, err, rawBlock)
+		}
+	}
+	if fenceCount == 0 {
+		t.Fatalf("expected at least one valid JSON fence in captured output: %s", capHuge.Text)
 	}
 }

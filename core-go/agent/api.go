@@ -44,9 +44,9 @@ const editorStateNote = "\n\nThe result of `get_editor_state` (fresh; call it ag
 
 // runAPI runs p's turn over a model API: the streamed reply, its tool calls and their results, until the model
 // ends its turn.
-func runAPI(e *engine.Engine, p engine.Profile, prompt string, images []engine.AttachmentImage, child bool, name string, client model.Provider, contextLimit int) (*jsonv.Object, error) {
+func runAPI(e *engine.Engine, p engine.Profile, prompt string, images []engine.AttachmentImage, supportsVision, child bool, name string, client model.Provider, contextLimit int) (*jsonv.Object, error) {
 	var effort, state string
-	var fast, supportsVision bool
+	var fast bool
 	var cancel *engine.Flag
 	var messages []jsonv.Value
 	if name == "" {
@@ -61,7 +61,6 @@ func runAPI(e *engine.Engine, p engine.Profile, prompt string, images []engine.A
 			contextLimit = e.ContextWindowLimit(e.Backend(), name)
 		}
 		fast = fastFor(name, jsonv.IsTrue(jsonv.Get(e.Settings, "agent_fast")))
-		supportsVision = e.SupportsVision()
 		cancel, state = e.Agent.Cancel, e.EditorState()
 		if !child {
 			messages = append(messages, e.Agent.Messages...)
