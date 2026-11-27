@@ -11,6 +11,7 @@ import (
 
 	"github.com/naddrzz/nalarupa/core-go/doc"
 	"github.com/naddrzz/nalarupa/core-go/jsonv"
+	"github.com/naddrzz/nalarupa/core-go/typesafe"
 )
 
 // Mask stands for a stored API key wherever the UI reads settings back.
@@ -74,6 +75,72 @@ func (e *Engine) APIKey() (string, bool) {
 	return nonblank(os.LookupEnv("ANTHROPIC_API_KEY"))
 }
 
+// TypeSafeAPIKey is the BYOK TypeSafe AI API key: the `typesafe_api_key` setting, else TYPESAFE_API_KEY.
+func (e *Engine) TypeSafeAPIKey() (string, bool) {
+	if k, ok := nonblank(e.Setting("typesafe_api_key")); ok {
+		return k, true
+	}
+	return nonblank(os.LookupEnv("TYPESAFE_API_KEY"))
+}
+
+// TypeSafeEnabled reports whether optional TypeSafe AI per-screen visual evaluation is enabled and has an API key.
+func (e *Engine) TypeSafeEnabled() bool {
+	if !jsonv.IsTrue(jsonv.Get(e.Settings, "typesafe_enabled")) {
+		return false
+	}
+	_, hasKey := e.TypeSafeAPIKey()
+	return hasKey
+}
+
+// TypeSafeModel returns the configured TypeSafe System One model ID/alias, defaulting to `jev-latest`.
+func (e *Engine) TypeSafeModel() string {
+	if m, ok := nonblank(e.Setting("typesafe_model")); ok {
+		return m
+	}
+	return typesafe.DefaultModel
+}
+
+// TypeSafeBaseURL returns the configured TypeSafe API base URL, defaulting to `https://api.typesafe.ai`.
+func (e *Engine) TypeSafeBaseURL() string {
+	if u, ok := nonblank(e.Setting("typesafe_base_url")); ok {
+		return u
+	}
+	return typesafe.DefaultBaseURL
+}
+
+// TypeSafeMinScore returns the configured 1–100 revision score threshold, defaulting to 75.
+func (e *Engine) TypeSafeMinScore() int {
+	if f, ok := jsonv.F64(jsonv.Get(e.Settings, "typesafe_min_score")); ok && !math.IsNaN(f) && !math.IsInf(f, 0) {
+		return typesafe.ClampPassScore(int(math.Round(f)))
+	}
+	return typesafe.DefaultPassScore
+}
+
+// TypeSafeAutoRevise reports whether screens scoring below TypeSafeMinScore should be automatically revised by the agent.
+// Defaults to true when unset so TypeSafe acts as an active quality gate out of the box.
+func (e *Engine) TypeSafeAutoRevise() bool {
+	if e.Settings != nil && e.Settings.Has("typesafe_auto_revise") {
+		return !jsonv.IsFalse(jsonv.Get(e.Settings, "typesafe_auto_revise"))
+	}
+	return true
+}
+
+// TypeSafeMaxRevisions returns the configured maximum auto-revision rounds per screen (1..5, default 2).
+func (e *Engine) TypeSafeMaxRevisions() int {
+	if f, ok := jsonv.F64(jsonv.Get(e.Settings, "typesafe_max_revisions")); ok && !math.IsNaN(f) && !math.IsInf(f, 0) {
+		return typesafe.ClampMaxRevisions(int(math.Round(f)))
+	}
+	return typesafe.DefaultMaxRevisions
+}
+
+// TypeSafeEffectiveMaxRevisions returns 0 when auto-revision is disabled, else TypeSafeMaxRevisions().
+func (e *Engine) TypeSafeEffectiveMaxRevisions() int {
+	if !e.TypeSafeAutoRevise() {
+		return 0
+	}
+	return e.TypeSafeMaxRevisions()
+}
+
 // Backend is the agent backend: the setting, else the API when a key is available, else the Claude Code CLI.
 func (e *Engine) Backend() string {
 	if b, ok := e.Setting("agent_backend"); ok {
@@ -102,6 +169,12 @@ func (e *Engine) SettingsView() *jsonv.Object {
 	s := jsonv.Clone(e.Settings).(*jsonv.Object)
 	if s.Has("anthropic_api_key") {
 		s.Set("anthropic_api_key", Mask)
+	}
+	if s.Has("typesafe_api_key") {
+		s.Set("typesafe_api_key", Mask)
+	}
+	if _, hasTS := e.TypeSafeAPIKey(); hasTS {
+		s.Set("has_typesafe_key", true)
 	}
 	if list, ok := s.Get("providers"); ok {
 		s.Set("providers", MaskedProviders(list))

@@ -143,6 +143,18 @@ type AgentPanelState struct {
 	GlobalContextDraft   string
 	ResolvedContextLimit int
 
+	TypeSafeEnabled        bool
+	TypeSafeAutoRevise     bool
+	TypeSafeMaxRevisions   int
+	HasTypeSafeKey         bool
+	HasSavedTypeSafeKey    bool
+	TypeSafeModel          string
+	TypeSafeBaseURL        string
+	TypeSafeMinScore       int
+	TypeSafeModels         []string
+	TypeSafeCustomModDraft string
+	TypeSafeFetchingModels bool
+
 	ExpandedCards      map[int]bool
 	FullOutputCards    map[int]bool
 	RevealedItems      map[int]bool
@@ -172,8 +184,12 @@ func (a *NalarupaApp) initAgentPanelState() {
 		AgentModel:      "",
 		CookDesigns:     1,
 		CookIterate:     "layout",
-		Effort:          "high",
-		PlanOpen:        true,
+		Effort:               "high",
+		TypeSafeAutoRevise:   true,
+		TypeSafeMaxRevisions: 2,
+		TypeSafeModel:        "jev-latest",
+		TypeSafeMinScore:     75,
+		PlanOpen:             true,
 		ExpandedCards:   map[int]bool{},
 		FullOutputCards: map[int]bool{},
 		RevealedItems:   map[int]bool{},
@@ -271,6 +287,41 @@ func (a *NalarupaApp) reloadAgentSettings() {
 	} else {
 		a.AgentUI.ResolvedContextLimit = defaultUIContextWindow(a.AgentUI.Backend, a.effectiveModelID())
 	}
+
+	a.AgentUI.TypeSafeEnabled, _ = s["typesafe_enabled"].(bool)
+	if ar, hasAR := s["typesafe_auto_revise"].(bool); hasAR {
+		a.AgentUI.TypeSafeAutoRevise = ar
+	} else {
+		a.AgentUI.TypeSafeAutoRevise = true
+	}
+	if mr := int(asFloat(s["typesafe_max_revisions"])); mr >= 1 && mr <= 5 {
+		a.AgentUI.TypeSafeMaxRevisions = mr
+	} else {
+		a.AgentUI.TypeSafeMaxRevisions = 2
+	}
+	a.AgentUI.HasTypeSafeKey, _ = s["has_typesafe_key"].(bool)
+	if tsk, ok := s["typesafe_api_key"].(string); ok && tsk != "" {
+		a.AgentUI.HasSavedTypeSafeKey = true
+		a.AgentUI.HasTypeSafeKey = true
+	} else {
+		a.AgentUI.HasSavedTypeSafeKey = false
+	}
+	if tsm, ok := s["typesafe_model"].(string); ok && strings.TrimSpace(tsm) != "" {
+		a.AgentUI.TypeSafeModel = strings.TrimSpace(tsm)
+	} else {
+		a.AgentUI.TypeSafeModel = "jev-latest"
+	}
+	a.AgentUI.TypeSafeBaseURL, _ = s["typesafe_base_url"].(string)
+	if ms := int(asFloat(s["typesafe_min_score"])); ms >= 1 && ms <= 100 {
+		a.AgentUI.TypeSafeMinScore = ms
+	} else {
+		a.AgentUI.TypeSafeMinScore = 75
+	}
+	var tsMods []string
+	if rawTSM, ok := s["typesafe_models_list"]; ok && rawTSM != nil {
+		redecode(rawTSM, &tsMods)
+	}
+	a.AgentUI.TypeSafeModels = tsMods
 }
 
 func formatTokenCount(n int) string {
@@ -1051,6 +1102,9 @@ func (a *NalarupaApp) viewAgentSettingsPanel(c *ui.Context) {
 				})
 			})
 
+			// Optional TypeSafe AI per-screen visual decision gate (BYOK)
+			a.viewTypeSafeSettingsSection(c)
+
 			// Connect External Agents (MCP)
 			ui.Column(c.Key("mcp-connect-sec")).
 				FillWidth().
@@ -1354,6 +1408,238 @@ func (a *NalarupaApp) viewBYOKProviderSettings(c *ui.Context) {
 	}
 }
 
+func (a *NalarupaApp) viewTypeSafeSettingsSection(c *ui.Context) {
+	ui.Column(c.Key("typesafe-settings-sec")).
+		FillWidth().
+		Padding(8, 0, 0, 0).
+		Gap(6).
+		BorderWidth(1, 0, 0, 0).
+		BorderColor(C.Border).
+		Children(func() {
+			ui.Text(c, "TypeSafe AI visual gate (optional)").FontSize(11).FontWeight(600).TextColor(C.Muted)
+			if _, clicked := ToggleChip(c, "typesafe-enabled", "Score each finished screen image (0–100)", a.AgentUI.TypeSafeEnabled); clicked {
+				next := !a.AgentUI.TypeSafeEnabled
+				a.setSetting("typesafe_enabled", next)
+			}
+			ui.Text(c, "Evaluates only the rendered image of each completed full screen at the end of a turn (skips individual component/section steps, code, and untouched screens).").
+				FontSize(10).TextColor(C.Ghost).Wrap()
+
+			tsPlaceholder := "TypeSafe API key (BYOK)…"
+			if a.AgentUI.HasSavedTypeSafeKey {
+				tsPlaceholder = "•••••••• (saved)"
+			} else if a.AgentUI.HasTypeSafeKey {
+				tsPlaceholder = "Using TYPESAFE_API_KEY from environment"
+			}
+			ui.Row(c.Key("typesafe-key-row")).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+				CommittedField(c, FieldOpts{
+					Key:         "typesafe-api-key",
+					AriaLabel:   "TypeSafe AI API key",
+					Value:       "",
+					Placeholder: tsPlaceholder,
+					Password:    true,
+					Mono:        true,
+					Grow:        true,
+					OnCommit: func(val string) bool {
+						trimmed := strings.TrimSpace(val)
+						if trimmed == "" {
+							return false
+						}
+						a.setSetting("typesafe_api_key", trimmed)
+						if !a.AgentUI.TypeSafeEnabled {
+							a.setSetting("typesafe_enabled", true)
+						}
+						return true
+					},
+				})
+				if a.AgentUI.HasTypeSafeKey {
+					if ActionBtn(c, "typesafe-test-btn", "Test TypeSafe key", "", "").Clicked() {
+						if err := a.Bridge.Call("typesafe_test", nil, nil); err != nil {
+							a.ShowToast(err.Error(), true)
+						}
+					}
+				}
+				if a.AgentUI.HasSavedTypeSafeKey {
+					if ActionBtn(c, "typesafe-key-remove", "Remove TypeSafe key", "", "danger").Clicked() {
+						a.setSetting("typesafe_api_key", nil)
+					}
+				}
+			})
+
+			if tst := a.Store.TypeSafeTest; tst != nil {
+				col := C.OK
+				msg := fmt.Sprintf("✓ TypeSafe ready (%s)", tst.Model)
+				if !tst.OK {
+					col = C.Danger
+					msg = "✕ " + tst.Error
+				}
+				ui.Text(c, msg).FontSize(11).TextColor(col).Wrap()
+			}
+
+			// Model selection (defaults to jev-latest -> newest Jev release)
+			ui.Row(c.Key("typesafe-model-row")).FillWidth().Wrap().Gap(4).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "Model:").FontSize(10).FontWeight(600).TextColor(C.Muted)
+				modelChoices := []string{"jev-latest", "jev-1.14.0"}
+				for _, extra := range a.AgentUI.TypeSafeModels {
+					if extra != "" && !slices.Contains(modelChoices, extra) {
+						modelChoices = append(modelChoices, extra)
+					}
+				}
+				if a.AgentUI.TypeSafeModel != "" && !slices.Contains(modelChoices, a.AgentUI.TypeSafeModel) {
+					modelChoices = append(modelChoices, a.AgentUI.TypeSafeModel)
+				}
+				for _, m := range modelChoices {
+					modID := m
+					sel := a.AgentUI.TypeSafeModel == modID
+					chip := ui.ButtonBase(c.Key("ts-mod-" + modID)).
+						Height(22).Padding(0, 7).Radius(5).Center().
+						Selected(sel).
+						Label("TypeSafe model: " + modID).
+						Cursor(ui.CursorPointer)
+					if sel {
+						chip.Background(C.AccentSoft).Border(1, C.Accent)
+					} else if chip.Hovered() {
+						chip.Background(C.Raised).Border(1, C.Border)
+					} else {
+						chip.Background(C.Panel).Border(1, C.Border)
+					}
+					chip.Children(func() {
+						col := C.Muted
+						if sel {
+							col = C.Accent
+						}
+						ui.Text(c, modID).FontSize(10).Font(MonoFont()).TextColor(col)
+					})
+					if chip.Clicked() {
+						a.setSetting("typesafe_model", modID)
+					}
+				}
+				if a.AgentUI.HasTypeSafeKey {
+					refLbl := "Refresh"
+					if a.AgentUI.TypeSafeFetchingModels {
+						refLbl = "Refreshing…"
+					}
+					refBtn := ui.ButtonBase(c.Key("ts-mod-refresh")).
+						Height(22).Padding(0, 7).Radius(5).Center().
+						Label("Refresh TypeSafe models").
+						Cursor(ui.CursorPointer)
+					if refBtn.Hovered() {
+						refBtn.Background(C.Raised).Border(1, C.Border)
+					} else {
+						refBtn.Background(C.Panel).Border(1, C.Border)
+					}
+					refBtn.Children(func() {
+						ui.Text(c, refLbl).FontSize(10).TextColor(C.Accent)
+					})
+					if refBtn.Clicked() && !a.AgentUI.TypeSafeFetchingModels {
+						a.AgentUI.TypeSafeFetchingModels = true
+						if err := a.Bridge.Call("typesafe_models", nil, nil); err != nil {
+							a.AgentUI.TypeSafeFetchingModels = false
+							a.ShowToast(err.Error(), true)
+						}
+					}
+				}
+			})
+
+			// Auto-revision toggle & configurable revision score threshold (1–100)
+			ui.Column(c.Key("typesafe-autorevise-sec")).FillWidth().Gap(5).Children(func() {
+				if _, clicked := ToggleChip(c, "typesafe-auto-revise", "Auto-revise screens below score threshold", a.AgentUI.TypeSafeAutoRevise); clicked {
+					a.setSetting("typesafe_auto_revise", !a.AgentUI.TypeSafeAutoRevise)
+				}
+
+				ui.Row(c.Key("typesafe-score-input-row")).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, "Revision score threshold (1–100):").
+						FontSize(10).FontWeight(600).TextColor(C.Muted).Grow(1)
+					ScrubNumField(c, NumFieldOpts{
+						Key:       "typesafe-min-score-field",
+						AriaLabel: "TypeSafe revision score threshold",
+						Prefix:    "≥",
+						Value:     float64(a.AgentUI.TypeSafeMinScore),
+						Step:      1,
+						HasMin:    true,
+						Min:       1,
+						HasMax:    true,
+						Max:       100,
+						Width:     68,
+						OnSet: func(val float64, _ string) bool {
+							clamped := int(math.Round(val))
+							if clamped < 1 {
+								clamped = 1
+							}
+							if clamped > 100 {
+								clamped = 100
+							}
+							a.setSetting("typesafe_min_score", clamped)
+							return true
+						},
+					})
+				})
+
+				ui.Row(c.Key("typesafe-score-row")).FillWidth().Wrap().Gap(4).AlignItems(ui.Center).Children(func() {
+					for _, thresh := range []int{60, 70, 75, 80, 85, 90} {
+						tVal := thresh
+						sel := a.AgentUI.TypeSafeMinScore == tVal
+						lbl := fmt.Sprintf("%d", tVal)
+						chip := ui.ButtonBase(c.Key(fmt.Sprintf("ts-thresh-%d", tVal))).
+							Height(22).Padding(0, 7).Radius(5).Center().
+							Selected(sel).
+							Label(fmt.Sprintf("TypeSafe minimum passing score: %d out of 100", tVal)).
+							Cursor(ui.CursorPointer)
+						if sel {
+							chip.Background(C.AccentSoft).Border(1, C.Accent)
+						} else if chip.Hovered() {
+							chip.Background(C.Raised).Border(1, C.Border)
+						} else {
+							chip.Background(C.Panel).Border(1, C.Border)
+						}
+						chip.Children(func() {
+							col := C.Muted
+							if sel {
+								col = C.Accent
+							}
+							ui.Text(c, lbl).FontSize(10).FontFeatures("tnum").TextColor(col)
+						})
+						if chip.Clicked() {
+							a.setSetting("typesafe_min_score", tVal)
+						}
+					}
+				})
+
+				if a.AgentUI.TypeSafeAutoRevise {
+					ui.Row(c.Key("typesafe-max-rev-row")).FillWidth().Wrap().Gap(4).AlignItems(ui.Center).Children(func() {
+						ui.Text(c, "Max auto-revisions:").FontSize(10).FontWeight(600).TextColor(C.Muted)
+						for _, mr := range []int{1, 2, 3, 5} {
+							revCnt := mr
+							sel := a.AgentUI.TypeSafeMaxRevisions == revCnt
+							lbl := fmt.Sprintf("%d×", revCnt)
+							chip := ui.ButtonBase(c.Key(fmt.Sprintf("ts-maxrev-%d", revCnt))).
+								Height(22).Padding(0, 7).Radius(5).Center().
+								Selected(sel).
+								Label(fmt.Sprintf("Maximum auto-revisions per screen: %d", revCnt)).
+								Cursor(ui.CursorPointer)
+							if sel {
+								chip.Background(C.AccentSoft).Border(1, C.Accent)
+							} else if chip.Hovered() {
+								chip.Background(C.Raised).Border(1, C.Border)
+							} else {
+								chip.Background(C.Panel).Border(1, C.Border)
+							}
+							chip.Children(func() {
+								col := C.Muted
+								if sel {
+									col = C.Accent
+								}
+								ui.Text(c, lbl).FontSize(10).FontFeatures("tnum").TextColor(col)
+							})
+							if chip.Clicked() {
+								a.setSetting("typesafe_max_revisions", revCnt)
+							}
+						}
+					})
+				}
+			})
+		})
+}
+
 func (a *NalarupaApp) viewAgentTranscript(c *ui.Context, reduced bool, nowMS int64) {
 	hasTickingItem := false
 	for _, it := range a.Store.Items {
@@ -1625,6 +1911,13 @@ func (a *NalarupaApp) viewChatItem(c *ui.Context, it ChatItem, isLatest bool, re
 		}
 		isOpen := a.AgentUI.ExpandedCards[it.ID]
 		title := friendlyToolLabel(it.Name, it.Running)
+		if strings.HasSuffix(it.Name, "typesafe_decision") && it.ScreenName != "" {
+			if it.Running {
+				title = "Scoring screen · " + it.ScreenName
+			} else {
+				title = "TypeSafe · " + it.ScreenName
+			}
+		}
 		if it.Running && !reduced {
 			title += EllipsisAt(nowMS)
 		} else if it.Running {
@@ -1677,19 +1970,48 @@ func (a *NalarupaApp) viewChatItem(c *ui.Context, it ChatItem, isLatest bool, re
 							FontSize(10).FontFeatures("tnum").TextColor(C.Ghost)
 					}
 					if !it.Running {
-						badge := "✓"
-						badgeCol := C.OK
-						if it.Error {
-							badge = "✕"
-							badgeCol = C.Danger
-						}
-						badgeEl := ui.Text(c.Key(fmt.Sprintf("tool-done-%d", it.ID)), badge).
-							FontSize(11).FontWeight(600).TextColor(badgeCol)
-						if !reduced && liveEnter {
-							badgeEl.Transition(ui.ElementTransition{
-								Animation: &IconSwapSpring,
-								Enter:     &ui.Motion{Scale: 0.4, Blur: 2},
-							})
+						if it.TypeSafe != nil && !it.Error {
+							ts := it.TypeSafe
+							pillText := fmt.Sprintf("%d/100 · PASS", ts.Score)
+							pillFg := C.OK
+							pillBg := C.Raised
+							if ts.Verdict != "pass" {
+								if ts.AutoRevise && ts.RevisionAttempt > 0 && ts.MaxRevisions > 0 {
+									pillText = fmt.Sprintf("%d/100 · AUTO-REVISE %d/%d (<%d)", ts.Score, ts.RevisionAttempt, ts.MaxRevisions, ts.PassScore)
+								} else {
+									pillText = fmt.Sprintf("%d/100 · BELOW %d", ts.Score, ts.PassScore)
+								}
+								if ts.Score < 50 {
+									pillFg = C.Danger
+									pillBg = C.DangerBg
+								} else {
+									pillFg = C.Warn
+									pillBg = C.WarnBg
+								}
+							}
+							ui.Box(c.Key(fmt.Sprintf("ts-pill-%d", it.ID))).
+								Padding(2, 6).
+								Radius(5).
+								Background(pillBg).
+								Border(1, C.Border).
+								Children(func() {
+									ui.Text(c, pillText).FontSize(10).FontWeight(700).FontFeatures("tnum").TextColor(pillFg)
+								})
+						} else {
+							badge := "✓"
+							badgeCol := C.OK
+							if it.Error {
+								badge = "✕"
+								badgeCol = C.Danger
+							}
+							badgeEl := ui.Text(c.Key(fmt.Sprintf("tool-done-%d", it.ID)), badge).
+								FontSize(11).FontWeight(600).TextColor(badgeCol)
+							if !reduced && liveEnter {
+								badgeEl.Transition(ui.ElementTransition{
+									Animation: &IconSwapSpring,
+									Enter:     &ui.Motion{Scale: 0.4, Blur: 2},
+								})
+							}
 						}
 					}
 				})
@@ -1735,6 +2057,39 @@ func (a *NalarupaApp) viewChatItem(c *ui.Context, it ChatItem, isLatest bool, re
 							ui.Image(c, entry.bmp).Size(252, 158).Radius(5).Fit(ui.Contain)
 						})
 					}
+				}
+
+				if it.TypeSafe != nil && len(it.TypeSafe.Dimensions) > 0 && !it.Error {
+					ui.Row(c.Key(fmt.Sprintf("ts-dims-%d", it.ID))).
+						FillWidth().
+						Wrap().
+						Padding(0, 8, 6, 8).
+						Gap(4).
+						Children(func() {
+							for _, dm := range it.TypeSafe.Dimensions {
+								dim := dm
+								col := C.Muted
+								switch dim.Status {
+								case "good":
+									col = C.OK
+								case "warn":
+									col = C.Warn
+								case "fail":
+									col = C.Danger
+								}
+								ui.Row(c.Key(fmt.Sprintf("ts-dim-%d-%s", it.ID, dim.Key))).
+									Padding(2, 5).
+									Gap(3).
+									Radius(4).
+									Background(C.Panel).
+									Border(1, C.Border).
+									AlignItems(ui.Center).
+									Children(func() {
+										ui.Text(c, dim.Label).FontSize(9.5).TextColor(C.Muted)
+										ui.Text(c, strconv.Itoa(dim.Score)).FontSize(9.5).FontWeight(600).FontFeatures("tnum").TextColor(col)
+									})
+							}
+						})
 				}
 
 				if isOpen {
@@ -1984,6 +2339,11 @@ func friendlyToolLabel(name string, running bool) string {
 			return "Opening document"
 		}
 		return "Opened document"
+	case "typesafe_decision":
+		if running {
+			return "Scoring screen visuals"
+		}
+		return "TypeSafe visual score"
 	default:
 		return clean
 	}

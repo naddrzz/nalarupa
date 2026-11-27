@@ -43,6 +43,8 @@ func (e *Engine) BeginTurnSnapshot() {
 	e.Agent.TurnNewTopIDs = nil
 	e.Agent.TurnScreenTeam = map[string]string{}
 	e.Agent.FixedTopBounds = nil
+	e.Agent.PreTurnScreenHashes = map[string]uint64{}
+	e.Agent.ScreenEvalRevisions = map[string]int{}
 	if e.Doc == nil {
 		e.Agent.PreTurnVars = nil
 		e.Agent.PreTurnThemes = nil
@@ -60,6 +62,9 @@ func (e *Engine) BeginTurnSnapshot() {
 			continue
 		}
 		e.Agent.PreTurnTopIDs[id] = true
+		if jsonv.StrIs(jsonv.Get(ch, "type"), "frame") && !jsonv.IsTrue(jsonv.Get(ch, "reusable")) {
+			e.Agent.PreTurnScreenHashes[id] = ScreenVisualHash(e.Doc.Root, ch)
+		}
 	}
 	if rawVars, _ := e.Doc.Root.Get("variables"); jsonv.Obj(rawVars) != nil {
 		e.Agent.PreTurnVars = jsonv.Obj(jsonv.Clone(rawVars))

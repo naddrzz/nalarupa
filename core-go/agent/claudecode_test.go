@@ -5,8 +5,10 @@ package agent
 // and prints stream-json (a batch file cannot take the multi-line system prompt as an argument).
 
 import (
+	"bytes"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -70,6 +72,35 @@ func fakeClaude(mode string) int {
 	case mode == "hang":
 		out(`{"type":"system","subtype":"init","session_id":"s-hang"}`)
 		time.Sleep(time.Minute)
+		return 0
+	case mode == "ts-mcp":
+		if i := slices.Index(args, "--mcp-config"); i >= 0 && i+1 < len(args) {
+			if cfgRaw, err := os.ReadFile(args[i+1]); err == nil {
+				if cfgVal, err := jsonv.Parse(cfgRaw); err == nil {
+					mcpURL := jsonv.StrOr(jsonv.Get(jsonv.Get(jsonv.Get(cfgVal, "mcpServers"), "nalarupa"), "url"))
+					js := `s = Insert(document, {type:"frame", name:"Analytics Screen", x:0, y:0, width:1280, height:800, fill:"#FAFAFA", layout:"vertical", padding:32}); Insert(s, {type:"text", name:"Heading", content:"Analytics", fontSize:42, fill:"#111111"});`
+					if resumed {
+						js = `Update(s, {padding:64, gap:24}); Insert(s, {type:"rectangle", name:"PrimaryCard", width:400, height:120, fill:"#0F766E"});`
+					}
+					rpcReq := engine.Object(
+						"jsonrpc", "2.0",
+						"id", jsonv.Int(1),
+						"method", "tools/call",
+						"params", engine.Object("name", "execute", "arguments", engine.Object("input", js)),
+					)
+					resp, err := http.Post(mcpURL, "application/json", bytes.NewReader(jsonv.Marshal(rpcReq)))
+					if err == nil {
+						_, _ = io.ReadAll(resp.Body)
+						resp.Body.Close()
+					}
+				}
+			}
+		}
+		out(`{"type":"system","subtype":"init","session_id":"s-ts"}`,
+			`{"type":"stream_event","event":{"type":"message_start"}}`,
+			`{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Done."}}}`,
+			`{"type":"stream_event","event":{"type":"message_stop"}}`,
+			`{"type":"result","is_error":false,"num_turns":1,"total_cost_usd":0.10,"usage":{"input_tokens":100,"output_tokens":20,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}`)
 		return 0
 	}
 	out(`{"type":"system","subtype":"init","session_id":"s-new"}`,

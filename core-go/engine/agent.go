@@ -13,6 +13,7 @@ import (
 
 	"github.com/naddrzz/nalarupa/core-go/doc"
 	"github.com/naddrzz/nalarupa/core-go/jsonv"
+	"github.com/naddrzz/nalarupa/core-go/typesafe"
 )
 
 // Flag is a cancel flag (Rust's `Arc<AtomicBool>`): once set it stays set, and Done is closed.
@@ -135,10 +136,14 @@ type AgentState struct {
 	TurnEditedPreTop map[string]bool
 	TurnNewTopIDs    []string
 	TurnScreenTeam   map[string]string
-	ChildScopes      map[string]map[string]bool
-	FixedTopBounds   map[string]cachedTopBound
-	ContextUsed      int
-	ContextLimit     int
+	ChildScopes           map[string]map[string]bool
+	FixedTopBounds        map[string]cachedTopBound
+	PreTurnScreenHashes   map[string]uint64
+	EvaluatedScreenHashes map[string]uint64
+	LastScreenDecisions   map[string]*typesafe.Decision
+	ScreenEvalRevisions   map[string]int
+	ContextUsed           int
+	ContextLimit          int
 }
 
 // PenFrames are the frames the pens draw into.
@@ -235,6 +240,8 @@ func (a *AgentState) EndTurnIsolation() {
 	a.TurnScreenTeam = nil
 	a.ChildScopes = nil
 	a.FixedTopBounds = nil
+	a.PreTurnScreenHashes = nil
+	a.ScreenEvalRevisions = nil
 }
 
 // Clear starts over with no conversation (the old one stays saved).

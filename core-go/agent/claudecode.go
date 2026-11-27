@@ -127,6 +127,35 @@ type ccInput struct {
 }
 
 func runClaudeCode(e *engine.Engine, p engine.Profile, prompt string, child bool, name string) (*jsonv.Object, error) {
+	return runClaudeCodeStep(e, p, prompt, child, name, "", false)
+}
+
+func mergeClaudeUsage(base, extra *jsonv.Object) *jsonv.Object {
+	if base == nil || base.Len() == 0 {
+		return extra
+	}
+	if extra == nil || extra.Len() == 0 {
+		return base
+	}
+	out := jsonv.Obj(jsonv.Clone(base))
+	for _, k := range []string{"input", "output", "cacheRead", "cacheWrite", "turns"} {
+		a, okA := jsonv.F64(jsonv.Get(out, k))
+		b, okB := jsonv.F64(jsonv.Get(extra, k))
+		if okA || okB {
+			out.Set(k, jsonv.Int(int64(a+b)))
+		}
+	}
+	if cA, okA := jsonv.F64(jsonv.Get(out, "costUsd")); okA {
+		if cB, okB := jsonv.F64(jsonv.Get(extra, "costUsd")); okB {
+			out.Set("costUsd", jsonv.Number(fmt.Sprintf("%.6f", cA+cB)))
+		}
+	} else if v, ok := extra.Get("costUsd"); ok && v != nil {
+		out.Set("costUsd", jsonv.Clone(v))
+	}
+	return out
+}
+
+func runClaudeCodeStep(e *engine.Engine, p engine.Profile, prompt string, child bool, name, overrideSession string, isReviseContinuation bool) (*jsonv.Object, error) {
 	cfg, err := MCPConfig(e, p.ID)
 	if err != nil {
 		return nil, err
@@ -138,7 +167,13 @@ func runClaudeCode(e *engine.Engine, p engine.Profile, prompt string, child bool
 	var skillDirs []string
 	e.Locked(func() {
 		if !child {
-			state, session = e.EditorState(), e.Agent.Session
+			session = e.Agent.Session
+			if !isReviseContinuation {
+				state = e.EditorState()
+			}
+		}
+		if overrideSession != "" {
+			session = overrideSession
 		}
 		skillDirs = append([]string(nil), e.Agent.ActiveSkillDirs...)
 		cancel = e.Agent.Cancel
@@ -149,7 +184,7 @@ func runClaudeCode(e *engine.Engine, p engine.Profile, prompt string, child bool
 		}
 	})
 	full := prompt
-	if !child {
+	if !child && !isReviseContinuation {
 		full = prompt + editorStateNote + state
 	}
 	// The prompt goes in on stdin: as an argument a long message or selection overflows the OS limit.
@@ -284,7 +319,7 @@ func runClaudeCode(e *engine.Engine, p engine.Profile, prompt string, child bool
 		e.Locked(func() { e.Agent.Session = "" })
 		if !cancel.IsSet() {
 			emit(e, p, "note", engine.Object("text", "Claude Code could no longer find this chat's earlier session, so the earlier context is gone. Continuing in a new session."))
-			return runClaudeCode(e, p, prompt, child, name)
+			return runClaudeCodeStep(e, p, prompt, child, name, "", isReviseContinuation)
 		}
 	}
 	sendErr := <-sent
@@ -297,11 +332,19 @@ func runClaudeCode(e *engine.Engine, p engine.Profile, prompt string, child bool
 	}
 	if textless && !cancel.IsSet() {
 		emit(e, p, "error", engine.Object("text", "Claude Code reported an error"))
+		return usage, nil
+	}
+	if !cancel.IsSet() {
+		if revPrompt := RunTurnEndTypeSafeGate(e, p); revPrompt != "" {
+			nextUsage, revErr := runClaudeCodeStep(e, p, revPrompt, child, name, turnCtx.sessionID, true)
+			return mergeClaudeUsage(usage, nextUsage), revErr
+		}
 	}
 	return usage, nil
 }
 
 type claudeTurnCtx struct {
+	sessionID  string
 	lastInput  int
 	lastOutput int
 }
@@ -309,8 +352,11 @@ type claudeTurnCtx struct {
 // claudeEvent handles one line of the CLI's stream-json output.
 func claudeEvent(e *engine.Engine, p engine.Profile, child bool, session string, ev jsonv.Value, tools map[uint64]*ccTool, inputs map[string]ccInput,
 	lastPreview map[string]time.Time, usage *jsonv.Object, turnCtx *claudeTurnCtx, reported, textless, stale bool) (*jsonv.Object, bool, bool, bool) {
-	if !child {
-		if id, ok := jsonv.Str(jsonv.Get(ev, "session_id")); ok {
+	if id, ok := jsonv.Str(jsonv.Get(ev, "session_id")); ok && id != "" {
+		if turnCtx != nil {
+			turnCtx.sessionID = id
+		}
+		if !child {
 			e.Locked(func() { e.Agent.Session = id })
 		}
 	}

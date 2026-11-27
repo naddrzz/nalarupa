@@ -290,6 +290,10 @@ func (e *Engine) Seed(seed uint64) { e.ids.Reseed(seed) }
 func (e *Engine) setDoc(d *doc.Doc) {
 	d.IDs = e.ids
 	e.Doc = d
+	e.Agent.EvaluatedScreenHashes = nil
+	e.Agent.LastScreenDecisions = nil
+	e.Agent.PreTurnScreenHashes = nil
+	e.Agent.ScreenEvalRevisions = nil
 }
 
 // Ctx is the canvas context of the open document.
