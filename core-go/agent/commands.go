@@ -279,21 +279,40 @@ func init() {
 		}
 		return out, nil
 	})
+	normTypeSafeEndpoint := func(u string) string {
+		u = strings.TrimRight(strings.TrimSpace(u), "/")
+		if u == "" {
+			u = typesafe.DefaultBaseURL
+		}
+		return strings.TrimSuffix(u, "/v1")
+	}
 	engine.HandleUnlocked("typesafe_test", func(e *engine.Engine, req jsonv.Value) (jsonv.Value, error) {
 		apiKey := strings.TrimSpace(jsonv.StrOr(jsonv.Get(req, "api_key")))
 		baseURL := strings.TrimSpace(jsonv.StrOr(jsonv.Get(req, "base_url")))
 		mod := strings.TrimSpace(jsonv.StrOr(jsonv.Get(req, "model")))
+		var precheckErr error
 		e.Locked(func() {
-			if apiKey == "" || apiKey == engine.Mask {
-				apiKey, _ = e.TypeSafeAPIKey()
-			}
+			savedBase := e.TypeSafeBaseURL()
 			if baseURL == "" {
-				baseURL = e.TypeSafeBaseURL()
+				baseURL = savedBase
+			}
+			if apiKey == "" || apiKey == engine.Mask {
+				if normTypeSafeEndpoint(baseURL) != normTypeSafeEndpoint(savedBase) {
+					if _, hasSaved := e.TypeSafeAPIKey(); hasSaved {
+						precheckErr = errors.New("Enter the TypeSafe API key for the edited Base URL before testing.")
+						return
+					}
+				} else {
+					apiKey, _ = e.TypeSafeAPIKey()
+				}
 			}
 			if mod == "" {
 				mod = e.TypeSafeModel()
 			}
 		})
+		if precheckErr != nil {
+			return nil, precheckErr
+		}
 		if apiKey == "" || apiKey == engine.Mask {
 			return nil, errors.New("Enter a TypeSafe API key first.")
 		}
@@ -321,14 +340,26 @@ func init() {
 	engine.HandleUnlocked("typesafe_models", func(e *engine.Engine, req jsonv.Value) (jsonv.Value, error) {
 		apiKey := strings.TrimSpace(jsonv.StrOr(jsonv.Get(req, "api_key")))
 		baseURL := strings.TrimSpace(jsonv.StrOr(jsonv.Get(req, "base_url")))
+		var precheckErr error
 		e.Locked(func() {
-			if apiKey == "" || apiKey == engine.Mask {
-				apiKey, _ = e.TypeSafeAPIKey()
-			}
+			savedBase := e.TypeSafeBaseURL()
 			if baseURL == "" {
-				baseURL = e.TypeSafeBaseURL()
+				baseURL = savedBase
+			}
+			if apiKey == "" || apiKey == engine.Mask {
+				if normTypeSafeEndpoint(baseURL) != normTypeSafeEndpoint(savedBase) {
+					if _, hasSaved := e.TypeSafeAPIKey(); hasSaved {
+						precheckErr = errors.New("Enter the TypeSafe API key for the edited Base URL before fetching models.")
+						return
+					}
+				} else {
+					apiKey, _ = e.TypeSafeAPIKey()
+				}
 			}
 		})
+		if precheckErr != nil {
+			return nil, precheckErr
+		}
 		if apiKey == "" || apiKey == engine.Mask {
 			return nil, errors.New("Enter a TypeSafe API key first.")
 		}

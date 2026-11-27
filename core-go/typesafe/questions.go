@@ -375,7 +375,7 @@ func ComputeDecision(resp jsonv.Value, passScore int) (*Decision, error) {
 	}
 
 	verdict := "pass"
-	if scoreInt < passScore {
+	if len(blockers) > 0 || scoreInt < passScore {
 		verdict = "revise"
 	}
 
@@ -414,25 +414,51 @@ func guidanceForDimensionKey(key string) string {
 	return "Refine visual polish, spacing rhythm, and contrast on this dimension."
 }
 
+func issueLabelPrefix(issue string) string {
+	if idx := len(issue); idx > 0 {
+		for i := 0; i+1 < len(issue); i++ {
+			if issue[i] == ' ' && issue[i+1] == '(' {
+				return issue[:i]
+			}
+		}
+	}
+	return ""
+}
+
 // ActionableIssues returns the prioritized list of concrete visual fixes when Verdict == "revise".
-// When a user configures a high revision threshold (e.g. 85 or 90) and no hard blockers fired, it automatically
-// pinpoints the lowest-scoring sub-dimensions dragging the composite score below PassScore.
+// Blockers always come first; when no hard blockers fired on a threshold-driven revision, it ranks the weakest
+// sub-dimensions below PassScore together with any warnings (deduplicated by dimension).
 func (d *Decision) ActionableIssues() []string {
 	if d == nil || d.Verdict == "pass" {
 		return nil
 	}
 	var out []string
-	out = append(out, d.Blockers...)
-	if len(out) < 4 {
+	seenLabels := map[string]bool{}
+	addIssue := func(s string) {
+		if s == "" {
+			return
+		}
+		lbl := issueLabelPrefix(s)
+		if lbl != "" {
+			if seenLabels[lbl] {
+				return
+			}
+			seenLabels[lbl] = true
+		}
+		out = append(out, s)
+	}
+
+	for _, b := range d.Blockers {
+		addIssue(b)
+	}
+
+	if len(d.Blockers) == 0 && len(d.Dimensions) > 0 {
+		warnByLabel := map[string]string{}
 		for _, w := range d.Warnings {
-			out = append(out, w)
-			if len(out) >= 4 {
-				break
+			if lbl := issueLabelPrefix(w); lbl != "" && warnByLabel[lbl] == "" {
+				warnByLabel[lbl] = w
 			}
 		}
-	}
-	if len(out) == 0 && len(d.Dimensions) > 0 {
-		// Sort dimensions ascending by score and target the weakest 3 dimensions below PassScore.
 		sorted := make([]DimensionScore, len(d.Dimensions))
 		copy(sorted, d.Dimensions)
 		for i := 0; i < len(sorted); i++ {
@@ -443,15 +469,27 @@ func (d *Decision) ActionableIssues() []string {
 			}
 		}
 		for _, dm := range sorted {
-			if dm.Score >= d.PassScore && len(out) > 0 {
+			if dm.Score >= d.PassScore && (len(out) > 0 || len(d.Warnings) > 0) {
 				break
 			}
-			out = append(out, fmt.Sprintf("%s (%d/100, target ≥ %d): %s", dm.Label, dm.Score, d.PassScore, guidanceForDimensionKey(dm.Key)))
-			if len(out) >= 3 {
+			if w, ok := warnByLabel[dm.Label]; ok {
+				addIssue(w)
+			} else {
+				addIssue(fmt.Sprintf("%s (%d/100, target ≥ %d): %s", dm.Label, dm.Score, d.PassScore, guidanceForDimensionKey(dm.Key)))
+			}
+			if len(out) >= 4 {
 				break
 			}
 		}
 	}
+
+	for _, w := range d.Warnings {
+		if len(out) >= 4 {
+			break
+		}
+		addIssue(w)
+	}
+
 	if len(out) == 0 {
 		out = append(out, fmt.Sprintf("Composite visual score %d/100 is below revision threshold %d/100; sharpen hierarchy, contrast, color harmony, and spacing.", d.Score, d.PassScore))
 	}

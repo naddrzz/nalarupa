@@ -14,8 +14,10 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/naddrzz/nalarupa/core-go/doc"
 	"github.com/naddrzz/nalarupa/core-go/engine"
 	"github.com/naddrzz/nalarupa/core-go/jsonv"
+	"github.com/naddrzz/nalarupa/core-go/typesafe"
 )
 
 type recordedTSCall struct {
@@ -30,7 +32,7 @@ func newFakeTypeSafeServer(t *testing.T, responder func(callIdx int) string) (*h
 	var mu sync.Mutex
 	var calls []recordedTSCall
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/models" {
 			w.Header().Set("Content-Type", "application/json")
 			io.WriteString(w, `{"models":[{"name":"jev-latest","description":"Newest Jev","release_date":"2026-10-14"},{"name":"jev-1.14.0","description":"Jev 1.14","release_date":"2026-10-14"}]}`)
@@ -106,6 +108,7 @@ func newFakeTypeSafeServer(t *testing.T, responder func(callIdx int) string) (*h
 		io.WriteString(w, `{"model":"jev-1.14.0","answers":{"probe":{"type":"noul","noul":0.97}},"usage":{"input_tokens":24,"output_tokens":4}}`)
 	}))
 	t.Cleanup(srv.Close)
+	t.Cleanup(typesafe.SetTestTransport(srv.Client().Transport))
 
 	return srv, func() []recordedTSCall {
 		mu.Lock()
@@ -506,12 +509,15 @@ func TestTypeSafeSkipsStandaloneComponentsAndEvaluatesOnlyFinishedScreens(t *tes
 		case 3:
 			return textReply("Standalone components created.", "end_turn")
 
-		// Turn 3: 1 tiny isolated button placed inside a generic "Frame 1" (1440x900) -> must NOT call Jev!
+		// Turn 3: 1 tiny isolated button placed inside a generic "Frame 1" or "Button Preview" (1440x900) -> must NOT call Jev!
 		case 4:
-			return toolReply("Placing 1 small button inside Frame 1.", "c_t3",
+			return toolReply("Placing 1 small button inside Frame 1 and Button Preview.", "c_t3",
 				`f1 = Insert(document, {type:"frame", name:"Frame 1", x:1800, y:0, width:1440, height:900, fill:"#FFFFFF"});`+
 					`b1 = Insert(f1, {type:"frame", name:"Btn", x:40, y:40, width:160, height:44, fill:"#111111"});`+
-					`Insert(b1, {type:"text", name:"Txt", content:"Save", fontSize:14, fill:"#FFFFFF"});`)
+					`Insert(b1, {type:"text", name:"Txt", content:"Save", fontSize:14, fill:"#FFFFFF"});`+
+					`bp = Insert(document, {type:"frame", name:"Button Preview", x:1800, y:1050, width:1440, height:900, fill:"#FFFFFF"});`+
+					`b2 = Insert(bp, {type:"frame", name:"Btn2", x:40, y:40, width:160, height:44, fill:"#2563EB"});`+
+					`Insert(b2, {type:"text", name:"Txt2", content:"Submit", fontSize:14, fill:"#FFFFFF"});`)
 		case 5:
 			return textReply("Added button.", "end_turn")
 
@@ -565,5 +571,86 @@ func TestTypeSafeSkipsStandaloneComponentsAndEvaluatesOnlyFinishedScreens(t *tes
 		if calls[0].imgW < 280 || calls[0].imgH < 568 {
 			t.Fatalf("unexpected mobile Checkout Screen image dimensions %dx%d", calls[0].imgW, calls[0].imgH)
 		}
+	}
+}
+
+func TestTypeSafeSharedComponentEditThresholdInvalidationEndpointBindingAndDocSwap(t *testing.T) {
+	tsSrv, getTSCalls := newFakeTypeSafeServer(t, func(callIdx int) string {
+		// Scores ~87 (passes 75, fails 94)
+		return tsJSONResponse(2.7, 2.7, 2.6, 2.5, 2.6, 0.04, 0.04, 0.06)
+	})
+
+	_, claudeURL := newFakeAPI(t, func(n int, w http.ResponseWriter, r *http.Request) string {
+		switch n {
+		case 0:
+			// Edit ONLY the shared reusable component `shared_nav` (NOT `home_scr` directly!)
+			return toolReply("Updating shared Navbar component.", "sc_1",
+				`Update("shared_nav", {fill:"#0F172A"});`)
+		default:
+			return textReply("Updated shared Navbar.", "end_turn")
+		}
+	})
+
+	e := apiEngine(t, claudeURL)
+	e.Locked(func() {
+		e.Doc.Root.Set("children", jsonv.MustParse(`[
+			{"id":"shared_nav","type":"frame","name":"SharedNav","reusable":true,"x":0,"y":-200,"width":1440,"height":72,"fill":"#FFFFFF","children":[
+				{"id":"sn_txt","type":"text","name":"Brand","content":"Acme","fontSize":20,"fill":"#111111"}
+			]},
+			{"id":"home_scr","type":"frame","name":"Home Screen","x":0,"y":0,"width":1440,"height":900,"fill":"#F8FAFC","layout":"vertical","children":[
+				{"id":"nav_inst","type":"ref","ref":"shared_nav","name":"Header","width":"fill_container"},
+				{"id":"hero_txt","type":"text","name":"Hero","content":"Dashboard","fontSize":44,"fill":"#0F172A"}
+			]}
+		]`))
+		e.Touch()
+		e.Settings.Set("typesafe_enabled", true)
+		e.Settings.Set("typesafe_auto_revise", false)
+		e.Settings.Set("typesafe_min_score", jsonv.Int(75))
+		e.Settings.Set("typesafe_api_key", "ts-byok-test")
+		e.Settings.Set("typesafe_base_url", tsSrv.URL)
+	})
+
+	// 1. Editing shared_nav changes home_scr's ScreenVisualHash -> must evaluate home_scr!
+	if err := Send(e, "Darken shared navbar", 1, "split", 1, "layout"); err != nil {
+		t.Fatal(err)
+	}
+	waitIdle(t, e)
+	if got := len(getTSCalls()); got != 1 {
+		t.Fatalf("expected 1 TypeSafe evaluation for pre-existing screen updated via shared component, got %d", got)
+	}
+
+	e.Locked(func() {
+		// 2. Threshold mismatch invalidates cached screen decision (75 -> 94)
+		e.Agent.TurnEditedPreTop = map[string]bool{"home_scr": true}
+		e.Settings.Set("typesafe_min_score", jsonv.Int(94))
+		plans := e.PlanTurnTypeSafeEvaluations("ag1")
+		if len(plans) != 1 || plans[0].CachedRevise != nil {
+			t.Fatalf("expected cache miss when active threshold changed from 75 to 94, got %+v", plans)
+		}
+
+		// 3. Huge float64 settings clamp before int conversion (1e20 -> 100 and 5)
+		e.Settings.Set("typesafe_min_score", jsonv.Float(1e20))
+		e.Settings.Set("typesafe_max_revisions", jsonv.Float(1e20))
+		if got := e.TypeSafeMinScore(); got != 100 {
+			t.Fatalf("expected 1e20 min_score to clamp to 100, got %d", got)
+		}
+		if got := e.TypeSafeMaxRevisions(); got != 5 {
+			t.Fatalf("expected 1e20 max_revisions to clamp to 5, got %d", got)
+		}
+
+		// 4. Stale SourceDoc after document replacement must not record decisions
+		staleDoc := &doc.Doc{Root: jsonv.NewObject()}
+		_, _, _, sameDoc := e.RecordScreenEvaluation(staleDoc, "home_scr", 12345, &typesafe.Decision{Score: 50, Verdict: "revise"}, true)
+		if sameDoc {
+			t.Fatalf("expected RecordScreenEvaluation to reject stale SourceDoc")
+		}
+	})
+
+	// 5. typesafe_test and typesafe_models must refuse sending saved key to an edited base_url
+	if _, err := e.Dispatch(engine.Object("cmd", "typesafe_test", "base_url", "https://other.example.com", "api_key", engine.Mask)); err == nil {
+		t.Fatalf("expected typesafe_test to reject masked saved key when base_url differs from saved base URL")
+	}
+	if _, err := e.Dispatch(engine.Object("cmd", "typesafe_models", "base_url", "https://other.example.com", "api_key", "")); err == nil {
+		t.Fatalf("expected typesafe_models to reject empty key fallback when base_url differs from saved base URL")
 	}
 }

@@ -33,8 +33,15 @@ func (e *Engine) SetSetting(key string, value jsonv.Value) error {
 		} else {
 			e.Settings.Remove(key)
 		}
+		return err
 	}
-	return err
+	switch key {
+	case "typesafe_min_score", "typesafe_model", "typesafe_base_url":
+		e.Agent.EvaluatedScreenHashes = nil
+		e.Agent.LastScreenDecisions = nil
+		e.Agent.ScreenEvalRevisions = nil
+	}
+	return nil
 }
 
 // SaveSettings writes settings.json atomically (a temp file renamed over it): a crash or a reader mid-save never
@@ -111,7 +118,14 @@ func (e *Engine) TypeSafeBaseURL() string {
 // TypeSafeMinScore returns the configured 1–100 revision score threshold, defaulting to 75.
 func (e *Engine) TypeSafeMinScore() int {
 	if f, ok := jsonv.F64(jsonv.Get(e.Settings, "typesafe_min_score")); ok && !math.IsNaN(f) && !math.IsInf(f, 0) {
-		return typesafe.ClampPassScore(int(math.Round(f)))
+		r := math.Round(f)
+		if r <= 0 {
+			return typesafe.DefaultPassScore
+		}
+		if r > 100 {
+			return 100
+		}
+		return typesafe.ClampPassScore(int(r))
 	}
 	return typesafe.DefaultPassScore
 }
@@ -128,7 +142,14 @@ func (e *Engine) TypeSafeAutoRevise() bool {
 // TypeSafeMaxRevisions returns the configured maximum auto-revision rounds per screen (1..5, default 2).
 func (e *Engine) TypeSafeMaxRevisions() int {
 	if f, ok := jsonv.F64(jsonv.Get(e.Settings, "typesafe_max_revisions")); ok && !math.IsNaN(f) && !math.IsInf(f, 0) {
-		return typesafe.ClampMaxRevisions(int(math.Round(f)))
+		r := math.Round(f)
+		if r <= 0 {
+			return typesafe.DefaultMaxRevisions
+		}
+		if r > 5 {
+			return 5
+		}
+		return typesafe.ClampMaxRevisions(int(r))
 	}
 	return typesafe.DefaultMaxRevisions
 }

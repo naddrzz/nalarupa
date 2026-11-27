@@ -199,9 +199,13 @@ func evaluateSingleScreenPlan(
 		return nil, 0, 0, false, err
 	}
 
+	var sameDoc bool
 	e.Locked(func() {
-		attempt, maxRevs, canRevise = e.RecordScreenEvaluation(plan.ID, plan.Hash, dec, consumeRevision)
+		attempt, maxRevs, canRevise, sameDoc = e.RecordScreenEvaluation(plan.SourceDoc, plan.ID, plan.Hash, dec, consumeRevision)
 	})
+	if !sameDoc {
+		return nil, 0, 0, false, nil
+	}
 	report := formatDecisionReport(plan.Name, plan.ID, dec, attempt, maxRevs, canRevise)
 	meta := decisionMetaJSON(plan.Name, plan.ID, dec, attempt, maxRevs, canRevise)
 	emitTypeSafeDone(e, prof, evalID, plan.Name, plan.ID, report, []string{b64Thumb}, false, meta, dec.ActionableIssues())
@@ -242,7 +246,7 @@ func RunTurnEndTypeSafeGate(e *engine.Engine, p engine.Profile) string {
 		if plan.CachedRevise != nil {
 			var attempt, maxRevs int
 			var allowed bool
-			e.Locked(func() { attempt, maxRevs, allowed = e.ConsumeCachedRevise(plan.ID) })
+			e.Locked(func() { attempt, maxRevs, allowed = e.ConsumeCachedRevise(plan.SourceDoc, plan.ID) })
 			if allowed {
 				emitAutoReviseNote(e, &p, plan.Name, plan.CachedRevise.Score, plan.CachedRevise.PassScore, attempt, maxRevs)
 				revisePrompts = append(revisePrompts, formatRevisionDirective(plan.Name, plan.ID, plan.CachedRevise, attempt, maxRevs))

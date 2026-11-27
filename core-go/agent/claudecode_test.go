@@ -88,7 +88,8 @@ func fakeClaude(mode string) int {
 						"method", "tools/call",
 						"params", engine.Object("name", "execute", "arguments", engine.Object("input", js)),
 					)
-					resp, err := http.Post(mcpURL, "application/json", bytes.NewReader(jsonv.Marshal(rpcReq)))
+					mcpClient := &http.Client{Timeout: 5 * time.Second}
+					resp, err := mcpClient.Post(mcpURL, "application/json", bytes.NewReader(jsonv.Marshal(rpcReq)))
 					if err == nil {
 						_, _ = io.ReadAll(resp.Body)
 						resp.Body.Close()

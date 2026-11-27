@@ -1561,14 +1561,13 @@ func (a *NalarupaApp) viewTypeSafeSettingsSection(c *ui.Context) {
 						Max:       100,
 						Width:     68,
 						OnSet: func(val float64, _ string) bool {
-							clamped := int(math.Round(val))
-							if clamped < 1 {
-								clamped = 1
+							r := math.Round(val)
+							if math.IsNaN(r) || math.IsInf(r, 0) || r < 1 {
+								r = 1
+							} else if r > 100 {
+								r = 100
 							}
-							if clamped > 100 {
-								clamped = 100
-							}
-							a.setSetting("typesafe_min_score", clamped)
+							a.setSetting("typesafe_min_score", int(r))
 							return true
 						},
 					})

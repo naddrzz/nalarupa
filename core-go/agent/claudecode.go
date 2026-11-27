@@ -316,7 +316,9 @@ func runClaudeCodeStep(e *engine.Engine, p engine.Profile, prompt string, child 
 	// The CLI no longer knows the saved session (another working folder, a cleaned `~/.claude`): the id would fail
 	// every later message too, so forget it and run this prompt again as a fresh session.
 	if session != "" && (stale || strings.Contains(stderrText, noSession)) {
-		e.Locked(func() { e.Agent.Session = "" })
+		if !child {
+			e.Locked(func() { e.Agent.Session = "" })
+		}
 		if !cancel.IsSet() {
 			emit(e, p, "note", engine.Object("text", "Claude Code could no longer find this chat's earlier session, so the earlier context is gone. Continuing in a new session."))
 			return runClaudeCodeStep(e, p, prompt, child, name, "", isReviseContinuation)

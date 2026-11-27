@@ -51,10 +51,14 @@ func (e *Engine) BeginTurnSnapshot() {
 		return
 	}
 	kids := e.Doc.Children()
+	reusableByID := CollectReusableComponents(e.Doc.Root)
 	for _, ch := range kids {
 		id := jsonv.StrOr(jsonv.Get(ch, "id"))
 		if id == "" {
 			continue
+		}
+		if jsonv.StrIs(jsonv.Get(ch, "type"), "frame") && !jsonv.IsTrue(jsonv.Get(ch, "reusable")) {
+			e.Agent.PreTurnScreenHashes[id] = ScreenVisualHashWithComponents(e.Doc.Root, ch, reusableByID)
 		}
 		// Exclude only the untouched blank/mobile template starter frame so Turn 1 can edit or replace it;
 		// finished screens (including empty background-only frames using $ground) remain protected.
@@ -62,9 +66,6 @@ func (e *Engine) BeginTurnSnapshot() {
 			continue
 		}
 		e.Agent.PreTurnTopIDs[id] = true
-		if jsonv.StrIs(jsonv.Get(ch, "type"), "frame") && !jsonv.IsTrue(jsonv.Get(ch, "reusable")) {
-			e.Agent.PreTurnScreenHashes[id] = ScreenVisualHash(e.Doc.Root, ch)
-		}
 	}
 	if rawVars, _ := e.Doc.Root.Get("variables"); jsonv.Obj(rawVars) != nil {
 		e.Agent.PreTurnVars = jsonv.Obj(jsonv.Clone(rawVars))

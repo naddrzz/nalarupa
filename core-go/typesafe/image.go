@@ -55,15 +55,7 @@ func PrepareScreenPNG(rawPNG []byte) ([]byte, int, int, error) {
 	if len(rawPNG) == 0 {
 		return nil, 0, 0, errors.New("empty screen image")
 	}
-	cfg, err := png.DecodeConfig(bytes.NewReader(rawPNG))
-	if err == nil &&
-		cfg.Width >= MinImageSide && cfg.Width <= MaxImageSide &&
-		cfg.Height >= MinImageSide && cfg.Height <= MaxImageSide &&
-		len(rawPNG) <= MaxImageBytes {
-		return rawPNG, cfg.Width, cfg.Height, nil
-	}
-
-	src, _, err := image.Decode(bytes.NewReader(rawPNG))
+	src, format, err := image.Decode(bytes.NewReader(rawPNG))
 	if err != nil {
 		return nil, 0, 0, fmt.Errorf("decode screen image: %w", err)
 	}
@@ -71,6 +63,13 @@ func PrepareScreenPNG(rawPNG []byte) ([]byte, int, int, error) {
 	sw, sh := b.Dx(), b.Dy()
 	if sw <= 0 || sh <= 0 {
 		return nil, 0, 0, errors.New("screen image has zero dimensions")
+	}
+	// Pass through the original bytes only after decoding verifies a complete, valid PNG within all TypeSafe bounds.
+	if format == "png" &&
+		sw >= MinImageSide && sw <= MaxImageSide &&
+		sh >= MinImageSide && sh <= MaxImageSide &&
+		len(rawPNG) <= MaxImageBytes {
+		return rawPNG, sw, sh, nil
 	}
 
 	// Step 1: Fit within MaxImageSide preserving aspect ratio (upscaling tiny frames if both fit <= MaxImageSide).
@@ -181,7 +180,7 @@ func resizeBilinear(src image.Image, dstW, dstH int) *image.NRGBA {
 				ix0 := int(math.Floor(sx0))
 				ix1 := min(sw-1, int(math.Ceil(sx1))-1)
 
-				var rSum, gSum, bSum, aSum, wSum float64
+				var rPremulSum, gPremulSum, bPremulSum, aSum, wSum float64
 				for sy := iy0; sy <= iy1; sy++ {
 					wy := math.Min(float64(sy+1), sy1) - math.Max(float64(sy), sy0)
 					if wy <= 0 {
@@ -195,10 +194,12 @@ func resizeBilinear(src image.Image, dstW, dstH int) *image.NRGBA {
 						}
 						w := wx * wy
 						off := rowOff + sx*4
-						rSum += float64(srcN.Pix[off]) * w
-						gSum += float64(srcN.Pix[off+1]) * w
-						bSum += float64(srcN.Pix[off+2]) * w
-						aSum += float64(srcN.Pix[off+3]) * w
+						alpha := float64(srcN.Pix[off+3]) / 255.0
+						aw := w * alpha
+						rPremulSum += float64(srcN.Pix[off]) * aw
+						gPremulSum += float64(srcN.Pix[off+1]) * aw
+						bPremulSum += float64(srcN.Pix[off+2]) * aw
+						aSum += aw
 						wSum += w
 					}
 				}
@@ -206,16 +207,23 @@ func resizeBilinear(src image.Image, dstW, dstH int) *image.NRGBA {
 					wSum = 1
 				}
 				dOff := y*dst.Stride + x*4
-				dst.Pix[dOff] = uint8(math.Round(rSum / wSum))
-				dst.Pix[dOff+1] = uint8(math.Round(gSum / wSum))
-				dst.Pix[dOff+2] = uint8(math.Round(bSum / wSum))
-				dst.Pix[dOff+3] = uint8(math.Round(aSum / wSum))
+				if aSum <= 1e-6 {
+					dst.Pix[dOff] = 0
+					dst.Pix[dOff+1] = 0
+					dst.Pix[dOff+2] = 0
+					dst.Pix[dOff+3] = 0
+				} else {
+					dst.Pix[dOff] = clampByte(math.Round(rPremulSum / aSum))
+					dst.Pix[dOff+1] = clampByte(math.Round(gPremulSum / aSum))
+					dst.Pix[dOff+2] = clampByte(math.Round(bPremulSum / aSum))
+					dst.Pix[dOff+3] = clampByte(math.Round((aSum / wSum) * 255.0))
+				}
 			}
 		}
 		return dst
 	}
 
-	// Bilinear interpolation for mild scale changes or upscaling.
+	// Bilinear interpolation in premultiplied alpha space for mild scale changes or upscaling.
 	for y := 0; y < dstH; y++ {
 		fy := (float64(y)+0.5)*scaleY - 0.5
 		if fy < 0 {
@@ -238,18 +246,31 @@ func resizeBilinear(src image.Image, dstW, dstH int) *image.NRGBA {
 			c01 := srcN.NRGBAAt(x0, y1)
 			c11 := srcN.NRGBAAt(x1, y1)
 
-			lerp := func(a, b, c, d uint8) uint8 {
-				top := float64(a)*(1-wx) + float64(b)*wx
-				bot := float64(c)*(1-wx) + float64(d)*wx
-				return uint8(math.Round(top*(1-wy) + bot*wy))
+			a00 := (float64(c00.A) / 255.0) * (1 - wx) * (1 - wy)
+			a10 := (float64(c10.A) / 255.0) * wx * (1 - wy)
+			a01 := (float64(c01.A) / 255.0) * (1 - wx) * wy
+			a11 := (float64(c11.A) / 255.0) * wx * wy
+			aSum := a00 + a10 + a01 + a11
+			if aSum <= 1e-6 {
+				dst.SetNRGBA(x, y, color.NRGBA{})
+				continue
 			}
-			dst.SetNRGBA(x, y, color.NRGBA{
-				R: lerp(c00.R, c10.R, c01.R, c11.R),
-				G: lerp(c00.G, c10.G, c01.G, c11.G),
-				B: lerp(c00.B, c10.B, c01.B, c11.B),
-				A: lerp(c00.A, c10.A, c01.A, c11.A),
-			})
+			r := clampByte(math.Round((float64(c00.R)*a00 + float64(c10.R)*a10 + float64(c01.R)*a01 + float64(c11.R)*a11) / aSum))
+			g := clampByte(math.Round((float64(c00.G)*a00 + float64(c10.G)*a10 + float64(c01.G)*a01 + float64(c11.G)*a11) / aSum))
+			b := clampByte(math.Round((float64(c00.B)*a00 + float64(c10.B)*a10 + float64(c01.B)*a01 + float64(c11.B)*a11) / aSum))
+			a := clampByte(math.Round(aSum * 255.0))
+			dst.SetNRGBA(x, y, color.NRGBA{R: r, G: g, B: b, A: a})
 		}
 	}
 	return dst
+}
+
+func clampByte(v float64) uint8 {
+	if v <= 0 {
+		return 0
+	}
+	if v >= 255 {
+		return 255
+	}
+	return uint8(v)
 }

@@ -11,8 +11,10 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
+	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/naddrzz/nalarupa/core-go/jsonv"
@@ -23,6 +25,46 @@ const (
 	maxErrorBodyBytes     = 16 * 1024
 )
 
+var (
+	testTransportMu sync.RWMutex
+	testTransport   http.RoundTripper
+)
+
+// SetTestTransport overrides the default HTTP RoundTripper for local TLS test servers and returns a restore func.
+func SetTestTransport(rt http.RoundTripper) func() {
+	testTransportMu.Lock()
+	prev := testTransport
+	testTransport = rt
+	testTransportMu.Unlock()
+	return func() {
+		testTransportMu.Lock()
+		testTransport = prev
+		testTransportMu.Unlock()
+	}
+}
+
+func currentTestTransport() http.RoundTripper {
+	testTransportMu.RLock()
+	defer testTransportMu.RUnlock()
+	return testTransport
+}
+
+func sameOriginHTTPSRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 5 {
+		return errors.New("stopped after 5 redirects")
+	}
+	if !strings.EqualFold(req.URL.Scheme, "https") {
+		return errors.New("refusing non-HTTPS redirect on TypeSafe API request")
+	}
+	if len(via) == 0 || !strings.EqualFold(req.URL.Host, via[0].URL.Host) {
+		return errors.New("refusing cross-origin redirect on TypeSafe API request")
+	}
+	if req.Method != http.MethodGet && req.Method != http.MethodHead {
+		return errors.New("refusing redirect on mutating TypeSafe API request")
+	}
+	return nil
+}
+
 // Client calls the TypeSafe AI HTTP API (`POST /v1/systemone` and `GET /v1/models`).
 type Client struct {
 	BaseURL    string
@@ -31,7 +73,7 @@ type Client struct {
 	HTTPClient *http.Client
 }
 
-// NewClient constructs a TypeSafe AI client with sensible defaults.
+// NewClient constructs a TypeSafe AI client with sensible defaults and strict HTTPS redirect policy.
 func NewClient(apiKey, baseURL, model string) *Client {
 	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if base == "" {
@@ -46,7 +88,9 @@ func NewClient(apiKey, baseURL, model string) *Client {
 		APIKey:  strings.TrimSpace(apiKey),
 		Model:   mod,
 		HTTPClient: &http.Client{
-			Timeout: defaultRequestTimeout,
+			Timeout:       defaultRequestTimeout,
+			Transport:     currentTestTransport(),
+			CheckRedirect: sameOriginHTTPSRedirect,
 		},
 	}
 }
@@ -135,7 +179,11 @@ func (c *Client) EvaluateScreen(ctx context.Context, rawScreenPNG []byte, passSc
 		return nil, fmt.Errorf("build TypeSafe multipart payload: %w", err)
 	}
 
-	respVal, err := c.postWithRetry(ctx, c.endpoint("/v1/systemone"), contentType, bodyBytes, true)
+	targetURL, err := c.endpoint("/v1/systemone")
+	if err != nil {
+		return nil, err
+	}
+	respVal, err := c.postWithRetry(ctx, targetURL, contentType, bodyBytes, true)
 	if err != nil {
 		return nil, err
 	}
@@ -146,6 +194,10 @@ func (c *Client) EvaluateScreen(ctx context.Context, rawScreenPNG []byte, passSc
 func (c *Client) TestConnection(ctx context.Context) (string, error) {
 	if strings.TrimSpace(c.APIKey) == "" {
 		return "", errors.New("Enter a TypeSafe API key first.")
+	}
+	targetURL, err := c.endpoint("/v1/systemone")
+	if err != nil {
+		return "", err
 	}
 	q := jsonv.NewObject()
 	q.Set("type", "noul")
@@ -161,7 +213,7 @@ func (c *Client) TestConnection(ctx context.Context) (string, error) {
 	reqObj.Set("state", st)
 	reqObj.Set("questions", qs)
 
-	respVal, err := c.postWithRetry(ctx, c.endpoint("/v1/systemone"), "application/json", jsonv.Marshal(reqObj), false)
+	respVal, err := c.postWithRetry(ctx, targetURL, "application/json", jsonv.Marshal(reqObj), false)
 	if err != nil {
 		return "", err
 	}
@@ -180,7 +232,11 @@ func (c *Client) ListModels(ctx context.Context) ([]string, error) {
 	if strings.TrimSpace(c.APIKey) == "" {
 		return nil, errors.New("Enter a TypeSafe API key first.")
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoint("/v1/models"), nil)
+	targetURL, err := c.endpoint("/v1/models")
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -192,7 +248,10 @@ func (c *Client) ListModels(ctx context.Context) ([]string, error) {
 		return nil, fmt.Errorf("TypeSafe API unreachable: %w", err)
 	}
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
+	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
+	if readErr != nil {
+		return nil, fmt.Errorf("reading TypeSafe /v1/models response: %w", readErr)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, formatHTTPError(resp.StatusCode, raw)
 	}
@@ -230,20 +289,37 @@ func (c *Client) effectiveModel() string {
 	return DefaultModel
 }
 
-func (c *Client) endpoint(path string) string {
+func (c *Client) endpoint(path string) (string, error) {
 	base := strings.TrimRight(strings.TrimSpace(c.BaseURL), "/")
 	if base == "" {
 		base = DefaultBaseURL
 	}
 	base = strings.TrimSuffix(base, "/v1")
-	return base + path
+	full := base + path
+	parsed, err := url.Parse(full)
+	if err != nil || parsed.Host == "" || parsed.User != nil {
+		return "", errors.New("invalid TypeSafe API base URL")
+	}
+	if !strings.EqualFold(parsed.Scheme, "https") {
+		return "", errors.New("TypeSafe API base URL must use https://")
+	}
+	return parsed.String(), nil
 }
 
 func (c *Client) httpClient() *http.Client {
 	if c.HTTPClient != nil {
-		return c.HTTPClient
+		if c.HTTPClient.CheckRedirect != nil {
+			return c.HTTPClient
+		}
+		cloned := *c.HTTPClient
+		cloned.CheckRedirect = sameOriginHTTPSRedirect
+		return &cloned
 	}
-	return &http.Client{Timeout: defaultRequestTimeout}
+	return &http.Client{
+		Timeout:       defaultRequestTimeout,
+		Transport:     currentTestTransport(),
+		CheckRedirect: sameOriginHTTPSRedirect,
+	}
 }
 
 func (c *Client) postWithRetry(ctx context.Context, url, contentType string, body []byte, withImages bool) (jsonv.Value, error) {

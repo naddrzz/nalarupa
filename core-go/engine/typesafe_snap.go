@@ -24,6 +24,7 @@ type ScreenEvalPlan struct {
 	ID           string
 	Name         string
 	Hash         uint64
+	SourceDoc    *doc.Doc
 	Tree         *usvg.Tree
 	Scale        float64
 	Downloads    []string
@@ -33,18 +34,106 @@ type ScreenEvalPlan struct {
 	CachedRevise *typesafe.Decision
 }
 
+// CollectReusableComponents indexes all local `reusable: true` nodes in docRoot by ID so callers hashing
+// multiple screens on the same document root only walk the document once.
+func CollectReusableComponents(docRoot *jsonv.Object) map[string]jsonv.Value {
+	reusableByID := map[string]jsonv.Value{}
+	if docRoot == nil {
+		return reusableByID
+	}
+	doc.Walk(jsonv.Items(jsonv.Get(docRoot, "children")), func(n jsonv.Value) {
+		if jsonv.IsTrue(jsonv.Get(n, "reusable")) {
+			if cid := jsonv.StrOr(jsonv.Get(n, "id")); cid != "" {
+				reusableByID[cid] = n
+			}
+		}
+	})
+	return reusableByID
+}
+
 // ScreenVisualHash computes a deterministic 64-bit visual content hash for a single top-level screen frame,
-// ignoring its root canvas placement (`x`, `y`) while folding in any local reusable components and `$variables`
-// referenced inside its subtree so edits via tokens or components are accurately detected.
+// ignoring its root canvas placement (`x`, `y`) while folding in any local reusable components and resolved
+// `$variables` referenced inside its subtree so edits via tokens or components are accurately detected.
 func ScreenVisualHash(docRoot *jsonv.Object, screen jsonv.Value) uint64 {
+	return ScreenVisualHashWithComponents(docRoot, screen, CollectReusableComponents(docRoot))
+}
+
+// ScreenVisualHashWithComponents computes ScreenVisualHash reusing a prebuilt reusable-component index.
+func ScreenVisualHashWithComponents(docRoot *jsonv.Object, screen jsonv.Value, reusableByID map[string]jsonv.Value) uint64 {
 	sObj := jsonv.Obj(screen)
 	if sObj == nil {
 		return 0
 	}
+	var varsObj, themesObj *jsonv.Object
+	if docRoot != nil {
+		varsObj = jsonv.Obj(jsonv.Get(docRoot, "variables"))
+		themesObj = jsonv.Obj(jsonv.Get(docRoot, "themes"))
+	}
+
 	h := fnv.New64a()
 	writeStr := func(s string) {
 		_, _ = h.Write([]byte(s))
 		_, _ = h.Write([]byte{0})
+	}
+	resolvedCache := map[string][]byte{}
+	resolveTokenBytes := func(varName string) ([]byte, bool) {
+		if varsObj == nil || varName == "" {
+			return nil, false
+		}
+		if cached, ok := resolvedCache[varName]; ok {
+			return cached, cached != nil
+		}
+		def, exists := varsObj.Get(varName)
+		if !exists {
+			resolvedCache[varName] = nil
+			return nil, false
+		}
+		res := jsonv.Marshal(resolveVarDefInTable(varsObj, themesObj, def))
+		resolvedCache[varName] = res
+		return res, true
+	}
+
+	var writeVal func(v jsonv.Value, depth int)
+	writeVal = func(v jsonv.Value, depth int) {
+		if depth > 64 {
+			return
+		}
+		switch x := v.(type) {
+		case string:
+			if strings.HasPrefix(x, "$") && len(x) > 1 {
+				if tokBytes, ok := resolveTokenBytes(x[1:]); ok {
+					writeStr("$resolved")
+					_, _ = h.Write(tokBytes)
+					_, _ = h.Write([]byte{0})
+					return
+				}
+			}
+			writeStr(x)
+		case *jsonv.Array:
+			writeStr("[")
+			for _, it := range x.Items {
+				writeVal(it, depth+1)
+			}
+			writeStr("]")
+		case *jsonv.Object:
+			writeStr("{")
+			ks := slices.Clone(x.Keys())
+			slices.Sort(ks)
+			for _, k := range ks {
+				writeStr(k)
+				val, _ := x.Get(k)
+				if isNonVarNodeKey(k) {
+					_, _ = h.Write(jsonv.Marshal(val))
+					_, _ = h.Write([]byte{0})
+				} else {
+					writeVal(val, depth+1)
+				}
+			}
+			writeStr("}")
+		default:
+			_, _ = h.Write(jsonv.Marshal(v))
+			_, _ = h.Write([]byte{0})
+		}
 	}
 
 	// Hash root properties in deterministic key order, excluding canvas placement `x`/`y` and `placeholder`.
@@ -56,23 +145,17 @@ func ScreenVisualHash(docRoot *jsonv.Object, screen jsonv.Value) uint64 {
 		}
 		v, _ := sObj.Get(k)
 		writeStr(k)
-		_, _ = h.Write(jsonv.Marshal(v))
-		_, _ = h.Write([]byte{0})
+		if isNonVarNodeKey(k) {
+			_, _ = h.Write(jsonv.Marshal(v))
+			_, _ = h.Write([]byte{0})
+		} else {
+			writeVal(v, 0)
+		}
 	}
 
 	if docRoot == nil {
 		return h.Sum64()
 	}
-
-	// Collect local reusable components by ID so nested `type: "ref"` instances fold into the screen's hash.
-	reusableByID := map[string]jsonv.Value{}
-	doc.Walk(jsonv.Items(jsonv.Get(docRoot, "children")), func(n jsonv.Value) {
-		if jsonv.IsTrue(jsonv.Get(n, "reusable")) {
-			if cid := jsonv.StrOr(jsonv.Get(n, "id")); cid != "" {
-				reusableByID[cid] = n
-			}
-		}
-	})
 
 	visitedRefs := map[string]bool{}
 	var refQueue []string
@@ -105,65 +188,40 @@ func ScreenVisualHash(docRoot *jsonv.Object, screen jsonv.Value) uint64 {
 	slices.Sort(refIDs)
 	for _, cid := range refIDs {
 		writeStr("comp:" + cid)
-		_, _ = h.Write(jsonv.Marshal(reusableByID[cid]))
-		_, _ = h.Write([]byte{0})
+		writeVal(reusableByID[cid], 0)
 	}
 
-	// Fold in any `$var` definitions referenced by the screen or its referenced components.
-	varsObj := jsonv.Obj(jsonv.Get(docRoot, "variables"))
-	if varsObj != nil && varsObj.Len() > 0 {
-		usedVars := map[string]bool{}
-		collectDollarVars(screen, varsObj, usedVars, 0)
-		for _, cid := range refIDs {
-			collectDollarVars(reusableByID[cid], varsObj, usedVars, 0)
-		}
-		if len(usedVars) > 0 {
-			var varNames []string
-			for vn := range usedVars {
-				varNames = append(varNames, vn)
-			}
-			slices.Sort(varNames)
-			for _, vn := range varNames {
-				if def, ok := varsObj.Get(vn); ok {
-					writeStr("var:" + vn)
-					_, _ = h.Write(jsonv.Marshal(def))
-					_, _ = h.Write([]byte{0})
-				}
-			}
-			if themes := jsonv.Get(docRoot, "themes"); themes != nil {
-				writeStr("themes")
-				_, _ = h.Write(jsonv.Marshal(themes))
-			}
-		}
+	if themesObj != nil && len(resolvedCache) > 0 {
+		writeStr("themes")
+		_, _ = h.Write(jsonv.Marshal(themesObj))
 	}
 
 	return h.Sum64()
 }
 
-func collectDollarVars(v jsonv.Value, vars *jsonv.Object, out map[string]bool, depth int) {
-	if v == nil || vars == nil || depth > 24 {
-		return
+func splitNameWords(s string) []string {
+	return strings.FieldsFunc(strings.ToLower(strings.TrimSpace(s)), func(r rune) bool {
+		return !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'))
+	})
+}
+
+func containsWordSeq(words []string, phrase ...string) bool {
+	if len(phrase) == 0 || len(words) < len(phrase) {
+		return false
 	}
-	switch x := v.(type) {
-	case string:
-		if name, ok := strings.CutPrefix(x, "$"); ok && name != "" && !out[name] {
-			if def, exists := vars.Get(name); exists {
-				out[name] = true
-				collectDollarVars(def, vars, out, depth+1)
+	for i := 0; i+len(phrase) <= len(words); i++ {
+		match := true
+		for j, p := range phrase {
+			if words[i+j] != p {
+				match = false
+				break
 			}
 		}
-	case *jsonv.Array:
-		for _, it := range x.Items {
-			collectDollarVars(it, vars, out, depth+1)
+		if match {
+			return true
 		}
-	case *jsonv.Object:
-		x.Each(func(k string, val jsonv.Value) {
-			if k == "id" || k == "name" || k == "type" || k == "ref" {
-				return
-			}
-			collectDollarVars(val, vars, out, depth+1)
-		})
 	}
+	return false
 }
 
 func isFullScreenDimensions(w, h float64) bool {
@@ -179,42 +237,97 @@ func isFullScreenDimensions(w, h float64) bool {
 	return false
 }
 
-func hasExplicitScreenOrSlideName(name string) bool {
+func isComponentOnlyFrameName(name string) bool {
 	l := strings.ToLower(strings.TrimSpace(name))
 	if l == "" {
 		return false
 	}
-	// Default blank starter frame names are generic containers, not explicit screen titles.
-	if strings.HasPrefix(l, "frame ") || l == "frame" || l == "mobile" || l == "desktop" || l == "canvas" || l == "artboard" {
+	words := splitNameWords(l)
+	if len(words) == 0 {
 		return false
 	}
-	for _, kw := range []string{
-		"screen", "page", "slide", "cover", "view", "dashboard", "home", "landing",
-		"login", "sign in", "signin", "sign up", "signup", "onboarding", "checkout",
-		"pricing", "settings", "profile", "analytics", "overview", "feed", "inbox",
-		"cart", "detail", "layar", "halaman", "beranda",
+
+	// If the name explicitly says Screen / Page / Slide / Dashboard (without being a component preview/kit),
+	// keep names like "Login Screen", "Card Checkout Page", or "Sidebar Settings Screen" eligible.
+	hasStrongScreenWord := false
+	for _, sw := range []string{"screen", "page", "slide", "dashboard", "layar", "halaman", "beranda"} {
+		if slices.Contains(words, sw) {
+			hasStrongScreenWord = true
+			break
+		}
+	}
+	hasComponentBoardModifier := false
+	for _, mod := range []string{"preview", "showcase", "specimen", "demo", "variants", "variant", "library", "sheet", "kit"} {
+		if slices.Contains(words, mod) {
+			hasComponentBoardModifier = true
+			break
+		}
+	}
+	if hasStrongScreenWord && !hasComponentBoardModifier {
+		return false
+	}
+
+	for _, phrase := range [][]string{
+		{"ui", "kit"},
+		{"design", "system"},
+		{"style", "guide"},
+		{"nav", "bar"},
+		{"navigation", "bar"},
+		{"top", "bar"},
 	} {
-		if strings.Contains(l, kw) {
+		if containsWordSeq(words, phrase...) {
+			return true
+		}
+	}
+
+	for _, kw := range []string{
+		"component", "components", "uikit", "styleguide", "token", "tokens",
+		"icon", "icons", "button", "buttons", "badge", "badges", "chip", "chips",
+		"input", "inputs", "navbar", "topbar", "header", "footer", "sidebar",
+		"card", "cards", "modal", "dialog", "popover", "dropdown", "tooltip",
+		"toast", "widget", "widgets", "komponen", "tombol",
+	} {
+		if len(words) == 1 && words[0] == kw {
+			return true
+		}
+		if words[0] == kw || words[len(words)-1] == kw {
+			return true
+		}
+		if hasComponentBoardModifier && slices.Contains(words, kw) {
 			return true
 		}
 	}
 	return false
 }
 
-func isComponentOnlyFrameName(name string) bool {
+func hasExplicitScreenOrSlideName(name string) bool {
 	l := strings.ToLower(strings.TrimSpace(name))
-	if l == "" || hasExplicitScreenOrSlideName(l) {
+	if l == "" || isComponentOnlyFrameName(l) {
 		return false
 	}
+	if strings.HasPrefix(l, "frame ") || l == "frame" || l == "mobile" || l == "desktop" || l == "canvas" || l == "artboard" {
+		return false
+	}
+	words := splitNameWords(l)
+	if len(words) == 0 {
+		return false
+	}
+	// Never treat "* Preview" / "* Showcase" / "* Specimen" boards as explicit screen names.
+	for _, mod := range []string{"preview", "showcase", "specimen"} {
+		if slices.Contains(words, mod) {
+			return false
+		}
+	}
+	if containsWordSeq(words, "sign", "in") || containsWordSeq(words, "sign", "up") {
+		return true
+	}
 	for _, kw := range []string{
-		"component", "components", "ui kit", "uikit", "design system", "style guide",
-		"styleguide", "token", "tokens", "icon", "icons", "button", "buttons",
-		"badge", "badges", "chip", "chips", "input", "inputs", "navbar", "nav bar",
-		"navigation bar", "topbar", "top bar", "header", "footer", "sidebar",
-		"card", "cards", "modal", "dialog", "popover", "dropdown", "tooltip",
-		"toast", "widget", "widgets", "komponen", "tombol",
+		"screen", "page", "slide", "cover", "view", "dashboard", "home", "landing",
+		"login", "signin", "signup", "onboarding", "checkout", "pricing", "settings",
+		"profile", "analytics", "overview", "feed", "inbox", "cart", "detail",
+		"layar", "halaman", "beranda",
 	} {
-		if l == kw || strings.HasPrefix(l, kw+" ") || strings.HasSuffix(l, " "+kw) {
+		if slices.Contains(words, kw) {
 			return true
 		}
 	}
@@ -335,6 +448,7 @@ func (e *Engine) buildScreenEvalPlan(id, name string, hash uint64, w, h float64)
 		ID:        id,
 		Name:      name,
 		Hash:      hash,
+		SourceDoc: e.Doc,
 		Tree:      tree,
 		Scale:     scale,
 		Downloads: waits,
@@ -355,10 +469,10 @@ func (e *Engine) PlanTurnTypeSafeEvaluations(agentID string) []ScreenEvalPlan {
 		return nil
 	}
 	pens := e.Agent.PenFrames()
+	reusableByID := CollectReusableComponents(e.Doc.Root)
 
 	// If the agent finished its turn while leaving `placeholder: true` on its own finished screen (and no AI Pen
 	// is drawing into it), clear the placeholder flag first so the finished screen evaluates cleanly.
-	clearedAny := false
 	for _, ch := range e.Doc.Children() {
 		if !jsonv.StrIs(jsonv.Get(ch, "type"), "frame") || jsonv.IsTrue(jsonv.Get(ch, "reusable")) {
 			continue
@@ -370,48 +484,52 @@ func (e *Engine) PlanTurnTypeSafeEvaluations(agentID string) []ScreenEvalPlan {
 		if topID == "" || slices.Contains(pens, topID) || !e.agentOwnsTopScreen(agentID, topID) {
 			continue
 		}
-		inTurnScope := slices.Contains(e.Agent.TurnNewTopIDs, topID) || e.Agent.TurnEditedPreTop[topID]
+		preHash, hadPreHash := e.Agent.PreTurnScreenHashes[topID]
+		hashChanged := hadPreHash && ScreenVisualHashWithComponents(e.Doc.Root, ch, reusableByID) != preHash
+		inTurnScope := slices.Contains(e.Agent.TurnNewTopIDs, topID) || e.Agent.TurnEditedPreTop[topID] || hashChanged
 		if !inTurnScope {
 			continue
 		}
 		e.ApplyGenerated(topID, Object("placeholder", false), true)
-		clearedAny = true
 	}
-	if clearedAny {
-		e.Sync()
-	} else {
-		e.Sync()
-	}
+	e.Sync()
 
+	activeMinScore := e.TypeSafeMinScore()
 	var plans []ScreenEvalPlan
 	for _, ch := range e.Doc.Children() {
 		topID, name, w, h, ok := e.isFinishedCandidateScreen(ch, pens)
 		if !ok || !e.agentOwnsTopScreen(agentID, topID) {
 			continue
 		}
-		inTurnScope := slices.Contains(e.Agent.TurnNewTopIDs, topID) || e.Agent.TurnEditedPreTop[topID]
+
+		hash := ScreenVisualHashWithComponents(e.Doc.Root, ch, reusableByID)
+		preHash, hadPreHash := e.Agent.PreTurnScreenHashes[topID]
+		if hadPreHash && hash == preHash {
+			continue
+		}
+		hashChangedFromPreTurn := hadPreHash && hash != preHash && !(e.Agent.IsVariationTurn && e.Agent.PreTurnTopIDs[topID])
+		inTurnScope := slices.Contains(e.Agent.TurnNewTopIDs, topID) || e.Agent.TurnEditedPreTop[topID] || hashChangedFromPreTurn
 		if !inTurnScope {
 			continue
 		}
 
-		hash := ScreenVisualHash(e.Doc.Root, ch)
-		if e.Agent.PreTurnTopIDs[topID] && hash == e.Agent.PreTurnScreenHashes[topID] {
-			continue
-		}
 		if e.Agent.EvaluatedScreenHashes[topID] == hash {
-			// Already evaluated at this exact visual state: if it scored "revise" and the agent tried to end
-			// a revision turn without modifying the screen yet, emit a cached revise nudge if budget remains.
-			maxRevs := e.TypeSafeEffectiveMaxRevisions()
-			if prev := e.Agent.LastScreenDecisions[topID]; prev != nil && prev.Verdict == "revise" &&
-				maxRevs > 0 && e.Agent.ScreenEvalRevisions[topID] < maxRevs {
-				plans = append(plans, ScreenEvalPlan{
-					ID:           topID,
-					Name:         name,
-					Hash:         hash,
-					CachedRevise: prev,
-				})
+			prev := e.Agent.LastScreenDecisions[topID]
+			if prev != nil && prev.PassScore == activeMinScore {
+				// Already evaluated at this exact visual state AND active threshold: if it scored "revise" and the
+				// agent tried to end a revision turn without modifying the screen yet, emit a cached revise nudge.
+				maxRevs := e.TypeSafeEffectiveMaxRevisions()
+				if prev.Verdict == "revise" && maxRevs > 0 && e.Agent.ScreenEvalRevisions[topID] < maxRevs {
+					plans = append(plans, ScreenEvalPlan{
+						ID:           topID,
+						Name:         name,
+						Hash:         hash,
+						SourceDoc:    e.Doc,
+						CachedRevise: prev,
+					})
+				}
+				continue
 			}
-			continue
 		}
 
 		if plan, built := e.buildScreenEvalPlan(topID, name, hash, w, h); built {
@@ -443,10 +561,13 @@ func (e *Engine) RasterizeScreenPlan(p ScreenEvalPlan) ([]byte, error) {
 	return export.EncodeTree(tree, "png", p.Scale, 0)
 }
 
-// RecordScreenEvaluation stores a completed TypeSafe decision for screenID at hash, returning the current
-// auto-revision attempt number, configured max attempts, and whether auto-revision should run on this screen.
-// Must be called under Engine.Lock.
-func (e *Engine) RecordScreenEvaluation(screenID string, hash uint64, dec *typesafe.Decision, consumeRevision bool) (attempt int, maxRevs int, canRevise bool) {
+// RecordScreenEvaluation stores a completed TypeSafe decision for screenID at hash if sourceDoc still matches e.Doc,
+// returning the current auto-revision attempt, configured max attempts, whether auto-revision should run, and whether
+// sourceDoc is still the active document. Must be called under Engine.Lock.
+func (e *Engine) RecordScreenEvaluation(sourceDoc *doc.Doc, screenID string, hash uint64, dec *typesafe.Decision, consumeRevision bool) (attempt int, maxRevs int, canRevise bool, sameDoc bool) {
+	if sourceDoc != nil && e.Doc != sourceDoc {
+		return 0, 0, false, false
+	}
 	if e.Agent.EvaluatedScreenHashes == nil {
 		e.Agent.EvaluatedScreenHashes = map[string]uint64{}
 	}
@@ -461,17 +582,21 @@ func (e *Engine) RecordScreenEvaluation(screenID string, hash uint64, dec *types
 	maxRevs = e.TypeSafeEffectiveMaxRevisions()
 	cur := e.Agent.ScreenEvalRevisions[screenID]
 	if dec == nil || dec.Verdict == "pass" || maxRevs <= 0 || cur >= maxRevs {
-		return cur, maxRevs, false
+		return cur, maxRevs, false, true
 	}
 	if consumeRevision {
 		cur++
 		e.Agent.ScreenEvalRevisions[screenID] = cur
 	}
-	return cur, maxRevs, true
+	return cur, maxRevs, true, true
 }
 
-// ConsumeCachedRevise increments the revision counter for a cached revise nudge if auto-revision budget remains. Under Engine.Lock.
-func (e *Engine) ConsumeCachedRevise(screenID string) (attempt int, maxRevs int, canRevise bool) {
+// ConsumeCachedRevise increments the revision counter for a cached revise nudge if sourceDoc still matches e.Doc
+// and auto-revision budget remains. Under Engine.Lock.
+func (e *Engine) ConsumeCachedRevise(sourceDoc *doc.Doc, screenID string) (attempt int, maxRevs int, canRevise bool) {
+	if sourceDoc != nil && e.Doc != sourceDoc {
+		return 0, 0, false
+	}
 	if e.Agent.ScreenEvalRevisions == nil {
 		e.Agent.ScreenEvalRevisions = map[string]int{}
 	}
