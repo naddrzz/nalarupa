@@ -218,6 +218,16 @@ func runAPI(e *engine.Engine, p engine.Profile, prompt string, child bool, name 
 		}
 		// Every tool_use needs a tool_result after it, or the API rejects all later requests.
 		if len(calls) == 0 || !(stop == "tool_use" || stop == "max_tokens") {
+			if len(calls) == 0 && stop != "max_tokens" && !cancel.IsSet() {
+				if revPrompt := RunTurnEndTypeSafeGate(e, p); revPrompt != "" {
+					messages = append(messages, engine.Object(
+						"role", "user",
+						"content", jsonv.NewArray(engine.Object("type", "text", "text", revPrompt)),
+					))
+					save()
+					continue
+				}
+			}
 			break
 		}
 		hasSpawnInBatch := false

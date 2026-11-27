@@ -147,6 +147,29 @@ func (a *NalarupaApp) onModelsFetched(ev map[string]any) {
 	a.ShowToast(fmt.Sprintf("Loaded %d models", len(models)), false)
 }
 
+func (a *NalarupaApp) onTypeSafeModelsFetched(ev map[string]any) {
+	a.AgentUI.TypeSafeFetchingModels = false
+	okVal, _ := ev["ok"].(bool)
+	if !okVal {
+		msg, _ := ev["error"].(string)
+		if msg == "" {
+			msg = "Failed to fetch TypeSafe models."
+		}
+		a.ShowToast(msg, true)
+		return
+	}
+	rawModels, _ := ev["models"].([]any)
+	var models []string
+	for _, raw := range rawModels {
+		if s, ok := raw.(string); ok && strings.TrimSpace(s) != "" {
+			models = append(models, strings.TrimSpace(s))
+		}
+	}
+	a.AgentUI.TypeSafeModels = models
+	a.reloadAgentSettings()
+	a.ShowToast(fmt.Sprintf("Loaded %d TypeSafe models", len(models)), false)
+}
+
 func (a *NalarupaApp) ensureSkillsLoaded(force bool) {
 	if !force && (a.AgentUI.SkillsLoaded || a.AgentUI.SkillsLoading) {
 		return

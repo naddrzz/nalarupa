@@ -305,6 +305,8 @@ func (a *NalarupaApp) ApplyPollResult(res PollResult, nowMS float64) {
 			a.onDocumentOpened()
 		case "models_fetched":
 			a.onModelsFetched(ev)
+		case "typesafe_models":
+			a.onTypeSafeModelsFetched(ev)
 		}
 	}
 	a.Store.ViewCenter = Pt{

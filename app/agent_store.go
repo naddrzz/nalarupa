@@ -77,6 +77,36 @@ type ProviderTestEvent struct {
 	Error string `json:"error,omitempty"`
 }
 
+// TypeSafeDimScore holds a 0-100 visual sub-score for one TypeSafe AI criterion.
+type TypeSafeDimScore struct {
+	Key    string `json:"key"`
+	Label  string `json:"label"`
+	Score  int    `json:"score"`
+	Status string `json:"status"`
+}
+
+// TypeSafeCardData holds structured 0-100 per-screen decision results attached to a tool_done event.
+type TypeSafeCardData struct {
+	ScreenID        string             `json:"screenId"`
+	ScreenName      string             `json:"screenName"`
+	Score           int                `json:"score"`
+	PassScore       int                `json:"passScore"`
+	Verdict         string             `json:"verdict"`
+	AutoRevise      bool               `json:"autoRevise,omitempty"`
+	RevisionAttempt int                `json:"revisionAttempt,omitempty"`
+	MaxRevisions    int                `json:"maxRevisions,omitempty"`
+	Model           string             `json:"model"`
+	Dimensions      []TypeSafeDimScore `json:"dimensions"`
+	Issues          []string           `json:"issues,omitempty"`
+}
+
+// TypeSafeTestEvent reports the outcome of testing a BYOK TypeSafe API key.
+type TypeSafeTestEvent struct {
+	OK    bool   `json:"ok"`
+	Model string `json:"model"`
+	Error string `json:"error,omitempty"`
+}
+
 // ChatItem is a polymorphic entry in the agent transcript.
 type ChatItem struct {
 	Kind string // "user","queued","assistant","thinking","tool","usage","note","error","external","permission"
@@ -93,14 +123,16 @@ type ChatItem struct {
 	StartedAt float64
 	EndedAt   *float64
 
-	ToolID  string
-	Name    string
-	Running bool
-	Lines   int
-	Input   any
-	Output  string
-	Images  []string
-	Error   bool
+	ToolID     string
+	Name       string
+	ScreenName string
+	Running    bool
+	Lines      int
+	Input      any
+	Output     string
+	Images     []string
+	Error      bool
+	TypeSafe   *TypeSafeCardData
 
 	DurationMS int64
 	Usage      UsageStats
@@ -214,6 +246,8 @@ type AgentStore struct {
 	ClaudeAuthAt       int
 	ProviderTest       *ProviderTestEvent
 	ProviderTestAt     int
+	TypeSafeTest       *TypeSafeTestEvent
+	TypeSafeTestAt     int
 	ContextUsed        int
 	ContextLimit       int
 	ContextStreamExtra int
@@ -606,6 +640,13 @@ func (s *AgentStore) ApplyEvents(events []map[string]any, now float64) bool {
 			s.ProviderTestAt++
 			changed = true
 			continue
+		case "typesafe_test":
+			var tt TypeSafeTestEvent
+			redecode(ev, &tt)
+			s.TypeSafeTest = &tt
+			s.TypeSafeTestAt++
+			changed = true
+			continue
 		case "claude_auth":
 			var st ClaudeAuth
 			if sub, ok := ev["state"]; ok {
@@ -731,6 +772,7 @@ func (s *AgentStore) ApplyEvents(events []map[string]any, now float64) bool {
 			s.endStreaming(aid, now)
 			tid, _ := ev["id"].(string)
 			tname, _ := ev["name"].(string)
+			sname, _ := ev["screenName"].(string)
 			exists := false
 			for i := range s.Items {
 				if s.Items[i].Kind == "tool" && s.Items[i].ToolID == tid {
@@ -746,15 +788,16 @@ func (s *AgentStore) ApplyEvents(events []map[string]any, now float64) bool {
 				}
 				hdr := s.opensReply(aid)
 				s.Items = append(s.Items, ChatItem{
-					Kind:     "tool",
-					ID:       s.allocID(),
-					ToolID:   tid,
-					Agent:    pVal,
-					HasAgent: true,
-					Name:     tname,
-					Running:  true,
-					Header:   hdr,
-					By:       byPtr,
+					Kind:       "tool",
+					ID:         s.allocID(),
+					ToolID:     tid,
+					Agent:      pVal,
+					HasAgent:   true,
+					Name:       tname,
+					ScreenName: sname,
+					Running:    true,
+					Header:     hdr,
+					By:         byPtr,
 				})
 			}
 			if prof != nil {
@@ -807,6 +850,14 @@ func (s *AgentStore) ApplyEvents(events []map[string]any, now float64) bool {
 			it.Input = ev["input"]
 			it.Output, _ = ev["output"].(string)
 			it.Error, _ = ev["error"].(bool)
+			if rawTS, ok := ev["typesafe"]; ok && rawTS != nil {
+				var tsc TypeSafeCardData
+				redecode(rawTS, &tsc)
+				if tsc.ScreenName != "" {
+					it.ScreenName = tsc.ScreenName
+				}
+				it.TypeSafe = &tsc
+			}
 			it.Images = nil
 			if imgs, ok := ev["images"].([]any); ok {
 				for _, im := range imgs {

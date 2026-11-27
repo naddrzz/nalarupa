@@ -43,16 +43,22 @@ func (e *Engine) BeginTurnSnapshot() {
 	e.Agent.TurnNewTopIDs = nil
 	e.Agent.TurnScreenTeam = map[string]string{}
 	e.Agent.FixedTopBounds = nil
+	e.Agent.PreTurnScreenHashes = map[string]uint64{}
+	e.Agent.ScreenEvalRevisions = map[string]int{}
 	if e.Doc == nil {
 		e.Agent.PreTurnVars = nil
 		e.Agent.PreTurnThemes = nil
 		return
 	}
 	kids := e.Doc.Children()
+	reusableByID := CollectReusableComponents(e.Doc.Root)
 	for _, ch := range kids {
 		id := jsonv.StrOr(jsonv.Get(ch, "id"))
 		if id == "" {
 			continue
+		}
+		if jsonv.StrIs(jsonv.Get(ch, "type"), "frame") && !jsonv.IsTrue(jsonv.Get(ch, "reusable")) {
+			e.Agent.PreTurnScreenHashes[id] = ScreenVisualHashWithComponents(e.Doc.Root, ch, reusableByID)
 		}
 		// Exclude only the untouched blank/mobile template starter frame so Turn 1 can edit or replace it;
 		// finished screens (including empty background-only frames using $ground) remain protected.

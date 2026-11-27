@@ -1,13 +1,16 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/naddrzz/nalarupa/core-go/engine"
 	"github.com/naddrzz/nalarupa/core-go/jsonv"
 	"github.com/naddrzz/nalarupa/core-go/model"
+	"github.com/naddrzz/nalarupa/core-go/typesafe"
 )
 
 // The agent's UI commands (lib.rs `dispatch`). They lock the engine themselves, so they join the dispatcher
@@ -275,5 +278,113 @@ func init() {
 			))
 		}
 		return out, nil
+	})
+	normTypeSafeEndpoint := func(u string) string {
+		u = strings.TrimRight(strings.TrimSpace(u), "/")
+		if u == "" {
+			u = typesafe.DefaultBaseURL
+		}
+		return strings.TrimSuffix(u, "/v1")
+	}
+	engine.HandleUnlocked("typesafe_test", func(e *engine.Engine, req jsonv.Value) (jsonv.Value, error) {
+		apiKey := strings.TrimSpace(jsonv.StrOr(jsonv.Get(req, "api_key")))
+		baseURL := strings.TrimSpace(jsonv.StrOr(jsonv.Get(req, "base_url")))
+		mod := strings.TrimSpace(jsonv.StrOr(jsonv.Get(req, "model")))
+		var precheckErr error
+		e.Locked(func() {
+			savedBase := e.TypeSafeBaseURL()
+			if baseURL == "" {
+				baseURL = savedBase
+			}
+			if apiKey == "" || apiKey == engine.Mask {
+				if normTypeSafeEndpoint(baseURL) != normTypeSafeEndpoint(savedBase) {
+					if _, hasSaved := e.TypeSafeAPIKey(); hasSaved {
+						precheckErr = errors.New("Enter the TypeSafe API key for the edited Base URL before testing.")
+						return
+					}
+				} else {
+					apiKey, _ = e.TypeSafeAPIKey()
+				}
+			}
+			if mod == "" {
+				mod = e.TypeSafeModel()
+			}
+		})
+		if precheckErr != nil {
+			return nil, precheckErr
+		}
+		if apiKey == "" || apiKey == engine.Mask {
+			return nil, errors.New("Enter a TypeSafe API key first.")
+		}
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					e.Locked(func() {
+						e.Emit(engine.Object("type", "typesafe_test", "ok", false, "model", mod, "error", fmt.Sprintf("internal error (panic): %v", r)))
+					})
+				}
+			}()
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			modelUsed, err := typesafe.NewClient(apiKey, baseURL, mod).TestConnection(ctx)
+			e.Locked(func() {
+				if err != nil {
+					e.Emit(engine.Object("type", "typesafe_test", "ok", false, "model", mod, "error", err.Error()))
+					return
+				}
+				e.Emit(engine.Object("type", "typesafe_test", "ok", true, "model", modelUsed, "error", ""))
+			})
+		}()
+		return true, nil
+	})
+	engine.HandleUnlocked("typesafe_models", func(e *engine.Engine, req jsonv.Value) (jsonv.Value, error) {
+		apiKey := strings.TrimSpace(jsonv.StrOr(jsonv.Get(req, "api_key")))
+		baseURL := strings.TrimSpace(jsonv.StrOr(jsonv.Get(req, "base_url")))
+		var precheckErr error
+		e.Locked(func() {
+			savedBase := e.TypeSafeBaseURL()
+			if baseURL == "" {
+				baseURL = savedBase
+			}
+			if apiKey == "" || apiKey == engine.Mask {
+				if normTypeSafeEndpoint(baseURL) != normTypeSafeEndpoint(savedBase) {
+					if _, hasSaved := e.TypeSafeAPIKey(); hasSaved {
+						precheckErr = errors.New("Enter the TypeSafe API key for the edited Base URL before fetching models.")
+						return
+					}
+				} else {
+					apiKey, _ = e.TypeSafeAPIKey()
+				}
+			}
+		})
+		if precheckErr != nil {
+			return nil, precheckErr
+		}
+		if apiKey == "" || apiKey == engine.Mask {
+			return nil, errors.New("Enter a TypeSafe API key first.")
+		}
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					e.Locked(func() {
+						e.Emit(engine.Object("type", "typesafe_models", "ok", false, "models", engine.Strings(nil), "error", fmt.Sprintf("internal error (panic): %v", r)))
+					})
+				}
+			}()
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			models, err := typesafe.NewClient(apiKey, baseURL, "").ListModels(ctx)
+			e.Locked(func() {
+				if err != nil {
+					e.Emit(engine.Object("type", "typesafe_models", "ok", false, "models", engine.Strings(nil), "error", err.Error()))
+					return
+				}
+				if len(models) > 0 {
+					_ = e.SetSetting("typesafe_models_list", engine.Strings(models))
+				}
+				e.Emit(engine.Object("type", "typesafe_models", "ok", true, "models", engine.Strings(models), "error", ""))
+			})
+		}()
+		return true, nil
 	})
 }
