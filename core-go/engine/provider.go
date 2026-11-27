@@ -124,3 +124,16 @@ func (e *Engine) EffectiveContextWindow() int {
 	m, _, _ := e.RunModel(b)
 	return e.ContextWindowLimit(b, m)
 }
+
+// SupportsVision reports whether the currently configured backend/provider supports image blocks.
+// Call with the engine lock held.
+func (e *Engine) SupportsVision() bool {
+	if e.Backend() == "provider" {
+		p := model.Active(jsonv.Get(e.Settings, "providers"), e.settingOr("agent_provider"))
+		if p == nil {
+			return true
+		}
+		return !jsonv.IsFalse(jsonv.Get(p, "vision"))
+	}
+	return true
+}

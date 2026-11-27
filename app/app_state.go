@@ -141,6 +141,8 @@ func (a *NalarupaApp) Close() {
 			a.Canvas.worker.Close()
 		}
 		a.bgWG.Wait()
+		a.clearAgentImageCache()
+		a.releasePendingImageBitmaps()
 		a.Bridge.Shutdown()
 	})
 }
@@ -368,6 +370,9 @@ func (a *NalarupaApp) onDocumentOpened() {
 	a.AgentUI.SkillsReqSeq++
 	a.AgentUI.DismissedSlash = ""
 	a.AgentUI.SlashIndex = 0
+	a.AgentUI.PendingContexts = nil
+	a.AgentUI.PickingCanvasCtx = false
+	a.AgentUI.CanvasAttachOpen = false
 	a.resetLayersForNewDoc()
 	a.resetCanvasForNewDoc()
 	a.Store.ClearPresence()
@@ -379,8 +384,10 @@ func (a *NalarupaApp) onDocumentOpened() {
 }
 
 func (a *NalarupaApp) onSelectionChanged(ids []string) {
+	a.clearCanvasContextMenuState()
 	a.Layers.revealSelection(a, ids)
-	if len(ids) > 0 && a.RightTab == "agent" && len(a.Store.Items) == 0 {
+	if len(ids) > 0 && a.RightTab == "agent" && len(a.Store.Items) == 0 &&
+		!a.AgentUI.PickingCanvasCtx && !a.hasPendingAttachments() {
 		a.RightTab = "design"
 	}
 }
@@ -973,6 +980,9 @@ func (a *NalarupaApp) HandleEditorShortcut(mods ui.Modifiers, key ui.Key) bool {
 		case ui.KeyD:
 			a.DuplicateSelection()
 			return true
+		case ui.KeyL:
+			a.TriggerCanvasAttachShortcut()
+			return true
 		case ui.KeyA:
 			if a.Canvas.pen != nil {
 				for _, c := range a.Canvas.pen.contours {
@@ -1269,6 +1279,10 @@ func (a *NalarupaApp) handleEnterShortcut(selectParents bool) bool {
 }
 
 func (a *NalarupaApp) handleEscapeShortcut() bool {
+	if a.AgentUI.PickingCanvasCtx {
+		a.AgentUI.PickingCanvasCtx = false
+		return true
+	}
 	if a.Canvas.textEdit != nil {
 		a.Canvas.commitInlineTextEdit(a)
 		return true
@@ -1436,6 +1450,7 @@ func (a *NalarupaApp) View(c *ui.Context) {
 	c.SetMenuPresentation(ui.PopoverMenus)
 	a.Services = c.Services()
 	a.drainExportDone()
+	a.drainAttachDone()
 
 	rm := EffectiveReducedMotion(c)
 	if a.lastReducedMotion == nil || *a.lastReducedMotion != rm {
@@ -1468,12 +1483,24 @@ func (a *NalarupaApp) viewEditor(c *ui.Context) {
 	c.OnWindowShortcut(ui.Cmd, ui.KeyEnter, func() {
 		a.EnterPresent()
 	})
+	c.OnWindowShortcut(ui.Cmd, ui.KeyL, func() {
+		a.TriggerCanvasAttachShortcut()
+	})
+	if a.AgentUI.PickingCanvasCtx {
+		c.OnWindowShortcut(0, ui.KeyEscape, func() {
+			a.AgentUI.PickingCanvasCtx = false
+		})
+	}
 
 	if takesText && a.Canvas.SpaceHeld {
 		a.Canvas.SpaceHeld = false
 	}
 	shell := ui.Column(c.Key("editor-shell")).Fill().Background(C.BG)
 	shell.HandleInput(func(ev ui.InputEvent) bool {
+		if ev.Kind == ui.InputKeyDown && ev.Key == ui.KeyEscape && a.AgentUI.PickingCanvasCtx {
+			a.AgentUI.PickingCanvasCtx = false
+			return true
+		}
 		if !takesText && a.Canvas.textEdit == nil && a.Canvas.frameRename == nil {
 			if ev.Kind == ui.InputKeyDown && ev.Key == ui.KeySpace {
 				a.Canvas.SpaceHeld = true

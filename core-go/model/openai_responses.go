@@ -263,6 +263,7 @@ func ResponsesTranslate(body jsonv.Value, vision, openai bool) jsonv.Value {
 			continue
 		}
 		var parts []jsonv.Value
+		droppedUserImages := 0
 		for _, b := range blocks {
 			switch jsonv.StrOr(jsonv.Get(b, "type")) {
 			case "tool_result":
@@ -292,8 +293,13 @@ func ResponsesTranslate(body jsonv.Value, vision, openai bool) jsonv.Value {
 			case "image":
 				if vision {
 					parts = append(parts, obj("type", "input_image", "image_url", dataURL(b)))
+				} else {
+					droppedUserImages++
 				}
 			}
+		}
+		if droppedUserImages > 0 {
+			parts = append(parts, obj("type", "input_text", "text", userImageBlind(droppedUserImages)))
 		}
 		if len(parts) > 0 {
 			input = append(input, obj("role", "user", "content", arr(parts)))

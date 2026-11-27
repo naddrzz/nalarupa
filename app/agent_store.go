@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"math"
 	"math/rand/v2"
+	"slices"
 	"strings"
 	"time"
 )
@@ -107,6 +108,17 @@ type TypeSafeTestEvent struct {
 	Error string `json:"error,omitempty"`
 }
 
+// ChatContextRef represents a pinned canvas node or viewport context attached to a user message.
+type ChatContextRef struct {
+	Kind     string      `json:"kind"` // "node" | "viewport"
+	ID       string      `json:"id,omitempty"`
+	Name     string      `json:"name,omitempty"`
+	NodeType string      `json:"nodeType,omitempty"`
+	W        float64     `json:"w,omitempty"`
+	H        float64     `json:"h,omitempty"`
+	Viewport *[4]float64 `json:"viewport,omitempty"`
+}
+
 // ChatItem is a polymorphic entry in the agent transcript.
 type ChatItem struct {
 	Kind string // "user","queued","assistant","thinking","tool","usage","note","error","external","permission"
@@ -130,6 +142,7 @@ type ChatItem struct {
 	Lines      int
 	Input      any
 	Output     string
+	Contexts   []ChatContextRef
 	Images     []string
 	Error      bool
 	TypeSafe   *TypeSafeCardData
@@ -679,19 +692,38 @@ func (s *AgentStore) ApplyEvents(events []map[string]any, now float64) bool {
 		switch kind {
 		case "user":
 			txt, _ := ev["text"].(string)
-			s.Items = append(s.Items, ChatItem{Kind: "user", ID: s.allocID(), Text: txt})
-			var queued []string
+			ctxs := parseEventContexts(ev["contexts"])
+			imgs := parseEventImages(ev["images"])
+			s.Items = append(s.Items, ChatItem{
+				Kind:     "user",
+				ID:       s.allocID(),
+				Text:     txt,
+				Contexts: ctxs,
+				Images:   imgs,
+			})
+			var queuedItems []ChatItem
 			for _, it := range s.Items {
 				if it.Kind == "queued" {
-					queued = append(queued, it.Text)
+					queuedItems = append(queuedItems, it)
 				}
 			}
-			if len(queued) > 0 && txt == strings.Join(queued, "\n\n") {
-				s.filterOutKind("queued")
+			if len(queuedItems) > 0 {
+				fromQueue, _ := ev["fromQueue"].(bool)
+				if fromQueue || matchesCoalescedQueue(queuedItems, txt, imgs) {
+					s.filterOutKind("queued")
+				}
 			}
 		case "queued":
 			txt, _ := ev["text"].(string)
-			s.Items = append(s.Items, ChatItem{Kind: "queued", ID: s.allocID(), Text: txt})
+			ctxs := parseEventContexts(ev["contexts"])
+			imgs := parseEventImages(ev["images"])
+			s.Items = append(s.Items, ChatItem{
+				Kind:     "queued",
+				ID:       s.allocID(),
+				Text:     txt,
+				Contexts: ctxs,
+				Images:   imgs,
+			})
 		case "dequeued":
 			s.filterOutKind("queued")
 			s.Items = append(s.Items, ChatItem{Kind: "note", ID: s.allocID(), Text: "Queued message discarded."})
@@ -1004,6 +1036,64 @@ func (s *AgentStore) filterOutKind(kind string) {
 		}
 	}
 	s.Items = kept
+}
+
+func parseEventContexts(raw any) []ChatContextRef {
+	if raw == nil {
+		return nil
+	}
+	var out []ChatContextRef
+	redecode(raw, &out)
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func parseEventImages(raw any) []string {
+	imgs, ok := raw.([]any)
+	if !ok || len(imgs) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(imgs))
+	for _, im := range imgs {
+		switch x := im.(type) {
+		case string:
+			if x != "" {
+				out = append(out, x)
+			}
+		case map[string]any:
+			if data, ok := x["data"].(string); ok && data != "" {
+				out = append(out, data)
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func matchesCoalescedQueue(queued []ChatItem, txt string, imgs []string) bool {
+	allTexts := make([]string, 0, len(queued))
+	nonEmptyTexts := make([]string, 0, len(queued))
+	var qImgs []string
+	for _, it := range queued {
+		allTexts = append(allTexts, it.Text)
+		if it.Text != "" {
+			nonEmptyTexts = append(nonEmptyTexts, it.Text)
+		}
+		for _, im := range it.Images {
+			if len(qImgs) < 10 {
+				qImgs = append(qImgs, im)
+			}
+		}
+	}
+	textMatch := txt == strings.Join(nonEmptyTexts, "\n\n") || txt == strings.Join(allTexts, "\n\n")
+	if !textMatch {
+		return false
+	}
+	return slices.Equal(qImgs, imgs)
 }
 
 func (s *AgentStore) pruneStaleActivity(now float64) {

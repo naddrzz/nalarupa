@@ -1,7 +1,9 @@
 package agent
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
@@ -47,7 +49,16 @@ func init() {
 		return d
 	}
 	engine.HandleUnlocked("agent_send", func(e *engine.Engine, req jsonv.Value) (jsonv.Value, error) {
-		return done(Send(e, jsonv.StrOr(jsonv.Get(req, "text")), u64Or(req, "parallel", 1), orDefault(req, "mode", "split"),
+		contexts, err := parseCanvasContexts(jsonv.Get(req, "contexts"))
+		if err != nil {
+			return nil, err
+		}
+		images, err := parseAttachmentImages(jsonv.Get(req, "images"))
+		if err != nil {
+			return nil, err
+		}
+		return done(SendWithAttachments(e, jsonv.StrOr(jsonv.Get(req, "text")), contexts, images,
+			u64Or(req, "parallel", 1), orDefault(req, "mode", "split"),
 			u64Or(req, "designs", 1), orDefault(req, "iterate", "layout")))
 	})
 	engine.HandleUnlocked("agent_stop", func(e *engine.Engine, _ jsonv.Value) (jsonv.Value, error) {
@@ -387,4 +398,211 @@ func init() {
 		}()
 		return true, nil
 	})
+}
+
+func parseCanvasContexts(raw jsonv.Value) ([]engine.CanvasContextRef, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	arr, ok := raw.(*jsonv.Array)
+	if !ok {
+		return nil, errors.New("contexts must be an array")
+	}
+	if arr == nil || len(arr.Items) == 0 {
+		return nil, nil
+	}
+	items := arr.Items
+	seen := map[string]bool{}
+	out := make([]engine.CanvasContextRef, 0, len(items))
+	for _, it := range items {
+		kind := strings.ToLower(strings.TrimSpace(jsonv.StrOr(jsonv.Get(it, "kind"))))
+		id := strings.TrimSpace(jsonv.StrOr(jsonv.Get(it, "id")))
+		if kind == "" && id != "" {
+			kind = "node"
+		}
+		switch kind {
+		case "node":
+			if id == "" {
+				continue
+			}
+			key := "node:" + id
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			w, _ := jsonv.F64(jsonv.Get(it, "w"))
+			h, _ := jsonv.F64(jsonv.Get(it, "h"))
+			out = append(out, engine.CanvasContextRef{
+				Kind:     "node",
+				ID:       id,
+				Name:     strings.TrimSpace(jsonv.StrOr(jsonv.Get(it, "name"))),
+				NodeType: strings.TrimSpace(jsonv.StrOr(jsonv.Get(it, "nodeType"))),
+				W:        w,
+				H:        h,
+			})
+		case "viewport":
+			if seen["viewport"] {
+				continue
+			}
+			seen["viewport"] = true
+			w, _ := jsonv.F64(jsonv.Get(it, "w"))
+			h, _ := jsonv.F64(jsonv.Get(it, "h"))
+			var vp *[4]float64
+			if arr := jsonv.Items(jsonv.Get(it, "viewport")); len(arr) >= 4 {
+				var vals [4]float64
+				okAll := true
+				for i := range 4 {
+					f, ok := jsonv.F64(arr[i])
+					if !ok {
+						okAll = false
+						break
+					}
+					vals[i] = f
+				}
+				if okAll && vals[2] > 0 && vals[3] > 0 {
+					vp = &vals
+				}
+			}
+			name := strings.TrimSpace(jsonv.StrOr(jsonv.Get(it, "name")))
+			if name == "" {
+				name = "Canvas viewport"
+			}
+			out = append(out, engine.CanvasContextRef{
+				Kind:     "viewport",
+				Name:     name,
+				NodeType: "viewport",
+				W:        w,
+				H:        h,
+				Viewport: vp,
+			})
+		}
+	}
+	return out, nil
+}
+
+func sniffImageBytesMediaType(raw []byte) (string, bool) {
+	if len(raw) >= 8 && bytes.Equal(raw[:8], []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}) {
+		return "image/png", true
+	}
+	if len(raw) >= 3 && raw[0] == 0xff && raw[1] == 0xd8 && raw[2] == 0xff {
+		return "image/jpeg", true
+	}
+	if len(raw) >= 6 && (string(raw[:6]) == "GIF87a" || string(raw[:6]) == "GIF89a") {
+		return "image/gif", true
+	}
+	if len(raw) >= 12 && string(raw[:4]) == "RIFF" && string(raw[8:12]) == "WEBP" {
+		return "image/webp", true
+	}
+	return "", false
+}
+
+func sniffImageMediaType(b64 string) string {
+	sample := b64
+	if len(sample) > 16 {
+		sample = sample[:16]
+	}
+	if raw, err := base64.StdEncoding.DecodeString(sample); err == nil {
+		if mt, ok := sniffImageBytesMediaType(raw); ok {
+			return mt
+		}
+	}
+	return "image/png"
+}
+
+func normalizeExplicitImageMediaType(mt string) (string, bool) {
+	mt = strings.ToLower(strings.TrimSpace(mt))
+	if mt == "image/jpg" {
+		mt = "image/jpeg"
+	}
+	switch mt {
+	case "image/png", "image/jpeg", "image/webp", "image/gif":
+		return mt, true
+	default:
+		return "", false
+	}
+}
+
+func parseAttachmentImages(raw jsonv.Value) ([]engine.AttachmentImage, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	arr, ok := raw.(*jsonv.Array)
+	if !ok {
+		return nil, errors.New("images must be an array")
+	}
+	if arr == nil || len(arr.Items) == 0 {
+		return nil, nil
+	}
+	items := arr.Items
+	if len(items) > MaxAttachedImages {
+		return nil, fmt.Errorf("At most %d images can be attached per message.", MaxAttachedImages)
+	}
+	out := make([]engine.AttachmentImage, 0, len(items))
+	for i, it := range items {
+		var name, mt, data string
+		var w, h int
+		if s, ok := jsonv.Str(it); ok {
+			data = strings.TrimSpace(s)
+		} else {
+			name = strings.TrimSpace(jsonv.StrOr(jsonv.Get(it, "name")))
+			mt = strings.TrimSpace(jsonv.StrOr(jsonv.Get(it, "mediaType")))
+			if mt == "" {
+				mt = strings.TrimSpace(jsonv.StrOr(jsonv.Get(it, "media_type")))
+			}
+			data = strings.TrimSpace(jsonv.StrOr(jsonv.Get(it, "data")))
+			if wf, ok := jsonv.F64(jsonv.Get(it, "width")); ok {
+				w = int(wf)
+			}
+			if hf, ok := jsonv.F64(jsonv.Get(it, "height")); ok {
+				h = int(hf)
+			}
+		}
+		var dataURLMT string
+		if strings.HasPrefix(data, "data:") {
+			if semi := strings.Index(data, ";base64,"); semi > 5 {
+				dataURLMT = strings.TrimSpace(data[5:semi])
+				data = strings.TrimSpace(data[semi+len(";base64,"):])
+			}
+		}
+		if data == "" {
+			return nil, fmt.Errorf("Attached image #%d is empty.", i+1)
+		}
+		rawBytes, err := base64.StdEncoding.DecodeString(data)
+		if err != nil {
+			return nil, fmt.Errorf("Attached image #%d is not valid base64.", i+1)
+		}
+		detectedMT, ok := sniffImageBytesMediaType(rawBytes)
+		if !ok {
+			return nil, fmt.Errorf("Attached image #%d is not a supported image format (use PNG, JPEG, WebP, or GIF).", i+1)
+		}
+		if mt != "" {
+			normMT, ok := normalizeExplicitImageMediaType(mt)
+			if !ok {
+				return nil, fmt.Errorf("Attached image #%d has unsupported media type %q (use PNG, JPEG, WebP, or GIF).", i+1, mt)
+			}
+			if normMT != detectedMT {
+				return nil, fmt.Errorf("Attached image #%d media type %q does not match detected image format %q.", i+1, normMT, detectedMT)
+			}
+		}
+		if dataURLMT != "" {
+			normURLMT, ok := normalizeExplicitImageMediaType(dataURLMT)
+			if !ok {
+				return nil, fmt.Errorf("Attached image #%d has unsupported media type %q (use PNG, JPEG, WebP, or GIF).", i+1, dataURLMT)
+			}
+			if normURLMT != detectedMT {
+				return nil, fmt.Errorf("Attached image #%d media type %q does not match detected image format %q.", i+1, normURLMT, detectedMT)
+			}
+		}
+		if name == "" {
+			name = fmt.Sprintf("image-%d", i+1)
+		}
+		out = append(out, engine.AttachmentImage{
+			Name:      name,
+			MediaType: detectedMT,
+			Data:      data,
+			Width:     w,
+			Height:    h,
+		})
+	}
+	return out, nil
 }
