@@ -44,9 +44,9 @@ const editorStateNote = "\n\nThe result of `get_editor_state` (fresh; call it ag
 
 // runAPI runs p's turn over a model API: the streamed reply, its tool calls and their results, until the model
 // ends its turn.
-func runAPI(e *engine.Engine, p engine.Profile, prompt string, child bool, name string, client model.Provider, contextLimit int) (*jsonv.Object, error) {
+func runAPI(e *engine.Engine, p engine.Profile, prompt string, images []engine.AttachmentImage, child bool, name string, client model.Provider, contextLimit int) (*jsonv.Object, error) {
 	var effort, state string
-	var fast bool
+	var fast, supportsVision bool
 	var cancel *engine.Flag
 	var messages []jsonv.Value
 	if name == "" {
@@ -61,20 +61,43 @@ func runAPI(e *engine.Engine, p engine.Profile, prompt string, child bool, name 
 			contextLimit = e.ContextWindowLimit(e.Backend(), name)
 		}
 		fast = fastFor(name, jsonv.IsTrue(jsonv.Get(e.Settings, "agent_fast")))
+		supportsVision = e.SupportsVision()
 		cancel, state = e.Agent.Cancel, e.EditorState()
 		if !child {
 			messages = append(messages, e.Agent.Messages...)
 		}
 	})
 	user := prompt
-	userMsg := engine.Object("role", "user", "content", jsonv.NewArray(engine.Object("type", "text", "text", user)))
 	if !child {
 		user = prompt + editorStateNote + state
-		userMsg = engine.Object(
-			"role", "user",
-			"content", jsonv.NewArray(engine.Object("type", "text", "text", user)),
-			"__prompt_len", jsonv.Int(int64(len(prompt))),
-		)
+	}
+	contentParts := jsonv.NewArray(engine.Object("type", "text", "text", user))
+	if len(images) > 0 {
+		if !supportsVision {
+			note := "[User attached 1 image, but this model cannot see images: the image is not available.]"
+			if len(images) > 1 {
+				note = fmt.Sprintf("[User attached %d images, but this model cannot see images: images are not available.]", len(images))
+			}
+			contentParts.Items = append(contentParts.Items, engine.Object("type", "text", "text", note))
+		} else {
+			for _, img := range images {
+				if img.Data == "" {
+					continue
+				}
+				mt := img.MediaType
+				if mt == "" {
+					mt = sniffImageMediaType(img.Data)
+				}
+				contentParts.Items = append(contentParts.Items, engine.Object(
+					"type", "image",
+					"source", engine.Object("type", "base64", "media_type", mt, "data", img.Data),
+				))
+			}
+		}
+	}
+	userMsg := engine.Object("role", "user", "content", contentParts)
+	if !child {
+		userMsg.Set("__prompt_len", jsonv.Int(int64(len(prompt))))
 	}
 	messages = append(messages, userMsg)
 
@@ -115,7 +138,7 @@ func runAPI(e *engine.Engine, p engine.Profile, prompt string, child bool, name 
 			return usage, fmt.Errorf("prompt exceeds configured context window (%d estimated input tokens, limit %d); shorten the prompt or increase the context window limit in Agent settings", estInput, contextLimit)
 		}
 		body := engine.Object("model", name, "max_tokens", jsonv.Int(int64(maxOut)), "system", system, "tools", tools,
-			"messages", apiWireMessages(messages), "output_config", engine.Object("effort", effort))
+			"messages", apiWireMessages(messages, supportsVision), "output_config", engine.Object("effort", effort))
 		var betas []string
 		if modern {
 			body.Set("fallbacks", "default")
@@ -300,22 +323,81 @@ func hasNumericField(v jsonv.Value, key string) bool {
 	return ok
 }
 
-func apiWireMessages(messages []jsonv.Value) *jsonv.Array {
+func apiWireMessages(messages []jsonv.Value, supportsVision bool) *jsonv.Array {
 	items := make([]jsonv.Value, len(messages))
 	for i, m := range messages {
-		if obj := jsonv.Obj(m); obj != nil && obj.Has("__prompt_len") {
-			clean := jsonv.NewObject()
-			obj.Each(func(k string, val jsonv.Value) {
-				if !strings.HasPrefix(k, "__") {
-					clean.Set(k, val)
-				}
-			})
-			items[i] = clean
+		obj := jsonv.Obj(m)
+		if obj == nil {
+			items[i] = m
 			continue
 		}
-		items[i] = m
+		needCleanMeta := obj.Has("__prompt_len")
+		if supportsVision && !needCleanMeta {
+			items[i] = m
+			continue
+		}
+		clean := jsonv.NewObject()
+		obj.Each(func(k string, val jsonv.Value) {
+			if strings.HasPrefix(k, "__") {
+				return
+			}
+			if k == "content" && !supportsVision {
+				clean.Set(k, stripWireImages(val))
+				return
+			}
+			clean.Set(k, val)
+		})
+		items[i] = clean
 	}
 	return jsonv.NewArray(items...)
+}
+
+func stripWireImages(content jsonv.Value) jsonv.Value {
+	arr := jsonv.Arr(content)
+	if arr == nil {
+		return content
+	}
+	kept := make([]jsonv.Value, 0, len(arr.Items))
+	droppedTop := 0
+	for _, b := range arr.Items {
+		switch jsonv.StrOr(jsonv.Get(b, "type")) {
+		case "image":
+			droppedTop++
+		case "tool_result":
+			trArr := jsonv.Arr(jsonv.Get(b, "content"))
+			if trArr == nil {
+				kept = append(kept, b)
+				continue
+			}
+			subKept := make([]jsonv.Value, 0, len(trArr.Items))
+			droppedSub := 0
+			for _, sub := range trArr.Items {
+				if jsonv.StrIs(jsonv.Get(sub, "type"), "image") {
+					droppedSub++
+					continue
+				}
+				subKept = append(subKept, sub)
+			}
+			if droppedSub == 0 {
+				kept = append(kept, b)
+				continue
+			}
+			subKept = append(subKept, engine.Object("type", "text", "text", "[Screenshot omitted: this model cannot see images.]"))
+			trObj := jsonv.Obj(jsonv.Clone(b))
+			trObj.Set("content", jsonv.NewArray(subKept...))
+			kept = append(kept, trObj)
+		default:
+			kept = append(kept, b)
+		}
+	}
+	if droppedTop > 0 {
+		note := "[Image omitted: this model cannot see images.]"
+		if droppedTop > 1 {
+			note = fmt.Sprintf("[%d images omitted: this model cannot see images.]", droppedTop)
+		}
+		kept = append(kept, engine.Object("type", "text", "text", note))
+	}
+	return jsonv.NewArray(kept...)
 }
 
 func u64(v uint64) jsonv.Number { return jsonv.Number(fmt.Sprint(v)) }

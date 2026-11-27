@@ -262,6 +262,13 @@ const (
 	shotBlind   = "\n[A screenshot was taken, but this model cannot see images: the screenshot is not available.]"
 )
 
+func userImageBlind(n int) string {
+	if n == 1 {
+		return "[User attached 1 image, but this model cannot see images: the image is not available.]"
+	}
+	return fmt.Sprintf("[User attached %d images, but this model cannot see images: images are not available.]", n)
+}
+
 func extractChatUsage(ev jsonv.Value) (jsonv.Value, bool) {
 	candidates := []jsonv.Value{jsonv.Get(ev, "usage")}
 	if choices := jsonv.Items(jsonv.Get(ev, "choices")); len(choices) > 0 {
@@ -324,6 +331,7 @@ func chatTranslateOpts(body jsonv.Value, vision, openai, includeReasoning bool) 
 			continue
 		}
 		var parts, images []jsonv.Value
+		droppedUserImages := 0
 		for _, b := range blocks {
 			switch jsonv.StrOr(jsonv.Get(b, "type")) {
 			case "tool_result":
@@ -349,8 +357,13 @@ func chatTranslateOpts(body jsonv.Value, vision, openai, includeReasoning bool) 
 			case "image":
 				if vision {
 					parts = append(parts, imagePart(b))
+				} else {
+					droppedUserImages++
 				}
 			}
+		}
+		if droppedUserImages > 0 {
+			parts = append(parts, obj("type", "text", "text", userImageBlind(droppedUserImages)))
 		}
 		// Nothing may sit between an assistant's tool calls and their replies: images come after all of them.
 		parts = append(parts, images...)

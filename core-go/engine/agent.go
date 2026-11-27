@@ -85,6 +85,51 @@ type QueueOpts struct {
 	Iterate  string
 }
 
+// AttachmentImage is a user-attached or auto-rendered canvas snapshot image sent with an agent turn.
+type AttachmentImage struct {
+	Name      string
+	MediaType string // "image/png" | "image/jpeg" | "image/webp" | "image/gif"
+	Data      string // raw base64 bytes (no data: prefix)
+	Width     int
+	Height    int
+}
+
+// CanvasContextRef identifies a pinned canvas node or viewport screen attached to an agent turn.
+type CanvasContextRef struct {
+	Kind     string      // "node" | "viewport"
+	ID       string      // node id when Kind == "node"
+	Name     string      // display name
+	NodeType string      // e.g. "frame", "text", "viewport"
+	W        float64     // width in document units
+	H        float64     // height in document units
+	Viewport *[4]float64 // pinned [x, y, w, h] in document units when Kind == "viewport"
+}
+
+// JSON is `{kind, id, name, nodeType, w?, h?, viewport?}`.
+func (c CanvasContextRef) JSON() *jsonv.Object {
+	o := Object("kind", c.Kind, "id", c.ID, "name", c.Name, "nodeType", c.NodeType)
+	if c.W > 0 || c.H > 0 {
+		o.Set("w", jsonv.Float(c.W))
+		o.Set("h", jsonv.Float(c.H))
+	}
+	if c.Viewport != nil {
+		o.Set("viewport", jsonv.NewArray(
+			jsonv.Float(c.Viewport[0]),
+			jsonv.Float(c.Viewport[1]),
+			jsonv.Float(c.Viewport[2]),
+			jsonv.Float(c.Viewport[3]),
+		))
+	}
+	return o
+}
+
+// QueueEntry holds one queued user message with its pinned canvas contexts and attached images.
+type QueueEntry struct {
+	Prompt   string
+	Contexts []CanvasContextRef
+	Images   []AttachmentImage
+}
+
 // AgentState is the built-in agent's state (agent.rs `AgentState`). Empty strings stand for Rust's `None`.
 type AgentState struct {
 	// Messages is the Claude API history of the main conversation.
@@ -99,8 +144,9 @@ type AgentState struct {
 	Cancel   *Flag
 	Profiles []Profile
 	Main     string
-	// Queue holds prompts sent while agents were busy; they are sent as one message afterwards.
-	Queue     []string
+	// Queue holds prompts (with optional canvas contexts and images) sent while agents were busy; they are
+	// coalesced and sent as one message afterwards.
+	Queue     []QueueEntry
 	QueueOpts QueueOpts
 	// Parallel and Mode are the parallel agent setting of the current turn: a count and "split" | "side".
 	Parallel int

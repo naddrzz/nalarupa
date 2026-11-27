@@ -146,9 +146,17 @@ func stripStaleImagesAndEditorState(messages []jsonv.Value) ([]jsonv.Value, bool
 			out[i] = mc
 			continue
 		}
+		isOlderUser := jsonv.StrIs(jsonv.Get(mc, "role"), "user") && i != lastHumanIdx
+		keptBlocks := make([]jsonv.Value, 0, len(blocks.Items))
+		omittedUserImg := false
 		for bi, b := range blocks.Items {
 			ty := jsonv.StrOr(jsonv.Get(b, "type"))
-			if ty == "text" && bi == 0 && i != lastHumanIdx && jsonv.StrIs(jsonv.Get(mc, "role"), "user") {
+			if ty == "image" && isOlderUser {
+				omittedUserImg = true
+				changed = true
+				continue
+			}
+			if ty == "text" && bi == 0 && isOlderUser {
 				txt := jsonv.StrOr(jsonv.Get(b, "text"))
 				if idx := editorStateNoteIndex(mc, txt); idx >= 0 {
 					trimmed := txt[:idx] + "\n\n[Earlier editor_state snapshot omitted; see latest turn for current state.]"
@@ -175,8 +183,12 @@ func stripStaleImagesAndEditorState(messages []jsonv.Value) ([]jsonv.Value, bool
 						trContent.Items = keptSub
 					}
 				}
-				_ = bi
 			}
+			keptBlocks = append(keptBlocks, b)
+		}
+		if omittedUserImg {
+			keptBlocks = append(keptBlocks, engine.Object("type", "text", "text", "[Earlier attached image(s) omitted to fit context window.]"))
+			blocks.Items = keptBlocks
 		}
 		out[i] = mc
 	}
@@ -304,6 +316,34 @@ func compactOversizedTurnBlocks(messages []jsonv.Value, baseOverhead, maxInput i
 					}
 				}
 			}
+		}
+	}
+	// Step 4a2: If still over maxInput, strip remaining top-level user image blocks (including latest human turn)
+	// while preserving index-0 text and message alternation.
+	for i := range out {
+		if EstimateContextTokens(baseOverhead, out) <= maxInput {
+			return out, changed
+		}
+		if !jsonv.StrIs(jsonv.Get(out[i], "role"), "user") {
+			continue
+		}
+		blocks := jsonv.Arr(jsonv.Get(out[i], "content"))
+		if blocks == nil {
+			continue
+		}
+		kept := make([]jsonv.Value, 0, len(blocks.Items))
+		omitted := false
+		for _, b := range blocks.Items {
+			if jsonv.StrIs(jsonv.Get(b, "type"), "image") {
+				omitted = true
+				changed = true
+				continue
+			}
+			kept = append(kept, b)
+		}
+		if omitted {
+			kept = append(kept, engine.Object("type", "text", "text", "[Attached image(s) omitted to fit context window.]"))
+			blocks.Items = kept
 		}
 	}
 	// Step 4b: Truncate oversized tool_result text blocks so a huge Get(document) output cannot exceed maxInput.

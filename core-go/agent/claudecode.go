@@ -126,8 +126,8 @@ type ccInput struct {
 	input jsonv.Value
 }
 
-func runClaudeCode(e *engine.Engine, p engine.Profile, prompt string, child bool, name string) (*jsonv.Object, error) {
-	return runClaudeCodeStep(e, p, prompt, child, name, "", false)
+func runClaudeCode(e *engine.Engine, p engine.Profile, prompt string, images []engine.AttachmentImage, child bool, name string) (*jsonv.Object, error) {
+	return runClaudeCodeStep(e, p, prompt, images, child, name, "", false)
 }
 
 func mergeClaudeUsage(base, extra *jsonv.Object) *jsonv.Object {
@@ -155,7 +155,7 @@ func mergeClaudeUsage(base, extra *jsonv.Object) *jsonv.Object {
 	return out
 }
 
-func runClaudeCodeStep(e *engine.Engine, p engine.Profile, prompt string, child bool, name, overrideSession string, isReviseContinuation bool) (*jsonv.Object, error) {
+func runClaudeCodeStep(e *engine.Engine, p engine.Profile, prompt string, images []engine.AttachmentImage, child bool, name, overrideSession string, isReviseContinuation bool) (*jsonv.Object, error) {
 	cfg, err := MCPConfig(e, p.ID)
 	if err != nil {
 		return nil, err
@@ -196,6 +196,26 @@ func runClaudeCodeStep(e *engine.Engine, p engine.Profile, prompt string, child 
 		"--disallowedTools", "Task,Agent,AskUserQuestion",
 		"--permission-prompt-tool", "mcp__nalarupa__" + PermissionTool,
 		"--append-system-prompt", Instructions("claude-code")}
+	stdinPayload := full
+	if len(images) > 0 {
+		args = append(args, "--input-format", "stream-json")
+		content := jsonv.NewArray(engine.Object("type", "text", "text", full))
+		for _, img := range images {
+			if img.Data == "" {
+				continue
+			}
+			mt := img.MediaType
+			if mt == "" {
+				mt = sniffImageMediaType(img.Data)
+			}
+			content.Items = append(content.Items, engine.Object(
+				"type", "image",
+				"source", engine.Object("type", "base64", "media_type", mt, "data", img.Data),
+			))
+		}
+		envelope := engine.Object("type", "user", "message", engine.Object("role", "user", "content", content))
+		stdinPayload = string(jsonv.Marshal(envelope)) + "\n"
+	}
 	if session != "" {
 		args = append(args, "--resume", session)
 	}
@@ -247,7 +267,7 @@ func runClaudeCodeStep(e *engine.Engine, p engine.Profile, prompt string, child 
 				sent <- fmt.Errorf("writer panicked: %v", r)
 			}
 		}()
-		_, err := io.WriteString(stdin, full)
+		_, err := io.WriteString(stdin, stdinPayload)
 		if cerr := stdin.Close(); err == nil {
 			err = cerr
 		}
@@ -321,7 +341,7 @@ func runClaudeCodeStep(e *engine.Engine, p engine.Profile, prompt string, child 
 		}
 		if !cancel.IsSet() {
 			emit(e, p, "note", engine.Object("text", "Claude Code could no longer find this chat's earlier session, so the earlier context is gone. Continuing in a new session."))
-			return runClaudeCodeStep(e, p, prompt, child, name, "", isReviseContinuation)
+			return runClaudeCodeStep(e, p, prompt, images, child, name, "", isReviseContinuation)
 		}
 	}
 	sendErr := <-sent
@@ -338,7 +358,7 @@ func runClaudeCodeStep(e *engine.Engine, p engine.Profile, prompt string, child 
 	}
 	if !cancel.IsSet() {
 		if revPrompt := RunTurnEndTypeSafeGate(e, p); revPrompt != "" {
-			nextUsage, revErr := runClaudeCodeStep(e, p, revPrompt, child, name, turnCtx.sessionID, true)
+			nextUsage, revErr := runClaudeCodeStep(e, p, revPrompt, nil, child, name, turnCtx.sessionID, true)
 			return mergeClaudeUsage(usage, nextUsage), revErr
 		}
 	}

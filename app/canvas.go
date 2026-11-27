@@ -244,6 +244,11 @@ type CanvasState struct {
 	frameRename *inlineFrameRename
 	pen         *penEditState
 
+	contextTargetID     string
+	contextHasTarget    bool
+	contextFromSel      bool
+	contextClickedEmpty bool
+
 	overlayPath ui.Path
 	LastPaintMS float64
 
@@ -288,7 +293,15 @@ func (a *NalarupaApp) initCanvasState() {
 	}
 }
 
+func (a *NalarupaApp) clearCanvasContextMenuState() {
+	a.Canvas.contextTargetID = ""
+	a.Canvas.contextHasTarget = false
+	a.Canvas.contextFromSel = false
+	a.Canvas.contextClickedEmpty = false
+}
+
 func (a *NalarupaApp) resetCanvasForNewDoc() {
+	a.clearCanvasContextMenuState()
 	a.Canvas.Pan = nil
 	a.Canvas.Marquee = nil
 	a.Canvas.drawDrag = nil
@@ -440,21 +453,44 @@ func (a *NalarupaApp) viewCanvas(c *ui.Context) {
 		a.syncGrabCursorNow()
 	}
 
-	vp := ui.Box(c.Key("canvas")).
-		FillHeight().
-		Grow(1).
-		MinWidth(0).
-		Clip().
-		Background(C.CanvasFill).
-		Focusable().
-		FocusRingOffset(-2).
-		FocusRingColor(C.Focus).
-		Label("Design canvas").
-		Bind(&a.CanvasHandle).
-		Cursor(a.computeCanvasCursor())
+	ui.Box(c.Key("canvas-wrap")).FillHeight().Grow(1).MinWidth(0).Clip().Children(func() {
+		vp := ui.Box(c.Key("canvas")).
+			Fill().
+			Clip().
+			Background(C.CanvasFill).
+			Focusable().
+			FocusRingOffset(-2).
+			FocusRingColor(C.Focus).
+			Label("Design canvas").
+			Bind(&a.CanvasHandle).
+			Cursor(a.computeCanvasCursor())
 
 	vp.HandleInput(func(ev ui.InputEvent) bool {
 		return a.handleCanvasInput(ev)
+	})
+	vp.ContextMenu(func(m *ui.Menu) {
+		if a.Canvas.contextHasTarget {
+			if m.Item("Attach to Agent Chat").Chosen() {
+				if a.Canvas.contextFromSel && len(a.State.Selection) > 0 {
+					a.AttachSelectionToAgentChat()
+				} else {
+					a.AttachNodesToAgentChat([]string{a.Canvas.contextTargetID})
+				}
+				a.clearCanvasContextMenuState()
+			}
+			return
+		}
+		if !a.Canvas.contextClickedEmpty && len(a.State.Selection) > 0 {
+			if m.Item("Attach to Agent Chat").Chosen() {
+				a.AttachSelectionToAgentChat()
+				a.clearCanvasContextMenuState()
+			}
+			return
+		}
+		if m.Item("Attach viewport screen").Chosen() {
+			a.AttachViewportToAgentChat()
+			a.clearCanvasContextMenuState()
+		}
 	})
 
 	// Flush any coalesced pointer-drag move aligned to the VSync frame boundary (~16ms) before snapshot fetches.
@@ -878,8 +914,11 @@ func (a *NalarupaApp) viewCanvas(c *ui.Context) {
 		}
 	})
 
-	vp.Children(func() {
-		a.buildCanvasChildren(c, topFrames, selBoxes, singleFrame, liveNodes, viewNowMS)
+		vp.Children(func() {
+			a.buildCanvasChildren(c, topFrames, selBoxes, singleFrame, liveNodes, viewNowMS)
+		})
+
+		a.buildCanvasActionOverlays(c, selBoxes, singleFrame)
 	})
 }
 
@@ -891,7 +930,13 @@ func (a *NalarupaApp) nativeGrabCursorMode() int {
 	if a.Canvas.Pan != nil || a.Canvas.Rotate != nil {
 		return 2
 	}
-	if a.Tool == "hand" || a.Canvas.SpaceHeld {
+	if a.Canvas.SpaceHeld {
+		return 1
+	}
+	if a.AgentUI.PickingCanvasCtx {
+		return 0
+	}
+	if a.Tool == "hand" {
 		return 1
 	}
 	return 0
@@ -909,7 +954,13 @@ func (a *NalarupaApp) computeCanvasCursor() ui.Cursor {
 	if a.Canvas.Pan != nil {
 		return ui.CursorGrabbing
 	}
-	if a.Tool == "hand" || a.Canvas.SpaceHeld {
+	if a.Canvas.SpaceHeld {
+		return ui.CursorGrab
+	}
+	if a.AgentUI.PickingCanvasCtx {
+		return ui.CursorCrosshair
+	}
+	if a.Tool == "hand" {
 		return ui.CursorGrab
 	}
 	switch a.Tool {
@@ -1490,6 +1541,93 @@ func (a *NalarupaApp) buildCanvasChildren(c *ui.Context, topFrames, selBoxes []B
 	a.buildAgentLayerChildren(c, liveNodes, nowMS)
 }
 
+// buildCanvasActionOverlays renders interactive floating overlays as siblings of the canvas element so
+// clicking them never bubbles into vp.HandleInput (onCanvasPointerDown).
+func (a *NalarupaApp) buildCanvasActionOverlays(c *ui.Context, selBoxes []Box, singleFrame *Box) {
+	if a.Canvas.pen == nil && len(selBoxes) > 0 && singleFrame != nil &&
+		!a.Canvas.isDraggingAny() && a.Canvas.textEdit == nil && a.Canvas.frameRename == nil && !a.AgentUI.PickingCanvasCtx {
+		sr := a.docRectToScreen(Painted(*singleFrame))
+		if sr.X+sr.W > 0 && sr.X < float32(a.CanvasW) && sr.Y+sr.H > 0 && sr.Y < float32(a.CanvasH) {
+			const chatPillW float32 = 68
+			const chatPillH float32 = 24
+			px := sr.X + sr.W - chatPillW
+			py := sr.Y - chatPillH - 22
+			if py < 8 {
+				py = sr.Y + sr.H + 30
+			}
+			maxX := max(float32(8), float32(a.CanvasW)-chatPillW-8)
+			maxY := max(float32(8), float32(a.CanvasH)-chatPillH-8)
+			px = min(max(float32(8), px), maxX)
+			py = min(max(float32(8), py), maxY)
+
+			chatPill := ui.ButtonBase(c.Key("canvas-add-chat")).
+				Absolute().
+				Left(px).
+				Top(py).
+				Height(chatPillH).
+				Padding(0, 8).
+				Radius(12).
+				Row().
+				Gap(4).
+				AlignItems(ui.Center).
+				Background(C.Panel2).
+				Border(1, C.Accent).
+				Shadow(0, 2, 8, 0, ui.Hex("#00000040")).
+				ZIndex(40).
+				Label("Attach selection to Agent Chat").
+				Tooltip("Attach selection to Agent Chat (" + attachShortcutHint() + ")").
+				Cursor(ui.CursorPointer)
+			if chatPill.Hovered() {
+				chatPill.Background(C.Raised)
+			}
+			chatPill.Children(func() {
+				ui.Icon(c, IconSVG("sparkles")).FontSize(11).TextColor(C.Accent).Shrink(0)
+				ui.Text(c, "+ Chat").FontSize(11).FontWeight(600).TextColor(C.Text).MaxLines(1)
+			})
+			if chatPill.Clicked() {
+				a.AttachSelectionToAgentChat()
+			}
+		}
+	}
+
+	if a.AgentUI.PickingCanvasCtx {
+		const bannerW float32 = 332
+		bx := max(float32(8), float32(a.CanvasW)/2-bannerW/2)
+		ui.Row(c.Key("canvas-pick-banner")).
+			Absolute().
+			Left(bx).
+			Top(12).
+			Height(30).
+			Padding(0, 10).
+			Gap(8).
+			Radius(15).
+			AlignItems(ui.Center).
+			Background(C.Panel2).
+			Border(1, C.Accent).
+			Shadow(0, 4, 14, 0, ui.Hex("#00000055")).
+			ZIndex(60).
+			Children(func() {
+				ui.Icon(c, IconSVG("sparkles")).FontSize(12).TextColor(C.Accent).Shrink(0)
+				ui.Text(c, "Click an element to attach to Agent Chat · Esc to cancel").
+					FontSize(11).FontWeight(500).TextColor(C.Text).MaxLines(1)
+				cancelPick := ui.ButtonBase(c.Key("canvas-pick-cancel")).
+					Height(20).Padding(0, 6).Radius(5).Center().
+					Label("Cancel canvas pick").Cursor(ui.CursorPointer)
+				if cancelPick.Hovered() {
+					cancelPick.Background(C.Raised)
+				} else {
+					cancelPick.Background(C.Panel)
+				}
+				cancelPick.Children(func() {
+					ui.Text(c, "Cancel").FontSize(10).TextColor(C.Muted)
+				})
+				if cancelPick.Clicked() {
+					a.AgentUI.PickingCanvasCtx = false
+				}
+			})
+	}
+}
+
 func (a *NalarupaApp) commitFrameRename() {
 	fr := a.Canvas.frameRename
 	if fr == nil {
@@ -1781,8 +1919,9 @@ func (a *NalarupaApp) onCanvasPointerDown(ev ui.InputEvent) bool {
 	a.Canvas.LastDownSX = sx
 	a.Canvas.LastDownSY = sy
 
-	// Middle mouse button (2 in MyGo: 0=left, 1=right, 2=middle), Hand tool, or Space+Left -> Pan
-	if ev.Button == 2 || (ev.Button == 0 && (a.Tool == "hand" || a.Canvas.SpaceHeld)) {
+	// Middle mouse button (2 in MyGo: 0=left, 1=right, 2=middle) or Space+Left -> Pan (always allowed)
+	if ev.Button == 2 || (ev.Button == 0 && a.Canvas.SpaceHeld) {
+		a.clearCanvasContextMenuState()
 		a.Canvas.Pan = &panGesture{
 			startSX: sx,
 			startSY: sy,
@@ -1792,11 +1931,55 @@ func (a *NalarupaApp) onCanvasPointerDown(ev ui.InputEvent) bool {
 		a.syncGrabCursorNow()
 		return true
 	}
+	if ev.Button == 1 {
+		docPt := a.screenToDoc(sx, sy)
+		target := ""
+		if lblFrame := a.frameLabelAt(sx, sy); lblFrame != nil {
+			target = lblFrame.ID
+		} else {
+			hitChain := a.Bridge.HitDirect(docPt[0], docPt[1])
+			target = a.pickContextTarget(hitChain, false, true)
+		}
+		a.Canvas.contextTargetID = target
+		a.Canvas.contextHasTarget = target != ""
+		a.Canvas.contextFromSel = target != "" && slices.Contains(a.State.Selection, target)
+		a.Canvas.contextClickedEmpty = target == ""
+		return false
+	}
 	if ev.Button != 0 {
 		return false
 	}
+	a.clearCanvasContextMenuState()
 
 	docPt := a.screenToDoc(sx, sy)
+
+	// Pick-from-canvas mode: takes priority over Hand tool so users can pick nodes while Hand is selected.
+	if a.AgentUI.PickingCanvasCtx {
+		if lblFrame := a.frameLabelAt(sx, sy); lblFrame != nil {
+			a.AttachNodesToAgentChat([]string{lblFrame.ID})
+			return true
+		}
+		hitChain := a.Bridge.HitDirect(docPt[0], docPt[1])
+		hasCmd := (ev.Mods&ui.Cmd != 0) || (ev.Mods&ui.Ctrl != 0)
+		if picked := a.pickContextTarget(hitChain, hasCmd, false); picked != "" {
+			a.AttachNodesToAgentChat([]string{picked})
+		} else {
+			a.AttachViewportToAgentChat()
+		}
+		return true
+	}
+
+	// Hand tool -> Pan
+	if a.Tool == "hand" {
+		a.Canvas.Pan = &panGesture{
+			startSX: sx,
+			startSY: sy,
+			startCX: a.Cam.X,
+			startCY: a.Cam.Y,
+		}
+		a.syncGrabCursorNow()
+		return true
+	}
 
 	// Pen / Vector editing mode
 	if a.Tool == "pen" || a.Canvas.pen != nil {
@@ -1988,6 +2171,25 @@ func (a *NalarupaApp) pickHitTarget(chain []string, deep, doubleClick bool) stri
 	// Default: if chain[0] is a top-level frame, select its direct child chain[1]
 	if len(chain) >= 2 && a.Bridge.NodeTypeDirect(chain[0]) == "frame" {
 		return chain[1]
+	}
+	return chain[0]
+}
+
+// pickContextTarget resolves a canvas hit chain for Pick-from-canvas and right-click context attachment,
+// always resolving freeform artboard frames instead of returning empty for marquee drag.
+func (a *NalarupaApp) pickContextTarget(chain []string, deep, preferSelected bool) string {
+	if len(chain) == 0 {
+		return ""
+	}
+	if preferSelected {
+		for _, id := range chain {
+			if slices.Contains(a.State.Selection, id) {
+				return id
+			}
+		}
+	}
+	if picked := a.pickHitTarget(chain, deep, false); picked != "" {
+		return picked
 	}
 	return chain[0]
 }
@@ -2282,7 +2484,7 @@ func (a *NalarupaApp) onCanvasPointerMove(ev ui.InputEvent) bool {
 }
 
 func (a *NalarupaApp) updateIdleHover(sx, sy float64, docPt Pt) {
-	if a.Tool != "move" {
+	if a.Tool != "move" && !a.AgentUI.PickingCanvasCtx {
 		a.Canvas.ActiveCursor = ui.CursorDefault
 		a.Canvas.HoverID = ""
 		a.Canvas.hasHoverCache = false

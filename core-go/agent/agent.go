@@ -115,6 +115,9 @@ func Instructions(backend string) string {
 // after a design is done, one variation per finished turn.
 const MaxDesigns = 6
 
+// MaxAttachedImages is the maximum number of user-attached images allowed per turn.
+const MaxAttachedImages = 10
+
 const (
 	firstDesign = "This is the first of several design variations. Unless the user asked for a flow or several screens, design one focused screen; " +
 		"for a broad product idea that is the main screen people land on first, the one that sets the visual and conceptual tone. Keep the scope tight: " +
@@ -128,25 +131,75 @@ const (
 	iterating = "Iterating more on the design…"
 )
 
+func contextsJSON(ctxs []engine.CanvasContextRef) *jsonv.Array {
+	items := make([]jsonv.Value, 0, len(ctxs))
+	for _, c := range ctxs {
+		items = append(items, c.JSON())
+	}
+	return jsonv.NewArray(items...)
+}
+
+func imageDataStrings(imgs []engine.AttachmentImage) *jsonv.Array {
+	list := make([]string, 0, len(imgs))
+	for _, im := range imgs {
+		if im.Data != "" {
+			list = append(list, im.Data)
+		}
+	}
+	return engine.Strings(list)
+}
+
 // Send is `agent_send`: start a turn. While agents are busy the prompt is queued and sent when they finish.
 // designs > 1 turns on "Let it cook" with iterate "layout" or "style".
 func Send(e *engine.Engine, prompt string, parallel uint64, mode string, designs uint64, iterate string) error {
+	return SendWithAttachments(e, prompt, nil, nil, parallel, mode, designs, iterate)
+}
+
+// SendWithAttachments starts a turn carrying optional pinned canvas contexts and user-attached images.
+func SendWithAttachments(e *engine.Engine, prompt string, contexts []engine.CanvasContextRef, images []engine.AttachmentImage, parallel uint64, mode string, designs uint64, iterate string) error {
+	if len(images) > MaxAttachedImages {
+		return fmt.Errorf("At most %d images can be attached per message.", MaxAttachedImages)
+	}
+	entry := engine.QueueEntry{
+		Prompt:   prompt,
+		Contexts: append([]engine.CanvasContextRef(nil), contexts...),
+		Images:   append([]engine.AttachmentImage(nil), images...),
+	}
 	queued := false
+	var queueErr error
 	e.Locked(func() {
 		if e.Agent.Running {
-			e.Agent.Queue = append(e.Agent.Queue, prompt)
+			queuedImages := 0
+			for _, q := range e.Agent.Queue {
+				queuedImages += len(q.Images)
+			}
+			if queuedImages+len(entry.Images) > MaxAttachedImages {
+				queueErr = fmt.Errorf("At most %d images can be queued for the next turn (%d already queued).", MaxAttachedImages, queuedImages)
+				return
+			}
+			e.Agent.Queue = append(e.Agent.Queue, entry)
 			// Several queued prompts run as one turn: the latest one's options win.
 			e.Agent.QueueOpts = engine.QueueOpts{Parallel: parallel, Mode: mode, Designs: designs, Iterate: iterate}
-			e.Emit(engine.Object("type", "agent", "kind", "queued", "text", prompt))
+			ev := engine.Object("type", "agent", "kind", "queued", "text", prompt)
+			if len(entry.Contexts) > 0 {
+				ev.Set("contexts", contextsJSON(entry.Contexts))
+			}
+			if len(entry.Images) > 0 {
+				ev.Set("images", imageDataStrings(entry.Images))
+			}
+			e.Emit(ev)
 			queued = true
 			return
 		}
-		// Reserve the turn under the same lock before releasing it for skill discovery so concurrent Sends queue cleanly.
+		// Reserve the turn under the same lock before releasing it for skill discovery / context validation so concurrent Sends queue cleanly.
 		e.Agent.Running = true
 		e.Agent.Cancel = engine.NewFlag()
 	})
+	if queueErr != nil {
+		return queueErr
+	}
 	if !queued {
-		begin(e, prompt, engine.QueueOpts{Parallel: parallel, Mode: mode, Designs: designs, Iterate: iterate}, true)
+		begin(e, entry, engine.QueueOpts{Parallel: parallel, Mode: mode, Designs: designs, Iterate: iterate}, true, false)
 	}
 	return nil
 }
@@ -154,8 +207,8 @@ func Send(e *engine.Engine, prompt string, parallel uint64, mode string, designs
 func clampU(v, lo, hi uint64) int { return int(max(lo, min(v, hi))) }
 
 // begin starts a user turn (either immediately from Send with Running reserved, or dequeued after a finished run).
-// Slash skills are always expanded for user prompts, including queued ones.
-func begin(e *engine.Engine, prompt string, o engine.QueueOpts, checkCancel bool) {
+// Only fast non-PNG metadata/existence validation runs here; heavy PNG snapshot rasterization runs inside go run().
+func begin(e *engine.Engine, entry engine.QueueEntry, o engine.QueueOpts, checkCancel, fromQueue bool) {
 	var docPath string
 	e.Locked(func() {
 		if e.Doc != nil {
@@ -173,20 +226,53 @@ func begin(e *engine.Engine, prompt string, o engine.QueueOpts, checkCancel bool
 		}
 		e.Agent.ActiveSkillDirs = nil
 	})
-	expanded := prompt
-	if strings.Contains(prompt, "/") {
+	expanded := entry.Prompt
+	if strings.Contains(entry.Prompt, "/") {
 		catalog := DiscoverSkills(docPath)
-		if matched, clean := ExtractSlashSkills(prompt, catalog); len(matched) > 0 {
+		if matched, clean := ExtractSlashSkills(entry.Prompt, catalog); len(matched) > 0 {
 			dirs := SkillDirs(matched)
 			e.Locked(func() { e.Agent.ActiveSkillDirs = dirs })
 			expanded = ExpandPromptWithSkills(clean, matched)
 		}
 	}
-	text := wrapParallel(e, expanded)
-	if o.Designs > 1 {
-		text += "\n\n" + firstDesign
+
+	var resolvedContexts []engine.CanvasContextRef
+	if len(entry.Contexts) > 0 {
+		validated := e.CaptureCanvasContexts(entry.Contexts, false)
+		if len(validated.Missing) > 0 {
+			msg := fmt.Sprintf("Skipped deleted canvas node(s): %s", strings.Join(validated.Missing, ", "))
+			if len(validated.Missing) == 1 {
+				msg = fmt.Sprintf("Skipped deleted canvas node `%s`.", validated.Missing[0])
+			}
+			e.Locked(func() {
+				e.Emit(engine.Object("type", "toast", "text", msg))
+			})
+		}
+		resolvedContexts = validated.Contexts
+		if strings.TrimSpace(expanded) == "" && len(resolvedContexts) == 0 && len(entry.Images) == 0 {
+			// All pinned nodes were deleted and nothing else was attached: abort cleanly without starting an empty turn.
+			var queued engine.QueueEntry
+			var opts engine.QueueOpts
+			hasNext := false
+			e.Locked(func() {
+				var ok bool
+				queued, opts, ok = takeQueueEntry(e)
+				if !ok {
+					e.Agent.Running = false
+					e.Agent.EndTurnIsolation()
+					return
+				}
+				e.Agent.Cancel = engine.NewFlag()
+				hasNext = true
+			})
+			if hasNext {
+				begin(e, queued, opts, true, true)
+			}
+			return
+		}
 	}
-	startTurn(e, prompt, text, checkCancel, false)
+
+	startTurn(e, entry.Prompt, expanded, resolvedContexts, entry.Images, checkCancel, false, fromQueue, true, o.Designs > 1)
 }
 
 // chatTitle is the first prompt on one line: whitespace runs (line breaks too) collapsed, capped at 100 chars.
@@ -198,15 +284,44 @@ func chatTitle(shown string) string {
 	return string(r)
 }
 
+func chatTitleForTurn(shown string, contexts []engine.CanvasContextRef, images []engine.AttachmentImage) string {
+	if t := chatTitle(shown); t != "" {
+		return t
+	}
+	var parts []string
+	if len(contexts) == 1 {
+		if contexts[0].Kind == "viewport" {
+			parts = append(parts, "Canvas viewport")
+		} else {
+			name := contexts[0].Name
+			if name == "" {
+				name = contexts[0].ID
+			}
+			parts = append(parts, "Canvas: "+name)
+		}
+	} else if len(contexts) > 1 {
+		parts = append(parts, fmt.Sprintf("%d canvas contexts", len(contexts)))
+	}
+	if len(images) == 1 {
+		parts = append(parts, "1 image")
+	} else if len(images) > 1 {
+		parts = append(parts, fmt.Sprintf("%d images", len(images)))
+	}
+	if len(parts) == 0 {
+		return "Untitled chat"
+	}
+	return chatTitle(strings.Join(parts, " · "))
+}
+
 // startTurn sends prompt to the main agent (same conversation), showing shown as the user's message. When
 // checkCancel is true, the turn is dropped if Stop ran since the reservation or previous run ended; isIteration
 // marks automatic "Let it cook" variation turns (distinct from queued user edit prompts).
-func startTurn(e *engine.Engine, shown, prompt string, checkCancel, isIteration bool) {
+func startTurn(e *engine.Engine, shown, prompt string, contexts []engine.CanvasContextRef, userImages []engine.AttachmentImage, checkCancel, isIteration, fromQueue, applyWrap, addFirstDesign bool) {
 	// Held until the run is marked running: a clear that sweeps the chat files must not interleave with a new
 	// chat's first save.
 	chatOps.Lock()
 	var main engine.Profile
-	var queued string
+	var queued engine.QueueEntry
 	var opts engine.QueueOpts
 	stopped, again := false, false
 	e.Locked(func() {
@@ -215,7 +330,7 @@ func startTurn(e *engine.Engine, shown, prompt string, checkCancel, isIteration 
 			// agent busy so nothing else slips in, instead of leaving them stranded.
 			stopped = true
 			var ok bool
-			queued, opts, ok = takeQueue(e)
+			queued, opts, ok = takeQueueEntry(e)
 			if !ok {
 				e.Agent.Running = false
 				e.Agent.EndTurnIsolation()
@@ -227,7 +342,7 @@ func startTurn(e *engine.Engine, shown, prompt string, checkCancel, isIteration 
 		}
 		if e.Agent.Chat == nil {
 			id := fmt.Sprintf("%x%04x", engine.NowMs(), doc.RandomU64()&0xffff)
-			e.Agent.Chat = &engine.Chat{ID: id, Title: chatTitle(shown)}
+			e.Agent.Chat = &engine.Chat{ID: id, Title: chatTitleForTurn(shown, contexts, userImages)}
 		}
 		p, ok := e.Agent.Profile(e.Agent.Main)
 		if e.Agent.Main == "" || !ok {
@@ -254,13 +369,23 @@ func startTurn(e *engine.Engine, shown, prompt string, checkCancel, isIteration 
 	if stopped {
 		chatOps.Unlock()
 		if again {
-			begin(e, queued, opts, true)
+			begin(e, queued, opts, true, true)
 		}
 		return
 	}
 	defer chatOps.Unlock()
-	emit(e, main, "user", engine.Object("text", shown))
-	startRun(e, main, prompt, "")
+	userEv := engine.Object("text", shown)
+	if len(contexts) > 0 {
+		userEv.Set("contexts", contextsJSON(contexts))
+	}
+	if len(userImages) > 0 {
+		userEv.Set("images", imageDataStrings(userImages))
+	}
+	if fromQueue {
+		userEv.Set("fromQueue", true)
+	}
+	emit(e, main, "user", userEv)
+	startRunWithAttachments(e, main, prompt, contexts, userImages, applyWrap, addFirstDesign, "")
 }
 
 // wrapParallel adds the parallel agents' instructions ("split work" and "side by side" modes).
@@ -293,6 +418,10 @@ func wrapParallel(e *engine.Engine, prompt string) string {
 // because Stop already ran: checked under the lock that registers it, so a Stop cannot land between the check
 // and the child counting as active. Its profile is dropped again.
 func startRun(e *engine.Engine, p engine.Profile, prompt, parent string) bool {
+	return startRunWithAttachments(e, p, prompt, nil, nil, false, false, parent)
+}
+
+func startRunWithAttachments(e *engine.Engine, p engine.Profile, prompt string, contexts []engine.CanvasContextRef, images []engine.AttachmentImage, applyWrap, addFirstDesign bool, parent string) bool {
 	child := parent != ""
 	started := false
 	e.Locked(func() {
@@ -305,7 +434,7 @@ func startRun(e *engine.Engine, p engine.Profile, prompt, parent string) bool {
 		started = true
 	})
 	if started {
-		go run(e, p, prompt, child)
+		go run(e, p, prompt, contexts, images, applyWrap, addFirstDesign, child)
 	}
 	return started
 }
@@ -323,14 +452,14 @@ func deleteProfile(ps []engine.Profile, id string) []engine.Profile {
 // next is what a finished run hands over to.
 type next struct {
 	prompt string // a "Let it cook" iteration
-	queued string
+	queued engine.QueueEntry
 	opts   engine.QueueOpts
 	// iterate: start the iteration; else the queued prompts.
 	iterate bool
 }
 
 // run is one agent's run (agent.rs `start_thread`'s thread).
-func run(e *engine.Engine, p engine.Profile, prompt string, child bool) {
+func run(e *engine.Engine, p engine.Profile, prompt string, contexts []engine.CanvasContextRef, images []engine.AttachmentImage, applyWrap, addFirstDesign, child bool) {
 	// The run itself is guarded below; this keeps the process alive should the bookkeeping around it panic.
 	defer func() { recover() }()
 	started := time.Now()
@@ -338,13 +467,14 @@ func run(e *engine.Engine, p engine.Profile, prompt string, child bool) {
 	// comes from the same snapshot as the model: a provider switched meanwhile cannot get the other provider's
 	// model id.
 	var backend, name string
-	var hasModel bool
+	var hasModel, supportsVision bool
 	var client model.Provider
 	var contextLimit int
 	var setup error
 	e.Locked(func() {
 		backend = e.Backend()
 		name, hasModel, setup = e.RunModel(backend)
+		supportsVision = e.SupportsVision()
 		effModel := name
 		if !hasModel || effModel == "" {
 			effModel = DefaultModel
@@ -363,14 +493,41 @@ func run(e *engine.Engine, p engine.Profile, prompt string, child bool) {
 		name = ""
 	}
 	usage, err := guarded(func() (*jsonv.Object, error) {
-		switch {
-		case setup != nil:
+		if setup != nil {
 			// A provider with no model listed (or no key) fails the turn with what to fix.
 			return nil, setup
-		case client != nil:
-			return runAPI(e, p, prompt, child, name, client, contextLimit)
 		}
-		return runClaudeCode(e, p, prompt, child, name)
+		fullPrompt := prompt
+		var modelImages []engine.AttachmentImage
+		if !child && len(contexts) > 0 {
+			captured := e.CaptureCanvasContexts(contexts, supportsVision)
+			if len(captured.Snapshots) > 0 {
+				modelImages = append(modelImages, captured.Snapshots...)
+			}
+			if captured.Text != "" {
+				if strings.TrimSpace(fullPrompt) != "" {
+					fullPrompt = fullPrompt + "\n\n" + captured.Text
+				} else {
+					fullPrompt = captured.Text
+				}
+			}
+		}
+		if len(images) > 0 {
+			modelImages = append(modelImages, images...)
+		}
+		if !child && strings.TrimSpace(fullPrompt) == "" && len(modelImages) > 0 {
+			fullPrompt = "Please inspect the attached image(s) and help me design accordingly."
+		}
+		if applyWrap {
+			fullPrompt = wrapParallel(e, fullPrompt)
+			if addFirstDesign {
+				fullPrompt += "\n\n" + firstDesign
+			}
+		}
+		if client != nil {
+			return runAPI(e, p, fullPrompt, modelImages, child, name, client, contextLimit)
+		}
+		return runClaudeCode(e, p, fullPrompt, modelImages, child, name)
 	})
 	var stopped bool
 	e.Locked(func() { stopped = e.Agent.Cancel.IsSet() })
@@ -423,7 +580,7 @@ func run(e *engine.Engine, p engine.Profile, prompt string, child bool) {
 			// Prompts queued while the stopped agents were shutting down are dropped too.
 			dropQueue(e)
 		default:
-			if q, o, ok := takeQueue(e); ok {
+			if q, o, ok := takeQueueEntry(e); ok {
 				then = &next{queued: q, opts: o}
 			}
 		}
@@ -436,9 +593,9 @@ func run(e *engine.Engine, p engine.Profile, prompt string, child bool) {
 	switch {
 	case then == nil:
 	case then.iterate:
-		startTurn(e, iterating, wrapParallel(e, then.prompt), true, true)
+		startTurn(e, iterating, wrapParallel(e, then.prompt), nil, nil, true, true, false, false, false)
 	default:
-		begin(e, then.queued, then.opts, true)
+		begin(e, then.queued, then.opts, true, true)
 	}
 }
 
@@ -493,16 +650,52 @@ func clearGenerating(e *engine.Engine) {
 	}
 }
 
-// takeQueue is the queued prompts as one message, with the options they were sent with. Under the engine lock.
+// takeQueue is the queued prompts as one text message, with the latest options. Under the engine lock.
 func takeQueue(e *engine.Engine) (string, engine.QueueOpts, bool) {
+	q, o, ok := takeQueueEntry(e)
+	return q.Prompt, o, ok
+}
+
+// takeQueueEntry is the queued prompts (and their contexts/images) coalesced as one turn, with the latest options.
+// Under the engine lock.
+func takeQueueEntry(e *engine.Engine) (engine.QueueEntry, engine.QueueOpts, bool) {
 	queued := e.Agent.Queue
 	e.Agent.Queue = nil
 	if len(queued) == 0 {
-		return "", engine.QueueOpts{}, false
+		return engine.QueueEntry{}, engine.QueueOpts{}, false
 	}
 	o := e.Agent.QueueOpts
 	e.Agent.QueueOpts = engine.QueueOpts{}
-	return strings.Join(queued, "\n\n"), o, true
+
+	var prompts []string
+	var contexts []engine.CanvasContextRef
+	var images []engine.AttachmentImage
+	seenCtx := map[string]bool{}
+	for _, q := range queued {
+		if q.Prompt != "" {
+			prompts = append(prompts, q.Prompt)
+		}
+		for _, ctx := range q.Contexts {
+			k := ctx.Kind + ":" + ctx.ID
+			if ctx.Kind == "viewport" {
+				k = "viewport"
+			}
+			if !seenCtx[k] {
+				seenCtx[k] = true
+				contexts = append(contexts, ctx)
+			}
+		}
+		for _, img := range q.Images {
+			if len(images) < MaxAttachedImages {
+				images = append(images, img)
+			}
+		}
+	}
+	return engine.QueueEntry{
+		Prompt:   strings.Join(prompts, "\n\n"),
+		Contexts: contexts,
+		Images:   images,
+	}, o, true
 }
 
 // dropQueue drops the queued prompts and tells the UI, so their bubbles stop promising to send them. Under the

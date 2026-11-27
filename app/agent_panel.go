@@ -7,8 +7,10 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/markdown"
 )
@@ -126,6 +128,17 @@ type AgentPanelState struct {
 	ModelBtnHandle   ui.Handle
 	EffortBtnHandle  ui.Handle
 	SkillsBtnHandle  ui.Handle
+	CanvasAttachBtn  ui.Handle
+
+	PendingContexts  []PendingCanvasContext
+	PendingImages    []PendingImageAttachment
+	NextAttachSeq    uint64
+	CanvasAttachOpen bool
+	PickingCanvasCtx bool
+	attachMu         sync.Mutex
+	attachPending    int
+	attachBatches    []attachBatchResult
+	pickImageFilesFn func(onFiles func([]string))
 
 	Chats          []ChatSummary
 	CurrentChatID  string
@@ -418,6 +431,12 @@ func (a *NalarupaApp) effectiveContextStats() (used, limit, remaining int, ratio
 	if d := strings.TrimSpace(a.AgentUI.Draft); d != "" {
 		used += int(math.Ceil(float64(len(d)) / 3.6))
 	}
+	if len(a.AgentUI.PendingImages) > 0 {
+		used += len(a.AgentUI.PendingImages) * 1250
+	}
+	if len(a.AgentUI.PendingContexts) > 0 {
+		used += len(a.AgentUI.PendingContexts) * 450
+	}
 	if used < 0 {
 		used = 0
 	}
@@ -509,35 +528,72 @@ func (a *NalarupaApp) activeProvider() *ProviderConfig {
 	return nil
 }
 
-func (a *NalarupaApp) submitAgentPrompt(prompt string, returnFocusToCanvas bool) {
+func (a *NalarupaApp) submitAgentPrompt(prompt string, returnFocusToCanvas bool) bool {
 	trimmed := strings.TrimSpace(prompt)
-	if trimmed == "" {
-		return
+	if trimmed == "" && !a.hasPendingAttachments() {
+		return false
 	}
 	now := time.Now()
 	if now.Sub(a.AgentUI.LastSubmitAt) < 80*time.Millisecond {
-		return
+		return false
 	}
-	a.AgentUI.LastSubmitAt = now
-	a.AgentUI.Draft = ""
-	a.AgentUI.DismissedSlash = ""
-	a.AgentUI.SlashIndex = 0
-	a.AgentUI.StickToBottom = true
 
-	if err := a.Bridge.Call("agent_send", map[string]any{
+	payload := map[string]any{
 		"text":     trimmed,
 		"parallel": a.AgentUI.Parallel,
 		"mode":     a.AgentUI.ParallelMode,
 		"designs":  a.AgentUI.CookDesigns,
 		"iterate":  a.AgentUI.CookIterate,
-	}, nil); err != nil {
-		a.ShowToast(err.Error(), true)
-		return
 	}
+	if len(a.AgentUI.PendingContexts) > 0 {
+		ctxs := make([]map[string]any, 0, len(a.AgentUI.PendingContexts))
+		for _, ctx := range a.AgentUI.PendingContexts {
+			m := map[string]any{
+				"kind":     ctx.Kind,
+				"id":       ctx.ID,
+				"name":     ctx.Name,
+				"nodeType": ctx.NodeType,
+				"w":        ctx.W,
+				"h":        ctx.H,
+			}
+			if ctx.Viewport != nil {
+				m["viewport"] = []float64{ctx.Viewport[0], ctx.Viewport[1], ctx.Viewport[2], ctx.Viewport[3]}
+			}
+			ctxs = append(ctxs, m)
+		}
+		payload["contexts"] = ctxs
+	}
+	if len(a.AgentUI.PendingImages) > 0 {
+		imgs := make([]map[string]any, 0, len(a.AgentUI.PendingImages))
+		for _, im := range a.AgentUI.PendingImages {
+			imgs = append(imgs, map[string]any{
+				"name":      im.Name,
+				"mediaType": im.MediaType,
+				"data":      im.Data,
+				"width":     im.Width,
+				"height":    im.Height,
+			})
+		}
+		payload["images"] = imgs
+	}
+
+	if err := a.Bridge.Call("agent_send", payload, nil); err != nil {
+		a.ShowToast(err.Error(), true)
+		return false
+	}
+	a.AgentUI.LastSubmitAt = now
+	a.AgentUI.Draft = ""
+	a.AgentUI.DismissedSlash = ""
+	a.AgentUI.SlashIndex = 0
+	a.AgentUI.PickingCanvasCtx = false
+	a.AgentUI.CanvasAttachOpen = false
+	a.clearPendingAttachments()
+	a.AgentUI.StickToBottom = true
 	a.PollNow(float64(now.UnixMilli()))
 	if returnFocusToCanvas {
 		a.CanvasHandle.Focus()
 	}
+	return true
 }
 
 func (a *NalarupaApp) viewAgentPanel(c *ui.Context) {
@@ -545,7 +601,12 @@ func (a *NalarupaApp) viewAgentPanel(c *ui.Context) {
 	reduced := EffectiveReducedMotion(c)
 	nowMS := time.Now().UnixMilli()
 
-	ui.Column(c.Key("agent-panel")).FillWidth().Grow(1).MinHeight(0).Children(func() {
+	panel := ui.Column(c.Key("agent-panel")).FillWidth().Grow(1).MinHeight(0)
+	dragOver := panel.FileDragOver()
+	if dropped := panel.DroppedFiles(); len(dropped) > 0 {
+		a.AttachImageFiles(dropped)
+	}
+	panel.Children(func() {
 		// 1. Header bar (fixed 40px)
 		var histBtn ui.Element
 		ui.Row(c.Key("agent-header")).
@@ -714,7 +775,7 @@ func (a *NalarupaApp) viewAgentPanel(c *ui.Context) {
 		}
 
 		// 6. Composer
-		a.viewAgentComposer(c)
+		a.viewAgentComposer(c, dragOver)
 	})
 }
 
@@ -1750,7 +1811,7 @@ func (a *NalarupaApp) viewAgentTranscript(c *ui.Context, reduced bool, nowMS int
 		if last.Running || last.Streaming {
 			runFlag = 1
 		}
-		streamSig = (streamSig << 40) ^ (uint64(last.ID) << 24) ^ (uint64(len(last.Text)+len(last.Output)+last.Lines+len(last.Images)) << 2) ^ (endedFlag << 1) ^ runFlag
+		streamSig = (streamSig << 40) ^ (uint64(last.ID) << 24) ^ (uint64(len(last.Text)+len(last.Output)+last.Lines+len(last.Images)+len(last.Contexts)) << 2) ^ (endedFlag << 1) ^ runFlag
 	}
 	if len(a.Store.Items) != a.AgentUI.LastItemCount || streamSig != a.AgentUI.LastStreamSig {
 		a.AgentUI.LastItemCount = len(a.Store.Items)
@@ -1808,18 +1869,68 @@ func (a *NalarupaApp) viewChatItem(c *ui.Context, it ChatItem, isLatest bool, re
 	switch it.Kind {
 	case "user", "queued":
 		isQueued := it.Kind == "queued"
-		ui.Column(c.Key(itemKey)).FillWidth().AlignItems(ui.End).Gap(3).Transition(itemTrans).Children(func() {
-			bub := ui.Box(c).
-				MaxWidth(236).
-				Padding(8, 12).
-				Radius(16).
-				Background(C.Raised)
-			if isQueued {
-				bub.Opacity(0.6)
+		ui.Column(c.Key(itemKey)).FillWidth().AlignItems(ui.End).Gap(4).Transition(itemTrans).Children(func() {
+			if len(it.Contexts) > 0 {
+				ctxRow := ui.Row(c.Key(fmt.Sprintf("user-ctxs-%d", it.ID))).MaxWidth(236).Wrap().Gap(4).Justify(ui.End)
+				if isQueued {
+					ctxRow.Opacity(0.6)
+				}
+				ctxRow.Children(func() {
+					for ci, ctx := range it.Contexts {
+						iconKey := NodeIconName(ctx.NodeType, false)
+						if ctx.Kind == "viewport" {
+							iconKey = "maximize"
+						}
+						lbl := formatChatContextLabel(ctx)
+						ui.Row(c.Key(fmt.Sprintf("user-ctx-%d-%d", it.ID, ci))).
+							Padding(2, 7).
+							Gap(4).
+							Radius(10).
+							AlignItems(ui.Center).
+							Background(C.Panel2).
+							Border(1, C.Border).
+							Children(func() {
+								ui.Icon(c, IconSVG(iconKey)).FontSize(10).TextColor(C.Accent).Shrink(0)
+								ui.Text(c, lbl).FontSize(10).FontWeight(500).TextColor(C.Muted).MaxLines(1)
+							})
+					}
+				})
 			}
-			bub.Children(func() {
-				ui.Text(c, it.Text).FontSize(12).TextColor(C.Text).Wrap().Selectable()
-			})
+			if len(it.Images) > 0 {
+				imgRow := ui.Row(c.Key(fmt.Sprintf("user-imgs-%d", it.ID))).MaxWidth(236).Wrap().Gap(4).Justify(ui.End)
+				if isQueued {
+					imgRow.Opacity(0.6)
+				}
+				imgRow.Children(func() {
+					for imgIdx, b64 := range it.Images {
+						cacheKey := fmt.Sprintf("u:%d:%d", it.ID, imgIdx)
+						bmp := a.getCachedChatImage(cacheKey, b64, 168)
+						if bmp != nil {
+							ui.Box(c.Key(fmt.Sprintf("user-img-%d-%d", it.ID, imgIdx))).
+								Size(72, 72).
+								Radius(8).
+								Border(1, C.Border).
+								Clip().
+								Children(func() {
+									ui.Image(c, bmp).Size(72, 72).Radius(7).Fit(ui.Cover)
+								})
+						}
+					}
+				})
+			}
+			if strings.TrimSpace(it.Text) != "" || (len(it.Contexts) == 0 && len(it.Images) == 0) {
+				bub := ui.Box(c).
+					MaxWidth(236).
+					Padding(8, 12).
+					Radius(16).
+					Background(C.Raised)
+				if isQueued {
+					bub.Opacity(0.6)
+				}
+				bub.Children(func() {
+					ui.Text(c, it.Text).FontSize(12).TextColor(C.Text).Wrap().Selectable()
+				})
+			}
 			if isQueued {
 				ui.Text(c, "Queued — sent when the agents finish").FontSize(10).TextColor(C.Ghost)
 			}
@@ -2455,24 +2566,28 @@ func (a *NalarupaApp) viewAgentPlan(c *ui.Context) {
 		})
 }
 
-func (a *NalarupaApp) viewAgentComposer(c *ui.Context) {
-	ui.Column(c.Key("agent-composer")).
+func (a *NalarupaApp) viewAgentComposer(c *ui.Context, dragOver bool) {
+	composer := ui.Column(c.Key("agent-composer")).
 		FillWidth().
 		Shrink(0).
 		Padding(8, 10, 10, 10).
 		Gap(8).
 		Background(C.Panel).
 		BorderWidth(1, 0, 0, 0).
-		BorderColor(C.Border).
-		Children(func() {
-			activeSkills := activeDraftSkills(a.AgentUI.Draft, a.AgentUI.Skills)
-			slashMatches, slashToken, _, slashStart := matchingSlashSkills(a.AgentUI.Draft, a.AgentUI.DismissedSlash, a.AgentUI.Skills)
-			if a.AgentUI.DismissedSlash != "" && slashToken != a.AgentUI.DismissedSlash {
-				a.AgentUI.DismissedSlash = ""
-			}
+		BorderColor(C.Border)
+	if dragOver {
+		composer.BorderColor(C.Accent)
+	}
+	composer.Children(func() {
+		activeSkills := activeDraftSkills(a.AgentUI.Draft, a.AgentUI.Skills)
+		slashMatches, slashToken, _, slashStart := matchingSlashSkills(a.AgentUI.Draft, a.AgentUI.DismissedSlash, a.AgentUI.Skills)
+		if a.AgentUI.DismissedSlash != "" && slashToken != a.AgentUI.DismissedSlash {
+			a.AgentUI.DismissedSlash = ""
+		}
 
-			a.viewActiveSkillChips(c, activeSkills)
-			a.viewSlashSkillAutocomplete(c, slashMatches, slashStart)
+		a.viewActiveSkillChips(c, activeSkills)
+		a.viewSlashSkillAutocomplete(c, slashMatches, slashStart)
+		a.viewComposerAttachments(c, dragOver)
 
 			// Live Context Window status bar: displays used context, active limit, and remaining headroom
 			ctxUsed, ctxLim, ctxRem, ctxRatio := a.effectiveContextStats()
@@ -2538,6 +2653,7 @@ func (a *NalarupaApp) viewAgentComposer(c *ui.Context) {
 			if a.State.AgentRunning {
 				ph = "Queue a follow-up…"
 			}
+			svc := c.Services()
 			ta := ui.TextArea(c.Key("agent-input"), &a.AgentUI.Draft).
 				FillWidth().
 				Padding(6, 8).
@@ -2553,7 +2669,24 @@ func (a *NalarupaApp) viewAgentComposer(c *ui.Context) {
 				Label("Message the design agent").
 				Bind(&a.AgentUI.InputHandle)
 
+			ta.OnPaste(func(text string) bool {
+				data := svc.ReadClipboardData(transfer.PNG, transfer.FileList)
+				if raw, err := data.Read(transfer.PNG); err == nil && len(raw) > 0 {
+					a.AttachImageBytes("Pasted image.png", raw)
+					return true
+				}
+				if paths, err := data.Files(); err == nil && len(paths) > 0 {
+					a.AttachImageFiles(paths)
+					return true
+				}
+				return false
+			})
+
 			ta.OnTextKey(func(k ui.TextKey) bool {
+				if k.Key == ui.KeyEscape && a.AgentUI.PickingCanvasCtx {
+					a.AgentUI.PickingCanvasCtx = false
+					return true
+				}
 				if len(slashMatches) > 0 {
 					switch k.Key {
 					case ui.KeyDown:
@@ -2597,8 +2730,9 @@ func (a *NalarupaApp) viewAgentComposer(c *ui.Context) {
 				}
 				if k.Key == ui.KeyEnter && (k.Mods&ui.Shift == 0) {
 					txt := k.Text()
-					k.SetText("")
-					a.submitAgentPrompt(txt, true)
+					if a.submitAgentPrompt(txt, true) {
+						k.SetText("")
+					}
 					return true
 				}
 				return false
@@ -2780,7 +2914,7 @@ func (a *NalarupaApp) viewAgentComposer(c *ui.Context) {
 					}
 				}
 
-				sendDisabled := strings.TrimSpace(a.AgentUI.Draft) == ""
+				sendDisabled := strings.TrimSpace(a.AgentUI.Draft) == "" && !a.hasPendingAttachments()
 				sendBtn := AccentIconBtn(c, "agent-send", "send", "Send", 26, sendDisabled)
 				if sendBtn.Clicked() && !sendDisabled {
 					a.submitAgentPrompt(a.AgentUI.Draft, true)
